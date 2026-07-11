@@ -178,7 +178,7 @@ public class SSOController : ControllerBase
                 _logger.LogWarning(
                     "OpenID login denied for {Username}: no role matched the allow-list, or the login resolved no username. Claims: {@Claims}. Roles expected (any one of): {@ExpectedClaims}",
                     timedState.Username?.ReplaceLineEndings(string.Empty),
-                    result.User.Claims.Select(o => new { o.Type, o.Value }),
+                    result.User.Claims.Select(o => new { Type = o.Type?.ReplaceLineEndings(string.Empty), Value = o.Value?.ReplaceLineEndings(string.Empty) }),
                     config.Roles);
 
                 return ReturnError(StatusCodes.Status401Unauthorized, "Error. Check permissions.");
@@ -480,7 +480,7 @@ public class SSOController : ControllerBase
             _logger.LogWarning(
                 "SAML user: {UserId} has insufficient roles: {@Roles}. Expected any one of: {@ExpectedRoles}",
                 samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty),
-                samlResponse.GetCustomAttributes("Role"),
+                samlResponse.GetCustomAttributes("Role").Select(r => r?.ReplaceLineEndings(string.Empty)),
                 config.Roles);
             return ReturnError(StatusCodes.Status401Unauthorized, "Error. Check permissions.");
         }
