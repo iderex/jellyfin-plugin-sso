@@ -4,13 +4,14 @@
 # security-critical paths (the SSO login path, crypto, config persistence, and
 # the release pipeline).
 #
-# Note: this only requests review; it is not a hard merge gate. GitHub cannot
-# require an approving review on a self-authored PR (a required-approval count
-# would deadlock the solo maintainer), so "require review from Code Owners" is
-# intentionally left off in the ruleset. The maintainer sign-off is instead a
-# process gate: every PR gets both a Copilot review and a mandatory `iderex`
-# review that confirms or rejects Copilot's findings before merge (submitted as
-# a Comment-event review on iderex-authored PRs, an approval on others).
+# Note: this only requests review; it is not a hard merge gate. GitHub can
+# require approvals, but a PR author cannot approve their own PR, so with a solo
+# maintainer as the only Code Owner a required-approval count (or "require
+# review from Code Owners") would deadlock every maintainer-authored PR — it is
+# therefore intentionally left off in the ruleset. The maintainer sign-off is
+# instead a process gate: every PR gets both a Copilot review and a mandatory
+# `iderex` review that confirms or rejects Copilot's findings before merge
+# (a Comment-event review on iderex-authored PRs, an approval on others).
 
 # Default owner for everything in the repo.
 *                        @iderex
