@@ -23,7 +23,9 @@ jobs:
     - name: Jellyfin compatibility metadata check
       run: bash scripts/check-jellyfin-compat.sh
     - name: Restore dependencies
-      run: dotnet restore
+      # --locked-mode fails the restore if the committed packages.lock.json files would change,
+      # so a drifted or tampered dependency graph cannot build in CI.
+      run: dotnet restore --locked-mode
     - name: Vulnerable dependency scan
       run: |
         set -o pipefail
