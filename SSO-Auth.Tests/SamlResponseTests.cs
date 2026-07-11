@@ -200,11 +200,10 @@ public class SamlResponseTests
     [Fact]
     public void GetNotOnOrAfter_ReturnsLatestBound()
     {
-        var expiry = System.DateTime.UtcNow.AddMinutes(5);
+        // Fixed whole-second UTC instant so the assertion is exact (the factory formats to whole
+        // seconds), rather than a wall-clock value with a tolerance.
+        var expiry = new System.DateTime(2026, 7, 11, 12, 5, 0, System.DateTimeKind.Utc);
         var fixture = SamlTestFactory.Create(notOnOrAfter: expiry);
-        var actual = Load(fixture).GetNotOnOrAfter();
-        Assert.NotNull(actual);
-        // Factory formats to whole seconds; compare within a second.
-        Assert.True(System.Math.Abs((actual.Value - expiry).TotalSeconds) < 2);
+        Assert.Equal(expiry, Load(fixture).GetNotOnOrAfter());
     }
 }

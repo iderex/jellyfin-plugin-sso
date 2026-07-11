@@ -40,10 +40,9 @@ internal sealed class SamlReplayCache
     }
 
     /// <summary>
-    /// Computes how long a just-consumed assertion must be retained for replay protection: at least the
-    /// whole window it would still be accepted - its NotOnOrAfter plus the validation clock skew - and
-    /// never less than one hour, so a long-lived assertion cannot be replayed after the entry would
-    /// otherwise have been evicted.
+    /// Computes how long a just-consumed assertion must be retained for replay protection: the whole
+    /// window it would still be accepted - its NotOnOrAfter plus the validation clock skew - with a
+    /// one-hour floor that covers an assertion carrying no (or a very short) expiry.
     /// </summary>
     /// <param name="nowUtc">The current time.</param>
     /// <param name="assertionExpiryUtc">The assertion's effective NotOnOrAfter, or null when it declares none.</param>

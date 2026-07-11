@@ -770,7 +770,12 @@ public class SSOController : ControllerBase
             // renders the intermediate page, so the two-step post-then-auth flow consumes the id once.
             var samlNow = DateTime.UtcNow;
             var replayRetention = SamlReplayCache.ComputeRetention(samlNow, samlResponse.GetNotOnOrAfter());
-            if (!SamlReplays.TryConsume(samlResponse.GetAssertionId(), replayRetention, samlNow))
+
+            // Scope the replay key by provider so two IdPs that happen to emit the same assertion ID
+            // cannot block each other; a missing ID stays empty so TryConsume still fails closed.
+            var assertionId = samlResponse.GetAssertionId();
+            var replayKey = string.IsNullOrEmpty(assertionId) ? assertionId : provider + "\n" + assertionId;
+            if (!SamlReplays.TryConsume(replayKey, replayRetention, samlNow))
             {
                 return Problem("SAML assertion has already been used");
             }

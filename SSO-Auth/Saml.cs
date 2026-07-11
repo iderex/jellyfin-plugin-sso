@@ -166,7 +166,8 @@ public class Response
     public string GetAssertionId()
     {
         var assertion = _xmlDoc.SelectSingleNode("/samlp:Response/saml:Assertion[1]", _xmlNameSpaceManager) as XmlElement;
-        return assertion?.GetAttribute("ID");
+        var id = assertion?.GetAttribute("ID");
+        return string.IsNullOrEmpty(id) ? null : id;
     }
 
     /// <summary>
