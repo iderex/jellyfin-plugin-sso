@@ -424,7 +424,14 @@ const sleep = (milliseconds) => {
         var punycodeDomain = idnMapping.GetAscii(domain);
         var punycodeBaseUrl = protocol + punycodeDomain;
 
+        // Emit the server-derived values as JSON-encoded JS constants so they cannot break out of
+        // the script context, then build every URL from these constants rather than interpolating
+        // raw. punycodeBaseUrl derives from the request host, and provider from the route, so both
+        // are treated as untrusted here (defense-in-depth); mode is a fixed literal.
         return Base + @"
+const ssoBaseUrl = " + JsonSerializer.Serialize(punycodeBaseUrl) + @";
+const ssoProvider = " + JsonSerializer.Serialize(provider) + @";
+const ssoMode = " + JsonSerializer.Serialize(mode) + @";
 async function link(request) {
     const jfCredentialsString = localStorage.getItem(""jellyfin_credentials"");
 
@@ -437,7 +444,7 @@ async function link(request) {
     if (jfUser == null) return;
     if (jfToken == null) return;
 
-    const url = '" + $"{punycodeBaseUrl}/sso/{mode}/Link/{provider}/" + @"' + jfUser;
+    const url = ssoBaseUrl + '/sso/' + ssoMode + '/Link/' + encodeURIComponent(ssoProvider) + '/' + jfUser;
 
     return new Promise(resolve => {
        var xhr = new XMLHttpRequest();
@@ -462,7 +469,7 @@ async function link(request) {
 
 async function main() {
     localStorage.removeItem('jellyfin_credentials');
-    document.getElementById('iframe-main').src = '" + punycodeBaseUrl + @"/web/index.html';
+    document.getElementById('iframe-main').src = ssoBaseUrl + '/web/index.html';
 
     var data = " + JsonSerializer.Serialize(data) + @";
     while (localStorage.getItem(""_deviceId2"") == null ||
@@ -480,7 +487,7 @@ async function main() {
 
     if (" + $"{isLinking}".ToLower() + @") await link(request);
 
-    var url = '" + punycodeBaseUrl + "/sso/" + mode + "/Auth/" + provider + @"';
+    var url = ssoBaseUrl + '/sso/' + ssoMode + '/Auth/' + encodeURIComponent(ssoProvider);
 
     let response = await new Promise(resolve => {
        var xhr = new XMLHttpRequest();
@@ -504,7 +511,7 @@ async function main() {
     jfCreds['Servers'][0]['UserId'] = responseJson['User']['Id'];
     localStorage.setItem('jellyfin_credentials', JSON.stringify(jfCreds));
     localStorage.setItem('enableAutoLogin', 'true');
-    window.location.replace('" + punycodeBaseUrl + @"/web/index.html');
+    window.location.replace(ssoBaseUrl + '/web/index.html');
 }
 
 document.addEventListener('DOMContentLoaded', function () {

@@ -41,4 +41,31 @@ public class WebResponseTests
 
         Assert.Contains("var data = \"" + base64 + "\";", html);
     }
+
+    [Fact]
+    public void Generator_EmitsProviderAsEncodedConstant_NotRawInUrl()
+    {
+        // A provider name that would break out of a single-quoted JS/URL literal if interpolated raw.
+        var hostileProvider = "p';alert(1);//";
+
+        var html = WebResponse.Generator("ZGF0YQ==", hostileProvider, "https://jf.example.com", "SAML");
+
+        // The provider is emitted once as a JSON-encoded constant and used through
+        // encodeURIComponent in the URLs, never concatenated raw.
+        Assert.Contains("const ssoProvider = " + JsonSerializer.Serialize(hostileProvider) + ";", html);
+        Assert.Contains("encodeURIComponent(ssoProvider)", html);
+        Assert.DoesNotContain("';alert(1);//", html);
+    }
+
+    [Fact]
+    public void Generator_EmitsBaseUrlAsEncodedConstant()
+    {
+        // The base URL derives from the request host, so it is treated as untrusted and emitted as
+        // a JSON-encoded constant rather than interpolated into the script.
+        var html = WebResponse.Generator("ZGF0YQ==", "keycloak", "https://jf.example.com", "SAML");
+
+        Assert.Contains("const ssoBaseUrl = \"https://jf.example.com\";", html);
+        // URLs are built from the constant, not a raw host string.
+        Assert.Contains("ssoBaseUrl + '/web/index.html'", html);
+    }
 }
