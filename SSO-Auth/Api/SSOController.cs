@@ -202,6 +202,15 @@ public class SSOController : ControllerBase
                     (s, claim) => s.Contains($"@{{{claim.Type}}}") ? s.Replace($"@{{{claim.Type}}}", claim.Value) : s);
             }
 
+            // The role-claim path depends only on config.RoleClaim, so process it once here rather
+            // than per claim. The regex splits on dots not escaped with a backslash ("a.b.c" ->
+            // a, b, c; "a.b\.c" -> a, b.c), then the escaped "\." are normalized back to ".".
+            string[] roleClaimSegments = string.IsNullOrEmpty(config.RoleClaim)
+                ? Array.Empty<string>()
+                : RoleClaimSplitRegex.Split(config.RoleClaim.Trim())
+                    .Select(segment => segment.Replace("\\.", "."))
+                    .ToArray();
+
             foreach (var claim in result.User.Claims)
             {
                 if (claim.Type == (config.DefaultUsernameClaim?.Trim() ?? "preferred_username"))
@@ -214,20 +223,13 @@ public class SSOController : ControllerBase
                 }
 
                 // Role processing
-                // The regex matches any "." not preceded by a "\": a.b.c will be split into a, b, and c, but a.b\.c will be split into a, b.c (after processing the escaped dots)
-                // We have to first process the RoleClaim string
-                string[] segments = string.IsNullOrEmpty(config.RoleClaim) ? Array.Empty<string>() : RoleClaimSplitRegex.Split(config.RoleClaim.Trim());
-
-                if (segments.Any())
+                if (roleClaimSegments.Any())
                 {
-                    // Now we make sure that any escaped "."s ("\.") are replaced with "."
-                    segments = segments.Select(i => i.Replace("\\.", ".")).ToArray();
-
-                    if (claim.Type == segments[0])
+                    if (claim.Type == roleClaimSegments[0])
                     {
                         List<string> roles;
                         // If we are not using JSON values, just use the raw info from the claim value
-                        if (segments.Length == 1)
+                        if (roleClaimSegments.Length == 1)
                         {
                             roles = new List<string> { claim.Value };
                         }
@@ -242,9 +244,9 @@ public class SSOController : ControllerBase
                             else
                             {
                                 bool missingSegment = false;
-                                for (int i = 1; i < segments.Length - 1; i++)
+                                for (int i = 1; i < roleClaimSegments.Length - 1; i++)
                                 {
-                                    var segment = segments[i];
+                                    var segment = roleClaimSegments[i];
                                     if (!json.TryGetValue(segment, out var nextToken) || nextToken is not JObject nextObject)
                                     {
                                         missingSegment = true;
@@ -259,7 +261,7 @@ public class SSOController : ControllerBase
                                     }
                                 }
 
-                                if (missingSegment || !json.TryGetValue(segments[^1], out var rolesToken) || rolesToken is not JArray rolesArray)
+                                if (missingSegment || !json.TryGetValue(roleClaimSegments[^1], out var rolesToken) || rolesToken is not JArray rolesArray)
                                 {
                                     roles = new List<string>();
                                 }
