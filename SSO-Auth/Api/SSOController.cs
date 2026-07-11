@@ -41,9 +41,11 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 [Route("[controller]")]
 public class SSOController : ControllerBase
 {
-    // Error messages returned when a provider name does not resolve to a configured provider.
+    // Client-facing error messages: unresolved provider names, and the generic denial for any
+    // rejected login (deliberately uniform so the response does not reveal why it was rejected).
     private const string NoMatchingProviderMessage = "No matching provider found";
     private const string ProviderDoesNotExistMessage = "Provider does not exist";
+    private const string PermissionDeniedMessage = "Error. Check permissions.";
 
     private readonly IUserManager _userManager;
     private readonly ISessionManager _sessionManager;
@@ -181,7 +183,7 @@ public class SSOController : ControllerBase
                     result.User.Claims.Select(o => new { Type = o.Type?.ReplaceLineEndings(string.Empty), Value = o.Value?.ReplaceLineEndings(string.Empty) }),
                     config.Roles);
 
-                return ReturnError(StatusCodes.Status401Unauthorized, "Error. Check permissions.");
+                return ReturnError(StatusCodes.Status401Unauthorized, PermissionDeniedMessage);
             }
         }
 
@@ -482,7 +484,7 @@ public class SSOController : ControllerBase
                 samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty),
                 samlResponse.GetCustomAttributes("Role").Select(r => r?.ReplaceLineEndings(string.Empty)),
                 config.Roles);
-            return ReturnError(StatusCodes.Status401Unauthorized, "Error. Check permissions.");
+            return ReturnError(StatusCodes.Status401Unauthorized, PermissionDeniedMessage);
         }
 
         return ReturnError(StatusCodes.Status400BadRequest, "No active providers found");
@@ -610,7 +612,7 @@ public class SSOController : ControllerBase
                 _logger.LogWarning(
                     "SAML user: {UserId} has insufficient roles at the session-minting endpoint; login denied.",
                     samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty));
-                return ReturnError(StatusCodes.Status401Unauthorized, "Error. Check permissions.");
+                return ReturnError(StatusCodes.Status401Unauthorized, PermissionDeniedMessage);
             }
 
             // Enforce one-time use so a captured assertion cannot be replayed to mint another session.
@@ -641,7 +643,7 @@ public class SSOController : ControllerBase
             if (string.IsNullOrWhiteSpace(nameId))
             {
                 _logger.LogWarning("SAML login denied: the assertion resolved no NameID.");
-                return ReturnError(StatusCodes.Status401Unauthorized, "Error. Check permissions.");
+                return ReturnError(StatusCodes.Status401Unauthorized, PermissionDeniedMessage);
             }
 
             Guid userId;
@@ -766,7 +768,7 @@ public class SSOController : ControllerBase
                 return decision.UserId;
 
             case AccountLinkAction.CreateNewAccount:
-                _logger.LogInformation("SSO user {Name} doesn't exist, creating...", canonicalName?.ReplaceLineEndings(string.Empty));
+                _logger.LogInformation("SSO user {Name} doesn't exist, creating...", canonicalName.ReplaceLineEndings(string.Empty));
                 var user = await _userManager.CreateUserAsync(canonicalName).ConfigureAwait(false);
                 user.AuthenticationProviderId = GetType().FullName;
                 // https://jonathancrozier.com/blog/how-to-generate-a-cryptographically-secure-random-string-in-dot-net-with-c-sharp
@@ -777,7 +779,7 @@ public class SSOController : ControllerBase
             case AccountLinkAction.RejectNameTaken:
                 _logger.LogWarning(
                     "SSO login for {Name} via {Mode}/{Provider} refused: a pre-existing unlinked Jellyfin account exists and AllowExistingAccountLink is disabled for this provider.",
-                    canonicalName?.ReplaceLineEndings(string.Empty),
+                    canonicalName.ReplaceLineEndings(string.Empty),
                     mode,
                     provider?.ReplaceLineEndings(string.Empty));
                 throw new AccountLinkForbiddenException();
