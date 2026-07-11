@@ -55,6 +55,19 @@ public class SamlConfig
     public string SamlCertificate { get; set; }
 
     /// <summary>
+    /// Gets or sets the audience (SP entity id) that a SAML response must be addressed to. When
+    /// unset, the SamlClientId is used. Ignored when <see cref="DoNotValidateAudience"/> is set.
+    /// </summary>
+    public string SamlAudience { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether to skip validating the assertion's AudienceRestriction.
+    /// Off by default: responses must be addressed to this service provider (fail closed). Only enable
+    /// for a provider that cannot emit a matching AudienceRestriction.
+    /// </summary>
+    public bool DoNotValidateAudience { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether the provider is enabled.
     /// </summary>
     public bool Enabled { get; set; }

@@ -111,6 +111,54 @@ public class Response
         return ValidateSignatureReference(signedXml) && signedXml.CheckSignature(_certificate, true) && IsWithinTimeBounds();
     }
 
+    /// <summary>
+    /// Checks whether the response is valid AND asserts it was issued for this service provider by
+    /// requiring the signed assertion's AudienceRestriction to name <paramref name="expectedAudience"/>.
+    /// Fail-closed: with no expected audience configured, or no matching Audience present, it is invalid.
+    /// </summary>
+    /// <param name="expectedAudience">The audience (SP entity id) this response must be addressed to.</param>
+    /// <returns>Whether the response is valid and bound to this audience.</returns>
+    public bool IsValid(string expectedAudience)
+    {
+        if (!IsValid())
+        {
+            return false;
+        }
+
+        if (string.IsNullOrEmpty(expectedAudience))
+        {
+            return false;
+        }
+
+        foreach (var audience in GetAudiences())
+        {
+            if (string.Equals(audience, expectedAudience, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private List<string> GetAudiences()
+    {
+        var output = new List<string>();
+        var nodes = _xmlDoc.SelectNodes("/samlp:Response/saml:Assertion[1]/saml:Conditions/saml:AudienceRestriction/saml:Audience", _xmlNameSpaceManager);
+        if (nodes != null)
+        {
+            foreach (XmlNode node in nodes)
+            {
+                if (!string.IsNullOrEmpty(node?.InnerText))
+                {
+                    output.Add(node.InnerText);
+                }
+            }
+        }
+
+        return output;
+    }
+
     // an XML signature can "cover" not the whole document, but only a part of it
     // .NET's built in "CheckSignature" does not cover this case, it will validate to true.
     // We should check the signature reference, so it "references" the id of the root document element! If not - it's a hack

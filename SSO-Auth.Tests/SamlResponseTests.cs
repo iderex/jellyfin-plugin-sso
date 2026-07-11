@@ -148,4 +148,43 @@ public class SamlResponseTests
             conditionsNotBefore: System.DateTime.UtcNow.AddMinutes(30));
         Assert.False(Load(fixture).IsValid());
     }
+
+    // --- Audience binding (IsValid(expectedAudience), fail-closed) ---
+
+    [Fact]
+    public void IsValid_MatchingAudience_ReturnsTrue()
+    {
+        var fixture = SamlTestFactory.Create(audience: "https://jellyfin.example.com/sso");
+        Assert.True(Load(fixture).IsValid("https://jellyfin.example.com/sso"));
+    }
+
+    [Fact]
+    public void IsValid_WrongAudience_ReturnsFalse()
+    {
+        var fixture = SamlTestFactory.Create(audience: "https://other-sp.example.com");
+        Assert.False(Load(fixture).IsValid("https://jellyfin.example.com/sso"));
+    }
+
+    [Fact]
+    public void IsValid_MissingAudienceWhenExpected_ReturnsFalse()
+    {
+        var fixture = SamlTestFactory.Create();
+        Assert.False(Load(fixture).IsValid("https://jellyfin.example.com/sso"));
+    }
+
+    [Fact]
+    public void IsValid_EmptyExpectedAudience_ReturnsFalse()
+    {
+        // Audience validation requested but nothing to check against -> fail closed.
+        var fixture = SamlTestFactory.Create(audience: "https://jellyfin.example.com/sso");
+        Assert.False(Load(fixture).IsValid(string.Empty));
+    }
+
+    [Fact]
+    public void IsValid_MultipleAudiences_MatchesAny()
+    {
+        var fixture = SamlTestFactory.Create(audiences: new[] { "https://other-sp.example.com", "https://jellyfin.example.com/sso" });
+        Assert.True(Load(fixture).IsValid("https://jellyfin.example.com/sso"));
+        Assert.False(Load(fixture).IsValid("https://not-listed.example.com"));
+    }
 }

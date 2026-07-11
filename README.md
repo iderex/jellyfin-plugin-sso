@@ -183,6 +183,9 @@ These all require authorization. Append an API key to the end of the request: `c
   - `samlEndpoint`: string. The SAML endpoint.
   - `samlClientId`: string. The SAML client ID.
   - `samlCertificate`: string. The base64 encoded SAML certificate.
+  - `samlAudience`: string. The audience the response must be addressed to (the assertion's `AudienceRestriction`). Leave blank to use `samlClientId`.
+  - `doNotValidateAudience`: boolean. If true, skips validating the assertion's `AudienceRestriction`. Off by default (responses must be addressed to this service provider). Only enable for a provider that cannot emit a matching audience.
+  - `allowExistingAccountLink`: boolean. If true, a first SSO login whose name matches an existing, unlinked Jellyfin account adopts that account. Off by default (such a login is refused rather than taking the account over).
   - `enabled`: boolean. Determines if the provider is enabled or not.
   - `enableAuthorization`: boolean: Determines if the plugin sets permissions for the user. If false, the user will start with no permissions and an administrator will add permissions. If disabled, then the permissions of users will not be modified and the Jellyfin defaults will be used instead.
   - `enableAllFolders`: boolean. Determines if the client logging in is allowed access to all folders.
