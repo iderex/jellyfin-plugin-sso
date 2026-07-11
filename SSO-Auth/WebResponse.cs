@@ -416,6 +416,8 @@ const sleep = (milliseconds) => {
     /// <returns>A string with the HTML to serve to the client.</returns>
     public static string Generator(string data, string provider, string baseUrl, string mode, bool isLinking = false)
     {
+        System.ArgumentNullException.ThrowIfNull(baseUrl);
+
         // Strip out the protocol (http:// or https://) and convert the domain to Punycode
         var idnMapping = new IdnMapping();
         var protocolSeparatorIndex = baseUrl.IndexOf("//");
