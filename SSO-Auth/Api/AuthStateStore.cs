@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Linq;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api;
 
@@ -20,12 +21,9 @@ internal static class AuthStateStore
         DateTime now,
         TimeSpan lifetime)
     {
-        foreach (var kvp in states)
+        foreach (var kvp in states.Where(kvp => now.Subtract(kvp.Value.Created) > lifetime))
         {
-            if (now.Subtract(kvp.Value.Created) > lifetime)
-            {
-                states.TryRemove(kvp.Key, out _);
-            }
+            states.TryRemove(kvp.Key, out _);
         }
     }
 
