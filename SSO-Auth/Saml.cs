@@ -283,11 +283,12 @@ public class Response
     /// <summary>
     /// Gets the name ID attribute from the XML response.
     /// </summary>
-    /// <returns>The name ID attribute.</returns>
+    /// <returns>The name ID attribute, or null when the assertion carries no NameID (the caller
+    /// rejects such a login; previously this threw and surfaced as a 500).</returns>
     public string GetNameID()
     {
         var node = _xmlDoc.SelectSingleNode("/samlp:Response/saml:Assertion[1]/saml:Subject/saml:NameID", _xmlNameSpaceManager);
-        return node.InnerText;
+        return node?.InnerText;
     }
 
     /// <summary>

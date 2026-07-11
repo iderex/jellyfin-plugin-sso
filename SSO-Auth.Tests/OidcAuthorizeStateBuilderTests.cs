@@ -152,6 +152,63 @@ public class OidcAuthorizeStateBuilderTests
     }
 
     [Fact]
+    public void RoleGrantValid_NoUsernameClaim_IsNotValid()
+    {
+        // Fail closed (#95): a role matching the allow-list makes the login valid, but with no
+        // username claim (and no sub claim) there is no identity to log in — previously this minted
+        // a valid state whose null username failed downstream with a 500.
+        var config = Config(c =>
+        {
+            c.Roles = new[] { "jellyfin-users" };
+            c.RoleClaim = "role";
+        });
+
+        var result = OidcAuthorizeStateBuilder.Build(Claims(("role", "jellyfin-users")), config);
+
+        Assert.Null(result.Username);
+        Assert.False(result.Valid);
+    }
+
+    [Fact]
+    public void RoleGrantValid_OnlySubClaim_IsNotValid()
+    {
+        // Fail closed (#95): the sub fallback only runs when the login is NOT yet valid, so a
+        // role-grant-valid login with only a sub claim never resolves a username — it is rejected,
+        // and the sub claim is deliberately NOT adopted (that would widen the fallback's semantics).
+        var config = Config(c =>
+        {
+            c.Roles = new[] { "jellyfin-users" };
+            c.RoleClaim = "role";
+        });
+
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(("role", "jellyfin-users"), ("sub", "subject-123")),
+            config);
+
+        Assert.Null(result.Username);
+        Assert.False(result.Valid);
+    }
+
+    [Fact]
+    public void EmptyUsernameClaimValue_IsNotValid()
+    {
+        // Fail closed (#95): an empty username claim value is no identity either.
+        var result = OidcAuthorizeStateBuilder.Build(Claims(("preferred_username", string.Empty)), Config(_ => { }));
+
+        Assert.False(result.Valid);
+    }
+
+    [Fact]
+    public void WhitespaceUsernameClaimValue_IsNotValid()
+    {
+        // Fail closed (#95): whitespace-only is no identity — Jellyfin's own username validation
+        // rejects it, so accepting it here could only ever produce a downstream 500.
+        var result = OidcAuthorizeStateBuilder.Build(Claims(("preferred_username", "   ")), Config(_ => { }));
+
+        Assert.False(result.Valid);
+    }
+
+    [Fact]
     public void SubFallback_LastSubClaimWins()
     {
         var config = Config(c => c.Roles = Array.Empty<string>());

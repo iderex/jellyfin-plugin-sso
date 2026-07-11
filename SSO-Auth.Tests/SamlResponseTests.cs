@@ -143,6 +143,15 @@ public class SamlResponseTests
     }
 
     [Fact]
+    public void GetNameID_MissingNameId_ReturnsNull()
+    {
+        // An assertion without a NameID must yield null (the callback rejects it as an invalid
+        // login), not throw — previously this was an unhandled NRE turning into a 500 (#95).
+        var fixture = SamlTestFactory.Create(includeNameId: false);
+        Assert.Null(Load(fixture).GetNameID());
+    }
+
+    [Fact]
     public void GetCustomAttribute_ValidResponse_ReturnsRole()
     {
         var fixture = SamlTestFactory.Create(role: "jellyfin-admins");

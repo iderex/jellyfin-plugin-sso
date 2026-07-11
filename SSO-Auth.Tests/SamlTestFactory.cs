@@ -34,6 +34,7 @@ internal static class SamlTestFactory
     /// Produces a self-signed certificate plus a signed SAML response for the given subject/role.
     /// </summary>
     /// <param name="nameId">The value placed in saml:NameID.</param>
+    /// <param name="includeNameId">When false, the saml:NameID element is omitted entirely.</param>
     /// <param name="role">The value of the "Role" attribute.</param>
     /// <param name="notOnOrAfter">SubjectConfirmationData/@NotOnOrAfter; defaults to five minutes in the future.</param>
     /// <param name="includeNotOnOrAfter">When false, the NotOnOrAfter attribute is omitted entirely.</param>
@@ -46,6 +47,7 @@ internal static class SamlTestFactory
     /// <returns>A fixture exposing the certificate and the signed document.</returns>
     internal static SamlFixture Create(
         string nameId = "alice",
+        bool includeNameId = true,
         string role = "jellyfin-users",
         DateTime? notOnOrAfter = null,
         bool includeNotOnOrAfter = true,
@@ -108,7 +110,7 @@ internal static class SamlTestFactory
                     "<saml:Issuer>https://idp.example.com</saml:Issuer>" +
                     conditions +
                     "<saml:Subject>" +
-                        "<saml:NameID>" + SecurityElement.Escape(nameId) + "</saml:NameID>" +
+                        (includeNameId ? "<saml:NameID>" + SecurityElement.Escape(nameId) + "</saml:NameID>" : string.Empty) +
                         "<saml:SubjectConfirmation Method=\"urn:oasis:names:tc:SAML:2.0:cm:bearer\">" +
                             subjectConfirmationData +
                         "</saml:SubjectConfirmation>" +
