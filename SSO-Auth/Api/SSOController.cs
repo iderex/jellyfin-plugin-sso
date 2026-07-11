@@ -450,9 +450,7 @@ public class SSOController : ControllerBase
     [HttpPost("OID/Add/{provider}")]
     public void OidAdd(string provider, [FromBody] OidConfig config)
     {
-        var configuration = SSOPlugin.Instance.Configuration;
-        configuration.OidConfigs[provider] = config;
-        SSOPlugin.Instance.UpdateConfiguration(configuration);
+        SSOPlugin.Instance.MutateConfiguration(configuration => configuration.OidConfigs[provider] = config);
     }
 
     /// <summary>
@@ -463,9 +461,7 @@ public class SSOController : ControllerBase
     [HttpGet("OID/Del/{provider}")]
     public void OidDel(string provider)
     {
-        var configuration = SSOPlugin.Instance.Configuration;
-        configuration.OidConfigs.Remove(provider);
-        SSOPlugin.Instance.UpdateConfiguration(configuration);
+        SSOPlugin.Instance.MutateConfiguration(configuration => configuration.OidConfigs.Remove(provider));
     }
 
     /// <summary>
@@ -708,9 +704,7 @@ public class SSOController : ControllerBase
     [HttpPost("SAML/Add/{provider}")]
     public OkResult SamlAdd(string provider, [FromBody] SamlConfig newConfig)
     {
-        var configuration = SSOPlugin.Instance.Configuration;
-        configuration.SamlConfigs[provider] = newConfig;
-        SSOPlugin.Instance.UpdateConfiguration(configuration);
+        SSOPlugin.Instance.MutateConfiguration(configuration => configuration.SamlConfigs[provider] = newConfig);
         return Ok();
     }
 
@@ -723,9 +717,7 @@ public class SSOController : ControllerBase
     [HttpGet("SAML/Del/{provider}")]
     public OkResult SamlDel(string provider)
     {
-        var configuration = SSOPlugin.Instance.Configuration;
-        configuration.SamlConfigs.Remove(provider);
-        SSOPlugin.Instance.UpdateConfiguration(configuration);
+        SSOPlugin.Instance.MutateConfiguration(configuration => configuration.SamlConfigs.Remove(provider));
         return Ok();
     }
 
@@ -895,28 +887,49 @@ public class SSOController : ControllerBase
         return Ok();
     }
 
-    private SerializableDictionary<string, Guid> GetCanonicalLinks(string mode, string provider)
+    // Applies a mutation to a provider's canonical-links map on the LIVE configuration, reassigning the
+    // map so a lazily-created (previously-null) one is persisted. Runs inside MutateConfiguration, so the
+    // whole read-modify-write is serialized and concurrent first-logins cannot lose each other's links.
+    private static void MutateLinks(PluginConfiguration configuration, string mode, string provider, Action<SerializableDictionary<string, Guid>> mutate)
     {
-        SerializableDictionary<string, Guid> links = null;
-
-        switch (mode.ToLower())
+        switch (mode.ToLowerInvariant())
         {
             case "saml":
-                links = SSOPlugin.Instance.Configuration.SamlConfigs[provider].CanonicalLinks;
+            {
+                var providerConfig = configuration.SamlConfigs[provider];
+                var links = providerConfig.CanonicalLinks;
+                mutate(links);
+                providerConfig.CanonicalLinks = links;
                 break;
+            }
+
             case "oid":
-                links = SSOPlugin.Instance.Configuration.OidConfigs[provider].CanonicalLinks;
+            {
+                var providerConfig = configuration.OidConfigs[provider];
+                var links = providerConfig.CanonicalLinks;
+                mutate(links);
+                providerConfig.CanonicalLinks = links;
                 break;
+            }
+
             default:
                 throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'");
         }
+    }
 
-        if (links == null)
+    // Looks up a canonical link under the config lock, so the read cannot tear against a concurrent write.
+    private static Guid? TryGetCanonicalLink(string mode, string provider, string canonicalName)
+    {
+        return SSOPlugin.Instance.ReadConfiguration(configuration =>
         {
-            links = new SerializableDictionary<string, Guid>();
-        }
-
-        return links;
+            var links = mode.ToLowerInvariant() switch
+            {
+                "saml" => configuration.SamlConfigs[provider].CanonicalLinks,
+                "oid" => configuration.OidConfigs[provider].CanonicalLinks,
+                _ => throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'"),
+            };
+            return links.TryGetValue(canonicalName, out var id) ? id : (Guid?)null;
+        });
     }
 
     private async Task<Guid> CreateCanonicalLinkAndUserIfNotExist(string mode, string provider, string canonicalName, bool allowExistingAccountLink)
@@ -924,7 +937,8 @@ public class SSOController : ControllerBase
         // An identity already linked to a still-existing account is keyed on the canonical name;
         // a dangling link (user since deleted) is treated as no link.
         Guid? linkedUserId = null;
-        if (GetCanonicalLinks(mode, provider).TryGetValue(canonicalName, out var linked) && _userManager.GetUserById(linked) != null)
+        var linked = TryGetCanonicalLink(mode, provider, canonicalName);
+        if (linked.HasValue && _userManager.GetUserById(linked.Value) != null)
         {
             linkedUserId = linked;
         }
@@ -961,18 +975,6 @@ public class SSOController : ControllerBase
             default:
                 throw new InvalidOperationException($"Unhandled account-link action: {decision.Action}");
         }
-    }
-
-    private Guid GetCanonicalLink(string mode, string provider, string canonicalName)
-    {
-        SerializableDictionary<string, Guid> links = null;
-        Guid userId = Guid.Empty;
-
-        links = GetCanonicalLinks(mode, provider);
-
-        userId = links[canonicalName];
-
-        return userId;
     }
 
     /// <summary>
@@ -1024,18 +1026,43 @@ public class SSOController : ControllerBase
             return StatusCode(StatusCodes.Status403Forbidden, "Current user is not allowed to unlink SSO providers for user ID.");
         }
 
-        Guid linkedId = GetCanonicalLink(mode, provider, canonicalName);
+        var mismatch = false;
+        var found = false;
+        try
+        {
+            SSOPlugin.Instance.MutateConfiguration(configuration => MutateLinks(configuration, mode, provider, links =>
+            {
+                if (!links.TryGetValue(canonicalName, out var linkedId))
+                {
+                    return;
+                }
 
-        if (linkedId != jellyfinUserId)
+                found = true;
+                if (linkedId != jellyfinUserId)
+                {
+                    mismatch = true;
+                    return;
+                }
+
+                links.Remove(canonicalName);
+            }));
+        }
+        catch (KeyNotFoundException)
+        {
+            return BadRequest("No matching provider found");
+        }
+
+        if (!found)
+        {
+            return NotFound("No SSO link is registered for that canonical name.");
+        }
+
+        if (mismatch)
         {
             return StatusCode(StatusCodes.Status409Conflict, "jellyfin UID does not match id registered to that canonical name.");
         }
 
-        var links = GetCanonicalLinks(mode, provider);
-
-        links.Remove(canonicalName);
-
-        return UpdateCanonicalLinkConfig(links, mode, provider);
+        return Ok();
     }
 
     /// <summary>
@@ -1166,41 +1193,19 @@ public class SSOController : ControllerBase
         return Problem("Something went wrong!");
     }
 
-    private ActionResult CreateCanonicalLink(string mode, string provider, [FromRoute] Guid jellyfinUserId, string providerUserId)
+    private ActionResult CreateCanonicalLink(string mode, string provider, Guid jellyfinUserId, string providerUserId)
     {
-        SerializableDictionary<string, Guid> links = null;
         try
         {
-            links = GetCanonicalLinks(mode, provider);
+            SSOPlugin.Instance.MutateConfiguration(configuration =>
+                MutateLinks(configuration, mode, provider, links => links[providerUserId] = jellyfinUserId));
         }
         catch (KeyNotFoundException)
         {
             return BadRequest("No matching provider found");
         }
 
-        links[providerUserId] = jellyfinUserId;
-        UpdateCanonicalLinkConfig(links, mode, provider);
-
         return NoContent();
-    }
-
-    private OkResult UpdateCanonicalLinkConfig(SerializableDictionary<string, Guid> links, string mode, string provider)
-    {
-        var configuration = SSOPlugin.Instance.Configuration;
-        switch (mode.ToLower())
-        {
-            case "saml":
-                configuration.SamlConfigs[provider].CanonicalLinks = links;
-                break;
-            case "oid":
-                configuration.OidConfigs[provider].CanonicalLinks = links;
-                break;
-            default:
-                throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'");
-        }
-
-        SSOPlugin.Instance.UpdateConfiguration(configuration);
-        return Ok();
     }
 
     /// <summary>
