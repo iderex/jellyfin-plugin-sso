@@ -5,8 +5,8 @@
 # Compile-time API compatibility is already enforced by building against the pinned Jellyfin.*
 # packages with --warnaserror; this catches the metadata/ABI drift that a build cannot.
 #
-# Runtime SSO behavior against a live Jellyfin + identity provider is verified separately by the
-# manual end-to-end checklist (docs/E2E-CHECKLIST.md) — it cannot be exercised headlessly.
+# Runtime SSO behavior against a live Jellyfin + identity provider is verified separately by a
+# manual end-to-end check on a real server — it cannot be exercised headlessly.
 set -euo pipefail
 
 csproj="SSO-Auth/SSO-Auth.csproj"
@@ -20,15 +20,17 @@ check() { # description actual expected
   if [ "$2" != "$3" ]; then echo "::error::$1 mismatch: '$2' vs '$3'"; fail=1; else echo "ok: $1 = $2"; fi
 }
 
-tfm=$(grep -oP '(?<=<TargetFramework>)[^<]+' "$csproj" | head -1); need "$tfm" "csproj TargetFramework"
-asmver=$(grep -oP '(?<=<AssemblyVersion>)[^<]+' "$csproj" | head -1); need "$asmver" "csproj AssemblyVersion"
-filever=$(grep -oP '(?<=<FileVersion>)[^<]+' "$csproj" | head -1); need "$filever" "csproj FileVersion"
-controller=$(grep -oP 'Jellyfin\.Controller"\s+Version="\K[^"]+' "$csproj" | head -1); need "$controller" "Jellyfin.Controller version"
-model=$(grep -oP 'Jellyfin\.Model"\s+Version="\K[^"]+' "$csproj" | head -1); need "$model" "Jellyfin.Model version"
+# `|| true` so a missing match yields an empty value handled by need()/fail below, rather than
+# aborting the whole script via `set -e`/`pipefail` before a clear error can be printed.
+tfm=$(grep -oP '(?<=<TargetFramework>)[^<]+' "$csproj" | head -1 || true); need "$tfm" "csproj TargetFramework"
+asmver=$(grep -oP '(?<=<AssemblyVersion>)[^<]+' "$csproj" | head -1 || true); need "$asmver" "csproj AssemblyVersion"
+filever=$(grep -oP '(?<=<FileVersion>)[^<]+' "$csproj" | head -1 || true); need "$filever" "csproj FileVersion"
+controller=$(grep -oP 'Jellyfin\.Controller"\s+Version="\K[^"]+' "$csproj" | head -1 || true); need "$controller" "Jellyfin.Controller version"
+model=$(grep -oP 'Jellyfin\.Model"\s+Version="\K[^"]+' "$csproj" | head -1 || true); need "$model" "Jellyfin.Model version"
 
-byframework=$(grep -oP 'framework:\s*"?\K[^"[:space:]]+' "$buildyaml" | head -1); need "$byframework" "build.yaml framework"
-byversion=$(grep -oP '^version:\s*"?\K[^"[:space:]]+' "$buildyaml" | head -1); need "$byversion" "build.yaml version"
-abi=$(grep -oP 'targetAbi:\s*"?\K[^"[:space:]]+' "$buildyaml" | head -1); need "$abi" "build.yaml targetAbi"
+byframework=$(grep -oP 'framework:\s*"?\K[^"[:space:]]+' "$buildyaml" | head -1 || true); need "$byframework" "build.yaml framework"
+byversion=$(grep -oP '^version:\s*"?\K[^"[:space:]]+' "$buildyaml" | head -1 || true); need "$byversion" "build.yaml version"
+abi=$(grep -oP 'targetAbi:\s*"?\K[^"[:space:]]+' "$buildyaml" | head -1 || true); need "$abi" "build.yaml targetAbi"
 
 [ "$fail" -eq 0 ] || { echo "aborting: could not read all metadata"; exit 1; }
 
