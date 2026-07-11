@@ -69,6 +69,14 @@ public class SSOController : ControllerBase
     private static readonly string UserAgentString =
         $"Jellyfin-Plugin-SSO-Auth +{System.Diagnostics.FileVersionInfo.GetVersionInfo(Assembly.GetExecutingAssembly().Location).FileVersion} (https://github.com/iderex/jellyfin-plugin-sso)";
 
+    // Splits the role-claim path on dots that are not escaped with a backslash ("a.b\.c" -> "a", "b.c").
+    // Compiled once and reused: it runs for every claim on every login (hot path), so it must not be
+    // recompiled per call. The match timeout is defense-in-depth on the match input: the pattern is
+    // fixed and linear (a fixed-width lookbehind plus a literal dot) so it cannot backtrack into a
+    // timeout, but the cap guarantees role parsing can never block the login path.
+    private static readonly Regex RoleClaimSplitRegex =
+        new Regex(@"(?<!\\)\.", RegexOptions.Compiled, TimeSpan.FromSeconds(1));
+
     /// <summary>
     /// Initializes a new instance of the <see cref="SSOController"/> class.
     /// </summary>
@@ -208,7 +216,7 @@ public class SSOController : ControllerBase
                 // Role processing
                 // The regex matches any "." not preceded by a "\": a.b.c will be split into a, b, and c, but a.b\.c will be split into a, b.c (after processing the escaped dots)
                 // We have to first process the RoleClaim string
-                string[] segments = string.IsNullOrEmpty(config.RoleClaim) ? Array.Empty<string>() : Regex.Split(config.RoleClaim.Trim(), "(?<!\\\\)\\.");
+                string[] segments = string.IsNullOrEmpty(config.RoleClaim) ? Array.Empty<string>() : RoleClaimSplitRegex.Split(config.RoleClaim.Trim());
 
                 if (segments.Any())
                 {
