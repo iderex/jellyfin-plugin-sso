@@ -213,6 +213,7 @@ public class SSOController : ControllerBase
                     .Select(segment => segment.Replace("\\.", "."))
                     .ToArray();
 
+            var roles = new List<string>();
             foreach (var claim in result.User.Claims)
             {
                 if (claim.Type == (config.DefaultUsernameClaim?.Trim() ?? "preferred_username"))
@@ -224,79 +225,23 @@ public class SSOController : ControllerBase
                     }
                 }
 
-                // Role processing
-                if (roleClaimSegments.Any())
+                // Collect the roles carried by every claim on the configured role-claim path.
+                if (roleClaimSegments.Any() && claim.Type == roleClaimSegments[0])
                 {
-                    if (claim.Type == roleClaimSegments[0])
-                    {
-                        foreach (string role in OidcRoleExtractor.ExtractRoles(roleClaimSegments, claim.Value))
-                        {
-                            // Check if allowed to login based on roles
-                            if (config.Roles != null && config.Roles.Any())
-                            {
-                                foreach (string validRoles in config.Roles)
-                                {
-                                    if (role.Equals(validRoles))
-                                    {
-                                        timedState.Valid = true;
-                                    }
-                                }
-                            }
-
-                            // Check if admin based on roles
-                            if (config.AdminRoles != null && config.AdminRoles.Any())
-                            {
-                                foreach (string validAdminRoles in config.AdminRoles)
-                                {
-                                    if (role.Equals(validAdminRoles))
-                                    {
-                                        timedState.Admin = true;
-                                    }
-                                }
-                            }
-
-                            // Get allowed folders from roles
-                            if (config.EnableFolderRoles)
-                            {
-                                foreach (FolderRoleMap folderRoleMap in config.FolderRoleMapping)
-                                {
-                                    if (role.Equals(folderRoleMap.Role?.Trim()))
-                                    {
-                                        timedState.Folders.AddRange(folderRoleMap.Folders);
-                                    }
-                                }
-                            }
-
-                            if (config.EnableLiveTvRoles)
-                            {
-                                // Check if allowed Live TV based on roles
-                                if (config.LiveTvRoles != null && config.LiveTvRoles.Any())
-                                {
-                                    foreach (string validLiveTvRoles in config.LiveTvRoles)
-                                    {
-                                        if (role.Equals(validLiveTvRoles))
-                                        {
-                                            timedState.EnableLiveTv = true;
-                                        }
-                                    }
-                                }
-
-                                // Check if allowed Live TV management based on roles
-                                if (config.LiveTvManagementRoles != null && config.LiveTvManagementRoles.Any())
-                                {
-                                    foreach (string validLiveTvManagementRoles in config.LiveTvManagementRoles)
-                                    {
-                                        if (role.Equals(validLiveTvManagementRoles))
-                                        {
-                                            timedState.EnableLiveTvManagement = true;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    roles.AddRange(OidcRoleExtractor.ExtractRoles(roleClaimSegments, claim.Value));
                 }
             }
+
+            // Map the collected roles to privileges and merge them into the authorize state. The grants
+            // are monotonic (login validity, admin, Live TV, Live TV management, and folder access are
+            // only ever added), so OR-ing the booleans and appending the folders preserves the prior
+            // config-default values initialized above.
+            var grants = OidcRolePrivilegeMapper.Evaluate(roles, config);
+            timedState.Valid |= grants.Valid;
+            timedState.Admin |= grants.Admin;
+            timedState.EnableLiveTv |= grants.EnableLiveTv;
+            timedState.EnableLiveTvManagement |= grants.EnableLiveTvManagement;
+            timedState.Folders.AddRange(grants.Folders);
 
             // If the provider doesn't support the preferred username claim, then use the sub claim
             if (!timedState.Valid)
