@@ -145,30 +145,7 @@ public class SSOController : ControllerBase
                 return BadRequest("Invalid or expired state");
             }
 
-            var scopes = config.OidScopes == null ? new string[2] : config.OidScopes;
-            var options = new OidcClientOptions
-            {
-                Authority = config.OidEndpoint?.Trim(),
-                ClientId = config.OidClientId?.Trim(),
-                ClientSecret = config.OidSecret?.Trim(),
-                RedirectUri = GetRequestBase(config.SchemeOverride, config.PortOverride) + $"/sso/OID/{(Request.Path.Value.Contains("/start/", StringComparison.InvariantCultureIgnoreCase) ? "redirect" : "r")}/" + provider,
-                Scope = string.Join(" ", scopes.Prepend("openid profile")),
-                DisablePushedAuthorization = config.DisablePushedAuthorization,
-                LoggerFactory = _loggerFactory,
-                LoadProfile = !config.DoNotLoadProfile,
-                HttpClientFactory = o =>
-                {
-                    var client = _httpClientFactory.CreateClient();
-                    client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgentString);
-                    return client;
-                }
-            };
-            var oidEndpointUri = new Uri(config.OidEndpoint?.Trim());
-            options.Policy.Discovery.AdditionalEndpointBaseAddresses.Add(oidEndpointUri.GetLeftPart(UriPartial.Authority));
-            options.Policy.Discovery.ValidateEndpoints = !config.DoNotValidateEndpoints; // For Google and other providers with different endpoints
-            options.Policy.Discovery.RequireHttps = !config.DisableHttps;
-            options.Policy.Discovery.ValidateIssuerName = !config.DoNotValidateIssuerName;
-            var oidcClient = new OidcClient(options);
+            var oidcClient = CreateCallbackOidcClient(config, provider);
             var currentState = timedState.State;
             var result = await oidcClient.ProcessResponseAsync(Request.QueryString.Value, currentState).ConfigureAwait(false);
 
@@ -244,29 +221,7 @@ public class SSOController : ControllerBase
 
             string redirectUri = GetRequestBase(config.SchemeOverride, config.PortOverride) + $"/sso/OID/{(newPath ? "redirect" : "r")}/" + provider;
 
-            var options = new OidcClientOptions
-            {
-                Authority = config.OidEndpoint?.Trim(),
-                ClientId = config.OidClientId?.Trim(),
-                ClientSecret = config.OidSecret?.Trim(),
-                RedirectUri = redirectUri,
-                Scope = string.Join(" ", config.OidScopes.Prepend("openid profile")),
-                DisablePushedAuthorization = config.DisablePushedAuthorization,
-                LoggerFactory = _loggerFactory,
-                LoadProfile = !config.DoNotLoadProfile,
-                HttpClientFactory = o =>
-                {
-                    var client = _httpClientFactory.CreateClient();
-                    client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgentString);
-                    return client;
-                }
-            };
-            var oidEndpointUri = new Uri(config.OidEndpoint?.Trim());
-            options.Policy.Discovery.AdditionalEndpointBaseAddresses.Add(oidEndpointUri.GetLeftPart(UriPartial.Authority));
-            options.Policy.Discovery.ValidateEndpoints = !config.DoNotValidateEndpoints; // For Google and other providers with different endpoints
-            options.Policy.Discovery.RequireHttps = !config.DisableHttps;
-            options.Policy.Discovery.ValidateIssuerName = !config.DoNotValidateIssuerName;
-            var oidcClient = new OidcClient(options);
+            var oidcClient = CreateOidcClient(config, redirectUri, string.Join(" ", config.OidScopes.Prepend("openid profile")));
             var state = await oidcClient.PrepareLoginAsync().ConfigureAwait(false);
 
             if (state.IsError)
@@ -287,6 +242,49 @@ public class SSOController : ControllerBase
         }
 
         throw new ArgumentException(ProviderDoesNotExistMessage);
+    }
+
+    // Builds the OidcClient that both the challenge and the callback use. Pure mechanical assembly:
+    // the redirect URI and the scope string are the only two inputs the endpoints derive differently,
+    // so the caller supplies them. Constructed in the same order as before the extraction, so a null
+    // OidEndpoint still fails at the same point (the Uri constructor, after the options object).
+    private OidcClient CreateOidcClient(OidConfig config, string redirectUri, string scope)
+    {
+        var options = new OidcClientOptions
+        {
+            Authority = config.OidEndpoint?.Trim(),
+            ClientId = config.OidClientId?.Trim(),
+            ClientSecret = config.OidSecret?.Trim(),
+            RedirectUri = redirectUri,
+            Scope = scope,
+            DisablePushedAuthorization = config.DisablePushedAuthorization,
+            LoggerFactory = _loggerFactory,
+            LoadProfile = !config.DoNotLoadProfile,
+            HttpClientFactory = o =>
+            {
+                var client = _httpClientFactory.CreateClient();
+                client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgentString);
+                return client;
+            }
+        };
+        var oidEndpointUri = new Uri(config.OidEndpoint?.Trim());
+        options.Policy.Discovery.AdditionalEndpointBaseAddresses.Add(oidEndpointUri.GetLeftPart(UriPartial.Authority));
+        options.Policy.Discovery.ValidateEndpoints = !config.DoNotValidateEndpoints; // For Google and other providers with different endpoints
+        options.Policy.Discovery.RequireHttps = !config.DisableHttps;
+        options.Policy.Discovery.ValidateIssuerName = !config.DoNotValidateIssuerName;
+        return new OidcClient(options);
+    }
+
+    // Callback-side client: the redirect URI is rebuilt with the same expression the callback always
+    // used — a "/start/" test against the callback path, which never contains it, so the segment is
+    // always "r" (pre-existing quirk, deliberately preserved; strict IdPs fail closed on a mismatch).
+    // A null scopes array is tolerated here but not on the challenge side — also a pre-existing
+    // asymmetry deliberately preserved.
+    private OidcClient CreateCallbackOidcClient(OidConfig config, string provider)
+    {
+        var scopes = config.OidScopes == null ? new string[2] : config.OidScopes;
+        var redirectUri = GetRequestBase(config.SchemeOverride, config.PortOverride) + $"/sso/OID/{(Request.Path.Value.Contains("/start/", StringComparison.InvariantCultureIgnoreCase) ? "redirect" : "r")}/" + provider;
+        return CreateOidcClient(config, redirectUri, string.Join(" ", scopes.Prepend("openid profile")));
     }
 
     /// <summary>
