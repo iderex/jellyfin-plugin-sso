@@ -426,8 +426,15 @@ public class SSOController : ControllerBase
                 return ReturnError(StatusCodes.Status400BadRequest, $"Error preparing login: {state.Error} - {state.ErrorDescription}");
             }
 
-            // IsLinking tracks whether this is a linking request rather than a login.
-            StateManager.TryAdd(state.State, new TimedAuthorizeState(state, DateTime.Now) { IsLinking = isLinking });
+            // IsLinking tracks whether this is a linking request rather than a login. The state value
+            // is a fresh CSPRNG token, so a collision is effectively impossible; log if it ever occurs
+            // instead of silently proceeding to a callback that would then fail with "invalid state".
+            if (!StateManager.TryAdd(state.State, new TimedAuthorizeState(state, DateTime.Now) { IsLinking = isLinking }))
+            {
+                _logger.LogWarning("OpenID authorize-state collision for provider {Provider}; login not started.", provider?.ReplaceLineEndings(string.Empty));
+                return ReturnError(StatusCodes.Status500InternalServerError, "Could not start login due to a state collision; please retry.");
+            }
+
             return Redirect(state.StartUrl);
         }
 

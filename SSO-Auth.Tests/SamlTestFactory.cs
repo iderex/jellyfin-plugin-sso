@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Security.Cryptography.Xml;
@@ -67,7 +68,7 @@ internal static class SamlTestFactory
         var assertionId = "_" + Guid.NewGuid().ToString("N");
 
         var subjectConfirmationData = includeNotOnOrAfter
-            ? "<saml:SubjectConfirmationData NotOnOrAfter=\"" + effectiveNotOnOrAfter.ToString(TimeFormat, CultureInfo.InvariantCulture) + "\" />"
+            ? "<saml:SubjectConfirmationData NotOnOrAfter=\"" + effectiveNotOnOrAfter.ToUniversalTime().ToString(TimeFormat, CultureInfo.InvariantCulture) + "\" />"
             : "<saml:SubjectConfirmationData />";
 
         var conditions = string.Empty;
@@ -76,12 +77,12 @@ internal static class SamlTestFactory
             var attributes = new StringBuilder();
             if (conditionsNotBefore.HasValue)
             {
-                attributes.Append(" NotBefore=\"" + conditionsNotBefore.Value.ToString(TimeFormat, CultureInfo.InvariantCulture) + "\"");
+                attributes.Append(" NotBefore=\"" + conditionsNotBefore.Value.ToUniversalTime().ToString(TimeFormat, CultureInfo.InvariantCulture) + "\"");
             }
 
             if (conditionsNotOnOrAfter.HasValue)
             {
-                attributes.Append(" NotOnOrAfter=\"" + conditionsNotOnOrAfter.Value.ToString(TimeFormat, CultureInfo.InvariantCulture) + "\"");
+                attributes.Append(" NotOnOrAfter=\"" + conditionsNotOnOrAfter.Value.ToUniversalTime().ToString(TimeFormat, CultureInfo.InvariantCulture) + "\"");
             }
 
             var body = string.Empty;
@@ -107,13 +108,13 @@ internal static class SamlTestFactory
                     "<saml:Issuer>https://idp.example.com</saml:Issuer>" +
                     conditions +
                     "<saml:Subject>" +
-                        "<saml:NameID>" + nameId + "</saml:NameID>" +
+                        "<saml:NameID>" + SecurityElement.Escape(nameId) + "</saml:NameID>" +
                         "<saml:SubjectConfirmation Method=\"urn:oasis:names:tc:SAML:2.0:cm:bearer\">" +
                             subjectConfirmationData +
                         "</saml:SubjectConfirmation>" +
                     "</saml:Subject>" +
                     "<saml:AttributeStatement>" +
-                        "<saml:Attribute Name=\"Role\"><saml:AttributeValue>" + role + "</saml:AttributeValue></saml:Attribute>" +
+                        "<saml:Attribute Name=\"Role\"><saml:AttributeValue>" + SecurityElement.Escape(role) + "</saml:AttributeValue></saml:Attribute>" +
                     "</saml:AttributeStatement>" +
                 "</saml:Assertion>" +
             "</samlp:Response>";
