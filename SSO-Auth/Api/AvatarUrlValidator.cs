@@ -100,17 +100,18 @@ internal static class AvatarUrlValidator
             return IsBlockedAddress(address.MapToIPv4());
         }
 
+        var bytes = address.GetAddressBytes();
+
         // IPv4-in-IPv6 transition addresses (6to4, the NAT64 well-known prefix, and the deprecated
         // IPv4-compatible form) embed an IPv4 address that can target an internal range - unwrap it and
         // re-check, so e.g. [64:ff9b::7f00:1] cannot smuggle 127.0.0.1 past the filter.
-        if (TryExtractEmbeddedIPv4(address.GetAddressBytes(), out var embedded))
+        if (TryExtractEmbeddedIPv4(bytes, out var embedded))
         {
             return IsBlockedAddress(embedded);
         }
 
         // fec0::/10 is the deprecated site-local range (RFC 3879); block it as defense-in-depth.
-        var v6 = address.GetAddressBytes();
-        var siteLocal = v6[0] == 0xfe && (v6[1] & 0xc0) == 0xc0;
+        var siteLocal = bytes[0] == 0xfe && (bytes[1] & 0xc0) == 0xc0;
 
         return address.IsIPv6LinkLocal
             || address.IsIPv6UniqueLocal
