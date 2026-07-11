@@ -7,7 +7,7 @@ export async function serverAddress({ basePath = "/web" }) {
   const apiClient = window.ApiClient;
 
   if (apiClient) {
-    return Promise.resolve(apiClient.serverAddress());
+    return apiClient.serverAddress();
   }
 
   const urls = [];
@@ -36,7 +36,7 @@ export async function serverAddress({ basePath = "/web" }) {
 
     // Don't use bundled app URL (file:) as server URL
     if (url.startsWith("file:")) {
-      return Promise.resolve();
+      return;
     }
 
     urls.push(url);
@@ -44,7 +44,16 @@ export async function serverAddress({ basePath = "/web" }) {
 
   console.debug("URL candidates:", urls);
 
-  const promises = urls.map((url) => {
+  // Fail closed: only probe candidates on this page's own origin.
+  const isSameOrigin = (candidate) => {
+    try {
+      return new URL(candidate).origin === window.location.origin;
+    } catch {
+      return false;
+    }
+  };
+
+  const promises = urls.filter(isSameOrigin).map((url) => {
     return fetch(`${url}/System/Info/Public`)
       .then((resp) => {
         return {
@@ -52,19 +61,17 @@ export async function serverAddress({ basePath = "/web" }) {
           response: resp,
         };
       })
-      .catch(() => {
-        return Promise.resolve();
-      });
+      .catch(() => undefined);
   });
 
   return Promise.all(promises)
     .then((responses) => {
       responses = responses.filter((obj) => obj && obj.response.ok);
       return Promise.all(
-        responses.map((obj) => {
+        responses.map(async (obj) => {
           return {
             url: obj.url,
-            config: obj.response.json(),
+            config: await obj.response.json(),
           };
         }),
       );
@@ -72,16 +79,14 @@ export async function serverAddress({ basePath = "/web" }) {
     .then((configs) => {
       const selection =
         configs.find((obj) => !obj.config.StartupWizardCompleted) || configs[0];
-      return Promise.resolve(selection?.url);
+      return selection?.url;
     })
     .catch((error) => {
       console.log(error);
-      return Promise.resolve();
     });
 }
 
-// TODO: Refactor duplicated code
-// ! Duplicated at
+// Duplicated with WebResponse.cs; tracked in #63.
 // https://github.com/9p4/jellyfin-plugin-sso/blob/38558d762a13422862240af4060bdd1bb1618d57/SSO-Auth/WebResponse.cs#L363-L401
 function getDeviceName() {
   return "DUMMY";
@@ -112,20 +117,20 @@ await awaitLocalStorage();
 
 // Fetch credentials
 
-var credentials = new jellyfinApiclient.Credentials();
+const credentials = new jellyfinApiclient.Credentials();
 
-var server = await serverAddress({ basePath: "/SSOViews" });
+const server = await serverAddress({ basePath: "/SSOViews" });
 console.log({ server: server });
-var deviceId = getDeviceId();
-var appName = "SSO-Auth";
-var appVersion = "0.0.0.9000";
-var capabilities = {};
+const deviceId = getDeviceId();
+const appName = "SSO-Auth";
+const appVersion = "0.0.0.9000";
+const capabilities = {};
 
 const current_server = credentials
   .credentials()
   .Servers.find((e) => e.LocalAddress == server || e.ManualAddress == server);
 
-var localApiClient = new jellyfinApiclient.ApiClient(
+const localApiClient = new jellyfinApiclient.ApiClient(
   server,
   appName,
   appVersion,
@@ -137,7 +142,7 @@ localApiClient.setAuthenticationInfo(
   current_server.UserId,
 );
 
-var connections = new jellyfinApiclient.ConnectionManager(
+const connections = new jellyfinApiclient.ConnectionManager(
   credentials,
   appName,
   appVersion,

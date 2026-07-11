@@ -14,10 +14,15 @@ buildyaml="build.yaml"
 fail=0
 
 need() { # value description
-  if [ -z "$1" ]; then echo "::error::could not read $2"; fail=1; fi
+  local value="$1"
+  local description="$2"
+  if [[ -z "$value" ]]; then echo "::error::could not read $description" >&2; fail=1; fi
 }
 check() { # description actual expected
-  if [ "$2" != "$3" ]; then echo "::error::$1 mismatch: '$2' vs '$3'"; fail=1; else echo "ok: $1 = $2"; fi
+  local description="$1"
+  local actual="$2"
+  local expected="$3"
+  if [[ "$actual" != "$expected" ]]; then echo "::error::$description mismatch: '$actual' vs '$expected'" >&2; fail=1; else echo "ok: $description = $actual"; fi
 }
 
 # `|| true` so a missing match yields an empty value handled by need()/fail below, rather than
@@ -32,7 +37,7 @@ byframework=$(grep -oP 'framework:\s*"?\K[^"[:space:]]+' "$buildyaml" | head -1 
 byversion=$(grep -oP '^version:\s*"?\K[^"[:space:]]+' "$buildyaml" | head -1 || true); need "$byversion" "build.yaml version"
 abi=$(grep -oP 'targetAbi:\s*"?\K[^"[:space:]]+' "$buildyaml" | head -1 || true); need "$abi" "build.yaml targetAbi"
 
-[ "$fail" -eq 0 ] || { echo "aborting: could not read all metadata"; exit 1; }
+[[ "$fail" -eq 0 ]] || { echo "aborting: could not read all metadata"; exit 1; }
 
 check "target framework (csproj vs build.yaml)" "$tfm" "$byframework"
 check "plugin version (build.yaml vs AssemblyVersion)" "$byversion" "$asmver"
@@ -41,7 +46,7 @@ check "Jellyfin Controller vs Model package version" "$controller" "$model"
 # targetAbi is the minimum supported server ABI; its major.minor must match the SDK we build against.
 check "targetAbi major.minor vs Jellyfin.Controller" "$(echo "$abi" | cut -d. -f1-2)" "$(echo "$controller" | cut -d. -f1-2)"
 
-if [ "$fail" -ne 0 ]; then
+if [[ "$fail" -ne 0 ]]; then
   echo "Jellyfin compatibility metadata is inconsistent."
   exit 1
 fi

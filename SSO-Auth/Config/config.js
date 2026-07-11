@@ -22,21 +22,21 @@ const ssoConfigurationPage = {
     // Add providers as options for the selector
 
     Object.keys(providers).forEach((provider_name) => {
-      var choice = new Option(provider_name, provider_name);
+      const choice = new Option(provider_name, provider_name);
 
       page.querySelector("#selectProvider").appendChild(choice);
     });
   },
   populateEnabledFolders: (folder_list, container) => {
     container.querySelectorAll(".folder-checkbox").forEach((e) => {
-      e.checked = folder_list.includes(e.getAttribute("data-id"));
+      e.checked = folder_list.includes(e.dataset.id);
     });
   },
   serializeEnabledFolders: (container) => {
     return [...container.querySelectorAll(".folder-checkbox")]
       .filter((e) => e.checked)
       .map((e) => {
-        return e.getAttribute("data-id");
+        return e.dataset.id;
       });
   },
   populateFolders: (container) => {
@@ -58,7 +58,7 @@ const ssoConfigurationPage = {
       .forEach((e) => e.remove());
 
     const checkboxes = folders.Items.map((folder) => {
-      var out = document.createElement("label");
+      const out = document.createElement("label");
 
       out.innerHTML = `
         <input
@@ -84,7 +84,7 @@ const ssoConfigurationPage = {
       .forEach((e) => e.remove());
 
     const mapping_elements = folder_role_mappings.map((mapping) => {
-      var elem = document.createElement("div");
+      const elem = document.createElement("div");
 
       elem.classList.add("sso-role-mapping-container");
       elem.innerHTML = `
@@ -111,7 +111,7 @@ const ssoConfigurationPage = {
       ></div>
       `;
 
-      var checklist = elem.querySelector(".sso-folder-list");
+      const checklist = elem.querySelector(".sso-folder-list");
       const enabled_folders = mapping["Folders"];
 
       ssoConfigurationPage
@@ -137,18 +137,18 @@ const ssoConfigurationPage = {
     mapping_elements.forEach((e) => container.appendChild(e));
   },
   serializeRoleMappings: (container) => {
-    var out = [];
-    const roles = [
-      ...container.querySelectorAll(".sso-role-mapping-container"),
-    ].forEach((elem) => {
-      const role = elem.querySelector(".sso-role-mapping-name").value;
-      const checklist = elem.querySelector(".sso-folder-list");
+    const out = [];
+    [...container.querySelectorAll(".sso-role-mapping-container")].forEach(
+      (elem) => {
+        const role = elem.querySelector(".sso-role-mapping-name").value;
+        const checklist = elem.querySelector(".sso-folder-list");
 
-      out.push({
-        Role: role,
-        Folders: ssoConfigurationPage.serializeEnabledFolders(checklist),
-      });
-    });
+        out.push({
+          Role: role,
+          Folders: ssoConfigurationPage.serializeEnabledFolders(checklist),
+        });
+      },
+    );
 
     return out;
   },
@@ -202,16 +202,16 @@ const ssoConfigurationPage = {
   },
   parseTextList: (element) => {
     // Return the parsed text list
-    var out = element.value
+    const out = element.value
       .split("\n")
       .map((e) => e.trim())
-      .filter((e) => e);
+      .filter(Boolean);
     return out;
   },
   loadProvider: (page, provider_name) => {
     ApiClient.getPluginConfiguration(ssoConfigurationPage.pluginUniqueId).then(
       (config) => {
-        var provider = config.OidConfigs[provider_name] || {};
+        const provider = config.OidConfigs[provider_name] || {};
 
         const form_elements = ssoConfigurationPage.listArgumentsByType(page);
 
@@ -294,7 +294,7 @@ const ssoConfigurationPage = {
       ApiClient.getPluginConfiguration(
         ssoConfigurationPage.pluginUniqueId,
       ).then((config) => {
-        var current_config = {};
+        let current_config = {};
         if (config.OidConfigs.hasOwnProperty(provider_name)) {
           current_config = config.OidConfigs[provider_name];
         }
@@ -356,7 +356,7 @@ const ssoConfigurationPage = {
     });
   },
   addTextAreaStyle: (view) => {
-    var style = document.createElement("link");
+    const style = document.createElement("link");
     style.rel = "stylesheet";
     style.href =
       ApiClient.getUrl("web/configurationpage") + "?name=SSO-Auth.css";
@@ -364,7 +364,7 @@ const ssoConfigurationPage = {
   },
 };
 
-export default function (view) {
+export default function initSsoConfigurationPage(view) {
   ssoConfigurationPage.addTextAreaStyle(view);
   ssoConfigurationPage.loadConfiguration(view);
 
