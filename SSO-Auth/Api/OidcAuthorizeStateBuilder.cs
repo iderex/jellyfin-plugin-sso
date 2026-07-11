@@ -45,29 +45,63 @@ internal static class OidcAuthorizeStateBuilder
             ? new List<string>(config.EnabledFolders)
             : new List<string>();
 
-        var enableLiveTv = config.EnableLiveTv;
-        var enableLiveTvManagement = config.EnableLiveTvManagement;
+        var avatarUrl = ResolveAvatarUrl(claimList, config);
+        var (username, valid, roles) = ScanClaims(claimList, config);
 
-        string? avatarUrl = null;
-        if (config.AvatarUrlFormat is not null)
+        // Map the collected roles to privileges and merge (monotonic: only ever grants).
+        var grants = OidcRolePrivilegeMapper.Evaluate(roles, config);
+        valid |= grants.Valid;
+        var admin = grants.Admin;
+        var enableLiveTv = config.EnableLiveTv || grants.EnableLiveTv;
+        var enableLiveTvManagement = config.EnableLiveTvManagement || grants.EnableLiveTvManagement;
+        folders.AddRange(grants.Folders);
+
+        // If the provider doesn't supply the preferred-username claim, fall back to the "sub" claim.
+        if (!valid)
         {
-            avatarUrl = claimList.Aggregate(
-                config.AvatarUrlFormat,
-                (s, claim) => s.Contains($"@{{{claim.Type}}}") ? s.Replace($"@{{{claim.Type}}}", claim.Value) : s);
+            (username, valid) = ResolveSubFallback(claimList, config, username);
         }
 
-        // The role-claim path depends only on config.RoleClaim, so process it once rather than per claim.
-        // The regex splits on dots not escaped with a backslash; escaped "\." are then normalized to ".".
-        string[] roleClaimSegments = string.IsNullOrEmpty(config.RoleClaim)
+        return new OidcAuthorizeState(username, valid, admin, enableLiveTv, enableLiveTvManagement, folders, avatarUrl);
+    }
+
+    // Resolves the avatar URL by substituting @{claimType} tokens in the configured format, or null
+    // when no format is configured. For a duplicate claim type the first occurrence wins (after the
+    // first Replace the token is gone).
+    private static string? ResolveAvatarUrl(IReadOnlyList<Claim> claims, OidConfig config)
+    {
+        if (config.AvatarUrlFormat is null)
+        {
+            return null;
+        }
+
+        return claims.Aggregate(
+            config.AvatarUrlFormat,
+            (s, claim) => s.Contains($"@{{{claim.Type}}}") ? s.Replace($"@{{{claim.Type}}}", claim.Value) : s);
+    }
+
+    // Splits the configured role-claim path on unescaped dots; escaped "\." are normalized to ".".
+    // Computed once per login — the path depends only on the configuration, not on any claim.
+    private static string[] SplitRoleClaimPath(OidConfig config)
+    {
+        return string.IsNullOrEmpty(config.RoleClaim)
             ? Array.Empty<string>()
             : RoleClaimSplitRegex.Split(config.RoleClaim.Trim())
                 .Select(segment => segment.Replace("\\.", "."))
                 .ToArray();
+    }
+
+    // Single pass over the claims: resolves the username (the LAST matching preferred-username /
+    // DefaultUsernameClaim claim wins), decides validity when no allow-list is configured, and
+    // collects the roles carried by every claim on the configured role-claim path.
+    private static (string? Username, bool Valid, List<string> Roles) ScanClaims(IReadOnlyList<Claim> claims, OidConfig config)
+    {
+        var roleClaimSegments = SplitRoleClaimPath(config);
 
         string? username = null;
         var valid = false;
         var roles = new List<string>();
-        foreach (var claim in claimList)
+        foreach (var claim in claims)
         {
             if (claim.Type == (config.DefaultUsernameClaim?.Trim() ?? "preferred_username"))
             {
@@ -78,43 +112,38 @@ internal static class OidcAuthorizeStateBuilder
                 }
             }
 
-            // Collect the roles carried by every claim on the configured role-claim path.
             if (roleClaimSegments.Length > 0 && claim.Type == roleClaimSegments[0])
             {
                 roles.AddRange(OidcRoleExtractor.ExtractRoles(roleClaimSegments, claim.Value));
             }
         }
 
-        // Map the collected roles to privileges and merge (monotonic: only ever grants).
-        var grants = OidcRolePrivilegeMapper.Evaluate(roles, config);
-        valid |= grants.Valid;
-        var admin = grants.Admin;
-        enableLiveTv |= grants.EnableLiveTv;
-        enableLiveTvManagement |= grants.EnableLiveTvManagement;
-        folders.AddRange(grants.Folders);
+        return (username, valid, roles);
+    }
 
-        // If the provider doesn't supply the preferred-username claim, fall back to the "sub" claim.
-        if (!valid)
+    // The "sub"-claim fallback, entered only when nothing validated the login (so validity starts
+    // false here): the LAST sub claim wins as the username.
+    private static (string? Username, bool Valid) ResolveSubFallback(IReadOnlyList<Claim> claims, OidConfig config, string? username)
+    {
+        var valid = false;
+        foreach (var claim in claims)
         {
-            foreach (var claim in claimList)
+            if (claim.Type == "sub")
             {
-                if (claim.Type == "sub")
-                {
-                    username = claim.Value;
+                username = claim.Value;
 
-                    // Faithful to the original: unlike the preferred-username branch above, this does
-                    // NOT null-check config.Roles, so a null Roles array here throws (an admin
-                    // misconfiguration where RBAC is off and the provider supplies only "sub"). The
-                    // null-forgiving operator keeps that exact fail-closed behavior; tracked in #89.
-                    if (config.Roles!.Length == 0)
-                    {
-                        valid = true;
-                    }
+                // Faithful to the original: unlike the preferred-username branch in ScanClaims, this
+                // does NOT null-check config.Roles, so a null Roles array here throws (an admin
+                // misconfiguration where RBAC is off and the provider supplies only "sub"). The
+                // null-forgiving operator keeps that exact fail-closed behavior; tracked in #89.
+                if (config.Roles!.Length == 0)
+                {
+                    valid = true;
                 }
             }
         }
 
-        return new OidcAuthorizeState(username, valid, admin, enableLiveTv, enableLiveTvManagement, folders, avatarUrl);
+        return (username, valid);
     }
 
     /// <summary>
