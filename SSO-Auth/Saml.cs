@@ -159,6 +159,44 @@ public class Response
         return output;
     }
 
+    /// <summary>
+    /// Gets the ID attribute of the assertion, used to enforce one-time use (replay protection).
+    /// </summary>
+    /// <returns>The assertion ID, or null when absent.</returns>
+    public string GetAssertionId()
+    {
+        var assertion = _xmlDoc.SelectSingleNode("/samlp:Response/saml:Assertion[1]", _xmlNameSpaceManager) as XmlElement;
+        var id = assertion?.GetAttribute("ID");
+        return string.IsNullOrEmpty(id) ? null : id;
+    }
+
+    /// <summary>
+    /// Gets the latest NotOnOrAfter across the assertion's Conditions and bearer SubjectConfirmationData,
+    /// in UTC. Callers use it to retain a consumed assertion for replay protection for the whole time it
+    /// would still be accepted.
+    /// </summary>
+    /// <returns>The latest NotOnOrAfter, or null when neither window carries one.</returns>
+    public DateTime? GetNotOnOrAfter()
+    {
+        DateTime? latest = null;
+        var xpaths = new[]
+        {
+            "/samlp:Response/saml:Assertion[1]/saml:Conditions",
+            "/samlp:Response/saml:Assertion[1]/saml:Subject/saml:SubjectConfirmation/saml:SubjectConfirmationData",
+        };
+
+        foreach (var xpath in xpaths)
+        {
+            var value = (_xmlDoc.SelectSingleNode(xpath, _xmlNameSpaceManager) as XmlElement)?.GetAttribute("NotOnOrAfter");
+            if (!string.IsNullOrEmpty(value) && SamlAssertionTime.TryParseUtc(value, out var parsed) && (latest == null || parsed > latest.Value))
+            {
+                latest = parsed;
+            }
+        }
+
+        return latest;
+    }
+
     // an XML signature can "cover" not the whole document, but only a part of it
     // .NET's built in "CheckSignature" does not cover this case, it will validate to true.
     // We should check the signature reference, so it "references" the id of the root document element! If not - it's a hack

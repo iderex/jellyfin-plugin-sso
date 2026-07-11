@@ -187,4 +187,23 @@ public class SamlResponseTests
         Assert.True(Load(fixture).IsValid("https://jellyfin.example.com/sso"));
         Assert.False(Load(fixture).IsValid("https://not-listed.example.com"));
     }
+
+    // --- Replay-support getters ---
+
+    [Fact]
+    public void GetAssertionId_ReturnsSignedAssertionId()
+    {
+        var fixture = SamlTestFactory.Create();
+        Assert.Equal(fixture.AssertionId, Load(fixture).GetAssertionId());
+    }
+
+    [Fact]
+    public void GetNotOnOrAfter_ReturnsLatestBound()
+    {
+        // Fixed whole-second UTC instant so the assertion is exact (the factory formats to whole
+        // seconds), rather than a wall-clock value with a tolerance.
+        var expiry = new System.DateTime(2026, 7, 11, 12, 5, 0, System.DateTimeKind.Utc);
+        var fixture = SamlTestFactory.Create(notOnOrAfter: expiry);
+        Assert.Equal(expiry, Load(fixture).GetNotOnOrAfter());
+    }
 }

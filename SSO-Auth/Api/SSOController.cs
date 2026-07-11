@@ -58,6 +58,9 @@ public class SSOController : ControllerBase
 
     private static readonly TimeSpan StateLifetime = TimeSpan.FromMinutes(1);
 
+    // One-time-use tracking for consumed SAML assertion IDs (replay protection).
+    private static readonly SamlReplayCache SamlReplays = new SamlReplayCache();
+
     /// <summary>
     /// Initializes a new instance of the <see cref="SSOController"/> class.
     /// </summary>
@@ -760,6 +763,21 @@ public class SSOController : ControllerBase
             if (!ValidateSaml(samlResponse, config))
             {
                 return Problem("Invalid SAML signature");
+            }
+
+            // Enforce one-time use so a captured assertion cannot be replayed to mint another session.
+            // Enforced only here (the session-minting endpoint), not at the SAML/post ACS which merely
+            // renders the intermediate page, so the two-step post-then-auth flow consumes the id once.
+            var samlNow = DateTime.UtcNow;
+            var replayRetention = SamlReplayCache.ComputeRetention(samlNow, samlResponse.GetNotOnOrAfter());
+
+            // Scope the replay key by provider so two IdPs that happen to emit the same assertion ID
+            // cannot block each other; a missing ID stays empty so TryConsume still fails closed.
+            var assertionId = samlResponse.GetAssertionId();
+            var replayKey = string.IsNullOrEmpty(assertionId) ? assertionId : provider + "\n" + assertionId;
+            if (!SamlReplays.TryConsume(replayKey, replayRetention, samlNow))
+            {
+                return Problem("SAML assertion has already been used");
             }
 
             List<string> folders;
