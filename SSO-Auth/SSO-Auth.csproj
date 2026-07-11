@@ -10,12 +10,14 @@
     <!-- Turns the compiler into a standing reviewer. AnalysisModeSecurity=All
          enables the disabled-by-default Security rules (CA3xxx injection/taint,
          CA53xx crypto) that Recommended leaves off. CodeAnalysisTreatWarningsAsErrors
-         selects the SDK's error-severity rule configs, so analyzer findings fail
-         EVERY build (local, JPRM package, SonarCloud) — not only the one CI job
-         that passes warnaserror. The mode's per-rule severities outrank any
-         .editorconfig category-bulk entry, so this property is the load-bearing
-         fail-closed mechanism; the .editorconfig carves out the documented
-         non-security backlog per rule. -->
+         selects the SDK's error-severity configs for the CA rules, so every
+         Security-category finding fails EVERY build (local, JPRM package,
+         SonarCloud) — not only the CI job that passes warnaserror; the mode's
+         per-rule severities outrank any .editorconfig category-bulk entry, which
+         makes this property the load-bearing fail-closed mechanism. Third-party
+         analyzer findings (Meziantou/Roslynator/StyleCop) are not covered by it
+         and gate through CI's warnaserror build instead; the .editorconfig
+         carves out the documented non-security backlog per rule. -->
     <AnalysisMode>Recommended</AnalysisMode>
     <AnalysisModeSecurity>All</AnalysisModeSecurity>
     <CodeAnalysisTreatWarningsAsErrors>true</CodeAnalysisTreatWarningsAsErrors>
