@@ -62,6 +62,13 @@ internal static class OidcAuthorizeStateBuilder
             (username, valid) = ResolveSubFallback(claimList, config, username);
         }
 
+        // Fail closed (#95): a valid login must also have resolved an identity. A role matching the
+        // allow-list can make the login valid while no username/sub claim resolved a username; such a
+        // state used to reach account creation with a null name and fail with a 500 — reject it as an
+        // invalid login instead. Whitespace-only counts as unresolved: Jellyfin's own username
+        // validation rejects it anyway, so no legitimate login can carry one.
+        valid = valid && !string.IsNullOrWhiteSpace(username);
+
         return new OidcAuthorizeState(username, valid, admin, enableLiveTv, enableLiveTvManagement, folders, avatarUrl);
     }
 

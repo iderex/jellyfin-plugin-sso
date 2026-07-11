@@ -176,8 +176,8 @@ public class SSOController : ControllerBase
             else
             {
                 _logger.LogWarning(
-                    "OpenID user {Username} has one or more incorrect role claims: {@Claims}. Expected any one of: {@ExpectedClaims}",
-                    timedState.Username,
+                    "OpenID login denied for {Username}: no role matched the allow-list, or the login resolved no username. Claims: {@Claims}. Roles expected (any one of): {@ExpectedClaims}",
+                    timedState.Username?.ReplaceLineEndings(string.Empty),
                     result.User.Claims.Select(o => new { o.Type, o.Value }),
                     config.Roles);
 
@@ -634,10 +634,20 @@ public class SSOController : ControllerBase
             // here.
             var derived = SamlAuthorizeStateBuilder.Build(samlResponse.GetCustomAttributes("Role"), config);
 
+            // Fail closed (#95): an assertion without a usable NameID carries no identity to log in —
+            // reject it as an invalid login instead of failing downstream on a null canonical name.
+            // Whitespace-only counts as unresolved (Jellyfin's username validation rejects it anyway).
+            var nameId = samlResponse.GetNameID();
+            if (string.IsNullOrWhiteSpace(nameId))
+            {
+                _logger.LogWarning("SAML login denied: the assertion resolved no NameID.");
+                return ReturnError(StatusCodes.Status401Unauthorized, "Error. Check permissions.");
+            }
+
             Guid userId;
             try
             {
-                userId = await CreateCanonicalLinkAndUserIfNotExist("saml", provider, samlResponse.GetNameID(), config.AllowExistingAccountLink).ConfigureAwait(false);
+                userId = await CreateCanonicalLinkAndUserIfNotExist("saml", provider, nameId, config.AllowExistingAccountLink).ConfigureAwait(false);
             }
             catch (AccountLinkForbiddenException)
             {
@@ -726,6 +736,14 @@ public class SSOController : ControllerBase
 
     private async Task<Guid> CreateCanonicalLinkAndUserIfNotExist(string mode, string provider, string canonicalName, bool allowExistingAccountLink)
     {
+        // Defense in depth (#95): a login without a resolvable identity must never create, adopt, or
+        // look up an account. Both callbacks reject such logins before calling here; this belt keeps
+        // the invariant if a future caller forgets.
+        if (string.IsNullOrWhiteSpace(canonicalName))
+        {
+            throw new AccountLinkForbiddenException("The SSO login did not resolve an identity; refusing to create or link an account.");
+        }
+
         // An identity already linked to a still-existing account is keyed on the canonical name.
         // A dangling link, whose user was since deleted, is treated as if there were no link.
         Guid? linkedUserId = null;
@@ -992,6 +1010,14 @@ public class SSOController : ControllerBase
 
     private ActionResult CreateCanonicalLink(string mode, string provider, Guid jellyfinUserId, string providerUserId)
     {
+        // Fail closed (#95), linking-side choke point: an SSO identity that did not resolve must not
+        // create a link — a null key would throw inside the config mutation (500), and an empty or
+        // whitespace key would persist a dead link no login can ever redeem.
+        if (string.IsNullOrWhiteSpace(providerUserId))
+        {
+            return BadRequest("The SSO login did not resolve an identity.");
+        }
+
         try
         {
             SSOPlugin.Instance.MutateConfiguration(configuration =>
