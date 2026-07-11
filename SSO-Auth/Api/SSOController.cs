@@ -3,11 +3,14 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Net.Mime;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using Duende.IdentityModel.OidcClient;
 using Jellyfin.Data;
@@ -1199,51 +1202,75 @@ public class SSOController : ControllerBase
 
         if (avatarUrl is not null)
         {
-            try
+            if (!AvatarUrlValidator.IsAllowedUrl(avatarUrl, out var avatarUri))
             {
-                using var client = _httpClientFactory.CreateClient();
-
-                System.Reflection.Assembly assembly = System.Reflection.Assembly.GetExecutingAssembly();
-                System.Diagnostics.FileVersionInfo fvi = System.Diagnostics.FileVersionInfo.GetVersionInfo(assembly.Location);
-                string version = fvi.FileVersion;
-                client.DefaultRequestHeaders.UserAgent.ParseAdd($"Jellyfin-Plugin-SSO-Auth +{version} (https://github.com/9p4/jellyfin-plugin-sso)");
-
-                var avatarResponse = await client.GetAsync(avatarUrl);
-
-                if (!avatarResponse.Content.Headers.TryGetValues("content-type", out var contentTypeList))
+                _logger.LogWarning("Refusing to fetch avatar from disallowed URL: {AvatarUrl}", avatarUrl?.ReplaceLineEndings(string.Empty));
+            }
+            else
+            {
+                try
                 {
-                    throw new Exception("Cannot get Content-Type of image : " + avatarUrl);
-                }
-
-                var contentType = contentTypeList.First();
-                if (!contentType.StartsWith("image"))
-                {
-                    throw new Exception("Content type of avatar URL is not an image, got :  " + contentType);
-                }
-
-                var extension = contentType.Split("/").Last();
-                var stream = await avatarResponse.Content.ReadAsStreamAsync();
-
-                if (user != null)
-                {
-                    var userDataPath =
-                        Path.Combine(
-                            _serverConfigurationManager.ApplicationPaths.UserConfigurationDirectoryPath,
-                            user.Username);
-                    if (user.ProfileImage is not null)
+                    // Route every connection (including redirect targets) through a callback that rejects
+                    // private/loopback addresses, closing the SSRF and DNS-rebinding vectors. Redirects stay
+                    // enabled (many avatar URLs redirect) but are bounded, each hop is IP-validated, and both
+                    // the request and the download are bounded.
+                    using var handler = new SocketsHttpHandler
                     {
-                        await _userManager.ClearProfileImageAsync(user).ConfigureAwait(false);
+                        AllowAutoRedirect = true,
+                        MaxAutomaticRedirections = 5,
+                        ConnectCallback = AvatarConnectCallback,
+
+                        // A system proxy would be the connection target, so the ConnectCallback would
+                        // validate the proxy's address rather than the avatar host's - bypassing the guard.
+                        UseProxy = false,
+                    };
+                    using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
+
+                    var version = System.Diagnostics.FileVersionInfo.GetVersionInfo(Assembly.GetExecutingAssembly().Location).FileVersion;
+                    client.DefaultRequestHeaders.UserAgent.ParseAdd($"Jellyfin-Plugin-SSO-Auth +{version} (https://github.com/iderex/jellyfin-plugin-sso)");
+
+                    // ResponseHeadersRead so the body is streamed, not fully buffered, before ReadCappedAsync
+                    // enforces the size limit; otherwise the cap runs only after the whole download is in memory.
+                    using var avatarResponse = await client.GetAsync(avatarUri, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+                    avatarResponse.EnsureSuccessStatusCode();
+
+                    // Media types are case-insensitive (RFC 7231); use the parsed type with parameters stripped.
+                    var mediaType = avatarResponse.Content.Headers.ContentType?.MediaType;
+                    if (string.IsNullOrEmpty(mediaType) || !mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new Exception("Content type of avatar URL is not an image, got :  " + (mediaType ?? "(none)"));
                     }
 
-                    user.ProfileImage = new ImageInfo(Path.Combine(userDataPath, "profile" + extension));
+                    const long MaxAvatarBytes = 10 * 1024 * 1024;
+                    if (avatarResponse.Content.Headers.ContentLength > MaxAvatarBytes)
+                    {
+                        throw new Exception("Avatar exceeds the maximum allowed size.");
+                    }
 
-                    await _providerManager.SaveImage(stream, contentType, user.ProfileImage.Path)
-                        .ConfigureAwait(false);
+                    var extension = mediaType.Split('/').Last();
+                    using var stream = await ReadCappedAsync(avatarResponse, MaxAvatarBytes).ConfigureAwait(false);
+
+                    if (user != null)
+                    {
+                        var userDataPath =
+                            Path.Combine(
+                                _serverConfigurationManager.ApplicationPaths.UserConfigurationDirectoryPath,
+                                user.Username);
+                        if (user.ProfileImage is not null)
+                        {
+                            await _userManager.ClearProfileImageAsync(user).ConfigureAwait(false);
+                        }
+
+                        user.ProfileImage = new ImageInfo(Path.Combine(userDataPath, "profile" + extension));
+
+                        await _providerManager.SaveImage(stream, mediaType, user.ProfileImage.Path)
+                            .ConfigureAwait(false);
+                    }
                 }
-            }
-            catch (Exception e)
-            {
-                _logger.LogError(e.Message);
+                catch (Exception e)
+                {
+                    _logger.LogError(e, "Failed to fetch or save the SSO avatar.");
+                }
             }
         }
 
@@ -1273,6 +1300,85 @@ public class SSOController : ControllerBase
     private void Invalidate()
     {
         AuthStateStore.InvalidateExpired(StateManager, DateTime.Now, StateLifetime);
+    }
+
+    // Resolves the target host and connects only to a non-blocked (public) address, so a hostname that
+    // resolves to an internal address - including via DNS rebinding on a redirect hop - cannot be reached.
+    private static async ValueTask<Stream> AvatarConnectCallback(SocketsHttpConnectionContext context, CancellationToken cancellationToken)
+    {
+        var addresses = await Dns.GetHostAddressesAsync(context.DnsEndPoint.Host, cancellationToken).ConfigureAwait(false);
+
+        // Try every non-blocked address in turn (a per-address connect fallback for dual-stack /
+        // multi-record hosts, since supplying a ConnectCallback replaces the handler's built-in one),
+        // connecting to the validated IP rather than the hostname so a DNS rebind cannot redirect the
+        // connection to an internal address.
+        Exception lastError = null;
+        var attempted = false;
+        foreach (var address in addresses)
+        {
+            if (AvatarUrlValidator.IsBlockedAddress(address))
+            {
+                continue;
+            }
+
+            attempted = true;
+            var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+            var connected = false;
+            try
+            {
+                await socket.ConnectAsync(address, context.DnsEndPoint.Port, cancellationToken).ConfigureAwait(false);
+                connected = true;
+                return new NetworkStream(socket, ownsSocket: true);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                lastError = ex;
+            }
+            finally
+            {
+                // Dispose unless ownership passed to the returned NetworkStream. Runs on the
+                // cancellation path too, where the catch filter is skipped and the socket would leak.
+                if (!connected)
+                {
+                    socket.Dispose();
+                }
+            }
+        }
+
+        if (attempted)
+        {
+            throw new HttpRequestException("Could not connect to any allowed address for the avatar host.", lastError);
+        }
+
+        throw new HttpRequestException("Avatar host resolves only to blocked addresses.");
+    }
+
+    // Copies the response body into memory, aborting if it exceeds the cap, so a hostile endpoint cannot
+    // exhaust resources with an unbounded (or Content-Length-lying) download.
+    private static async ValueTask<MemoryStream> ReadCappedAsync(HttpResponseMessage response, long maxBytes)
+    {
+        var buffer = new MemoryStream();
+        var source = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+        await using (source.ConfigureAwait(false))
+        {
+            var chunk = new byte[81920];
+            long total = 0;
+            int read;
+            while ((read = await source.ReadAsync(chunk).ConfigureAwait(false)) > 0)
+            {
+                total += read;
+                if (total > maxBytes)
+                {
+                    await buffer.DisposeAsync().ConfigureAwait(false);
+                    throw new Exception("Avatar exceeds the maximum allowed size.");
+                }
+
+                await buffer.WriteAsync(chunk.AsMemory(0, read)).ConfigureAwait(false);
+            }
+        }
+
+        buffer.Position = 0;
+        return buffer;
     }
 
     private string GetRequestBase(string schemeOverride = null, int? portOverride = null)
