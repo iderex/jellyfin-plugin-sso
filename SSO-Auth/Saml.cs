@@ -77,9 +77,27 @@ public class Response
     public void LoadXml(string xml)
     {
         _xmlDoc = new XmlDocument();
+
+        // PreserveWhitespace is load-bearing for XML signature validation (canonicalization depends
+        // on the exact whitespace), so it must stay true.
         _xmlDoc.PreserveWhitespace = true;
         _xmlDoc.XmlResolver = null;
-        _xmlDoc.LoadXml(xml);
+
+        // The SAML response is untrusted input. Reject any DTD/DOCTYPE outright: XmlResolver=null
+        // alone blocks only EXTERNAL entities (XXE/SSRF), while an internal DTD still expands
+        // entities (a billion-laughs style denial of service). DtdProcessing.Prohibit makes the
+        // reader throw on a DOCTYPE, which is the fail-closed posture; a well-formed SAML assertion
+        // never carries one.
+        var settings = new XmlReaderSettings
+        {
+            DtdProcessing = DtdProcessing.Prohibit,
+            XmlResolver = null,
+        };
+        using (var stringReader = new StringReader(xml))
+        using (var reader = XmlReader.Create(stringReader, settings))
+        {
+            _xmlDoc.Load(reader);
+        }
 
         _xmlNameSpaceManager = GetNamespaceManager(); // lets construct a "manager" for XPath queries
     }
