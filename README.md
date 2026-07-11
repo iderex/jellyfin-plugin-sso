@@ -23,14 +23,16 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 >
 > This is a revival of [**9p4/jellyfin-plugin-sso**](https://github.com/9p4/jellyfin-plugin-sso), which its original author has since archived. It continues from the last upstream release (**4.0.0.x**, Jellyfin 10.11 / .NET 9) and is being taken forward **security-first**: an automated test suite has been added and the login path is being hardened step by step. Huge thanks to the original author and contributors for the foundation.
 >
+> Its hardened sibling project, **`jellyfin-plugin-sso-V2`** (private), is the reference this repository draws on — a good deal still remains to be ported across from there, deliberately, one reviewed change at a time.
+>
 > **Status:** early and under active development. See [Installing](#installing) — for now the reliable path is building from source; a packaged release will follow once the security-hardening pass reaches its first milestone.
 
 > ### 🤖 A note on AI and on contributions
 >
-> Development is assisted by **[Claude](https://www.anthropic.com/claude)** (Anthropic) — the maintainer is a non-native English speaker and uses it for documentation, English clarity, and development. Two things matter:
+> The maintainer is a non-native English speaker, so **[Claude](https://www.anthropic.com/claude)** (Anthropic) is used to **translate documentation and comments into English** — the README, the wiki, the in-repo guides, and code comments. That is its only role here.
 >
-> - **A human stays responsible.** Every change — code and prose — is reviewed and owned by the maintainer before it lands; he holds responsibility for it. Nothing merges without a green build, tests, and (for the login path) a security review.
-> - **The AI is not in the product.** AI tooling is used **during development only**. It is **not** part of the plugin at runtime and plays **no role in authentication or in processing your users' data**.
+> - **A human reviews it.** Every AI-translated text is reviewed and edited by the maintainer before it lands; he holds responsibility for it.
+> - **The AI is not in the product.** It plays **no role at runtime**, in authentication, or in processing your users' data.
 >
 > Provided in the spirit of transparent AI use, in line with the EU AI Act's transparency principles (Art. 50).
 >
