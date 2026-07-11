@@ -81,7 +81,7 @@ internal static class SamlAssertionTime
         return true;
     }
 
-    private static bool TryParseUtc(string raw, out DateTime utc)
+    internal static bool TryParseUtc(string raw, out DateTime utc)
     {
         // SAML timestamps are xsd:dateTime in UTC ('...Z'). Parse culture-invariantly and normalize
         // to UTC, assuming UTC when no offset is present rather than the machine's local zone.
