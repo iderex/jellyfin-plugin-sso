@@ -56,7 +56,10 @@ public class SSOController : ControllerBase
     // OidLink / Invalidate); a plain Dictionary corrupts or throws under that interleaving.
     private static readonly ConcurrentDictionary<string, TimedAuthorizeState> StateManager = new ConcurrentDictionary<string, TimedAuthorizeState>();
 
-    private static readonly TimeSpan StateLifetime = TimeSpan.FromMinutes(1);
+    // How long an in-flight OpenID authorize state may live before it is rejected/pruned. This now
+    // bounds the whole interactive leg (OidChallenge -> IdP login/MFA/consent -> callback -> mint),
+    // so it must accommodate a real user completing MFA, not just a fast round trip.
+    private static readonly TimeSpan StateLifetime = TimeSpan.FromMinutes(15);
 
     // One-time-use tracking for consumed SAML assertion IDs (replay protection).
     private static readonly SamlReplayCache SamlReplays = new SamlReplayCache();
@@ -131,8 +134,12 @@ public class SSOController : ControllerBase
                 return BadRequest("Missing state");
             }
 
-            if (!StateManager.TryGetValue(state, out var timedState))
+            if (!StateManager.TryGetValue(state, out var timedState)
+                || !AuthStateStore.IsCurrentFor(timedState, provider, DateTime.Now, StateLifetime))
             {
+                // Unknown, expired, or minted for a different provider — reject so a state issued
+                // for one provider cannot be validated on another's callback. (No removal: the value
+                // is an unguessable CSPRNG token, and expiry pruning is handled by the sweep.)
                 return BadRequest("Invalid or expired state");
             }
 
@@ -429,7 +436,7 @@ public class SSOController : ControllerBase
             // IsLinking tracks whether this is a linking request rather than a login. The state value
             // is a fresh CSPRNG token, so a collision is effectively impossible; log if it ever occurs
             // instead of silently proceeding to a callback that would then fail with "invalid state".
-            if (!StateManager.TryAdd(state.State, new TimedAuthorizeState(state, DateTime.Now) { IsLinking = isLinking }))
+            if (!StateManager.TryAdd(state.State, new TimedAuthorizeState(state, DateTime.Now) { IsLinking = isLinking, Provider = provider }))
             {
                 _logger.LogWarning("OpenID authorize-state collision for provider {Provider}; login not started.", provider?.ReplaceLineEndings(string.Empty));
                 return ReturnError(StatusCodes.Status500InternalServerError, "Could not start login due to a state collision; please retry.");
@@ -503,7 +510,16 @@ public class SSOController : ControllerBase
     [HttpGet("OID/States")]
     public ActionResult OidStates()
     {
-        return Ok(StateManager);
+        // Project to a non-secret summary. The raw store holds the authorize-state token and the
+        // PKCE code_verifier / nonce; those must never be serialized out, even to an admin.
+        var summary = StateManager.Values.Select(s => new
+        {
+            s.Provider,
+            s.Created,
+            s.Valid,
+            s.IsLinking,
+        });
+        return Ok(summary);
     }
 
     /// <summary>
@@ -517,6 +533,11 @@ public class SSOController : ControllerBase
     [Produces(MediaTypeNames.Application.Json)]
     public async Task<ActionResult> OidAuth(string provider, [FromBody] AuthResponse response)
     {
+        if (string.IsNullOrEmpty(response?.Data))
+        {
+            return BadRequest("Missing data");
+        }
+
         OidConfig config;
         try
         {
@@ -527,39 +548,38 @@ public class SSOController : ControllerBase
             return BadRequest("No matching provider found");
         }
 
-        if (config.Enabled)
+        // The store is keyed by the authorize-state token, which is exactly response.Data, so look it
+        // up directly (O(1), no full-store scan) and atomically claim it with TryRemove(KeyValuePair):
+        // only the request that wins the removal proceeds, so one state mints at most one session even
+        // under concurrent posts.
+        if (config.Enabled
+            && StateManager.TryGetValue(response.Data, out var timedState)
+            && AuthStateStore.IsRedeemableBy(timedState, response.Data, provider, DateTime.Now, StateLifetime)
+            && StateManager.TryRemove(new KeyValuePair<string, TimedAuthorizeState>(response.Data, timedState)))
         {
-            foreach (var kvp in StateManager)
+            Guid userId;
+            try
             {
-                if (kvp.Value.State.State.Equals(response.Data) && kvp.Value.Valid)
-                {
-                    Guid userId;
-                    try
-                    {
-                        userId = await CreateCanonicalLinkAndUserIfNotExist("oid", provider, kvp.Value.Username, config.AllowExistingAccountLink).ConfigureAwait(false);
-                    }
-                    catch (AccountLinkForbiddenException)
-                    {
-                        StateManager.TryRemove(kvp.Key, out _);
-                        return StatusCode(StatusCodes.Status403Forbidden, "SSO login is not permitted for this account.");
-                    }
-
-                    var authenticationResult = await Authenticate(
-                        userId,
-                        kvp.Value.Admin,
-                        config.EnableAuthorization,
-                        config.EnableAllFolders,
-                        kvp.Value.Folders.ToArray(),
-                        kvp.Value.EnableLiveTv,
-                        kvp.Value.EnableLiveTvManagement,
-                        response,
-                        config.DefaultProvider?.Trim(),
-                        kvp.Value.AvatarURL)
-                        .ConfigureAwait(false);
-                    StateManager.TryRemove(kvp.Key, out _);
-                    return Ok(authenticationResult);
-                }
+                userId = await CreateCanonicalLinkAndUserIfNotExist("oid", provider, timedState.Username, config.AllowExistingAccountLink).ConfigureAwait(false);
             }
+            catch (AccountLinkForbiddenException)
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, "SSO login is not permitted for this account.");
+            }
+
+            var authenticationResult = await Authenticate(
+                userId,
+                timedState.Admin,
+                config.EnableAuthorization,
+                config.EnableAllFolders,
+                timedState.Folders.ToArray(),
+                timedState.EnableLiveTv,
+                timedState.EnableLiveTvManagement,
+                response,
+                config.DefaultProvider?.Trim(),
+                timedState.AvatarURL)
+                .ConfigureAwait(false);
+            return Ok(authenticationResult);
         }
 
         return Problem("Something went wrong");
@@ -1162,6 +1182,11 @@ public class SSOController : ControllerBase
     [Produces(MediaTypeNames.Application.Json)]
     private ActionResult OidLink(string provider, Guid jellyfinUserId, AuthResponse response)
     {
+        if (string.IsNullOrEmpty(response?.Data))
+        {
+            return BadRequest("Missing data");
+        }
+
         OidConfig config;
         try
         {
@@ -1172,13 +1197,13 @@ public class SSOController : ControllerBase
             return BadRequest("No matching provider found");
         }
 
-        foreach (var kvp in StateManager)
+        // Keyed O(1) lookup + atomic claim (see OidAuth): consume the state so one verified identity
+        // cannot be linked repeatedly and cannot then be reused to mint a session.
+        if (StateManager.TryGetValue(response.Data, out var timedState)
+            && AuthStateStore.IsRedeemableBy(timedState, response.Data, provider, DateTime.Now, StateLifetime)
+            && StateManager.TryRemove(new KeyValuePair<string, TimedAuthorizeState>(response.Data, timedState)))
         {
-            if (kvp.Value.State.State.Equals(response.Data) && kvp.Value.Valid)
-            {
-                string providerUserId = kvp.Value.Username;
-                return CreateCanonicalLink("oid", provider, jellyfinUserId, providerUserId);
-            }
+            return CreateCanonicalLink("oid", provider, jellyfinUserId, timedState.Username);
         }
 
         return Problem("Something went wrong!");
@@ -1524,6 +1549,12 @@ public class TimedAuthorizeState
     /// Gets or sets the Authorization State of the client.
     /// </summary>
     public AuthorizeState State { get; set; }
+
+    /// <summary>
+    /// Gets or sets the provider that minted this state. A state may only be consumed on the same
+    /// provider's endpoints, so it cannot be replayed against another provider's login/role gate.
+    /// </summary>
+    public string Provider { get; set; }
 
     /// <summary>
     /// Gets or sets when this object was created to time it out.
