@@ -183,6 +183,27 @@ public class OidcAuthorizeStateBuilderTests
     }
 
     [Fact]
+    public void InvalidLogin_SubClaimStillOverwritesUsername()
+    {
+        // Faithful quirk: the sub fallback runs whenever the login is not (yet) valid, even though
+        // a preferred-username claim already set the username — so a failed allow-list match with a
+        // sub claim present ends invalid AND with the sub value as the username. Easily misread as
+        // "fallback only when no username claim exists"; pinned here so a change is deliberate.
+        var config = Config(c =>
+        {
+            c.Roles = new[] { "jellyfin-users" };
+            c.RoleClaim = "role";
+        });
+
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(("preferred_username", "alice"), ("role", "outsiders"), ("sub", "subject-123")),
+            config);
+
+        Assert.Equal("subject-123", result.Username);
+        Assert.False(result.Valid);
+    }
+
+    [Fact]
     public void EscapedDotInRoleClaim_IsTreatedAsLiteralDot()
     {
         // "realm\.access" is one segment named "realm.access", not a two-segment path.
