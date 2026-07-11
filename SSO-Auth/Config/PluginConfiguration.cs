@@ -65,6 +65,13 @@ public class SamlConfig
     public bool EnableAuthorization { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether an SSO login may adopt a pre-existing, unlinked
+    /// Jellyfin account whose username matches the SSO name. Off by default (fail closed): a first
+    /// login that matches an existing account is rejected rather than taking it over.
+    /// </summary>
+    public bool AllowExistingAccountLink { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether all folders are allowed by default.
     /// </summary>
     public bool EnableAllFolders { get; set; }
@@ -192,6 +199,13 @@ public class OidConfig
     /// Gets or sets a value indicating whether RBAC is enabled.
     /// </summary>
     public bool EnableAuthorization { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether an SSO login may adopt a pre-existing, unlinked
+    /// Jellyfin account whose username matches the SSO name. Off by default (fail closed): a first
+    /// login that matches an existing account is rejected rather than taking it over.
+    /// </summary>
+    public bool AllowExistingAccountLink { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether all folders are allowed by default.

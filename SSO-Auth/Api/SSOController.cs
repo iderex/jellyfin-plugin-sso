@@ -526,7 +526,16 @@ public class SSOController : ControllerBase
             {
                 if (kvp.Value.State.State.Equals(response.Data) && kvp.Value.Valid)
                 {
-                    Guid userId = await CreateCanonicalLinkAndUserIfNotExist("oid", provider, kvp.Value.Username);
+                    Guid userId;
+                    try
+                    {
+                        userId = await CreateCanonicalLinkAndUserIfNotExist("oid", provider, kvp.Value.Username, config.AllowExistingAccountLink).ConfigureAwait(false);
+                    }
+                    catch (AccountLinkForbiddenException)
+                    {
+                        StateManager.TryRemove(kvp.Key, out _);
+                        return StatusCode(StatusCodes.Status403Forbidden, "SSO login is not permitted for this account.");
+                    }
 
                     var authenticationResult = await Authenticate(
                         userId,
@@ -813,7 +822,15 @@ public class SSOController : ControllerBase
                 }
             }
 
-            Guid userId = await CreateCanonicalLinkAndUserIfNotExist("saml", provider, samlResponse.GetNameID());
+            Guid userId;
+            try
+            {
+                userId = await CreateCanonicalLinkAndUserIfNotExist("saml", provider, samlResponse.GetNameID(), config.AllowExistingAccountLink).ConfigureAwait(false);
+            }
+            catch (AccountLinkForbiddenException)
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, "SSO login is not permitted for this account.");
+            }
 
             var authenticationResult = await Authenticate(
                 userId,
@@ -873,63 +890,45 @@ public class SSOController : ControllerBase
         return links;
     }
 
-    private async Task<Guid> CreateCanonicalLinkAndUserIfNotExist(string mode, string provider, string canonicalName)
+    private async Task<Guid> CreateCanonicalLinkAndUserIfNotExist(string mode, string provider, string canonicalName, bool allowExistingAccountLink)
     {
-        User user = null;
-
-        // First try to get the user by its id in case it was already registered before
-        Guid userId = Guid.Empty;
-        try
+        // An identity already linked to a still-existing account is keyed on the canonical name;
+        // a dangling link (user since deleted) is treated as no link.
+        Guid? linkedUserId = null;
+        if (GetCanonicalLinks(mode, provider).TryGetValue(canonicalName, out var linked) && _userManager.GetUserById(linked) != null)
         {
-            userId = GetCanonicalLink(mode, provider, canonicalName);
-        }
-        catch (KeyNotFoundException)
-        {
-            userId = Guid.Empty;
+            linkedUserId = linked;
         }
 
-        // No userId found? Let's try and find the user by name instead
-        if (userId == Guid.Empty)
-        {
-            user = _userManager.GetUserByName(canonicalName);
-        }
-        else
-        {
-            user = _userManager.GetUserById(userId);
-        }
+        Guid? existingAccountUserId = _userManager.GetUserByName(canonicalName)?.Id;
 
-        if (user == null)
+        var decision = AccountLinkResolver.Resolve(linkedUserId, existingAccountUserId, allowExistingAccountLink);
+        switch (decision.Action)
         {
-            _logger.LogInformation($"SSO user {canonicalName} doesn't exist, creating...");
-            user = await _userManager.CreateUserAsync(canonicalName).ConfigureAwait(false);
-            user.AuthenticationProviderId = GetType().FullName;
-            // https://jonathancrozier.com/blog/how-to-generate-a-cryptographically-secure-random-string-in-dot-net-with-c-sharp
-            user.Password = _cryptoProvider.CreatePasswordHash(Convert.ToBase64String(RandomNumberGenerator.GetBytes(64))).ToString();
+            case AccountLinkAction.UseExistingLink:
+                return decision.UserId;
 
-            // Make sure there aren't any trailing existing links
-            var links = GetCanonicalLinks(mode, provider);
-            links.Remove(canonicalName);
-            UpdateCanonicalLinkConfig(links, mode, provider);
-        }
+            case AccountLinkAction.AdoptExistingAccount:
+                CreateCanonicalLink(mode, provider, decision.UserId, canonicalName);
+                return decision.UserId;
 
-        userId = Guid.Empty;
-        try
-        {
-            userId = GetCanonicalLink(mode, provider, canonicalName);
-        }
-        catch (KeyNotFoundException)
-        {
-            userId = Guid.Empty;
-        }
+            case AccountLinkAction.CreateNewAccount:
+                _logger.LogInformation("SSO user {Name} doesn't exist, creating...", canonicalName?.ReplaceLineEndings(string.Empty));
+                var user = await _userManager.CreateUserAsync(canonicalName).ConfigureAwait(false);
+                user.AuthenticationProviderId = GetType().FullName;
+                // https://jonathancrozier.com/blog/how-to-generate-a-cryptographically-secure-random-string-in-dot-net-with-c-sharp
+                user.Password = _cryptoProvider.CreatePasswordHash(Convert.ToBase64String(RandomNumberGenerator.GetBytes(64))).ToString();
+                CreateCanonicalLink(mode, provider, user.Id, canonicalName);
+                return user.Id;
 
-        if (userId == Guid.Empty)
-        {
-            _logger.LogInformation("SSO user link doesn't exist, creating...");
-            userId = user.Id;
-            CreateCanonicalLink(mode, provider, userId, canonicalName);
+            default:
+                _logger.LogWarning(
+                    "SSO login for {Name} via {Mode}/{Provider} refused: a pre-existing unlinked Jellyfin account exists and AllowExistingAccountLink is disabled for this provider.",
+                    canonicalName?.ReplaceLineEndings(string.Empty),
+                    mode,
+                    provider?.ReplaceLineEndings(string.Empty));
+                throw new AccountLinkForbiddenException(canonicalName);
         }
-
-        return userId;
     }
 
     private Guid GetCanonicalLink(string mode, string provider, string canonicalName)
