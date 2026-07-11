@@ -61,6 +61,11 @@ public class SSOController : ControllerBase
     // One-time-use tracking for consumed SAML assertion IDs (replay protection).
     private static readonly SamlReplayCache SamlReplays = new SamlReplayCache();
 
+    // Single canonical User-Agent for the plugin's outbound HTTP (discovery, avatar fetch),
+    // computed once since the assembly version does not change at runtime.
+    private static readonly string UserAgentString =
+        $"Jellyfin-Plugin-SSO-Auth +{System.Diagnostics.FileVersionInfo.GetVersionInfo(Assembly.GetExecutingAssembly().Location).FileVersion} (https://github.com/iderex/jellyfin-plugin-sso)";
+
     /// <summary>
     /// Initializes a new instance of the <see cref="SSOController"/> class.
     /// </summary>
@@ -145,7 +150,7 @@ public class SSOController : ControllerBase
                 HttpClientFactory = o =>
                 {
                     var client = _httpClientFactory.CreateClient();
-                    client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent());
+                    client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgentString);
                     return client;
                 }
             };
@@ -404,7 +409,7 @@ public class SSOController : ControllerBase
                 HttpClientFactory = o =>
                 {
                     var client = _httpClientFactory.CreateClient();
-                    client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent());
+                    client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgentString);
                     return client;
                 }
             };
@@ -1237,7 +1242,7 @@ public class SSOController : ControllerBase
                     };
                     using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
 
-                    client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent());
+                    client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgentString);
 
                     // ResponseHeadersRead so the body is streamed, not fully buffered, before ReadCappedAsync
                     // enforces the size limit; otherwise the cap runs only after the whole download is in memory.
@@ -1310,13 +1315,6 @@ public class SSOController : ControllerBase
     private void Invalidate()
     {
         AuthStateStore.InvalidateExpired(StateManager, DateTime.Now, StateLifetime);
-    }
-
-    // Single canonical User-Agent for the plugin's outbound HTTP (discovery, avatar fetch).
-    private static string UserAgent()
-    {
-        var version = System.Diagnostics.FileVersionInfo.GetVersionInfo(Assembly.GetExecutingAssembly().Location).FileVersion;
-        return $"Jellyfin-Plugin-SSO-Auth +{version} (https://github.com/iderex/jellyfin-plugin-sso)";
     }
 
     // Validates a SAML response: signature + time bounds always, plus AudienceRestriction binding to
