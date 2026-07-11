@@ -36,6 +36,8 @@ internal static class SamlTestFactory
     /// <param name="role">The value of the "Role" attribute.</param>
     /// <param name="notOnOrAfter">SubjectConfirmationData/@NotOnOrAfter; defaults to five minutes in the future.</param>
     /// <param name="includeNotOnOrAfter">When false, the NotOnOrAfter attribute is omitted entirely.</param>
+    /// <param name="conditionsNotBefore">When set, emits a Conditions element carrying this NotBefore.</param>
+    /// <param name="conditionsNotOnOrAfter">When set, emits a Conditions element carrying this NotOnOrAfter.</param>
     /// <param name="scope">Which element to sign.</param>
     /// <param name="signWithSha1">When true, sign with RSA-SHA1/SHA1 digest (for weak-algorithm tests).</param>
     /// <returns>A fixture exposing the certificate and the signed document.</returns>
@@ -44,9 +46,12 @@ internal static class SamlTestFactory
         string role = "jellyfin-users",
         DateTime? notOnOrAfter = null,
         bool includeNotOnOrAfter = true,
+        DateTime? conditionsNotBefore = null,
+        DateTime? conditionsNotOnOrAfter = null,
         SignatureScope scope = SignatureScope.Response,
         bool signWithSha1 = false)
     {
+        const string TimeFormat = "yyyy-MM-ddTHH:mm:ssZ";
         var effectiveNotOnOrAfter = notOnOrAfter ?? DateTime.UtcNow.AddMinutes(5);
 
         using var rsa = RSA.Create(2048);
@@ -57,13 +62,31 @@ internal static class SamlTestFactory
         var assertionId = "_" + Guid.NewGuid().ToString("N");
 
         var subjectConfirmationData = includeNotOnOrAfter
-            ? "<saml:SubjectConfirmationData NotOnOrAfter=\"" + effectiveNotOnOrAfter.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture) + "\" />"
+            ? "<saml:SubjectConfirmationData NotOnOrAfter=\"" + effectiveNotOnOrAfter.ToString(TimeFormat, CultureInfo.InvariantCulture) + "\" />"
             : "<saml:SubjectConfirmationData />";
+
+        var conditions = string.Empty;
+        if (conditionsNotBefore.HasValue || conditionsNotOnOrAfter.HasValue)
+        {
+            var attributes = new StringBuilder();
+            if (conditionsNotBefore.HasValue)
+            {
+                attributes.Append(" NotBefore=\"" + conditionsNotBefore.Value.ToString(TimeFormat, CultureInfo.InvariantCulture) + "\"");
+            }
+
+            if (conditionsNotOnOrAfter.HasValue)
+            {
+                attributes.Append(" NotOnOrAfter=\"" + conditionsNotOnOrAfter.Value.ToString(TimeFormat, CultureInfo.InvariantCulture) + "\"");
+            }
+
+            conditions = "<saml:Conditions" + attributes + " />";
+        }
 
         var xml =
             "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" ID=\"" + responseId + "\" Version=\"2.0\">" +
                 "<saml:Assertion ID=\"" + assertionId + "\" Version=\"2.0\">" +
                     "<saml:Issuer>https://idp.example.com</saml:Issuer>" +
+                    conditions +
                     "<saml:Subject>" +
                         "<saml:NameID>" + nameId + "</saml:NameID>" +
                         "<saml:SubjectConfirmation Method=\"urn:oasis:names:tc:SAML:2.0:cm:bearer\">" +

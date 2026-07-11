@@ -108,7 +108,7 @@ public class Response
         }
 
         signedXml.LoadXml((XmlElement)nodeList[0]);
-        return ValidateSignatureReference(signedXml) && signedXml.CheckSignature(_certificate, true) && !IsExpired();
+        return ValidateSignatureReference(signedXml) && signedXml.CheckSignature(_certificate, true) && IsWithinTimeBounds();
     }
 
     // an XML signature can "cover" not the whole document, but only a part of it
@@ -142,16 +142,20 @@ public class Response
         return true;
     }
 
-    private bool IsExpired()
+    // Fail-closed time-bound validation: an assertion is accepted only if it carries at least one
+    // parseable upper bound (NotOnOrAfter) and every present bound holds, within a small clock skew.
+    // A missing or unparseable upper bound is a rejection, not an accept-forever (the old behavior).
+    private bool IsWithinTimeBounds()
     {
-        var expirationDate = DateTime.MaxValue;
-        var node = _xmlDoc.SelectSingleNode("/samlp:Response/saml:Assertion[1]/saml:Subject/saml:SubjectConfirmation/saml:SubjectConfirmationData", _xmlNameSpaceManager);
-        if (node != null && node.Attributes["NotOnOrAfter"] != null)
-        {
-            DateTime.TryParse(node.Attributes["NotOnOrAfter"].Value, out expirationDate);
-        }
+        var subjectConfirmationData = _xmlDoc.SelectSingleNode("/samlp:Response/saml:Assertion[1]/saml:Subject/saml:SubjectConfirmation/saml:SubjectConfirmationData", _xmlNameSpaceManager);
+        var conditions = _xmlDoc.SelectSingleNode("/samlp:Response/saml:Assertion[1]/saml:Conditions", _xmlNameSpaceManager);
 
-        return DateTime.UtcNow > expirationDate.ToUniversalTime();
+        return SamlAssertionTime.IsWithinValidity(
+            subjectConfirmationData?.Attributes?["NotOnOrAfter"]?.Value,
+            conditions?.Attributes?["NotBefore"]?.Value,
+            conditions?.Attributes?["NotOnOrAfter"]?.Value,
+            DateTime.UtcNow,
+            SamlAssertionTime.ClockSkew);
     }
 
     /// <summary>
