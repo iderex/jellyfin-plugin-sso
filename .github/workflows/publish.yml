@@ -6,6 +6,11 @@ on:
       - released
   workflow_dispatch:
 
+# Default to read-only; the jobs that create the release and update the
+# manifest branch opt into write access explicitly.
+permissions:
+  contents: read
+
 jobs:
   build:
     uses: ./.github/workflows/build.yml
@@ -14,6 +19,8 @@ jobs:
       dotnet-target:  "net9.0"
   upload:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     needs:
     - build
     steps:
@@ -40,6 +47,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   generate:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     needs:
     - upload
     steps:
