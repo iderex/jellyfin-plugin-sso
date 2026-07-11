@@ -18,7 +18,7 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 
 > ### ⚡ Actively maintained revival
 >
-> This is a revival of [**9p4/jellyfin-plugin-sso**](https://github.com/9p4/jellyfin-plugin-sso), which its original author archived. It continues from the last upstream release (**4.0.0.x**, Jellyfin 10.11 / .NET 9) and is being taken forward **security-first**: an automated test suite has been added and the login path is being hardened step by step. Huge thanks to the original author and contributors for the foundation.
+> This is a revival of [**9p4/jellyfin-plugin-sso**](https://github.com/9p4/jellyfin-plugin-sso), which its original author has since archived. It continues from the last upstream release (**4.0.0.x**, Jellyfin 10.11 / .NET 9) and is being taken forward **security-first**: an automated test suite has been added and the login path is being hardened step by step. Huge thanks to the original author and contributors for the foundation.
 >
 > **Status:** early and under active development. See [Installing](#installing) — for now the reliable path is building from source; a packaged release will follow once the security-hardening pass reaches its first milestone.
 
@@ -51,7 +51,7 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 dotnet publish -c Release
 ```
 
-Copy `SSO-Auth.dll`, `Duende.IdentityModel.OidcClient.dll`, and `Duende.IdentityModel.dll` from the build output into your Jellyfin plugins directory under `config/plugins/sso/`, then restart Jellyfin. [JPRM](https://github.com/oddstr13/jellyfin-plugin-repository-manager) can produce a packaged plugin if you prefer.
+Copy the **full publish output** (`SSO-Auth.dll` and every dependency DLL beside it — the OpenID client, the embedded library, and the other referenced assemblies) into your Jellyfin plugins directory under `config/plugins/sso/`, then restart Jellyfin. Copying only a subset can leave Jellyfin unable to load the plugin. [JPRM](https://github.com/oddstr13/jellyfin-plugin-repository-manager) packages the correct set for you if you prefer.
 
 A packaged release installable from a plugin repository will be published once the hardening pass reaches its first release milestone.
 
