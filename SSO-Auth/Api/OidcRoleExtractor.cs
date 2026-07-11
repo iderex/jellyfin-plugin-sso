@@ -34,7 +34,9 @@ internal static class OidcRoleExtractor
             return new List<string> { claimValue };
         }
 
-        // A multi-segment path walks the claim's JSON object; a non-object value yields no roles.
+        // A multi-segment path parses the claim value as a JSON object and walks it. A JSON null
+        // yields no roles; a malformed or non-object value throws (surfaced by the caller as a
+        // failed login, i.e. fail-closed).
         var json = JsonConvert.DeserializeObject<IDictionary<string, object>>(claimValue);
         if (json is null)
         {
