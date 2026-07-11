@@ -587,8 +587,11 @@ public class SSOController : ControllerBase
 
         bool isLinking = relayState == "linking";
 
+        // relayState is attacker-controllable; strip line endings inline at the log call to prevent
+        // log forging (structured logging alone does not sanitize a newline-bearing value).
         _logger.LogInformation(
-            $"SAML request has relayState of {relayState}");
+            "SAML request has relayState of {RelayState}",
+            relayState?.ReplaceLineEndings(string.Empty));
 
         if (config.Enabled)
         {
@@ -596,7 +599,7 @@ public class SSOController : ControllerBase
 
             if (!ValidateSaml(samlResponse, config))
             {
-                return Problem("Invalid SAML signature");
+                return Problem("SAML response validation failed");
             }
 
             bool valid = false;
@@ -760,7 +763,7 @@ public class SSOController : ControllerBase
 
             if (!ValidateSaml(samlResponse, config))
             {
-                return Problem("Invalid SAML signature");
+                return Problem("SAML response validation failed");
             }
 
             // Enforce one-time use so a captured assertion cannot be replayed to mint another session.
@@ -1109,7 +1112,7 @@ public class SSOController : ControllerBase
 
         if (!ValidateSaml(samlResponse, config))
         {
-            return Problem("Invalid SAML signature");
+            return Problem("SAML response validation failed");
         }
 
         string providerUserId = samlResponse.GetNameID();

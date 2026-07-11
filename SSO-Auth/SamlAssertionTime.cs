@@ -1,3 +1,4 @@
+#nullable enable
 using System;
 using System.Globalization;
 
@@ -28,9 +29,9 @@ internal static class SamlAssertionTime
     /// <param name="skew">The clock-skew tolerance applied to each bound.</param>
     /// <returns>True only when a valid upper bound exists and every present bound is satisfied.</returns>
     internal static bool IsWithinValidity(
-        string subjectNotOnOrAfter,
-        string conditionsNotBefore,
-        string conditionsNotOnOrAfter,
+        string? subjectNotOnOrAfter,
+        string? conditionsNotBefore,
+        string? conditionsNotOnOrAfter,
         DateTime nowUtc,
         TimeSpan skew)
     {
@@ -81,7 +82,7 @@ internal static class SamlAssertionTime
         return true;
     }
 
-    internal static bool TryParseUtc(string raw, out DateTime utc)
+    internal static bool TryParseUtc(string? raw, out DateTime utc)
     {
         // SAML timestamps are xsd:dateTime in UTC ('...Z'). Parse culture-invariantly and normalize
         // to UTC, assuming UTC when no offset is present rather than the machine's local zone.
