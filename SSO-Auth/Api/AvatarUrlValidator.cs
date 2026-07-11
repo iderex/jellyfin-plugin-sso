@@ -31,7 +31,9 @@ internal static class AvatarUrlValidator
             return false;
         }
 
-        var host = parsed.DnsSafeHost;
+        // Strip a fully-qualified trailing dot ("localhost." / "host.") before the localhost check,
+        // since it resolves the same but would otherwise slip past the string comparison.
+        var host = parsed.DnsSafeHost.TrimEnd('.');
         if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase) || host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase))
         {
             return false;
@@ -65,14 +67,21 @@ internal static class AvatarUrlValidator
 
             // 0.0.0.0/8 (this network), 10.0.0.0/8, 100.64.0.0/10 (CGNAT), 169.254.0.0/16 (link-local),
             // 172.16.0.0/12, 192.0.0.0/24 (IETF protocol assignments incl. the 192.0.0.192 cloud-metadata
-            // address), 192.168.0.0/16, and 224.0.0.0/3 (multicast 224/4, reserved 240/4, broadcast).
+            // address), 192.0.2.0/24 / 198.51.100.0/24 / 203.0.113.0/24 (TEST-NET-1/2/3), 192.88.99.0/24
+            // (6to4 relay anycast), 192.168.0.0/16, 198.18.0.0/15 (benchmarking), and 224.0.0.0/3
+            // (multicast 224/4, reserved 240/4, broadcast).
             return b[0] == 0
                 || b[0] == 10
                 || (b[0] == 100 && b[1] >= 64 && b[1] <= 127)
                 || (b[0] == 169 && b[1] == 254)
                 || (b[0] == 172 && b[1] >= 16 && b[1] <= 31)
                 || (b[0] == 192 && b[1] == 0 && b[2] == 0)
+                || (b[0] == 192 && b[1] == 0 && b[2] == 2)
+                || (b[0] == 192 && b[1] == 88 && b[2] == 99)
                 || (b[0] == 192 && b[1] == 168)
+                || (b[0] == 198 && (b[1] == 18 || b[1] == 19))
+                || (b[0] == 198 && b[1] == 51 && b[2] == 100)
+                || (b[0] == 203 && b[1] == 0 && b[2] == 113)
                 || b[0] >= 224;
         }
 

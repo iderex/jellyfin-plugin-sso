@@ -28,6 +28,8 @@ public class AvatarUrlValidatorTests
     [InlineData("")]
     [InlineData("http://localhost/x")]
     [InlineData("http://service.localhost/x")]
+    [InlineData("http://localhost./x")]
+    [InlineData("http://service.localhost./x")]
     [InlineData("http://127.0.0.1/x")]
     [InlineData("http://169.254.169.254/latest/meta-data/")]
     [InlineData("http://192.0.0.192/")]
@@ -64,6 +66,12 @@ public class AvatarUrlValidatorTests
     [InlineData("2002:c0a8:101::")] // 6to4 embedding 192.168.1.1
     [InlineData("::7f00:1")] // deprecated IPv4-compatible ::127.0.0.1
     [InlineData("192.0.0.192")] // Oracle Cloud metadata (192.0.0.0/24 protocol assignments)
+    [InlineData("192.0.2.10")] // TEST-NET-1
+    [InlineData("198.51.100.10")] // TEST-NET-2
+    [InlineData("203.0.113.10")] // TEST-NET-3
+    [InlineData("198.18.0.1")] // benchmarking 198.18.0.0/15
+    [InlineData("198.19.255.255")] // benchmarking 198.18.0.0/15 (upper half)
+    [InlineData("192.88.99.1")] // 6to4 relay anycast
     [InlineData("fec0::1")] // deprecated IPv6 site-local
     public void IsBlockedAddress_PrivateOrLoopback_ReturnsTrue(string ip)
     {
@@ -76,6 +84,9 @@ public class AvatarUrlValidatorTests
     [InlineData("172.32.0.1")]
     [InlineData("100.63.255.255")]
     [InlineData("223.255.255.255")] // last unicast address just below the 224/4 multicast range
+    [InlineData("198.17.255.255")] // just below the 198.18.0.0/15 benchmarking range
+    [InlineData("198.20.0.1")] // just above the 198.18.0.0/15 benchmarking range
+    [InlineData("192.0.1.1")] // adjacent to 192.0.0.0/24 and 192.0.2.0/24, not reserved
     [InlineData("2606:4700:4700::1111")]
     [InlineData("64:ff9b::808:808")] // NAT64 embedding the public 8.8.8.8
     public void IsBlockedAddress_PublicAddresses_ReturnsFalse(string ip)

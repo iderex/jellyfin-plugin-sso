@@ -145,10 +145,7 @@ public class SSOController : ControllerBase
                 HttpClientFactory = o =>
                 {
                     var client = _httpClientFactory.CreateClient();
-                    System.Reflection.Assembly assembly = System.Reflection.Assembly.GetExecutingAssembly();
-                    System.Diagnostics.FileVersionInfo fvi = System.Diagnostics.FileVersionInfo.GetVersionInfo(assembly.Location);
-                    string version = fvi.FileVersion;
-                    client.DefaultRequestHeaders.UserAgent.ParseAdd($"Jellyfin-Plugin-SSO-Auth +{version} (https://github.com/9p4/jellyfin-plugin-sso)");
+                    client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent());
                     return client;
                 }
             };
@@ -407,11 +404,7 @@ public class SSOController : ControllerBase
                 HttpClientFactory = o =>
                 {
                     var client = _httpClientFactory.CreateClient();
-                    System.Reflection.Assembly assembly = System.Reflection.Assembly.GetExecutingAssembly();
-                    System.Diagnostics.FileVersionInfo fvi = System.Diagnostics.FileVersionInfo.GetVersionInfo(assembly.Location);
-                    string version = fvi.FileVersion;
-
-                    client.DefaultRequestHeaders.UserAgent.ParseAdd($"Jellyfin-Plugin-SSO-Auth +{version} (https://github.com/9p4/jellyfin-plugin-sso)");
+                    client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent());
                     return client;
                 }
             };
@@ -1244,8 +1237,7 @@ public class SSOController : ControllerBase
                     };
                     using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
 
-                    var version = System.Diagnostics.FileVersionInfo.GetVersionInfo(Assembly.GetExecutingAssembly().Location).FileVersion;
-                    client.DefaultRequestHeaders.UserAgent.ParseAdd($"Jellyfin-Plugin-SSO-Auth +{version} (https://github.com/iderex/jellyfin-plugin-sso)");
+                    client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent());
 
                     // ResponseHeadersRead so the body is streamed, not fully buffered, before ReadCappedAsync
                     // enforces the size limit; otherwise the cap runs only after the whole download is in memory.
@@ -1320,6 +1312,13 @@ public class SSOController : ControllerBase
         AuthStateStore.InvalidateExpired(StateManager, DateTime.Now, StateLifetime);
     }
 
+    // Single canonical User-Agent for the plugin's outbound HTTP (discovery, avatar fetch).
+    private static string UserAgent()
+    {
+        var version = System.Diagnostics.FileVersionInfo.GetVersionInfo(Assembly.GetExecutingAssembly().Location).FileVersion;
+        return $"Jellyfin-Plugin-SSO-Auth +{version} (https://github.com/iderex/jellyfin-plugin-sso)";
+    }
+
     // Validates a SAML response: signature + time bounds always, plus AudienceRestriction binding to
     // this SP unless explicitly opted out. Expected audience is the configured SamlAudience, falling
     // back to the SamlClientId (SP entity id). Both are trimmed so the comparison matches the trimmed
@@ -1360,7 +1359,7 @@ public class SSOController : ControllerBase
             }
 
             attempted = true;
-            var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+            var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
             var connected = false;
             try
             {
