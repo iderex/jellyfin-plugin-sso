@@ -422,7 +422,7 @@ form {
 
 /* Fix checkboxes */
 /* Customize the label (the container) */
-*/ .checkbox-wrapper {
+.checkbox-wrapper {
   position: relative;
 }
 
