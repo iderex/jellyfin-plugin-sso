@@ -1,0 +1,11 @@
+<Project>
+
+  <PropertyGroup>
+    <!-- Generate and honor a packages.lock.json per project so the restored dependency graph is
+         pinned and reproducible. CI restores in locked mode, which fails if the lock file would
+         change (drift or tampering); locally, updating a package regenerates the lock file (or run
+         a restore with the force-evaluate switch). -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+</Project>
