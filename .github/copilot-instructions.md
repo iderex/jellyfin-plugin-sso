@@ -8,7 +8,7 @@ authentication bypass, not an inconvenience.
 ## Review priorities
 
 1. **Fail closed.** Validation must reject on anything missing, unparseable,
-   or unexpected — a missing signature, time bound, audience, state, or role
+   or unexpected — a missing signature, time-bound, audience, state, or role
    must never default to accept. Flag any default-accept branch, swallowed
    exception, or early return that skips a validation step.
 2. **Secrets stay secret.** `OidSecret`, signing keys, state tokens, and PKCE
