@@ -83,6 +83,8 @@ public class SerializableDictionary<TKey, TValue>
     /// <param name="reader">The XML reader to read from.</param>
     public void ReadXml(System.Xml.XmlReader reader)
     {
+        System.ArgumentNullException.ThrowIfNull(reader);
+
         XmlSerializer keySerializer = new XmlSerializer(typeof(TKey));
         XmlSerializer valueSerializer = new XmlSerializer(typeof(TValue));
 
@@ -121,6 +123,8 @@ public class SerializableDictionary<TKey, TValue>
     /// <param name="writer">An instance of the XmlWriter class.</param>
     public void WriteXml(System.Xml.XmlWriter writer)
     {
+        System.ArgumentNullException.ThrowIfNull(writer);
+
         XmlSerializer keySerializer = new XmlSerializer(typeof(TKey));
         XmlSerializer valueSerializer = new XmlSerializer(typeof(TValue));
 

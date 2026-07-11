@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api;
 
@@ -36,12 +37,9 @@ internal static class SamlLoginPolicy
                     continue;
                 }
 
-                foreach (var allowed in allowedRoles)
+                if (allowedRoles.Any(allowed => !string.IsNullOrEmpty(allowed) && string.Equals(allowed, role, StringComparison.Ordinal)))
                 {
-                    if (!string.IsNullOrEmpty(allowed) && string.Equals(allowed, role, StringComparison.Ordinal))
-                    {
-                        return true;
-                    }
+                    return true;
                 }
             }
         }
