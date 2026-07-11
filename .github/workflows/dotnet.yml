@@ -20,6 +20,8 @@ jobs:
       uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
       with:
         dotnet-version: 9.0.x
+    - name: Jellyfin compatibility metadata check
+      run: bash scripts/check-jellyfin-compat.sh
     - name: Restore dependencies
       run: dotnet restore
     - name: Vulnerable dependency scan
@@ -34,3 +36,11 @@ jobs:
       run: dotnet build --no-restore --warnaserror
     - name: Test
       run: dotnet test --no-build --verbosity normal
+
+  # Verify the plugin actually packages as a loadable Jellyfin plugin (JPRM builds it against the
+  # targeted ABI and produces the manifest) on every PR, not only at release time.
+  package:
+    uses: ./.github/workflows/build.yml
+    with:
+      dotnet-version: "9.0.x"
+      dotnet-target: "net9.0"
