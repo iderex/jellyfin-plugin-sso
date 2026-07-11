@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 
 namespace Jellyfin.Plugin.SSO_Auth;
 
@@ -463,7 +464,7 @@ async function main() {
     localStorage.removeItem('jellyfin_credentials');
     document.getElementById('iframe-main').src = '" + punycodeBaseUrl + @"/web/index.html';
 
-    var data = '" + data + @"';
+    var data = " + JsonSerializer.Serialize(data) + @";
     while (localStorage.getItem(""_deviceId2"") == null ||
         localStorage.getItem(""jellyfin_credentials"") == null ||
         JSON.parse(localStorage.getItem(""jellyfin_credentials""))['Servers'][0]['Id'] == null) {
