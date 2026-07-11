@@ -91,6 +91,50 @@ public class SamlResponseTests
         Assert.False(Load(fixture).IsValid());
     }
 
+    // --- Signature/digest algorithm allowlist (A-3: reject SHA-1) ---
+
+    [Fact]
+    public void IsValid_Sha1SignedResponse_ReturnsFalse()
+    {
+        // A response signed with RSA-SHA1 and a SHA-1 digest verifies cryptographically against the
+        // certificate, but SHA-1 is collision-weak — it must be rejected fail-closed before that check.
+        var fixture = SamlTestFactory.Create(signWithSha1: true);
+        Assert.False(Load(fixture).IsValid());
+    }
+
+    [Fact]
+    public void IsValid_Sha1SignedAssertionScope_ReturnsFalse()
+    {
+        var fixture = SamlTestFactory.Create(scope: SamlTestFactory.SignatureScope.Assertion, signWithSha1: true);
+        Assert.False(Load(fixture).IsValid());
+    }
+
+    [Fact]
+    public void GetSignatureAlgorithm_Sha256SignedResponse_ReturnsRsaSha256Uri()
+    {
+        var fixture = SamlTestFactory.Create();
+        Assert.Equal("http://www.w3.org/2001/04/xmldsig-more#rsa-sha256", Load(fixture).GetSignatureAlgorithm());
+    }
+
+    [Fact]
+    public void GetSignatureAlgorithm_Sha1SignedResponse_ReturnsRsaSha1Uri()
+    {
+        // Diagnostic getter reports the rejected weak algorithm so an operator can identify the cause.
+        var fixture = SamlTestFactory.Create(signWithSha1: true);
+        Assert.Equal("http://www.w3.org/2000/09/xmldsig#rsa-sha1", Load(fixture).GetSignatureAlgorithm());
+    }
+
+    [Fact]
+    public void GetSignatureAlgorithm_UnsignedResponse_ReturnsNull()
+    {
+        var unsigned =
+            "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" ID=\"_r\" Version=\"2.0\">" +
+                "<saml:Assertion ID=\"_a\" Version=\"2.0\"><saml:Subject><saml:NameID>alice</saml:NameID></saml:Subject></saml:Assertion>" +
+            "</samlp:Response>";
+        var response = new Response(SamlFixture.ForeignCertificateBase64(), SamlFixture.Encode(unsigned));
+        Assert.Null(response.GetSignatureAlgorithm());
+    }
+
     [Fact]
     public void GetNameID_ValidResponse_ReturnsSignedSubject()
     {
