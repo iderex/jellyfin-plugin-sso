@@ -620,7 +620,7 @@ public class SSOController : ControllerBase
         {
             var samlResponse = new Response(config.SamlCertificate, Request.Form["SAMLResponse"]);
 
-            if (!ValidateSaml(samlResponse, config))
+            if (!IsSamlResponseValid(samlResponse, config))
             {
                 return Problem("SAML response validation failed");
             }
@@ -760,7 +760,7 @@ public class SSOController : ControllerBase
             bool liveTvManagement = config.EnableLiveTvManagement;
             var samlResponse = new Response(config.SamlCertificate, response.Data);
 
-            if (!ValidateSaml(samlResponse, config))
+            if (!IsSamlResponseValid(samlResponse, config))
             {
                 return Problem("SAML response validation failed");
             }
@@ -1158,7 +1158,7 @@ public class SSOController : ControllerBase
 
         var samlResponse = new Response(config.SamlCertificate, response.Data);
 
-        if (!ValidateSaml(samlResponse, config))
+        if (!IsSamlResponseValid(samlResponse, config))
         {
             return Problem("SAML response validation failed");
         }
@@ -1349,6 +1349,25 @@ public class SSOController : ControllerBase
     private void Invalidate()
     {
         AuthStateStore.InvalidateExpired(StateManager, DateTime.Now, StateLifetime);
+    }
+
+    // Validates the SAML response and, on failure, logs the declared signature algorithm plus the
+    // weak-algorithm remediation hint. This lets an operator tell a rejected SHA-1 signature - the
+    // expected post-upgrade lockout of a legacy IdP - apart from a bad certificate, an expired
+    // assertion, or an audience mismatch, all of which otherwise surface as the same opaque error.
+    private bool IsSamlResponseValid(Response samlResponse, SamlConfig config)
+    {
+        if (ValidateSaml(samlResponse, config))
+        {
+            return true;
+        }
+
+        // The algorithm URI is identity-provider-controlled; strip line endings inline at the log
+        // call to prevent log forging (a helper-boundary sanitizer is not recognized by CodeQL).
+        _logger.LogWarning(
+            "SAML response validation failed (signature algorithm: {Algorithm}). SHA-1 is rejected; if that is the identity provider's algorithm, reconfigure it to sign with RSA/ECDSA-SHA-256 or stronger.",
+            samlResponse.GetSignatureAlgorithm()?.ReplaceLineEndings(string.Empty));
+        return false;
     }
 
     // Validates a SAML response: signature + time bounds always, plus AudienceRestriction binding to

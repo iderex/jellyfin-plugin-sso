@@ -108,7 +108,24 @@ public class Response
         }
 
         signedXml.LoadXml((XmlElement)nodeList[0]);
-        return ValidateSignatureReference(signedXml) && signedXml.CheckSignature(_certificate, true) && IsWithinTimeBounds();
+        return ValidateSignatureReference(signedXml)
+            && IsSignatureAlgorithmAllowed(signedXml)
+            && signedXml.CheckSignature(_certificate, true)
+            && IsWithinTimeBounds();
+    }
+
+    // Reject weak/legacy signature and digest algorithms (e.g. RSA-SHA1, SHA-1 digest) before the
+    // cryptographic check, so a misconfigured or downgraded identity provider is not trusted.
+    // Runs after ValidateSignatureReference, which guarantees exactly one reference exists.
+    private bool IsSignatureAlgorithmAllowed(SignedXml signedXml)
+    {
+        var digestMethods = new List<string>();
+        foreach (Reference reference in signedXml.SignedInfo.References)
+        {
+            digestMethods.Add(reference.DigestMethod);
+        }
+
+        return SamlSignatureAlgorithms.IsAllowed(signedXml.SignedInfo.SignatureMethod, digestMethods);
     }
 
     /// <summary>
@@ -142,6 +159,25 @@ public class Response
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Gets the signature-method algorithm URI declared in the response's XML signature, or null when
+    /// the response carries no signature. Diagnostic only (e.g. to explain a rejected weak algorithm in
+    /// a log); it is never a substitute for <see cref="IsValid()"/>.
+    /// </summary>
+    /// <returns>The SignedInfo signature-method URI, or null if unsigned.</returns>
+    public string GetSignatureAlgorithm()
+    {
+        var nodeList = _xmlDoc.SelectNodes("//ds:Signature", _xmlNameSpaceManager);
+        if (nodeList == null || nodeList.Count == 0)
+        {
+            return null;
+        }
+
+        var signedXml = new SignedXml(_xmlDoc);
+        signedXml.LoadXml((XmlElement)nodeList[0]);
+        return signedXml.SignedInfo.SignatureMethod;
     }
 
     private List<string> GetAudiences()

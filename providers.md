@@ -4,6 +4,8 @@ This plugin has been tested to work against various providers, though not all pr
 
 ❗ Before you proceed, make sure you have another admin account if you are going to link SSO provider to the only admin account on the server, permission might get overwritten (see [#212](https://github.com/9p4/jellyfin-plugin-sso/issues/212)).
 
+❗ **SAML signing algorithm:** SAML responses must be signed with **RSA or ECDSA using SHA-256 or stronger** (SHA-384/SHA-512). Signatures using SHA-1 (`rsa-sha1`) or a SHA-1 digest are rejected, so if your identity provider still signs with SHA-1, reconfigure it to SHA-256 — otherwise every login through that provider fails with a "SAML response validation failed" error. The server log records the offending signature algorithm to help you diagnose this.
+
 ## TOC / Tested Providers:
 
 This section is broken into providers that support Role-Based Access Control (RBAC), and those that do not

@@ -1,0 +1,85 @@
+using System.Collections.Generic;
+using Jellyfin.Plugin.SSO_Auth;
+using Xunit;
+
+namespace Jellyfin.Plugin.SSO_Auth.Tests;
+
+/// <summary>
+/// Unit tests for <see cref="SamlSignatureAlgorithms"/> — the XML-DSig algorithm allowlist that
+/// rejects weak/legacy primitives (A-3). Uses the standard XML-DSig algorithm identifier URIs.
+/// </summary>
+public class SamlSignatureAlgorithmsTests
+{
+    private const string RsaSha256 = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256";
+    private const string RsaSha512 = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512";
+    private const string EcdsaSha384 = "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha384";
+    private const string RsaSha1 = "http://www.w3.org/2000/09/xmldsig#rsa-sha1";
+
+    private const string DigestSha256 = "http://www.w3.org/2001/04/xmlenc#sha256";
+    private const string DigestSha384 = "http://www.w3.org/2001/04/xmldsig-more#sha384";
+    private const string DigestSha512 = "http://www.w3.org/2001/04/xmlenc#sha512";
+    private const string DigestSha1 = "http://www.w3.org/2000/09/xmldsig#sha1";
+
+    [Fact]
+    public void IsAllowed_RsaSha256WithSha256Digest_ReturnsTrue()
+    {
+        Assert.True(SamlSignatureAlgorithms.IsAllowed(RsaSha256, new[] { DigestSha256 }));
+    }
+
+    [Fact]
+    public void IsAllowed_StrongerVariants_ReturnTrue()
+    {
+        Assert.True(SamlSignatureAlgorithms.IsAllowed(RsaSha512, new[] { DigestSha512 }));
+        Assert.True(SamlSignatureAlgorithms.IsAllowed(EcdsaSha384, new[] { DigestSha384 }));
+    }
+
+    [Fact]
+    public void IsAllowed_RsaSha1Signature_ReturnsFalse()
+    {
+        Assert.False(SamlSignatureAlgorithms.IsAllowed(RsaSha1, new[] { DigestSha256 }));
+    }
+
+    [Fact]
+    public void IsAllowed_Sha1Digest_ReturnsFalse()
+    {
+        Assert.False(SamlSignatureAlgorithms.IsAllowed(RsaSha256, new[] { DigestSha1 }));
+    }
+
+    [Fact]
+    public void IsAllowed_OneWeakDigestAmongStrong_ReturnsFalse()
+    {
+        // A single weak digest anywhere in the reference set poisons the whole response.
+        Assert.False(SamlSignatureAlgorithms.IsAllowed(RsaSha256, new[] { DigestSha256, DigestSha1 }));
+    }
+
+    [Fact]
+    public void IsAllowed_NullSignatureMethod_ReturnsFalse()
+    {
+        Assert.False(SamlSignatureAlgorithms.IsAllowed(null!, new[] { DigestSha256 }));
+    }
+
+    [Fact]
+    public void IsAllowed_NullDigestEnumerable_ReturnsFalse()
+    {
+        Assert.False(SamlSignatureAlgorithms.IsAllowed(RsaSha256, null!));
+    }
+
+    [Fact]
+    public void IsAllowed_NoReferences_ReturnsFalse()
+    {
+        // No digest to vouch for anything -> fail closed.
+        Assert.False(SamlSignatureAlgorithms.IsAllowed(RsaSha256, new List<string>()));
+    }
+
+    [Fact]
+    public void IsAllowed_NullDigestValue_ReturnsFalse()
+    {
+        Assert.False(SamlSignatureAlgorithms.IsAllowed(RsaSha256, new string?[] { null }));
+    }
+
+    [Fact]
+    public void IsAllowed_UnknownSignatureMethod_ReturnsFalse()
+    {
+        Assert.False(SamlSignatureAlgorithms.IsAllowed("urn:made:up", new[] { DigestSha256 }));
+    }
+}

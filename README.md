@@ -75,7 +75,7 @@ Broader documentation lives in the **[Wiki](https://github.com/iderex/jellyfin-p
 
 ## Security
 
-SSO is a sensitive part of your stack, and this plugin is being built to **fail closed**: a missing signature, an out-of-bounds time window, a wrong audience, a replayed assertion, or an unrecognized identity is rejected rather than waved through. Security-relevant behavior is covered by the automated test suite.
+SSO is a sensitive part of your stack, and this plugin is being built to **fail closed**: a missing signature, a weak SHA-1 signature, an out-of-bounds time window, a wrong audience, a replayed assertion, or an unrecognized identity is rejected rather than waved through. Security-relevant behavior is covered by the automated test suite.
 
 Found a vulnerability? Please report it **privately** via GitHub's ["Report a vulnerability"](https://github.com/iderex/jellyfin-plugin-sso/security/advisories/new) — not the public issue tracker. See [SECURITY.md](SECURITY.md).
 
