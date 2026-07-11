@@ -138,6 +138,26 @@ public class SamlAuthorizeStateBuilderTests
     }
 
     [Fact]
+    public void LiveTv_ConfigDefaultAndRoleGrant_StaysTrue()
+    {
+        // Pins the (true, true) row of the OR merge: a config default AND a role grant together must
+        // still yield true (an accidental XOR would flip it off).
+        var config = Config(c =>
+        {
+            c.EnableLiveTv = true;
+            c.EnableLiveTvManagement = true;
+            c.EnableLiveTvRoles = true;
+            c.LiveTvRoles = new[] { "tv" };
+            c.LiveTvManagementRoles = new[] { "tv" };
+        });
+
+        var result = SamlAuthorizeStateBuilder.Build(new List<string> { "tv" }, config);
+
+        Assert.True(result.EnableLiveTv);
+        Assert.True(result.EnableLiveTvManagement);
+    }
+
+    [Fact]
     public void LiveTvRolesDisabled_RoleDoesNotGrantLiveTv()
     {
         // EnableLiveTvRoles is off, so a matching Live TV role is ignored (faithful to the mapper).

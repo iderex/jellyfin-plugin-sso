@@ -35,8 +35,8 @@ internal static class SamlAuthorizeStateBuilder
         // OR-merge is a plain assignment; Live TV starts from the config default and is OR-ed.
         var grants = SamlRolePrivilegeMapper.Evaluate(roles, config);
         var admin = grants.Admin;
-        var enableLiveTv = config.EnableLiveTv | grants.EnableLiveTv;
-        var enableLiveTvManagement = config.EnableLiveTvManagement | grants.EnableLiveTvManagement;
+        var enableLiveTv = config.EnableLiveTv || grants.EnableLiveTv;
+        var enableLiveTvManagement = config.EnableLiveTvManagement || grants.EnableLiveTvManagement;
         folders.AddRange(grants.Folders);
 
         return new SamlAuthorizeState(admin, enableLiveTv, enableLiveTvManagement, folders);
