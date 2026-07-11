@@ -5,6 +5,11 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+# The single build job also creates the GitHub release and updates the
+# manifest branch, so it needs write access to repository contents.
+permissions:
+  contents: write
+
 jobs:
   build:
 

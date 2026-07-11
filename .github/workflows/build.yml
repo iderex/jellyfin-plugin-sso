@@ -12,6 +12,9 @@ on:
         description: "The .NET target to set for JPRM"
         type: string
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
