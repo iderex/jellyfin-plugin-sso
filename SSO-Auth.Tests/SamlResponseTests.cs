@@ -66,7 +66,7 @@ public class SamlResponseTests
     [Fact]
     public void IsValid_ExpiredNotOnOrAfter_ReturnsFalse()
     {
-        var fixture = SamlTestFactory.Create(notOnOrAfter: System.DateTime.UtcNow.AddMinutes(-5));
+        var fixture = SamlTestFactory.Create(notOnOrAfter: System.DateTime.UtcNow.AddMinutes(-10));
         Assert.False(Load(fixture).IsValid());
     }
 
@@ -119,15 +119,33 @@ public class SamlResponseTests
         Assert.Null(Load(fixture).GetCustomAttribute("NonExistent"));
     }
 
-    // --- Characterization of known-insecure current behavior (docs/SECURITY-FINDINGS.md) ---
+    // --- Time-bound validation (fail-closed; F-2 fixed) ---
 
     [Fact]
-    public void IsValid_MissingNotOnOrAfter_ReturnsTrue_KnownFailOpen()
+    public void IsValid_MissingAnyTimeBound_ReturnsFalse()
     {
-        // FINDING F-2: with no NotOnOrAfter bound, IsExpired() defaults the expiry to
-        // DateTime.MaxValue and the assertion is accepted forever. The P2 fix flips this to
-        // fail-closed (a missing time bound must be rejected); this assertion inverts then.
+        // F-2 fix: an assertion with no NotOnOrAfter anywhere must be rejected, not accepted
+        // forever (the previous DateTime.MaxValue fail-open default).
         var fixture = SamlTestFactory.Create(includeNotOnOrAfter: false);
+        Assert.False(Load(fixture).IsValid());
+    }
+
+    [Fact]
+    public void IsValid_OnlyConditionsUpperBound_ReturnsTrue()
+    {
+        // An IdP that carries the upper bound only in Conditions (not SubjectConfirmationData)
+        // must still authenticate — we require at least one upper bound, not that specific one.
+        var fixture = SamlTestFactory.Create(
+            includeNotOnOrAfter: false,
+            conditionsNotOnOrAfter: System.DateTime.UtcNow.AddMinutes(5));
         Assert.True(Load(fixture).IsValid());
+    }
+
+    [Fact]
+    public void IsValid_ConditionsNotBeforeInFuture_ReturnsFalse()
+    {
+        var fixture = SamlTestFactory.Create(
+            conditionsNotBefore: System.DateTime.UtcNow.AddMinutes(30));
+        Assert.False(Load(fixture).IsValid());
     }
 }
