@@ -1,0 +1,61 @@
+name: SonarCloud
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Build and analyze
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up JDK 17
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
+        with:
+          java-version: 17
+          distribution: zulu
+      - name: Set up .NET
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: 9.0.x
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          # A full clone lets SonarCloud attribute issues to the right commits/authors.
+          fetch-depth: 0
+      - name: Cache SonarCloud packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+      - name: Cache SonarCloud scanner
+        id: cache-sonar-scanner
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ./.sonar/scanner
+          key: ${{ runner.os }}-sonar-scanner
+          restore-keys: ${{ runner.os }}-sonar-scanner
+      - name: Install SonarCloud scanner
+        if: steps.cache-sonar-scanner.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ./.sonar/scanner
+          dotnet tool update dotnet-sonarscanner --tool-path ./.sonar/scanner
+      - name: Build and analyze
+        env:
+          # The scanner reads SONAR_TOKEN from the environment; sourcing it via env keeps the
+          # token out of the script text and the process command line, and Actions masks it in logs.
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          ./.sonar/scanner/dotnet-sonarscanner begin \
+            /k:"iderex_jellyfin-plugin-sso" \
+            /o:"iderex" \
+            /d:sonar.exclusions="img/**"
+          dotnet build --no-incremental
+          ./.sonar/scanner/dotnet-sonarscanner end
