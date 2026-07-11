@@ -31,38 +31,41 @@ const ssoConfigLinking = {
   },
   loadProviderList: (container, providers, provider_mode) => {
     providers.forEach((provider_name) => {
+      // Provider and canonical names are identity-provider/admin-controlled: build the DOM with
+      // createElement/textContent (never innerHTML), and feed them into selectors and URLs only
+      // through CSS.escape / encodeURIComponent, never raw.
       const provider_config = document.createElement("div");
       provider_config.classList.add("sso-provider-links-container");
       provider_config.dataset.id = provider_name;
 
-      provider_config.innerHTML = `
-      <label
-        class="inputLabel inputLabelUnfocused sso-provider-link-title"
-      >${provider_name}
-      </label>
-      <a
-        class="fab emby-button sso-provider-add-link"
-      >
-        <span class="material-icons add" aria-hidden="true"></span>
-      </a>
-      <div
-        class="sso-provider-existing-links-container"
-        data-provider="${provider_name}"
-      ></div>
-      `;
-      const add_provider = provider_config.querySelector(
-        ".sso-provider-add-link",
+      const title = document.createElement("label");
+      title.classList.add(
+        "inputLabel",
+        "inputLabelUnfocused",
+        "sso-provider-link-title",
       );
+      title.textContent = provider_name;
 
-      //const provider_name_css = ssoConfigLinking.safeCSSId(provider_name);
-      //provider_link.id = "sso-provider-" + provider_name_css;
-      //provider_link.classList.add("sso-provider-" + provider_name_css);
-      add_provider.classList.add("sso-provider");
-
+      const add_provider = document.createElement("a");
+      add_provider.classList.add(
+        "fab",
+        "emby-button",
+        "sso-provider-add-link",
+        "sso-provider",
+      );
+      const add_icon = document.createElement("span");
+      add_icon.classList.add("material-icons", "add");
+      add_icon.setAttribute("aria-hidden", "true");
+      add_provider.appendChild(add_icon);
       add_provider.href = ApiClient.getUrl(
-        `/SSO/${provider_mode}/p/${provider_name}?isLinking=true`,
+        `/SSO/${provider_mode}/p/${encodeURIComponent(provider_name)}?isLinking=true`,
       );
 
+      const existing_links = document.createElement("div");
+      existing_links.classList.add("sso-provider-existing-links-container");
+      existing_links.dataset.provider = provider_name;
+
+      provider_config.append(title, add_provider, existing_links);
       container.appendChild(provider_config);
     });
 
@@ -81,7 +84,7 @@ const ssoConfigLinking = {
 
           Object.keys(provider_map).forEach((provider_name) => {
             const provider_container = container.querySelector(
-              `.sso-provider-existing-links-container[data-provider="${provider_name}"]`,
+              `.sso-provider-existing-links-container[data-provider="${CSS.escape(provider_name)}"]`,
             );
             ssoConfigLinking.populateExistingLinks(
               provider_container,
@@ -111,17 +114,26 @@ const ssoConfigLinking = {
         "sso-provider-link-checkbox-wrapper",
         "checkbox-wrapper",
       );
-      out.innerHTML = `
-        <input
-          is="emby-checkbox"
-          class="sso-link-checkbox"
-          data-id="${canonical_name}"
-          data-mode="${provider_mode}"
-          data-provider="${provider_name}"
-          type="checkbox"
-        />
-        <span class="checkbox-label">${canonical_name}</span>
-      `;
+
+      // The canonical name is identity-provider-controlled - assigning it via dataset/textContent
+      // (never innerHTML) keeps a hostile linked-account name inert on this page.
+      // createElement's `is` option upgrades the customized built-in; the attribute is set as well
+      // so CSS attribute selectors and the web-components polyfill see it.
+      const checkbox = document.createElement("input", {
+        is: "emby-checkbox",
+      });
+      checkbox.setAttribute("is", "emby-checkbox");
+      checkbox.classList.add("sso-link-checkbox");
+      checkbox.type = "checkbox";
+      checkbox.dataset.id = canonical_name;
+      checkbox.dataset.mode = provider_mode;
+      checkbox.dataset.provider = provider_name;
+
+      const checkbox_label = document.createElement("span");
+      checkbox_label.classList.add("checkbox-label");
+      checkbox_label.textContent = canonical_name;
+
+      out.append(checkbox, checkbox_label);
       return out;
     });
 
@@ -157,10 +169,15 @@ const ssoConfigLinking = {
         const provider_name = checked_link.dataset.provider;
         const provider_mode = checked_link.dataset.mode;
 
+        // Encode the provider/canonical segments so an identity-provider-controlled name with a
+        // slash or other reserved character cannot inject extra path segments. A name that is
+        // exactly "." or ".." can still be collapsed by a path normalizer, but that only 404s
+        // (the route targets the caller's own links); "." is left unencoded because encoding it
+        // would break the common dotted username/email behind a strict reverse proxy.
         return ApiClient.fetch({
           type: "DELETE",
           url: ApiClient.getUrl(
-            `sso/${provider_mode}/link/${provider_name}/${currentUserId}/${canonical_name}`,
+            `sso/${provider_mode}/link/${encodeURIComponent(provider_name)}/${currentUserId}/${encodeURIComponent(canonical_name)}`,
           ),
         });
       });
