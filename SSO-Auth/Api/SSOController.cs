@@ -30,8 +30,6 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 using SSO_Auth.Lib;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api;
@@ -227,53 +225,7 @@ public class SSOController : ControllerBase
                 {
                     if (claim.Type == roleClaimSegments[0])
                     {
-                        List<string> roles;
-                        // If we are not using JSON values, just use the raw info from the claim value
-                        if (roleClaimSegments.Length == 1)
-                        {
-                            roles = new List<string> { claim.Value };
-                        }
-                        else
-                        {
-                            // We recursively traverse through the JSON data for the roles and parse it
-                            var json = JsonConvert.DeserializeObject<IDictionary<string, object>>(claim.Value);
-                            if (json is null)
-                            {
-                                roles = new List<string>();
-                            }
-                            else
-                            {
-                                bool missingSegment = false;
-                                for (int i = 1; i < roleClaimSegments.Length - 1; i++)
-                                {
-                                    var segment = roleClaimSegments[i];
-                                    if (!json.TryGetValue(segment, out var nextToken) || nextToken is not JObject nextObject)
-                                    {
-                                        missingSegment = true;
-                                        break;
-                                    }
-
-                                    json = nextObject.ToObject<IDictionary<string, object>>();
-                                    if (json is null)
-                                    {
-                                        missingSegment = true;
-                                        break;
-                                    }
-                                }
-
-                                if (missingSegment || !json.TryGetValue(roleClaimSegments[^1], out var rolesToken) || rolesToken is not JArray rolesArray)
-                                {
-                                    roles = new List<string>();
-                                }
-                                else
-                                {
-                                    // The final step is to take the JSON and turn it from a dictionary into a string
-                                    roles = rolesArray.ToObject<List<string>>();
-                                }
-                            }
-                        }
-
-                        foreach (string role in roles)
+                        foreach (string role in OidcRoleExtractor.ExtractRoles(roleClaimSegments, claim.Value))
                         {
                             // Check if allowed to login based on roles
                             if (config.Roles != null && config.Roles.Any())
