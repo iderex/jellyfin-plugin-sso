@@ -42,4 +42,12 @@ public class SamlLoginPolicyTests
         Assert.False(SamlLoginPolicy.IsLoginAllowed(new[] { "Jellyfin" }, new[] { "jellyfin" }));
         Assert.False(SamlLoginPolicy.IsLoginAllowed(new[] { "jellyfin" }, new string?[] { null }));
     }
+
+    [Fact]
+    public void NullOrEmptyRolesNeverAuthorize()
+    {
+        // A null/empty on both sides must not satisfy the allow-list.
+        Assert.False(SamlLoginPolicy.IsLoginAllowed(new string?[] { null }, new string?[] { null }));
+        Assert.False(SamlLoginPolicy.IsLoginAllowed(new[] { "" }, new[] { "" }));
+    }
 }

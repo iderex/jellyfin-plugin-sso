@@ -29,10 +29,16 @@ internal static class SamlLoginPolicy
         {
             foreach (var role in assertionRoles)
             {
+                // Skip empty/null role values so a missing role can never satisfy the allow-list
+                // (a null/empty on both sides must not authorize).
+                if (string.IsNullOrEmpty(role))
+                {
+                    continue;
+                }
+
                 foreach (var allowed in allowedRoles)
                 {
-                    // Static Equals is null-safe (a null allowed entry returns false rather than throwing).
-                    if (string.Equals(allowed, role, StringComparison.Ordinal))
+                    if (!string.IsNullOrEmpty(allowed) && string.Equals(allowed, role, StringComparison.Ordinal))
                     {
                         return true;
                     }
