@@ -36,9 +36,11 @@
 theme.css
 */
 .button-delete {
-  /* A darker danger red so the white label meets WCAG AA contrast (>=4.5:1);
-     rgb(247, 0, 0) only reached ~3.4:1. Still unmistakably a destructive action. */
-  background: #c62828;
+  /* Material Red 800: against the theme's rgba(255, 255, 255, 0.87) label this clears WCAG AA
+     with margin (~5.3:1) rather than sitting on the 4.5:1 line; the previous rgb(247, 0, 0)
+     reached only ~3.4:1. Text opacity is kept at the theme's 0.87 for visual consistency.
+     Still an unmistakable destructive-action red. */
+  background: #b71c1c;
   color: rgba(255, 255, 255, 0.87);
 }
 
