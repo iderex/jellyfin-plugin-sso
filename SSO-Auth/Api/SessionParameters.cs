@@ -1,5 +1,7 @@
 using System;
 
+#nullable enable
+
 namespace Jellyfin.Plugin.SSO_Auth.Api;
 
 /// <summary>
@@ -55,10 +57,10 @@ internal sealed class SessionParameters
     /// Gets the authentication provider id to persist as the user's default login provider, or
     /// null/empty to leave it unchanged.
     /// </summary>
-    public required string DefaultProvider { get; init; }
+    public required string? DefaultProvider { get; init; }
 
     /// <summary>
     /// Gets the avatar URL to fetch and set as the user's profile image, or null to skip.
     /// </summary>
-    public required string AvatarUrl { get; init; }
+    public required string? AvatarUrl { get; init; }
 }
