@@ -13,7 +13,8 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 public class SamlAssertionTimeTests
 {
     private static readonly DateTime Now = new DateTime(2026, 7, 11, 12, 0, 0, DateTimeKind.Utc);
-    private static readonly TimeSpan Skew = TimeSpan.FromMinutes(3);
+    // Use the production skew so the tests exercise the real acceptance window.
+    private static readonly TimeSpan Skew = SamlAssertionTime.ClockSkew;
 
     private static string At(int minutesFromNow) =>
         Now.AddMinutes(minutesFromNow).ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);

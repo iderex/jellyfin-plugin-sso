@@ -125,6 +125,9 @@ public class Response
             return false;
         }
 
+        // Trim and fail closed on an empty expected audience, so a caller passing a padded value
+        // (e.g. " https://sp ") still matches the trimmed audiences read from the assertion.
+        expectedAudience = expectedAudience?.Trim();
         if (string.IsNullOrEmpty(expectedAudience))
         {
             return false;
@@ -149,9 +152,13 @@ public class Response
         {
             foreach (XmlNode node in nodes)
             {
-                if (!string.IsNullOrEmpty(node?.InnerText))
+                // Trim so a pretty-printed assertion (indentation/newlines around the value) still
+                // compares equal; skip whitespace-only audiences. The assertion is signed, so
+                // trimming does not weaken the check.
+                var value = node?.InnerText?.Trim();
+                if (!string.IsNullOrEmpty(value))
                 {
-                    output.Add(node.InnerText);
+                    output.Add(value);
                 }
             }
         }
