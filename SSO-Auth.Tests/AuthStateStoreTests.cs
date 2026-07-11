@@ -27,6 +27,55 @@ public class AuthStateStoreTests
         return store;
     }
 
+    private static readonly DateTime Now = new DateTime(2026, 7, 11, 12, 0, 0, DateTimeKind.Utc);
+
+    private static TimedAuthorizeState State(string provider, string stateValue, bool valid, DateTime created)
+        => new TimedAuthorizeState(new Duende.IdentityModel.OidcClient.AuthorizeState { State = stateValue }, created)
+        {
+            Provider = provider,
+            Valid = valid,
+        };
+
+    // --- IsCurrentFor (OidPost precondition): provider-bound + unexpired ---
+
+    [Fact]
+    public void IsCurrentFor_SameProviderWithinLifetime_True()
+        => Assert.True(AuthStateStore.IsCurrentFor(State("p", "s", false, Now), "p", Now, Lifetime));
+
+    [Fact]
+    public void IsCurrentFor_DifferentProvider_False()
+        => Assert.False(AuthStateStore.IsCurrentFor(State("p", "s", false, Now), "other", Now, Lifetime));
+
+    [Fact]
+    public void IsCurrentFor_Expired_False()
+        => Assert.False(AuthStateStore.IsCurrentFor(State("p", "s", false, Now.AddMinutes(-2)), "p", Now, Lifetime));
+
+    [Fact]
+    public void IsCurrentFor_Null_False()
+        => Assert.False(AuthStateStore.IsCurrentFor(null, "p", Now, Lifetime));
+
+    // --- IsRedeemableBy (OidAuth/OidLink): valid + response match + provider + unexpired ---
+
+    [Fact]
+    public void IsRedeemableBy_AllConditionsMet_True()
+        => Assert.True(AuthStateStore.IsRedeemableBy(State("p", "tok", true, Now), "tok", "p", Now, Lifetime));
+
+    [Fact]
+    public void IsRedeemableBy_NotValid_False()
+        => Assert.False(AuthStateStore.IsRedeemableBy(State("p", "tok", false, Now), "tok", "p", Now, Lifetime));
+
+    [Fact]
+    public void IsRedeemableBy_CrossProviderReplay_False()
+        => Assert.False(AuthStateStore.IsRedeemableBy(State("low-trust", "tok", true, Now), "tok", "high-trust", Now, Lifetime));
+
+    [Fact]
+    public void IsRedeemableBy_ResponseMismatch_False()
+        => Assert.False(AuthStateStore.IsRedeemableBy(State("p", "tok", true, Now), "other", "p", Now, Lifetime));
+
+    [Fact]
+    public void IsRedeemableBy_Expired_False()
+        => Assert.False(AuthStateStore.IsRedeemableBy(State("p", "tok", true, Now.AddMinutes(-2)), "tok", "p", Now, Lifetime));
+
     [Fact]
     public void InvalidateExpired_RemovesOnlyExpiredEntries()
     {
