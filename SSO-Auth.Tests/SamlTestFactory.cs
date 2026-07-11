@@ -38,6 +38,8 @@ internal static class SamlTestFactory
     /// <param name="includeNotOnOrAfter">When false, the NotOnOrAfter attribute is omitted entirely.</param>
     /// <param name="conditionsNotBefore">When set, emits a Conditions element carrying this NotBefore.</param>
     /// <param name="conditionsNotOnOrAfter">When set, emits a Conditions element carrying this NotOnOrAfter.</param>
+    /// <param name="audience">When set, emits a Conditions/AudienceRestriction with this single Audience.</param>
+    /// <param name="audiences">When set, emits a Conditions/AudienceRestriction with these Audiences (overrides audience).</param>
     /// <param name="scope">Which element to sign.</param>
     /// <param name="signWithSha1">When true, sign with RSA-SHA1/SHA1 digest (for weak-algorithm tests).</param>
     /// <returns>A fixture exposing the certificate and the signed document.</returns>
@@ -48,9 +50,12 @@ internal static class SamlTestFactory
         bool includeNotOnOrAfter = true,
         DateTime? conditionsNotBefore = null,
         DateTime? conditionsNotOnOrAfter = null,
+        string? audience = null,
+        string[]? audiences = null,
         SignatureScope scope = SignatureScope.Response,
         bool signWithSha1 = false)
     {
+        var audienceList = audiences ?? (audience == null ? null : new[] { audience });
         const string TimeFormat = "yyyy-MM-ddTHH:mm:ssZ";
         var effectiveNotOnOrAfter = notOnOrAfter ?? DateTime.UtcNow.AddMinutes(5);
 
@@ -66,7 +71,7 @@ internal static class SamlTestFactory
             : "<saml:SubjectConfirmationData />";
 
         var conditions = string.Empty;
-        if (conditionsNotBefore.HasValue || conditionsNotOnOrAfter.HasValue)
+        if (conditionsNotBefore.HasValue || conditionsNotOnOrAfter.HasValue || audienceList != null)
         {
             var attributes = new StringBuilder();
             if (conditionsNotBefore.HasValue)
@@ -79,7 +84,21 @@ internal static class SamlTestFactory
                 attributes.Append(" NotOnOrAfter=\"" + conditionsNotOnOrAfter.Value.ToString(TimeFormat, CultureInfo.InvariantCulture) + "\"");
             }
 
-            conditions = "<saml:Conditions" + attributes + " />";
+            var body = string.Empty;
+            if (audienceList != null)
+            {
+                var audienceElements = new StringBuilder();
+                foreach (var a in audienceList)
+                {
+                    audienceElements.Append("<saml:Audience>" + a + "</saml:Audience>");
+                }
+
+                body = "<saml:AudienceRestriction>" + audienceElements + "</saml:AudienceRestriction>";
+            }
+
+            conditions = body.Length == 0
+                ? "<saml:Conditions" + attributes + " />"
+                : "<saml:Conditions" + attributes + ">" + body + "</saml:Conditions>";
         }
 
         var xml =

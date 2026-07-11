@@ -593,7 +593,7 @@ public class SSOController : ControllerBase
         {
             var samlResponse = new Response(config.SamlCertificate, Request.Form["SAMLResponse"]);
 
-            if (!samlResponse.IsValid())
+            if (!ValidateSaml(samlResponse, config))
             {
                 return Problem("Invalid SAML signature");
             }
@@ -757,7 +757,7 @@ public class SSOController : ControllerBase
             bool liveTvManagement = config.EnableLiveTvManagement;
             var samlResponse = new Response(config.SamlCertificate, response.Data);
 
-            if (!samlResponse.IsValid())
+            if (!ValidateSaml(samlResponse, config))
             {
                 return Problem("Invalid SAML signature");
             }
@@ -1091,7 +1091,7 @@ public class SSOController : ControllerBase
 
         var samlResponse = new Response(config.SamlCertificate, response.Data);
 
-        if (!samlResponse.IsValid())
+        if (!ValidateSaml(samlResponse, config))
         {
             return Problem("Invalid SAML signature");
         }
@@ -1300,6 +1300,26 @@ public class SSOController : ControllerBase
     private void Invalidate()
     {
         AuthStateStore.InvalidateExpired(StateManager, DateTime.Now, StateLifetime);
+    }
+
+    // Validates a SAML response: signature + time bounds always, plus AudienceRestriction binding to
+    // this SP unless explicitly opted out. Expected audience is the configured SamlAudience, falling
+    // back to the SamlClientId (SP entity id). Both are trimmed so the comparison matches the trimmed
+    // Issuer sent in the AuthnRequest, and an empty SamlAudience falls through to the client id.
+    internal static bool ValidateSaml(Response samlResponse, SamlConfig config)
+    {
+        if (config.DoNotValidateAudience)
+        {
+            return samlResponse.IsValid();
+        }
+
+        var expected = config.SamlAudience?.Trim();
+        if (string.IsNullOrEmpty(expected))
+        {
+            expected = config.SamlClientId?.Trim();
+        }
+
+        return samlResponse.IsValid(expected);
     }
 
     // Resolves the target host and connects only to a non-blocked (public) address, so a hostname that
