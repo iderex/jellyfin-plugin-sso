@@ -10,6 +10,9 @@
 <a href="https://github.com/iderex/jellyfin-plugin-sso/actions/workflows/dotnet.yml">
 <img alt="Build Status" src="https://github.com/iderex/jellyfin-plugin-sso/actions/workflows/dotnet.yml/badge.svg"/>
 </a>
+<a href="https://github.com/iderex/jellyfin-plugin-sso/wiki">
+<img alt="Documentation" src="https://img.shields.io/badge/docs-wiki-blue"/>
+</a>
 </p>
 
 <p align="center">
@@ -60,6 +63,13 @@ A packaged release installable from a plugin repository will be published once t
 Configure your providers on the plugin's settings page (**Dashboard → Plugins → SSO-Auth**) and via the admin API. The [Provider Guides](providers.md) walk through setup for common identity providers.
 
 > **Scripting the admin API?** The provider-management endpoints use Jellyfin's `RequiresElevation` policy — pass your admin API key in the header (`-H 'Authorization: MediaBrowser Token="YOUR_KEY"'`) rather than as a `?api_key=` query parameter, which would leak the secret into proxy logs, the process list, and shell history.
+
+## Documentation
+
+Broader documentation lives in the **[Wiki](https://github.com/iderex/jellyfin-plugin-sso/wiki)**:
+
+- [Installation](https://github.com/iderex/jellyfin-plugin-sso/wiki/Installation) · [Security Model](https://github.com/iderex/jellyfin-plugin-sso/wiki/Security-Model) · [Troubleshooting](https://github.com/iderex/jellyfin-plugin-sso/wiki/Troubleshooting)
+- Per-identity-provider setup: [Provider Guides](providers.md)
 
 ## Security
 
