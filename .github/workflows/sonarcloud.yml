@@ -41,12 +41,15 @@ jobs:
           path: ./.sonar/scanner
           key: ${{ runner.os }}-sonar-scanner
           restore-keys: ${{ runner.os }}-sonar-scanner
-      - name: Install or update SonarCloud scanner
-        # Always run: with a cache hit this is a fast no-op when current, but it keeps a cached
-        # scanner from going stale forever (the cache key never changes).
+      - name: Install or update SonarCloud scanner and coverage tool
+        # Always run: with a cache hit this is a fast no-op when current, but it keeps the cached
+        # tools from going stale forever (the cache key never changes). dotnet-coverage collects
+        # coverage at the process level, which is what works for the xUnit v3 / Microsoft Testing
+        # Platform test project (the VSTest --collect data collector does not apply under MTP).
         run: |
           mkdir -p ./.sonar/scanner
           dotnet tool update dotnet-sonarscanner --tool-path ./.sonar/scanner
+          dotnet tool update dotnet-coverage --tool-path ./.sonar/scanner
       - name: Build and analyze
         env:
           # The scanner reads SONAR_TOKEN from the environment; sourcing it via env keeps the
@@ -56,6 +59,8 @@ jobs:
           ./.sonar/scanner/dotnet-sonarscanner begin \
             /k:"iderex_jellyfin-plugin-sso" \
             /o:"iderex" \
-            /d:sonar.exclusions="img/**"
+            /d:sonar.exclusions="img/**" \
+            /d:sonar.cs.vscoveragexml.reportsPaths="coverage.xml"
           dotnet build --no-incremental
+          ./.sonar/scanner/dotnet-coverage collect "dotnet test --no-build" -f xml -o coverage.xml
           ./.sonar/scanner/dotnet-sonarscanner end
