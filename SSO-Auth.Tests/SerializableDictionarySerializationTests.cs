@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Xml;
 using System.Xml.Serialization;
 using Jellyfin.Plugin.SSO_Auth;
 using Xunit;
@@ -59,9 +60,7 @@ public class SerializableDictionarySerializationTests
             "<dictionary><item><key><string>keycloak</string></key>" +
             "<value><guid>" + id + "</guid></value></item></dictionary>";
 
-        var serializer = new XmlSerializer(typeof(SerializableDictionary<string, Guid>));
-        using var reader = new StringReader(legacy);
-        var restored = (SerializableDictionary<string, Guid>)serializer.Deserialize(reader)!;
+        var restored = Deserialize<string, Guid>(legacy);
 
         Assert.Equal(id, restored["keycloak"]);
     }
@@ -75,9 +74,16 @@ public class SerializableDictionarySerializationTests
     }
 
     private static SerializableDictionary<TKey, TValue> RoundTrip<TKey, TValue>(SerializableDictionary<TKey, TValue> value)
+        => Deserialize<TKey, TValue>(Serialize(value));
+
+    // Deserializes through the XmlReader overload with DTD processing prohibited (the
+    // XmlReaderSettings default) — the hardened pattern CA5369 requires, mirroring how the
+    // production type is only ever read through an XmlReader.
+    private static SerializableDictionary<TKey, TValue> Deserialize<TKey, TValue>(string xml)
     {
         var serializer = new XmlSerializer(typeof(SerializableDictionary<TKey, TValue>));
-        using var reader = new StringReader(Serialize(value));
-        return (SerializableDictionary<TKey, TValue>)serializer.Deserialize(reader)!;
+        using var stringReader = new StringReader(xml);
+        using var xmlReader = XmlReader.Create(stringReader, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null });
+        return (SerializableDictionary<TKey, TValue>)serializer.Deserialize(xmlReader)!;
     }
 }
