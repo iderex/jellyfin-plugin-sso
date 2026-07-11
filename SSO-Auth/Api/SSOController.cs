@@ -41,6 +41,10 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 [Route("[controller]")]
 public class SSOController : ControllerBase
 {
+    // Error messages returned when a provider name does not resolve to a configured provider.
+    private const string NoMatchingProviderMessage = "No matching provider found";
+    private const string ProviderDoesNotExistMessage = "Provider does not exist";
+
     private readonly IUserManager _userManager;
     private readonly ISessionManager _sessionManager;
     private readonly IAuthorizationContext _authContext;
@@ -130,7 +134,7 @@ public class SSOController : ControllerBase
         }
         catch (KeyNotFoundException)
         {
-            return BadRequest("No matching provider found");
+            return BadRequest(NoMatchingProviderMessage);
         }
 
         if (config.Enabled)
@@ -329,8 +333,8 @@ public class SSOController : ControllerBase
             }
         }
 
-        // If the config doesn't have an active provider matching the requeset, show an error
-        return BadRequest("No matching provider found");
+        // If the config doesn't have an active provider matching the request, show an error
+        return BadRequest(NoMatchingProviderMessage);
     }
 
     /// <summary>
@@ -351,7 +355,7 @@ public class SSOController : ControllerBase
         }
         catch (KeyNotFoundException)
         {
-            throw new ArgumentException("Provider does not exist");
+            throw new ArgumentException(ProviderDoesNotExistMessage);
         }
 
         if (config.Enabled)
@@ -407,7 +411,7 @@ public class SSOController : ControllerBase
             return Redirect(state.StartUrl);
         }
 
-        throw new ArgumentException("Provider does not exist");
+        throw new ArgumentException(ProviderDoesNotExistMessage);
     }
 
     /// <summary>
@@ -507,7 +511,7 @@ public class SSOController : ControllerBase
         }
         catch (KeyNotFoundException)
         {
-            return BadRequest("No matching provider found");
+            return BadRequest(NoMatchingProviderMessage);
         }
 
         // The store is keyed by the authorize-state token, which is exactly response.Data, so look it
@@ -567,7 +571,7 @@ public class SSOController : ControllerBase
         }
         catch (KeyNotFoundException)
         {
-            return BadRequest("No matching provider found");
+            return BadRequest(NoMatchingProviderMessage);
         }
 
         bool isLinking = relayState == "linking";
@@ -627,7 +631,7 @@ public class SSOController : ControllerBase
         }
         catch (KeyNotFoundException)
         {
-            throw new ArgumentException("Provider does not exist");
+            throw new ArgumentException(ProviderDoesNotExistMessage);
         }
 
         if (config.Enabled)
@@ -653,7 +657,7 @@ public class SSOController : ControllerBase
             return Redirect(request.GetRedirectUrl(config.SamlEndpoint.Trim(), relayState));
         }
 
-        throw new ArgumentException("Provider does not exist");
+        throw new ArgumentException(ProviderDoesNotExistMessage);
     }
 
     /// <summary>
@@ -712,7 +716,7 @@ public class SSOController : ControllerBase
         }
         catch (KeyNotFoundException)
         {
-            return BadRequest("No matching provider found");
+            return BadRequest(NoMatchingProviderMessage);
         }
 
         if (config.Enabled)
@@ -907,8 +911,8 @@ public class SSOController : ControllerBase
 
     private async Task<Guid> CreateCanonicalLinkAndUserIfNotExist(string mode, string provider, string canonicalName, bool allowExistingAccountLink)
     {
-        // An identity already linked to a still-existing account is keyed on the canonical name;
-        // a dangling link (user since deleted) is treated as no link.
+        // An identity already linked to a still-existing account is keyed on the canonical name.
+        // A dangling link, whose user was since deleted, is treated as if there were no link.
         Guid? linkedUserId = null;
         var linked = TryGetCanonicalLink(mode, provider, canonicalName);
         if (linked.HasValue && _userManager.GetUserById(linked.Value) != null)
@@ -1022,7 +1026,7 @@ public class SSOController : ControllerBase
         }
         catch (KeyNotFoundException)
         {
-            return BadRequest("No matching provider found");
+            return BadRequest(NoMatchingProviderMessage);
         }
 
         if (!found)
@@ -1115,7 +1119,7 @@ public class SSOController : ControllerBase
         }
         catch (KeyNotFoundException)
         {
-            return BadRequest("No matching provider found");
+            return BadRequest(NoMatchingProviderMessage);
         }
 
         var samlResponse = new Response(config.SamlCertificate, response.Data);
@@ -1149,14 +1153,14 @@ public class SSOController : ControllerBase
             return BadRequest("Missing data");
         }
 
-        OidConfig config;
         try
         {
-            config = SSOPlugin.Instance.Configuration.OidConfigs[provider];
+            // Touch the indexer only to verify the provider exists; it throws if it does not.
+            _ = SSOPlugin.Instance.Configuration.OidConfigs[provider];
         }
         catch (KeyNotFoundException)
         {
-            return BadRequest("No matching provider found");
+            return BadRequest(NoMatchingProviderMessage);
         }
 
         // Keyed O(1) lookup + atomic claim (see OidAuth): consume the state so one verified identity
@@ -1180,7 +1184,7 @@ public class SSOController : ControllerBase
         }
         catch (KeyNotFoundException)
         {
-            return BadRequest("No matching provider found");
+            return BadRequest(NoMatchingProviderMessage);
         }
 
         return NoContent();
@@ -1223,7 +1227,7 @@ public class SSOController : ControllerBase
         {
             if (!AvatarUrlValidator.IsAllowedUrl(avatarUrl, out var avatarUri))
             {
-                _logger.LogWarning("Refusing to fetch avatar from disallowed URL: {AvatarUrl}", avatarUrl?.ReplaceLineEndings(string.Empty));
+                _logger.LogWarning("Refusing to fetch avatar from disallowed URL: {AvatarUrl}", avatarUrl.ReplaceLineEndings(string.Empty));
             }
             else
             {
@@ -1256,16 +1260,16 @@ public class SSOController : ControllerBase
                     var mediaType = avatarResponse.Content.Headers.ContentType?.MediaType;
                     if (string.IsNullOrEmpty(mediaType) || !mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
                     {
-                        throw new Exception("Content type of avatar URL is not an image, got :  " + (mediaType ?? "(none)"));
+                        throw new InvalidOperationException("Content type of avatar URL is not an image, got: " + (mediaType ?? "(none)"));
                     }
 
                     const long MaxAvatarBytes = 10 * 1024 * 1024;
                     if (avatarResponse.Content.Headers.ContentLength > MaxAvatarBytes)
                     {
-                        throw new Exception("Avatar exceeds the maximum allowed size.");
+                        throw new InvalidOperationException("Avatar exceeds the maximum allowed size.");
                     }
 
-                    var extension = mediaType.Split('/').Last();
+                    var extension = mediaType.Split('/')[^1];
                     using var stream = await ReadCappedAsync(avatarResponse, MaxAvatarBytes).ConfigureAwait(false);
 
                     var userDataPath =
@@ -1312,7 +1316,7 @@ public class SSOController : ControllerBase
         return await _sessionManager.AuthenticateDirect(authRequest).ConfigureAwait(false);
     }
 
-    private void Invalidate()
+    private static void Invalidate()
     {
         AuthStateStore.InvalidateExpired(StateManager, DateTime.Now, StateLifetime);
     }
@@ -1424,7 +1428,7 @@ public class SSOController : ControllerBase
                 if (total > maxBytes)
                 {
                     await buffer.DisposeAsync().ConfigureAwait(false);
-                    throw new Exception("Avatar exceeds the maximum allowed size.");
+                    throw new InvalidOperationException("Avatar exceeds the maximum allowed size.");
                 }
 
                 await buffer.WriteAsync(chunk.AsMemory(0, read)).ConfigureAwait(false);
@@ -1467,7 +1471,7 @@ public class SSOController : ControllerBase
         }.ToString().TrimEnd('/');
     }
 
-    private ContentResult ReturnError(int code, string message)
+    private static ContentResult ReturnError(int code, string message)
     {
         var errorResult = new ContentResult();
         errorResult.Content = message;
