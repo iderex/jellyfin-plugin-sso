@@ -1,0 +1,87 @@
+# Analyzer configuration. Replaces the legacy jellyfin.ruleset (same
+# severities, migrated 1:1). The fail-closed security posture lives in the
+# csproj files (AnalysisModeSecurity=All enables every Security rule;
+# CodeAnalysisTreatWarningsAsErrors makes analyzer findings fail EVERY build)
+# because the analysis mode's per-rule severities outrank any category-bulk
+# entry here. The bulk entry below stays as a belt for rules the mode configs
+# do not pin.
+root = true
+
+[*.cs]
+
+# --- Security rules are errors (fail closed; see csproj note above) --------
+dotnet_analyzer_diagnostic.category-Security.severity = error
+
+# --- Migrated from jellyfin.ruleset: StyleCop ------------------------------
+# Demoted to suggestion (deliberate helper-near-caller grouping and repo style).
+dotnet_diagnostic.SA1202.severity = suggestion
+dotnet_diagnostic.SA1204.severity = suggestion
+dotnet_diagnostic.SA1404.severity = suggestion
+# Disabled repo-wide.
+dotnet_diagnostic.SA1009.severity = none
+dotnet_diagnostic.SA1101.severity = none
+dotnet_diagnostic.SA1108.severity = none
+dotnet_diagnostic.SA1128.severity = none
+dotnet_diagnostic.SA1130.severity = none
+dotnet_diagnostic.SA1200.severity = none
+dotnet_diagnostic.SA1309.severity = none
+dotnet_diagnostic.SA1402.severity = none
+dotnet_diagnostic.SA1413.severity = none
+dotnet_diagnostic.SA1512.severity = none
+dotnet_diagnostic.SA1515.severity = none
+dotnet_diagnostic.SA1600.severity = none
+dotnet_diagnostic.SA1633.severity = none
+dotnet_diagnostic.SA1649.severity = none
+
+# --- Analyzer-adoption backlog (issue #101 follow-up) -----------------------
+# Non-security rules newly surfaced by AnalysisMode Recommended + Roslynator +
+# Meziantou. Demoted to suggestion so the security net lands green; each family
+# is worked through deliberately in follow-ups (several are behavior-relevant
+# on the login path — string-comparison semantics must not change in a config
+# PR).
+dotnet_diagnostic.CA1309.severity = suggestion
+dotnet_diagnostic.CA1311.severity = suggestion
+dotnet_diagnostic.CA1848.severity = suggestion
+dotnet_diagnostic.RCS1194.severity = suggestion
+dotnet_diagnostic.MA0002.severity = suggestion
+dotnet_diagnostic.MA0006.severity = suggestion
+dotnet_diagnostic.MA0011.severity = suggestion
+dotnet_diagnostic.MA0015.severity = suggestion
+dotnet_diagnostic.MA0016.severity = suggestion
+dotnet_diagnostic.MA0048.severity = suggestion
+dotnet_diagnostic.MA0051.severity = suggestion
+dotnet_diagnostic.MA0074.severity = suggestion
+dotnet_diagnostic.MA0158.severity = suggestion
+# HIGH-priority backlog: culture-dependent casing/comparison on the identity
+# path (AddCanonicalLink ToLower, WebResponse IndexOf). Fixing changes the
+# canonical-link keys of existing installations, so it needs its own reviewed
+# PR with a migration consideration — not a ride-along in a config change.
+dotnet_diagnostic.CA1304.severity = suggestion
+dotnet_diagnostic.CA1310.severity = suggestion
+dotnet_diagnostic.MA0008.severity = suggestion
+# The SSO_Auth namespace underscore is load-bearing: renaming breaks users'
+# persisted AuthenticationProviderId (same rationale as the accepted S101).
+dotnet_diagnostic.CA1707.severity = none
+
+# --- Migrated from jellyfin.ruleset: CA ------------------------------------
+# Demoted to suggestion.
+dotnet_diagnostic.CA1031.severity = suggestion
+dotnet_diagnostic.CA1032.severity = suggestion
+dotnet_diagnostic.CA1062.severity = suggestion
+dotnet_diagnostic.CA1716.severity = suggestion
+dotnet_diagnostic.CA1720.severity = suggestion
+dotnet_diagnostic.CA1812.severity = suggestion
+dotnet_diagnostic.CA1822.severity = suggestion
+dotnet_diagnostic.CA2000.severity = suggestion
+# Disabled repo-wide.
+dotnet_diagnostic.CA1054.severity = none
+dotnet_diagnostic.CA1055.severity = none
+dotnet_diagnostic.CA1056.severity = none
+dotnet_diagnostic.CA1303.severity = none
+dotnet_diagnostic.CA1308.severity = none
+
+[SSO-Auth.Tests/**.cs]
+# Inline constant arrays keep test cases readable; the standing decision for
+# test code (documented-accepted in SonarCloud) applies here too.
+dotnet_diagnostic.CA1861.severity = none
+dotnet_diagnostic.CA1825.severity = none

@@ -10,6 +10,10 @@
     <IsPublishable>false</IsPublishable>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+    <!-- Same security-analyzer posture as the main project: all Security-category
+         rules enabled, analyzer findings fail every build. -->
+    <AnalysisModeSecurity>All</AnalysisModeSecurity>
+    <CodeAnalysisTreatWarningsAsErrors>true</CodeAnalysisTreatWarningsAsErrors>
   </PropertyGroup>
 
   <ItemGroup>
