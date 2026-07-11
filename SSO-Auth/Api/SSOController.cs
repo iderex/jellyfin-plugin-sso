@@ -277,15 +277,15 @@ public class SSOController : ControllerBase
         return new OidcClient(options);
     }
 
-    // Callback-side client: the redirect URI is rebuilt with the same expression the callback always
-    // used — a "/start/" test against the callback path, which never contains it, so the segment is
-    // always "r" (pre-existing quirk, deliberately preserved; strict IdPs fail closed on a mismatch).
-    // A null scopes array is tolerated here but not on the challenge side — also a pre-existing
-    // asymmetry deliberately preserved.
+    // Callback-side client: the redirect URI is rebuilt from the callback's own route (the IdP calls
+    // back on exactly the route the authorization request advertised), so the token request's
+    // redirect_uri matches the authorization request's as RFC 6749 requires (#98). A null scopes
+    // array is tolerated here but not on the challenge side — a pre-existing asymmetry deliberately
+    // preserved.
     private OidcClient CreateCallbackOidcClient(OidConfig config, string provider)
     {
         var scopes = config.OidScopes == null ? new string[2] : config.OidScopes;
-        var redirectUri = GetRequestBase(config.SchemeOverride, config.PortOverride) + $"/sso/OID/{(Request.Path.Value.Contains("/start/", StringComparison.InvariantCultureIgnoreCase) ? "redirect" : "r")}/" + provider;
+        var redirectUri = GetRequestBase(config.SchemeOverride, config.PortOverride) + $"/sso/OID/{OidcCallbackPath.RedirectSegment(Request.Path.Value)}/" + provider;
         return CreateOidcClient(config, redirectUri, string.Join(" ", scopes.Prepend("openid profile")));
     }
 
