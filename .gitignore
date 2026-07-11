@@ -460,11 +460,8 @@ CLAUDE.md
 AGENTS.md
 .tmp/
 
-# Internal project-process docs (playbook, branching, release policy, roadmap,
-# security-findings log, tooling catalog). Maintained locally, not published.
-docs/GITHUB-PLAYBOOK.md
-docs/BRANCHING.md
-docs/RELEASE-POLICY.md
-docs/ROADMAP.md
-docs/SECURITY-FINDINGS.md
-docs/AGENT-TOOLING.md
+# Internal project-process docs are maintained LOCALLY, not published. Public
+# user documentation lives in README.md, providers.md, and the GitHub wiki; if
+# a genuinely public doc is ever added under docs/, un-ignore it explicitly
+# (e.g. `!docs/CONFIGURATION.md`).
+docs/

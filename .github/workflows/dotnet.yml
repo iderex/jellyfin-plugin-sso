@@ -22,6 +22,14 @@ jobs:
         dotnet-version: 9.0.x
     - name: Restore dependencies
       run: dotnet restore
+    - name: Vulnerable dependency scan
+      run: |
+        set -o pipefail
+        dotnet list package --vulnerable --include-transitive 2>&1 | tee vuln.txt
+        if grep -q "has the following vulnerable packages" vuln.txt; then
+          echo "::error::Vulnerable NuGet dependencies found (see the log above)."
+          exit 1
+        fi
     - name: Build
       run: dotnet build --no-restore --warnaserror
     - name: Test
