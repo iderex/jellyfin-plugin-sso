@@ -20,20 +20,21 @@ public class WebResponseTests
 
         var html = WebResponse.Generator(hostileData, "keycloak", "https://jf.example.com", "SAML");
 
-        // Emitted via JSON serialization (double-quoted, fully escaped) rather than a raw
-        // single-quoted concatenation.
+        // Emitted via JSON serialization (double-quoted, encoded) rather than a raw single-quoted
+        // concatenation.
         Assert.Contains("var data = " + JsonSerializer.Serialize(hostileData) + ";", html);
-        // The raw break-out sequence must not survive into the page (the default encoder escapes
-        // "<" to <, so the injected script tags cannot terminate the surrounding script).
+        // Security property: the injected closing </script> tag must not appear literally in the
+        // page, so it cannot terminate the surrounding script and inject markup.
         Assert.DoesNotContain("</script><script>alert(1)", html);
     }
 
     [Fact]
     public void Generator_BenignBase64Data_RoundTripsAsSameString()
     {
-        // A base64 value without '+' (which the encoder would escape to +): it serializes
-        // byte-identically, so the embedded literal is the same string, only re-quoted. Base64 with
-        // '+' still round-trips at runtime (+ parses back to '+') — the wire value is unchanged.
+        // The normal case: the embedded value is the same string, only re-quoted. Whatever encoding
+        // the serializer applies to individual characters, the requirement is that the runtime
+        // value the browser sends back is unchanged; this vector is chosen so the literal is also
+        // textually identical.
         var base64 = "PHNhbWxwOlJlc3BvbnNlLz4=";
 
         var html = WebResponse.Generator(base64, "authelia", "https://jf.example.com", "OID");
