@@ -66,7 +66,7 @@ export async function serverAddress({ basePath = "/web" }) {
 
   return Promise.all(promises)
     .then((responses) => {
-      responses = responses.filter((obj) => obj && obj.response.ok);
+      responses = responses.filter((obj) => obj?.response.ok);
       return Promise.all(
         responses.map(async (obj) => {
           return {
