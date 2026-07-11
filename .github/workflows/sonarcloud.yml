@@ -62,5 +62,5 @@ jobs:
             /d:sonar.exclusions="img/**" \
             /d:sonar.cs.vscoveragexml.reportsPaths="coverage.xml"
           dotnet build --no-incremental
-          ./.sonar/scanner/dotnet-coverage collect "dotnet test --no-build" -f xml -o coverage.xml
+          ./.sonar/scanner/dotnet-coverage collect -f xml -o coverage.xml -- dotnet test --no-build
           ./.sonar/scanner/dotnet-sonarscanner end
