@@ -478,18 +478,19 @@ public class SSOController : ControllerBase
                 return StatusCode(StatusCodes.Status403Forbidden, "SSO login is not permitted for this account.");
             }
 
-            var authenticationResult = await Authenticate(
-                userId,
-                timedState.Admin,
-                config.EnableAuthorization,
-                config.EnableAllFolders,
-                timedState.Folders.ToArray(),
-                timedState.EnableLiveTv,
-                timedState.EnableLiveTvManagement,
-                response,
-                config.DefaultProvider?.Trim(),
-                timedState.AvatarURL)
-                .ConfigureAwait(false);
+            var authenticationResult = await Authenticate(new SessionParameters
+            {
+                UserId = userId,
+                IsAdmin = timedState.Admin,
+                EnableAuthorization = config.EnableAuthorization,
+                EnableAllFolders = config.EnableAllFolders,
+                EnabledFolders = timedState.Folders.ToArray(),
+                EnableLiveTv = timedState.EnableLiveTv,
+                EnableLiveTvManagement = timedState.EnableLiveTvManagement,
+                AuthResponse = response,
+                DefaultProvider = config.DefaultProvider?.Trim(),
+                AvatarUrl = timedState.AvatarURL,
+            }).ConfigureAwait(false);
             return Ok(authenticationResult);
         }
 
@@ -732,18 +733,19 @@ public class SSOController : ControllerBase
                 return StatusCode(StatusCodes.Status403Forbidden, "SSO login is not permitted for this account.");
             }
 
-            var authenticationResult = await Authenticate(
-                userId,
-                isAdmin,
-                config.EnableAuthorization,
-                config.EnableAllFolders,
-                folders.ToArray(),
-                liveTv,
-                liveTvManagement,
-                response,
-                config.DefaultProvider?.Trim(),
-                null)
-                .ConfigureAwait(false);
+            var authenticationResult = await Authenticate(new SessionParameters
+            {
+                UserId = userId,
+                IsAdmin = isAdmin,
+                EnableAuthorization = config.EnableAuthorization,
+                EnableAllFolders = config.EnableAllFolders,
+                EnabledFolders = folders.ToArray(),
+                EnableLiveTv = liveTv,
+                EnableLiveTvManagement = liveTvManagement,
+                AuthResponse = response,
+                DefaultProvider = config.DefaultProvider?.Trim(),
+                AvatarUrl = null,
+            }).ConfigureAwait(false);
             return Ok(authenticationResult);
         }
 
@@ -1093,21 +1095,13 @@ public class SSOController : ControllerBase
     }
 
     /// <summary>
-    /// Authenticates the user with the given information.
+    /// Mints a Jellyfin session for a resolved SSO login: applies the granted permissions and the
+    /// optional avatar/default-provider updates to the user, then authenticates the client.
     /// </summary>
-    /// <param name="userId">The user id of the user to authenticate.</param>
-    /// <param name="isAdmin">Determines whether this user is an administrator.</param>
-    /// <param name="enableAuthorization">Determines whether RBAC is used for this user.</param>
-    /// <param name="enableAllFolders">Determines whether all folders are enabled.</param>
-    /// <param name="enabledFolders">Determines which folders should be enabled for this client.</param>
-    /// <param name="enableLiveTv">Determines whether live TV access is allowed for this user.</param>
-    /// <param name="enableLiveTvAdmin">Determines whether live TV can be managed by this user.</param>
-    /// <param name="authResponse">The client information to authenticate the user with.</param>
-    /// <param name="defaultProvider">The default provider of the user to be set after logging in.</param>
-    /// <param name="avatarUrl">The new avatar url for the user.</param>
-    private async Task<AuthenticationResult> Authenticate(Guid userId, bool isAdmin, bool enableAuthorization, bool enableAllFolders, string[] enabledFolders, bool enableLiveTv, bool enableLiveTvAdmin, AuthResponse authResponse, string defaultProvider, string avatarUrl)
+    /// <param name="parameters">The resolved user, granted privileges, and client identity.</param>
+    private async Task<AuthenticationResult> Authenticate(SessionParameters parameters)
     {
-        User user = _userManager.GetUserById(userId);
+        User user = _userManager.GetUserById(parameters.UserId);
         if (user is null)
         {
             // Fail closed: the account resolved for this SSO login no longer exists (e.g. it was
@@ -1115,107 +1109,116 @@ public class SSOController : ControllerBase
             throw new AuthenticationException("SSO authentication aborted: the target user does not exist.");
         }
 
-        if (enableAuthorization)
+        if (parameters.EnableAuthorization)
         {
-            user.SetPermission(PermissionKind.IsAdministrator, isAdmin);
-            user.SetPermission(PermissionKind.EnableAllFolders, enableAllFolders);
-            if (!enableAllFolders)
+            user.SetPermission(PermissionKind.IsAdministrator, parameters.IsAdmin);
+            user.SetPermission(PermissionKind.EnableAllFolders, parameters.EnableAllFolders);
+            if (!parameters.EnableAllFolders)
             {
-                user.SetPreference(PreferenceKind.EnabledFolders, enabledFolders);
+                user.SetPreference(PreferenceKind.EnabledFolders, parameters.EnabledFolders);
             }
         }
 
-        if (avatarUrl is not null)
-        {
-            if (!AvatarUrlValidator.IsAllowedUrl(avatarUrl, out var avatarUri))
-            {
-                _logger.LogWarning("Refusing to fetch avatar from disallowed URL: {AvatarUrl}", avatarUrl.ReplaceLineEndings(string.Empty));
-            }
-            else
-            {
-                try
-                {
-                    // Route every connection (including redirect targets) through a callback that rejects
-                    // private/loopback addresses, closing the SSRF and DNS-rebinding vectors. Redirects stay
-                    // enabled (many avatar URLs redirect) but are bounded, each hop is IP-validated, and both
-                    // the request and the download are bounded.
-                    using var handler = new SocketsHttpHandler
-                    {
-                        AllowAutoRedirect = true,
-                        MaxAutomaticRedirections = 5,
-                        ConnectCallback = AvatarConnectCallback,
+        await TrySetUserAvatarAsync(user, parameters.AvatarUrl).ConfigureAwait(false);
 
-                        // A system proxy would be the connection target, so the ConnectCallback would
-                        // validate the proxy's address rather than the avatar host's - bypassing the guard.
-                        UseProxy = false,
-                    };
-                    using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
-
-                    client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgentString);
-
-                    // ResponseHeadersRead so the body is streamed, not fully buffered, before ReadCappedAsync
-                    // enforces the size limit; otherwise the cap runs only after the whole download is in memory.
-                    using var avatarResponse = await client.GetAsync(avatarUri, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
-                    avatarResponse.EnsureSuccessStatusCode();
-
-                    // Media types are case-insensitive (RFC 7231); use the parsed type with parameters stripped.
-                    var mediaType = avatarResponse.Content.Headers.ContentType?.MediaType;
-                    if (string.IsNullOrEmpty(mediaType) || !mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
-                    {
-                        throw new InvalidOperationException("Content type of avatar URL is not an image, got: " + (mediaType ?? "(none)"));
-                    }
-
-                    const long MaxAvatarBytes = 10 * 1024 * 1024;
-                    if (avatarResponse.Content.Headers.ContentLength > MaxAvatarBytes)
-                    {
-                        throw new InvalidOperationException("Avatar exceeds the maximum allowed size.");
-                    }
-
-                    var extension = mediaType.Split('/')[^1];
-                    using var stream = await ReadCappedAsync(avatarResponse, MaxAvatarBytes).ConfigureAwait(false);
-
-                    var userDataPath =
-                        Path.Combine(
-                            _serverConfigurationManager.ApplicationPaths.UserConfigurationDirectoryPath,
-                            user.Username);
-                    if (user.ProfileImage is not null)
-                    {
-                        await _userManager.ClearProfileImageAsync(user).ConfigureAwait(false);
-                    }
-
-                    user.ProfileImage = new ImageInfo(Path.Combine(userDataPath, "profile" + extension));
-
-                    await _providerManager.SaveImage(stream, mediaType, user.ProfileImage.Path)
-                        .ConfigureAwait(false);
-                }
-                catch (Exception e)
-                {
-                    _logger.LogError(e, "Failed to fetch or save the SSO avatar.");
-                }
-            }
-        }
-
-        user.SetPermission(PermissionKind.EnableLiveTvAccess, enableLiveTv);
-        user.SetPermission(PermissionKind.EnableLiveTvManagement, enableLiveTvAdmin);
+        user.SetPermission(PermissionKind.EnableLiveTvAccess, parameters.EnableLiveTv);
+        user.SetPermission(PermissionKind.EnableLiveTvManagement, parameters.EnableLiveTvManagement);
 
         await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
 
         var authRequest = new AuthenticationRequest();
         authRequest.UserId = user.Id;
         authRequest.Username = user.Username;
-        authRequest.App = authResponse.AppName;
-        authRequest.AppVersion = authResponse.AppVersion;
-        authRequest.DeviceId = authResponse.DeviceID;
-        authRequest.DeviceName = authResponse.DeviceName;
+        authRequest.App = parameters.AuthResponse.AppName;
+        authRequest.AppVersion = parameters.AuthResponse.AppVersion;
+        authRequest.DeviceId = parameters.AuthResponse.DeviceID;
+        authRequest.DeviceName = parameters.AuthResponse.DeviceName;
         _logger.LogInformation("Auth request created...");
-        if (!string.IsNullOrEmpty(defaultProvider))
+        if (!string.IsNullOrEmpty(parameters.DefaultProvider))
         {
-            user.AuthenticationProviderId = defaultProvider;
+            user.AuthenticationProviderId = parameters.DefaultProvider;
             await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
-            _logger.LogInformation("Set default login provider to {DefaultProvider}", defaultProvider);
+            _logger.LogInformation("Set default login provider to {DefaultProvider}", parameters.DefaultProvider);
         }
 
         return await _sessionManager.AuthenticateDirect(authRequest).ConfigureAwait(false);
+    }
+
+    // Fetches the avatar and sets it as the user's profile image. Best-effort by design: any fetch or
+    // save failure is logged and the login proceeds without the avatar; only the URL guard and the
+    // SSRF-safe transport are security-relevant, and they fail closed (no fetch).
+    private async Task TrySetUserAvatarAsync(User user, string avatarUrl)
+    {
+        if (avatarUrl is null)
+        {
+            return;
+        }
+
+        if (!AvatarUrlValidator.IsAllowedUrl(avatarUrl, out var avatarUri))
+        {
+            _logger.LogWarning("Refusing to fetch avatar from disallowed URL: {AvatarUrl}", avatarUrl.ReplaceLineEndings(string.Empty));
+            return;
+        }
+
+        try
+        {
+            // Route every connection (including redirect targets) through a callback that rejects
+            // private/loopback addresses, closing the SSRF and DNS-rebinding vectors. Redirects stay
+            // enabled (many avatar URLs redirect) but are bounded, each hop is IP-validated, and both
+            // the request and the download are bounded.
+            using var handler = new SocketsHttpHandler
+            {
+                AllowAutoRedirect = true,
+                MaxAutomaticRedirections = 5,
+                ConnectCallback = AvatarConnectCallback,
+
+                // A system proxy would be the connection target, so the ConnectCallback would
+                // validate the proxy's address rather than the avatar host's - bypassing the guard.
+                UseProxy = false,
+            };
+            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
+
+            client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgentString);
+
+            // ResponseHeadersRead so the body is streamed, not fully buffered, before ReadCappedAsync
+            // enforces the size limit; otherwise the cap runs only after the whole download is in memory.
+            using var avatarResponse = await client.GetAsync(avatarUri, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+            avatarResponse.EnsureSuccessStatusCode();
+
+            // Media types are case-insensitive (RFC 7231); use the parsed type with parameters stripped.
+            var mediaType = avatarResponse.Content.Headers.ContentType?.MediaType;
+            if (string.IsNullOrEmpty(mediaType) || !mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Content type of avatar URL is not an image, got: " + (mediaType ?? "(none)"));
+            }
+
+            const long MaxAvatarBytes = 10 * 1024 * 1024;
+            if (avatarResponse.Content.Headers.ContentLength > MaxAvatarBytes)
+            {
+                throw new InvalidOperationException("Avatar exceeds the maximum allowed size.");
+            }
+
+            var extension = mediaType.Split('/')[^1];
+            using var stream = await ReadCappedAsync(avatarResponse, MaxAvatarBytes).ConfigureAwait(false);
+
+            var userDataPath =
+                Path.Combine(
+                    _serverConfigurationManager.ApplicationPaths.UserConfigurationDirectoryPath,
+                    user.Username);
+            if (user.ProfileImage is not null)
+            {
+                await _userManager.ClearProfileImageAsync(user).ConfigureAwait(false);
+            }
+
+            user.ProfileImage = new ImageInfo(Path.Combine(userDataPath, "profile" + extension));
+
+            await _providerManager.SaveImage(stream, mediaType, user.ProfileImage.Path)
+                .ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            _logger.LogError(e, "Failed to fetch or save the SSO avatar.");
+        }
     }
 
     private static void Invalidate()
