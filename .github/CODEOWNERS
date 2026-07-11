@@ -9,8 +9,8 @@
 # maintainer as the only Code Owner a required-approval count (or "require
 # review from Code Owners") would deadlock every maintainer-authored PR — it is
 # therefore intentionally left off in the ruleset. The maintainer sign-off is
-# instead a process gate: every PR gets both a Copilot review and a mandatory
-# `iderex` review that confirms or rejects Copilot's findings before merge
+# instead a process gate: every PR gets a mandatory consolidated `iderex`
+# review before merge that documents the review findings and their resolution
 # (a Comment-event review on iderex-authored PRs, an approval on others).
 
 # Default owner for everything in the repo.
