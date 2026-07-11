@@ -533,6 +533,11 @@ public class SSOController : ControllerBase
     [Produces(MediaTypeNames.Application.Json)]
     public async Task<ActionResult> OidAuth(string provider, [FromBody] AuthResponse response)
     {
+        if (string.IsNullOrEmpty(response?.Data))
+        {
+            return BadRequest("Missing data");
+        }
+
         OidConfig config;
         try
         {
@@ -1177,6 +1182,11 @@ public class SSOController : ControllerBase
     [Produces(MediaTypeNames.Application.Json)]
     private ActionResult OidLink(string provider, Guid jellyfinUserId, AuthResponse response)
     {
+        if (string.IsNullOrEmpty(response?.Data))
+        {
+            return BadRequest("Missing data");
+        }
+
         OidConfig config;
         try
         {

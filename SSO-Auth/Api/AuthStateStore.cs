@@ -41,9 +41,15 @@ internal static class AuthStateStore
     /// <returns>True only when the state exists, belongs to the provider, and is within its lifetime.</returns>
     internal static bool IsCurrentFor(TimedAuthorizeState state, string provider, DateTime now, TimeSpan lifetime)
     {
-        return state != null
-            && string.Equals(state.Provider, provider, StringComparison.Ordinal)
-            && now.Subtract(state.Created) <= lifetime;
+        if (state == null || !string.Equals(state.Provider, provider, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        // Reject a negative age (Created in the future, e.g. a backward clock step) as well as an
+        // over-lifetime one, so a clock anomaly cannot make a state effectively never expire.
+        var age = now.Subtract(state.Created);
+        return age >= TimeSpan.Zero && age <= lifetime;
     }
 
     /// <summary>

@@ -54,6 +54,11 @@ public class AuthStateStoreTests
     public void IsCurrentFor_Null_False()
         => Assert.False(AuthStateStore.IsCurrentFor(null, "p", Now, Lifetime));
 
+    [Fact]
+    public void IsCurrentFor_CreatedInFuture_False()
+        // A backward clock step (Created ahead of now) must not make a state effectively never expire.
+        => Assert.False(AuthStateStore.IsCurrentFor(State("p", "s", false, Now.AddMinutes(5)), "p", Now, Lifetime));
+
     // --- IsRedeemableBy (OidAuth/OidLink): valid + response match + provider + unexpired ---
 
     [Fact]
