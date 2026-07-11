@@ -226,7 +226,7 @@ public class SSOController : ControllerBase
                 }
 
                 // Collect the roles carried by every claim on the configured role-claim path.
-                if (roleClaimSegments.Any() && claim.Type == roleClaimSegments[0])
+                if (roleClaimSegments.Length > 0 && claim.Type == roleClaimSegments[0])
                 {
                     roles.AddRange(OidcRoleExtractor.ExtractRoles(roleClaimSegments, claim.Value));
                 }
