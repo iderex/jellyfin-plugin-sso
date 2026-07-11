@@ -943,13 +943,16 @@ public class SSOController : ControllerBase
                 CreateCanonicalLink(mode, provider, user.Id, canonicalName);
                 return user.Id;
 
-            default:
+            case AccountLinkAction.RejectNameTaken:
                 _logger.LogWarning(
                     "SSO login for {Name} via {Mode}/{Provider} refused: a pre-existing unlinked Jellyfin account exists and AllowExistingAccountLink is disabled for this provider.",
                     canonicalName?.ReplaceLineEndings(string.Empty),
                     mode,
                     provider?.ReplaceLineEndings(string.Empty));
-                throw new AccountLinkForbiddenException(canonicalName);
+                throw new AccountLinkForbiddenException();
+
+            default:
+                throw new InvalidOperationException($"Unhandled account-link action: {decision.Action}");
         }
     }
 

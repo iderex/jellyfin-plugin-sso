@@ -82,16 +82,17 @@ internal static class AccountLinkResolver
 
 /// <summary>
 /// Thrown when an SSO login resolves to a pre-existing, unlinked Jellyfin account and adopting such
-/// accounts is not permitted for the provider. The controller maps this to an HTTP 403.
+/// accounts is not permitted for the provider. The controller maps this to an HTTP 403. The message
+/// is deliberately generic — the identity-provider-supplied name is not embedded, since exception
+/// messages may be logged or reported elsewhere; the caller logs the sanitized name and context.
 /// </summary>
 internal sealed class AccountLinkForbiddenException : Exception
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="AccountLinkForbiddenException"/> class.
     /// </summary>
-    /// <param name="canonicalName">The SSO name whose adoption was refused.</param>
-    internal AccountLinkForbiddenException(string canonicalName)
-        : base($"An unlinked Jellyfin account already exists for '{canonicalName}'. Enable AllowExistingAccountLink for this provider to adopt it.")
+    internal AccountLinkForbiddenException()
+        : base("An unlinked Jellyfin account already exists for this SSO identity, and adopting it is disabled for the provider (AllowExistingAccountLink).")
     {
     }
 }
