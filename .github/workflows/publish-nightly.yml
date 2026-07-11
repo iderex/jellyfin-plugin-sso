@@ -48,7 +48,7 @@ jobs:
         popd
     - name: Publish output artifacts
       id: publish-assets
-      uses: softprops/action-gh-release@50195ba7f6f93d1ac97ba8332a178e008ad176aa
+      uses: softprops/action-gh-release@132dbbba49e22bd4837f09b46d32a8edaf6baa58
       with:
           prerelease: false
           fail_on_unmatched_files: true
