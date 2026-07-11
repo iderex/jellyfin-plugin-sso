@@ -31,9 +31,9 @@ const ssoConfigLinking = {
   },
   loadProviderList: (container, providers, provider_mode) => {
     providers.forEach((provider_name) => {
-      var provider_config = document.createElement("div");
+      const provider_config = document.createElement("div");
       provider_config.classList.add("sso-provider-links-container");
-      provider_config.setAttribute("data-id", provider_name);
+      provider_config.dataset.id = provider_name;
 
       provider_config.innerHTML = `
       <label
@@ -50,7 +50,7 @@ const ssoConfigLinking = {
         data-provider="${provider_name}"
       ></div>
       `;
-      var add_provider = provider_config.querySelector(
+      const add_provider = provider_config.querySelector(
         ".sso-provider-add-link",
       );
 
@@ -106,9 +106,11 @@ const ssoConfigLinking = {
       .forEach((e) => e.remove());
 
     const checkboxes = canonical_names.map((canonical_name) => {
-      var out = document.createElement("label");
-      out.classList.add("sso-provider-link-checkbox-wrapper");
-      out.classList.add("checkbox-wrapper");
+      const out = document.createElement("label");
+      out.classList.add(
+        "sso-provider-link-checkbox-wrapper",
+        "checkbox-wrapper",
+      );
       out.innerHTML = `
         <input
           is="emby-checkbox"
@@ -136,11 +138,11 @@ const ssoConfigLinking = {
 
     const delete_requests = [...view.querySelectorAll(".sso-link-checkbox")]
       .filter((checkbox_link) => {
-        const canonical_name = checkbox_link.getAttribute("data-id");
-        const provider_name = checkbox_link.getAttribute("data-provider");
-        const provider_mode = checkbox_link.getAttribute("data-mode");
+        const canonical_name = checkbox_link.dataset.id;
+        const provider_name = checkbox_link.dataset.provider;
+        const provider_mode = checkbox_link.dataset.mode;
 
-        if (![canonical_name, provider_name, provider_mode].every((e) => e)) {
+        if (![canonical_name, provider_name, provider_mode].every(Boolean)) {
           return false;
         }
 
@@ -151,9 +153,9 @@ const ssoConfigLinking = {
         return true;
       })
       .map((checked_link) => {
-        const canonical_name = checked_link.getAttribute("data-id");
-        const provider_name = checked_link.getAttribute("data-provider");
-        const provider_mode = checked_link.getAttribute("data-mode");
+        const canonical_name = checked_link.dataset.id;
+        const provider_name = checked_link.dataset.provider;
+        const provider_mode = checked_link.dataset.mode;
 
         return ApiClient.fetch({
           type: "DELETE",
@@ -170,7 +172,7 @@ const ssoConfigLinking = {
   },
 };
 
-export default function (view) {
+export default function initLinkingView(view) {
   ssoConfigLinking.loadProviders(view);
 
   view.querySelector("#enable-delete").addEventListener("change", (e) => {

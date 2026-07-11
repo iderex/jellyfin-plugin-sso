@@ -15,6 +15,8 @@
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   -moz-osx-font-smoothing: grayscale;
+
+  /* Also fixes font ligatures on older WebOS versions */
   font-feature-settings: "liga";
 }
 
@@ -246,6 +248,7 @@ html {
   text-size-adjust: 100%;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  line-height: 1.35;
 }
 
 html[lang|="ja"] {
@@ -290,10 +293,6 @@ html[lang|="zh-HK"] {
 
 /* site.scss */
 
-html {
-  line-height: 1.35;
-}
-
 body {
   overflow-x: hidden;
   background-color: transparent !important;
@@ -309,11 +308,6 @@ body {
   overflow: hidden;
   padding: 0;
   position: absolute;
-}
-
-.material-icons {
-  /* Fix font ligatures on older WebOS versions */
-  font-feature-settings: "liga";
 }
 
 .backgroundContainer {
@@ -433,7 +427,6 @@ form {
 }
 
 .checkbox-wrapper [type="checkbox"] {
-  /*display:  none;*/
   position: absolute;
   top: 0px;
   left: 0px;
@@ -464,8 +457,6 @@ form {
   width: 20px;
   border: 0.14em solid white;
   border-radius: 0.14em;
-  /* background:  #fff; */
-
   margin-right: 10px;
 }
 

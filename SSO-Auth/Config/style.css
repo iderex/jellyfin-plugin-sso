@@ -37,12 +37,7 @@
 
 .sso-role-mapping-container,
 .sso-bordered-list {
-  /*
-  border-color: #101010;
-  border-color: #383838;
-  */
   border-color: rgba(255, 255, 255, 0.135);
-
   padding-top: 0.5em;
   border-style: solid;
   margin-top: 0.25em;
