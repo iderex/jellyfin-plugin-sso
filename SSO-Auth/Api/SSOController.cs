@@ -712,58 +712,15 @@ public class SSOController : ControllerBase
                 folders = new List<string>();
             }
 
-            foreach (string role in samlResponse.GetCustomAttributes("Role"))
-            {
-                if (config.AdminRoles != null)
-                {
-                    foreach (string allowedRole in config.AdminRoles)
-                    {
-                        if (allowedRole.Equals(role))
-                        {
-                            isAdmin = true;
-                        }
-                    }
-                }
-
-                if (config.EnableFolderRoles)
-                {
-                    if (config.FolderRoleMapping != null)
-                    {
-                        foreach (FolderRoleMap folderRoleMap in config.FolderRoleMapping)
-                        {
-                            if (folderRoleMap.Role.Equals(role))
-                            {
-                                folders.AddRange(folderRoleMap.Folders);
-                            }
-                        }
-                    }
-                }
-
-                if (config.EnableLiveTvRoles)
-                {
-                    if (config.LiveTvRoles != null)
-                    {
-                        foreach (string allowedLiveTvRole in config.LiveTvRoles)
-                        {
-                            if (allowedLiveTvRole.Equals(role))
-                            {
-                                liveTv = true;
-                            }
-                        }
-                    }
-
-                    if (config.LiveTvManagementRoles != null)
-                    {
-                        foreach (string allowedLiveTvManagementRole in config.LiveTvManagementRoles)
-                        {
-                            if (allowedLiveTvManagementRole.Equals(role))
-                            {
-                                liveTvManagement = true;
-                            }
-                        }
-                    }
-                }
-            }
+            // Map the assertion's roles to privileges and merge into the pre-initialized locals. The
+            // grants are monotonic (admin, Live TV, Live TV management, and folder access are only ever
+            // added), so OR-ing the booleans and appending the folders preserves the config defaults set
+            // above. Login validity is decided separately by SamlLoginPolicy, so it is not mapped here.
+            var samlGrants = SamlRolePrivilegeMapper.Evaluate(samlResponse.GetCustomAttributes("Role"), config);
+            isAdmin |= samlGrants.Admin;
+            liveTv |= samlGrants.EnableLiveTv;
+            liveTvManagement |= samlGrants.EnableLiveTvManagement;
+            folders.AddRange(samlGrants.Folders);
 
             Guid userId;
             try
