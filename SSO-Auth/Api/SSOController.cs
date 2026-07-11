@@ -605,27 +605,7 @@ public class SSOController : ControllerBase
                 return Problem("SAML response validation failed");
             }
 
-            bool valid = false;
-
-            // If no roles are configured, don't use RBAC
-            if (config.Roles.Length == 0)
-            {
-                valid = true;
-            }
-
-            // Check if user is allowed to log in based on roles
-            foreach (string role in samlResponse.GetCustomAttributes("Role"))
-            {
-                foreach (string allowedRole in config.Roles)
-                {
-                    if (allowedRole.Equals(role))
-                    {
-                        valid = true;
-                    }
-                }
-            }
-
-            if (valid)
+            if (SamlLoginPolicy.IsLoginAllowed(samlResponse.GetCustomAttributes("Role"), config.Roles))
             {
                 return Content(
                         WebResponse.Generator(
@@ -639,7 +619,7 @@ public class SSOController : ControllerBase
 
             _logger.LogWarning(
                 "SAML user: {UserId} has insufficient roles: {@Roles}. Expected any one of: {@ExpectedRoles}",
-                samlResponse.GetNameID(),
+                samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty),
                 samlResponse.GetCustomAttributes("Role"),
                 config.Roles);
             return ReturnError(StatusCodes.Status401Unauthorized, "Error. Check permissions.");
@@ -763,6 +743,17 @@ public class SSOController : ControllerBase
             if (!ValidateSaml(samlResponse, config))
             {
                 return Problem("SAML response validation failed");
+            }
+
+            // Enforce the login allow-list here too, not only at the assertion-consumer page: a caller
+            // can POST an assertion straight to this session-minting endpoint and skip the page, so
+            // checking it only there would be fail-open.
+            if (!SamlLoginPolicy.IsLoginAllowed(samlResponse.GetCustomAttributes("Role"), config.Roles))
+            {
+                _logger.LogWarning(
+                    "SAML user: {UserId} has insufficient roles at the session-minting endpoint; login denied.",
+                    samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty));
+                return ReturnError(StatusCodes.Status401Unauthorized, "Error. Check permissions.");
             }
 
             // Enforce one-time use so a captured assertion cannot be replayed to mint another session.
