@@ -1052,7 +1052,12 @@ public class SSOController : ControllerBase
             return BadRequest("No matching provider found");
         }
 
-        if (!found || mismatch)
+        if (!found)
+        {
+            return NotFound("No SSO link is registered for that canonical name.");
+        }
+
+        if (mismatch)
         {
             return StatusCode(StatusCodes.Status409Conflict, "jellyfin UID does not match id registered to that canonical name.");
         }
