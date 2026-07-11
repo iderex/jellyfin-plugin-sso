@@ -1240,6 +1240,13 @@ public class SSOController : ControllerBase
     private async Task<AuthenticationResult> Authenticate(Guid userId, bool isAdmin, bool enableAuthorization, bool enableAllFolders, string[] enabledFolders, bool enableLiveTv, bool enableLiveTvAdmin, AuthResponse authResponse, string defaultProvider, string avatarUrl)
     {
         User user = _userManager.GetUserById(userId);
+        if (user is null)
+        {
+            // Fail closed: the account resolved for this SSO login no longer exists (e.g. it was
+            // deleted between resolution and this call), so no session may be minted for it.
+            throw new AuthenticationException("SSO authentication aborted: the target user does not exist.");
+        }
+
         if (enableAuthorization)
         {
             user.SetPermission(PermissionKind.IsAdministrator, isAdmin);
@@ -1299,22 +1306,19 @@ public class SSOController : ControllerBase
                     var extension = mediaType.Split('/').Last();
                     using var stream = await ReadCappedAsync(avatarResponse, MaxAvatarBytes).ConfigureAwait(false);
 
-                    if (user != null)
+                    var userDataPath =
+                        Path.Combine(
+                            _serverConfigurationManager.ApplicationPaths.UserConfigurationDirectoryPath,
+                            user.Username);
+                    if (user.ProfileImage is not null)
                     {
-                        var userDataPath =
-                            Path.Combine(
-                                _serverConfigurationManager.ApplicationPaths.UserConfigurationDirectoryPath,
-                                user.Username);
-                        if (user.ProfileImage is not null)
-                        {
-                            await _userManager.ClearProfileImageAsync(user).ConfigureAwait(false);
-                        }
-
-                        user.ProfileImage = new ImageInfo(Path.Combine(userDataPath, "profile" + extension));
-
-                        await _providerManager.SaveImage(stream, mediaType, user.ProfileImage.Path)
-                            .ConfigureAwait(false);
+                        await _userManager.ClearProfileImageAsync(user).ConfigureAwait(false);
                     }
+
+                    user.ProfileImage = new ImageInfo(Path.Combine(userDataPath, "profile" + extension));
+
+                    await _providerManager.SaveImage(stream, mediaType, user.ProfileImage.Path)
+                        .ConfigureAwait(false);
                 }
                 catch (Exception e)
                 {
