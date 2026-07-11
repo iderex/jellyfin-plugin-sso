@@ -7,6 +7,20 @@
     <FileVersion>4.0.0.4</FileVersion>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <!-- Turns the compiler into a standing reviewer. AnalysisModeSecurity=All
+         enables the disabled-by-default Security rules (CA3xxx injection/taint,
+         CA53xx crypto) that Recommended leaves off. CodeAnalysisTreatWarningsAsErrors
+         selects the SDK's error-severity configs for the CA rules, so every
+         Security-category finding fails EVERY build (local, JPRM package,
+         SonarCloud) — not only the CI job that passes warnaserror; the mode's
+         per-rule severities outrank any .editorconfig category-bulk entry, which
+         makes this property the load-bearing fail-closed mechanism. Third-party
+         analyzer findings (Meziantou/Roslynator/StyleCop) are not covered by it
+         and gate through CI's warnaserror build instead; the .editorconfig
+         carves out the documented non-security backlog per rule. -->
+    <AnalysisMode>Recommended</AnalysisMode>
+    <AnalysisModeSecurity>All</AnalysisModeSecurity>
+    <CodeAnalysisTreatWarningsAsErrors>true</CodeAnalysisTreatWarningsAsErrors>
   </PropertyGroup>
 
   <ItemGroup>
@@ -37,6 +51,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Meziantou.Analyzer" Version="3.0.122" PrivateAssets="All" />
+    <PackageReference Include="Roslynator.Analyzers" Version="4.15.0" PrivateAssets="All" />
     <PackageReference Include="SerilogAnalyzer" Version="0.15.0" PrivateAssets="All" />
     <PackageReference Include="StyleCop.Analyzers" Version="1.2.0-beta.556" PrivateAssets="all" />
     <PackageReference Include="SmartAnalyzers.MultithreadingAnalyzer" Version="1.1.31" PrivateAssets="All" />
@@ -45,9 +61,5 @@
   <ItemGroup>
     <ProjectReference Include="Lib\Lib.fsproj" />
   </ItemGroup>
-
-  <PropertyGroup>
-    <CodeAnalysisRuleSet>../jellyfin.ruleset</CodeAnalysisRuleSet>
-  </PropertyGroup>
 
 </Project>
