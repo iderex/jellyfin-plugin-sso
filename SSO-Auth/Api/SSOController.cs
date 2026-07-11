@@ -71,14 +71,6 @@ public class SSOController : ControllerBase
     private static readonly string UserAgentString =
         $"Jellyfin-Plugin-SSO-Auth +{System.Diagnostics.FileVersionInfo.GetVersionInfo(Assembly.GetExecutingAssembly().Location).FileVersion} (https://github.com/iderex/jellyfin-plugin-sso)";
 
-    // Splits the role-claim path on dots that are not escaped with a backslash ("a.b\.c" -> "a", "b.c").
-    // Compiled once and reused: it runs for every claim on every login (hot path), so it must not be
-    // recompiled per call. The match timeout is defense-in-depth on the match input: the pattern is
-    // fixed and linear (a fixed-width lookbehind plus a literal dot) so it cannot backtrack into a
-    // timeout, but the cap guarantees role parsing can never block the login path.
-    private static readonly Regex RoleClaimSplitRegex =
-        new Regex(@"(?<!\\)\.", RegexOptions.Compiled, TimeSpan.FromSeconds(1));
-
     /// <summary>
     /// Initializes a new instance of the <see cref="SSOController"/> class.
     /// </summary>
@@ -185,79 +177,17 @@ public class SSOController : ControllerBase
                 return ReturnError(StatusCodes.Status400BadRequest, $"Error logging in: {result.Error} - {result.ErrorDescription}");
             }
 
-            if (!config.EnableFolderRoles && config.EnabledFolders != null)
-            {
-                timedState.Folders = new List<string>(config.EnabledFolders);
-            }
-            else
-            {
-                timedState.Folders = new List<string>();
-            }
-
-            timedState.EnableLiveTv = config.EnableLiveTv;
-            timedState.EnableLiveTvManagement = config.EnableLiveTvManagement;
-
-            if (config.AvatarUrlFormat is not null)
-            {
-                timedState.AvatarURL = result.User.Claims.Aggregate(
-                    config.AvatarUrlFormat,
-                    (s, claim) => s.Contains($"@{{{claim.Type}}}") ? s.Replace($"@{{{claim.Type}}}", claim.Value) : s);
-            }
-
-            // The role-claim path depends only on config.RoleClaim, so process it once here rather
-            // than per claim. The regex splits on dots not escaped with a backslash ("a.b.c" ->
-            // a, b, c; "a.b\.c" -> a, b.c), then the escaped "\." are normalized back to ".".
-            string[] roleClaimSegments = string.IsNullOrEmpty(config.RoleClaim)
-                ? Array.Empty<string>()
-                : RoleClaimSplitRegex.Split(config.RoleClaim.Trim())
-                    .Select(segment => segment.Replace("\\.", "."))
-                    .ToArray();
-
-            var roles = new List<string>();
-            foreach (var claim in result.User.Claims)
-            {
-                if (claim.Type == (config.DefaultUsernameClaim?.Trim() ?? "preferred_username"))
-                {
-                    timedState.Username = claim.Value;
-                    if (config.Roles == null || config.Roles.Length == 0)
-                    {
-                        timedState.Valid = true;
-                    }
-                }
-
-                // Collect the roles carried by every claim on the configured role-claim path.
-                if (roleClaimSegments.Length > 0 && claim.Type == roleClaimSegments[0])
-                {
-                    roles.AddRange(OidcRoleExtractor.ExtractRoles(roleClaimSegments, claim.Value));
-                }
-            }
-
-            // Map the collected roles to privileges and merge them into the authorize state. The grants
-            // are monotonic (login validity, admin, Live TV, Live TV management, and folder access are
-            // only ever added), so OR-ing the booleans and appending the folders preserves the prior
-            // config-default values initialized above.
-            var grants = OidcRolePrivilegeMapper.Evaluate(roles, config);
-            timedState.Valid |= grants.Valid;
-            timedState.Admin |= grants.Admin;
-            timedState.EnableLiveTv |= grants.EnableLiveTv;
-            timedState.EnableLiveTvManagement |= grants.EnableLiveTvManagement;
-            timedState.Folders.AddRange(grants.Folders);
-
-            // If the provider doesn't support the preferred username claim, then use the sub claim
-            if (!timedState.Valid)
-            {
-                foreach (var claim in result.User.Claims)
-                {
-                    if (claim.Type == "sub")
-                    {
-                        timedState.Username = claim.Value;
-                        if (config.Roles.Length == 0)
-                        {
-                            timedState.Valid = true;
-                        }
-                    }
-                }
-            }
+            // Derive the authorize-state values (username, validity, admin, Live TV, folders, avatar)
+            // from the verified login's claims and the provider configuration, then apply them to the
+            // fresh authorize state (its derivation fields are still at their defaults at this point).
+            var derived = OidcAuthorizeStateBuilder.Build(result.User.Claims, config);
+            timedState.Username = derived.Username;
+            timedState.Valid = derived.Valid;
+            timedState.Admin = derived.Admin;
+            timedState.EnableLiveTv = derived.EnableLiveTv;
+            timedState.EnableLiveTvManagement = derived.EnableLiveTvManagement;
+            timedState.Folders = derived.Folders;
+            timedState.AvatarURL = derived.AvatarUrl;
 
             bool isLinking = timedState.IsLinking;
 
