@@ -597,9 +597,6 @@ public class SSOController : ControllerBase
 
         if (config.Enabled)
         {
-            bool isAdmin = false;
-            bool liveTv = config.EnableLiveTv;
-            bool liveTvManagement = config.EnableLiveTvManagement;
             var samlResponse = new Response(config.SamlCertificate, response.Data);
 
             if (!IsSamlResponseValid(samlResponse, config))
@@ -633,25 +630,11 @@ public class SSOController : ControllerBase
                 return Problem("SAML assertion has already been used");
             }
 
-            List<string> folders;
-            if (!config.EnableFolderRoles && config.EnabledFolders != null)
-            {
-                folders = new List<string>(config.EnabledFolders);
-            }
-            else
-            {
-                folders = new List<string>();
-            }
-
-            // Map the assertion's roles to privileges and merge into the pre-initialized locals. The
-            // grants are monotonic (admin, Live TV, Live TV management, and folder access are only ever
-            // added), so OR-ing the booleans and appending the folders preserves the config defaults set
-            // above. Login validity is decided separately by SamlLoginPolicy, so it is not mapped here.
-            var samlGrants = SamlRolePrivilegeMapper.Evaluate(samlResponse.GetCustomAttributes("Role"), config);
-            isAdmin |= samlGrants.Admin;
-            liveTv |= samlGrants.EnableLiveTv;
-            liveTvManagement |= samlGrants.EnableLiveTvManagement;
-            folders.AddRange(samlGrants.Folders);
+            // Derive the authorize-state privileges (admin, Live TV, Live TV management, folders) from
+            // the assertion's roles and the provider configuration. Login validity was already decided
+            // above by SamlLoginPolicy and the username is the assertion's NameID, so neither is derived
+            // here.
+            var derived = SamlAuthorizeStateBuilder.Build(samlResponse.GetCustomAttributes("Role"), config);
 
             Guid userId;
             try
@@ -666,12 +649,12 @@ public class SSOController : ControllerBase
             var authenticationResult = await Authenticate(new SessionParameters
             {
                 UserId = userId,
-                IsAdmin = isAdmin,
+                IsAdmin = derived.Admin,
                 EnableAuthorization = config.EnableAuthorization,
                 EnableAllFolders = config.EnableAllFolders,
-                EnabledFolders = folders.ToArray(),
-                EnableLiveTv = liveTv,
-                EnableLiveTvManagement = liveTvManagement,
+                EnabledFolders = derived.Folders.ToArray(),
+                EnableLiveTv = derived.EnableLiveTv,
+                EnableLiveTvManagement = derived.EnableLiveTvManagement,
                 AuthResponse = response,
                 DefaultProvider = config.DefaultProvider?.Trim(),
                 AvatarUrl = null,
