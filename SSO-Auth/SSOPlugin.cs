@@ -13,6 +13,10 @@ namespace Jellyfin.Plugin.SSO_Auth;
 /// </summary>
 public class SSOPlugin : BasePlugin<PluginConfiguration>, IPlugin, IHasWebPages
 {
+    // Serializes every read-modify-write of the plugin configuration so concurrent mutations
+    // (notably first-logins each writing a canonical link) cannot lose one another's updates.
+    private static readonly object ConfigMutationLock = new object();
+
     /// <summary>
     /// Initializes a new instance of the <see cref="SSOPlugin"/> class.
     /// </summary>
@@ -38,6 +42,40 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IPlugin, IHasWebPages
     /// Gets the GUID of the SSO plugin.
     /// </summary>
     public override Guid Id => Guid.Parse("505ce9d1-d916-42fa-86ca-673ef241d7df");
+
+    /// <summary>
+    /// Applies a mutation to the live configuration under a single lock and persists it, so a
+    /// read-modify-write cannot race another and lose its update. All configuration writes must go
+    /// through this rather than reading <see cref="BasePlugin{T}.Configuration"/>, mutating, and
+    /// calling <c>UpdateConfiguration</c> separately.
+    /// </summary>
+    /// <param name="mutate">The mutation to apply to the live configuration.</param>
+    public void MutateConfiguration(Action<PluginConfiguration> mutate)
+    {
+        ArgumentNullException.ThrowIfNull(mutate);
+        lock (ConfigMutationLock)
+        {
+            var configuration = Configuration;
+            mutate(configuration);
+            UpdateConfiguration(configuration);
+        }
+    }
+
+    /// <summary>
+    /// Reads a value from the live configuration under the same lock as <see cref="MutateConfiguration"/>,
+    /// so a read cannot tear against a concurrent write of a (non-thread-safe) configuration collection.
+    /// </summary>
+    /// <typeparam name="T">The value read.</typeparam>
+    /// <param name="read">The read to perform against the live configuration.</param>
+    /// <returns>The value returned by <paramref name="read"/>.</returns>
+    public T ReadConfiguration<T>(Func<PluginConfiguration, T> read)
+    {
+        ArgumentNullException.ThrowIfNull(read);
+        lock (ConfigMutationLock)
+        {
+            return read(Configuration);
+        }
+    }
 
     /// <summary>
     /// Returns the available internal web pages of this plugin.
