@@ -333,7 +333,7 @@ public class SSOController : ControllerBase
             }
         }
 
-        // If the config doesn't have an active provider matching the requeset, show an error
+        // If the config doesn't have an active provider matching the request, show an error
         return BadRequest(NoMatchingProviderMessage);
     }
 
@@ -1260,7 +1260,7 @@ public class SSOController : ControllerBase
                     var mediaType = avatarResponse.Content.Headers.ContentType?.MediaType;
                     if (string.IsNullOrEmpty(mediaType) || !mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
                     {
-                        throw new InvalidOperationException("Content type of avatar URL is not an image, got :  " + (mediaType ?? "(none)"));
+                        throw new InvalidOperationException("Content type of avatar URL is not an image, got: " + (mediaType ?? "(none)"));
                     }
 
                     const long MaxAvatarBytes = 10 * 1024 * 1024;
