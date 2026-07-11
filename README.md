@@ -29,7 +29,7 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 
 > ### 🤖 A note on AI and on contributions
 >
-> The maintainer is a non-native English speaker, so **[Claude](https://www.anthropic.com/claude)** (Anthropic) is used to **translate documentation and comments into English** — the README, the wiki, the in-repo guides, and code comments. That is its only role here.
+> The maintainer is a non-native English speaker, so **[Claude](https://www.anthropic.com/claude)** (Anthropic) is used to **translate documentation and comments into English** — the README, the wiki, the in-repo guides, and code comments.
 >
 > - **A human reviews it.** Every AI-translated text is reviewed and edited by the maintainer before it lands; he holds responsibility for it.
 > - **The AI is not in the product.** It plays **no role at runtime**, in authentication, or in processing your users' data.
