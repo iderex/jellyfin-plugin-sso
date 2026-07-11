@@ -10,6 +10,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Security.Cryptography.X509Certificates;
 using System.Security.Cryptography.Xml;
 using System.Text;
@@ -117,7 +118,7 @@ public class Response
     // Reject weak/legacy signature and digest algorithms (e.g. RSA-SHA1, SHA-1 digest) before the
     // cryptographic check, so a misconfigured or downgraded identity provider is not trusted.
     // Runs after ValidateSignatureReference, which guarantees exactly one reference exists.
-    private bool IsSignatureAlgorithmAllowed(SignedXml signedXml)
+    private static bool IsSignatureAlgorithmAllowed(SignedXml signedXml)
     {
         var digestMethods = new List<string>();
         foreach (Reference reference in signedXml.SignedInfo.References)
@@ -150,15 +151,7 @@ public class Response
             return false;
         }
 
-        foreach (var audience in GetAudiences())
-        {
-            if (string.Equals(audience, expectedAudience, StringComparison.Ordinal))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return GetAudiences().Any(audience => string.Equals(audience, expectedAudience, StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -494,23 +487,11 @@ public class AuthRequest
             xw.WriteAttributeString("AllowCreate", "true");
             xw.WriteEndElement();
 
-            /*
-                xw.WriteStartElement("samlp", "RequestedAuthnContext", "urn:oasis:names:tc:SAML:2.0:protocol");
-                xw.WriteAttributeString("Comparison", "exact");
-                xw.WriteStartElement("saml", "AuthnContextClassRef", "urn:oasis:names:tc:SAML:2.0:assertion");
-                xw.WriteString("urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport");
-                xw.WriteEndElement();
-                xw.WriteEndElement();
-                */
-
             xw.WriteEndElement();
         }
 
         if (format == AuthRequestFormat.Base64)
         {
-            // byte[] toEncodeAsBytes = System.Text.ASCIIEncoding.ASCII.GetBytes(sw.ToString());
-            // return System.Convert.ToBase64String(toEncodeAsBytes);
-
             // https://stackoverflow.com/questions/25120025/acs75005-the-request-is-not-a-valid-saml2-protocol-message-is-showing-always%3C/a%3E
             var memoryStream = new MemoryStream();
             var writer = new StreamWriter(new DeflateStream(memoryStream, CompressionMode.Compress, true), new UTF8Encoding(false));
@@ -531,6 +512,8 @@ public class AuthRequest
     /// <returns>The redirect url.</returns>
     public string GetRedirectUrl(string samlEndpoint, string relayState = null)
     {
+        ArgumentNullException.ThrowIfNull(samlEndpoint);
+
         var queryStringSeparator = samlEndpoint.Contains('?') ? "&" : "?";
 
         var url = samlEndpoint + queryStringSeparator + "SAMLRequest=" + HttpUtility.UrlEncode(GetRequest(AuthRequestFormat.Base64));
