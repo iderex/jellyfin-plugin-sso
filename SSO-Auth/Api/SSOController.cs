@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -48,7 +49,11 @@ public class SSOController : ControllerBase
     private readonly IProviderManager _providerManager;
     private readonly IServerConfigurationManager _serverConfigurationManager;
     private readonly IHttpClientFactory _httpClientFactory;
-    private static readonly IDictionary<string, TimedAuthorizeState> StateManager = new Dictionary<string, TimedAuthorizeState>();
+    // Concurrent requests add to, enumerate, and prune this map (OidChallenge / OidAuth /
+    // OidLink / Invalidate); a plain Dictionary corrupts or throws under that interleaving.
+    private static readonly ConcurrentDictionary<string, TimedAuthorizeState> StateManager = new ConcurrentDictionary<string, TimedAuthorizeState>();
+
+    private static readonly TimeSpan StateLifetime = TimeSpan.FromMinutes(1);
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SSOController"/> class.
@@ -417,10 +422,8 @@ public class SSOController : ControllerBase
                 return ReturnError(StatusCodes.Status400BadRequest, $"Error preparing login: {state.Error} - {state.ErrorDescription}");
             }
 
-            StateManager.Add(state.State, new TimedAuthorizeState(state, DateTime.Now));
-
-            // Track whether this is a linking request or not.
-            StateManager[state.State].IsLinking = isLinking;
+            // IsLinking tracks whether this is a linking request rather than a login.
+            StateManager.TryAdd(state.State, new TimedAuthorizeState(state, DateTime.Now) { IsLinking = isLinking });
             return Redirect(state.StartUrl);
         }
 
@@ -537,7 +540,7 @@ public class SSOController : ControllerBase
                         config.DefaultProvider?.Trim(),
                         kvp.Value.AvatarURL)
                         .ConfigureAwait(false);
-                    StateManager.Remove(kvp.Key);
+                    StateManager.TryRemove(kvp.Key, out _);
                     return Ok(authenticationResult);
                 }
             }
@@ -1270,14 +1273,7 @@ public class SSOController : ControllerBase
 
     private void Invalidate()
     {
-        foreach (var kvp in StateManager)
-        {
-            var now = DateTime.Now;
-            if (now.Subtract(kvp.Value.Created).TotalMinutes > 1)
-            {
-                StateManager.Remove(kvp.Key);
-            }
-        }
+        AuthStateStore.InvalidateExpired(StateManager, DateTime.Now, StateLifetime);
     }
 
     private string GetRequestBase(string schemeOverride = null, int? portOverride = null)
