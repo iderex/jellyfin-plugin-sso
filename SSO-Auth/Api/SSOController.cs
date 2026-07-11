@@ -318,7 +318,7 @@ public class SSOController : ControllerBase
 
             if (timedState.Valid)
             {
-                _logger.LogInformation($"Is request linking: {isLinking}");
+                _logger.LogInformation("Is request linking: {IsLinking}", isLinking);
                 return Content(WebResponse.Generator(data: state, provider: provider, baseUrl: GetRequestBase(config.SchemeOverride, config.PortOverride), mode: "OID", isLinking: isLinking), MediaTypeNames.Text.Html);
             }
             else
@@ -1310,7 +1310,7 @@ public class SSOController : ControllerBase
         {
             user.AuthenticationProviderId = defaultProvider;
             await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
-            _logger.LogInformation("Set default login provider to " + defaultProvider);
+            _logger.LogInformation("Set default login provider to {DefaultProvider}", defaultProvider);
         }
 
         return await _sessionManager.AuthenticateDirect(authRequest).ConfigureAwait(false);
