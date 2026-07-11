@@ -35,14 +35,17 @@ public class SerializableDictionarySerializationTests
     [Fact]
     public void Serialize_DoesNotLeakClrNamespaceIntoXml()
     {
-        // The CLR namespace must not appear in the XML: the format is defined entirely by
-        // IXmlSerializable (item/key/value), so it is independent of where the type lives.
-        // This is what lets the namespace move stay backward-compatible with saved config.
+        // The type's CLR namespace must not appear in the XML: the format is defined entirely by
+        // IXmlSerializable (item/key/value), so it is independent of where the type lives. This is
+        // what lets the namespace move stay backward-compatible with saved config. Assert against
+        // the type's actual namespace so the test stays correct if the namespace is ever renamed.
         var dict = new SerializableDictionary<string, Guid> { ["provider"] = Guid.NewGuid() };
+        var clrNamespace = typeof(SerializableDictionary<string, Guid>).Namespace;
 
         var xml = Serialize(dict);
 
-        Assert.DoesNotContain("Jellyfin.Plugin", xml, StringComparison.Ordinal);
+        Assert.False(string.IsNullOrEmpty(clrNamespace));
+        Assert.DoesNotContain(clrNamespace, xml, StringComparison.Ordinal);
     }
 
     [Fact]
