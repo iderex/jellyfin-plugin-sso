@@ -24,14 +24,13 @@ public class SSOViewsController : ControllerBase
     public SSOViewsController(ILogger<SSOViewsController> logger)
     {
         _logger = logger;
-        _logger.LogInformation("SSO Views Controller initialized");
     }
 
     /// <summary>
-    /// Gets a html view.
+    /// Gets an HTML view.
     /// </summary>
     /// <param name="viewName">The name of the view / asset to fetch.</param>
-    /// <returns>The html view with the specified name.</returns>
+    /// <returns>The HTML view with the specified name.</returns>
     [HttpGet("{viewName}")]
     public ActionResult GetView([FromRoute] string viewName)
     {
