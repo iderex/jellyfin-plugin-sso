@@ -449,3 +449,22 @@ $RECYCLE.BIN/
 ##
 .vscode/*
 .vscode
+
+##
+## Claude Code / AI agent tooling
+##
+# Local agent tooling (hooks, commands, subagents, settings), transcripts and
+# state, plus the agent operating manual. Maintained locally, not published.
+.claude/
+CLAUDE.md
+AGENTS.md
+.tmp/
+
+# Internal project-process docs (playbook, branching, release policy, roadmap,
+# security-findings log, tooling catalog). Maintained locally, not published.
+docs/GITHUB-PLAYBOOK.md
+docs/BRANCHING.md
+docs/RELEASE-POLICY.md
+docs/ROADMAP.md
+docs/SECURITY-FINDINGS.md
+docs/AGENT-TOOLING.md

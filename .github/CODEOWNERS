@@ -1,0 +1,24 @@
+# Code owners for jellyfin-plugin-sso
+#
+# Auto-requests the maintainer's review on changes, with extra emphasis on the
+# security-critical paths (the SSO login path, crypto, config persistence, and
+# the release pipeline).
+#
+# Note: this only requests review; it is not a hard merge gate unless a ruleset
+# turns on "require review from Code Owners". With a solo maintainer that would
+# be self-blocking, so it is intentionally left off.
+
+# Default owner for everything in the repo.
+*                        @iderex
+
+# SSO login path and crypto: SAML core, controller/API helpers, admin config.
+/SSO-Auth/Saml.cs        @iderex
+/SSO-Auth/Api/           @iderex
+/SSO-Auth/Config/        @iderex
+
+# Release pipeline and CI.
+/.github/workflows/      @iderex
+/build.yaml              @iderex
+
+# Security policy.
+/SECURITY.md             @iderex
