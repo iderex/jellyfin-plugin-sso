@@ -1,3 +1,10 @@
+// Encode one URL path segment from an identity-provider-controlled name so it cannot reshape the
+// route: encodeURIComponent handles reserved characters (including "/"), and encoding "." as well
+// neutralizes the "." / ".." dot-segments a path normalizer would otherwise collapse. The server
+// percent-decodes the segment back to the original name, so a legitimate name keeps its dots.
+const encodePathSegment = (value) =>
+  encodeURIComponent(value).replace(/\./g, "%2E");
+
 const ssoConfigLinking = {
   pluginUniqueId: "505ce9d1-d916-42fa-86ca-673ef241d7df",
   loadProviders: (view) => {
@@ -32,7 +39,8 @@ const ssoConfigLinking = {
   loadProviderList: (container, providers, provider_mode) => {
     providers.forEach((provider_name) => {
       // Provider and canonical names are identity-provider/admin-controlled: build the DOM with
-      // createElement/textContent and never interpolate them into HTML, selectors, or raw URLs.
+      // createElement/textContent (never innerHTML), and feed them into selectors and URLs only
+      // through CSS.escape / encodePathSegment, never raw.
       const provider_config = document.createElement("div");
       provider_config.classList.add("sso-provider-links-container");
       provider_config.dataset.id = provider_name;
@@ -57,7 +65,7 @@ const ssoConfigLinking = {
       add_icon.setAttribute("aria-hidden", "true");
       add_provider.appendChild(add_icon);
       add_provider.href = ApiClient.getUrl(
-        `/SSO/${provider_mode}/p/${encodeURIComponent(provider_name)}?isLinking=true`,
+        `/SSO/${provider_mode}/p/${encodePathSegment(provider_name)}?isLinking=true`,
       );
 
       const existing_links = document.createElement("div");
@@ -169,11 +177,11 @@ const ssoConfigLinking = {
         const provider_mode = checked_link.dataset.mode;
 
         // Encode the provider/canonical segments: an identity-provider-controlled name containing
-        // a slash or dot segment must not be able to reshape the route.
+        // a slash or "." / ".." dot-segment must not be able to reshape the route.
         return ApiClient.fetch({
           type: "DELETE",
           url: ApiClient.getUrl(
-            `sso/${provider_mode}/link/${encodeURIComponent(provider_name)}/${currentUserId}/${encodeURIComponent(canonical_name)}`,
+            `sso/${provider_mode}/link/${encodePathSegment(provider_name)}/${currentUserId}/${encodePathSegment(canonical_name)}`,
           ),
         });
       });
