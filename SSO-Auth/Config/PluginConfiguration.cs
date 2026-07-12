@@ -16,6 +16,8 @@ public class PluginConfiguration : MediaBrowser.Model.Plugins.BasePluginConfigur
     {
         SamlConfigs = new SerializableDictionary<string, SamlConfig>();
         OidConfigs = new SerializableDictionary<string, OidConfig>();
+        RateLimitMaxAttempts = 30;
+        RateLimitWindowSeconds = 60;
     }
 
     /// <summary>
@@ -29,6 +31,29 @@ public class PluginConfiguration : MediaBrowser.Model.Plugins.BasePluginConfigur
     /// </summary>
     [XmlElement("OidConfigs")]
     public SerializableDictionary<string, OidConfig> OidConfigs { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the anonymous SSO flow endpoints are rate-limited
+    /// per client address (best-effort, in-process). Opt-in (default off). The limiter keys on the
+    /// connection's remote address only. CAUTION: behind a reverse proxy, first configure
+    /// Jellyfin's own "Known proxies" networking setting so the server resolves the real client
+    /// from the forwarded headers — without it every client shares the proxy's address and one
+    /// abuser throttles logins for everyone; in that case leave this off. Refs #128.
+    /// </summary>
+    public bool EnableRateLimit { get; set; }
+
+    /// <summary>
+    /// Gets or sets how many hits per window a client may make against the anonymous SSO endpoints
+    /// before being throttled with 429. One login is several hits (challenge, callback,
+    /// authentication), so keep this generous; the default is 30. A value below 1 disables the
+    /// limiter (it never means "block everything").
+    /// </summary>
+    public int RateLimitMaxAttempts { get; set; }
+
+    /// <summary>
+    /// Gets or sets the rate-limit window length in seconds. The default is 60.
+    /// </summary>
+    public int RateLimitWindowSeconds { get; set; }
 }
 
 /// <summary>

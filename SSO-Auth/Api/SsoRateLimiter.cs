@@ -1,0 +1,207 @@
+using System;
+using System.Collections.Concurrent;
+using System.Globalization;
+using System.Net;
+using System.Net.Sockets;
+using System.Threading;
+
+namespace Jellyfin.Plugin.SSO_Auth.Api;
+
+/// <summary>
+/// Opt-in fixed-window rate limiter for the anonymous SSO flow endpoints (#128), keyed on the
+/// attributed client address. Availability-first: an unattributable client, a full table, or a
+/// disabled limiter never throttles (fail open) — throttling is a best-effort defense in depth on
+/// top of the CSPRNG state, one-time replay caches and signature/time/audience validation, and must
+/// never become a mass-lockout hazard itself.
+/// </summary>
+internal sealed class SsoRateLimiter
+{
+    // Ceiling on tracked client keys, bounding memory under a key-rotation flood. At the cap a NEW
+    // key is allowed rather than throttled or evicted: refusing unknown clients would mass-lock-out
+    // legitimate users during the very flood the limiter exists for, and evicting would reset an
+    // abuser's window. Fail open — the cap bounds memory, not the attacker.
+    private readonly int _maxEntries;
+
+    // Stale-entry sweeping is throttled to at most once per this interval (an O(n) scan on the
+    // anonymous hot path would amplify a flood into CPU load). Safe to defer: a stale window is
+    // reset inline by the next hit on its key, so sweeping is only memory reclamation.
+    private static readonly TimeSpan PruneInterval = TimeSpan.FromMinutes(1);
+
+    private readonly ConcurrentDictionary<string, Counter> _counters = new(StringComparer.Ordinal);
+
+    // Serializes only the rare "new key" cap-check-and-insert so it is atomic; the hot "existing
+    // key" path never touches it.
+    private readonly object _capLock = new object();
+
+    // Last sweep time as ticks, read/written atomically (DateTime is not torn-read-safe).
+    private long _lastPruneTicks = DateTime.MinValue.Ticks;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SsoRateLimiter"/> class.
+    /// </summary>
+    /// <param name="maxEntries">Ceiling on tracked client keys (overridable for tests).</param>
+    internal SsoRateLimiter(int maxEntries = 100_000)
+    {
+        _maxEntries = maxEntries;
+    }
+
+    /// <summary>
+    /// Normalizes the client's connection address into a rate-limit key. Returns null (= do not
+    /// throttle, fail open) when no address can be attributed. IPv6 is keyed on its /64 prefix —
+    /// a single residential allocation — since per-/128 keying is evadable by address rotation;
+    /// IPv4-mapped IPv6 is keyed as the underlying IPv4.
+    /// </summary>
+    /// <param name="remoteIp">The connection's remote address. Deliberately the ONLY input: the
+    /// plugin never parses X-Forwarded-For itself. Jellyfin's own forwarded-headers middleware
+    /// (enabled by the server's "Known proxies" networking setting) already resolves the real
+    /// client into this address and strips the consumed header entries, so any X-Forwarded-For
+    /// value visible here is client-supplied and spoofable — keying on it would let an attacker
+    /// rotate keys to evade or pin a victim's address to lock them out.</param>
+    /// <returns>The rate-limit key, or null when the client cannot be attributed.</returns>
+    internal static string NormalizeClientKey(IPAddress remoteIp)
+    {
+        var ip = remoteIp;
+        if (ip == null)
+        {
+            return null;
+        }
+
+        if (ip.IsIPv4MappedToIPv6)
+        {
+            ip = ip.MapToIPv4();
+        }
+
+        // Non-public sources (loopback, RFC1918, CGNAT, link-local, unique/site-local) are never
+        // rate-limited. This is THE structural mass-lockout defense: behind a reverse proxy whose
+        // forwarded headers Jellyfin has not been told to resolve ("Known proxies" unset), the
+        // socket peer is the proxy's private/loopback address — one shared bucket for the entire
+        // userbase — so no bucket is created at all. LAN/insider traffic is out of scope for a
+        // brute-force limiter aimed at the public edge. Reuses the avatar SSRF classifier:
+        // "not a public address" is the same predicate in both places.
+        if (AvatarUrlValidator.IsBlockedAddress(ip))
+        {
+            return null;
+        }
+
+        if (ip.AddressFamily != AddressFamily.InterNetworkV6)
+        {
+            return ip.ToString();
+        }
+
+        var bytes = ip.GetAddressBytes();
+        Array.Clear(bytes, 8, 8);
+        return string.Create(CultureInfo.InvariantCulture, $"{new IPAddress(bytes)}/64");
+    }
+
+    /// <summary>
+    /// Counts a hit for <paramref name="key"/> and reports whether it is within the limit. A fixed
+    /// window per key: the first hit opens the window, hits beyond <paramref name="maxAttempts"/>
+    /// inside it are refused, and the next hit after it expires resets it. Boundary bursts can reach
+    /// 2x the limit across two adjacent windows — accepted; this throttles sustained abuse.
+    /// </summary>
+    /// <param name="key">The client key from <see cref="NormalizeClientKey"/>; null/empty is always allowed.</param>
+    /// <param name="maxAttempts">Allowed hits per window. A value below 1 disables the limiter (always allowed), never "block everything".</param>
+    /// <param name="window">The window length.</param>
+    /// <param name="nowUtc">The current time.</param>
+    /// <param name="retryAfterSeconds">Whole seconds until the window expires, when refused.</param>
+    /// <returns>True when the hit is allowed; false when the client is over the limit.</returns>
+    internal bool IsAllowed(string key, int maxAttempts, TimeSpan window, DateTime nowUtc, out int retryAfterSeconds)
+    {
+        retryAfterSeconds = 0;
+        if (string.IsNullOrEmpty(key) || maxAttempts < 1)
+        {
+            return true;
+        }
+
+        PruneStale(window, nowUtc);
+        if (!_counters.TryGetValue(key, out var counter))
+        {
+            // Serialize the cap check and the insert so they are atomic: a lock-free check-then-act
+            // lets concurrent distinct new keys all pass the count check before any inserts, so the
+            // tracked-key table overshoots the cap under a key-rotation flood (the login-path
+            // invariant is to keep check-then-act on shared state atomic). Only new keys pay this;
+            // the common already-tracked path above is lock-free.
+            lock (_capLock)
+            {
+                if (!_counters.TryGetValue(key, out counter))
+                {
+                    if (_counters.Count >= _maxEntries)
+                    {
+                        return true;
+                    }
+
+                    counter = _counters.GetOrAdd(key, _ => new Counter());
+                }
+            }
+        }
+
+        lock (counter)
+        {
+            if (nowUtc.Ticks - counter.WindowStartTicks >= window.Ticks)
+            {
+                counter.WindowStartTicks = nowUtc.Ticks;
+                counter.Count = 0;
+            }
+
+            // Count is clamped at the refusal threshold rather than incremented unboundedly, so a
+            // pathologically long window cannot overflow it into a negative value that re-admits
+            // (once over the limit the exact count is irrelevant — the client is refused).
+            if (counter.Count <= maxAttempts)
+            {
+                counter.Count++;
+            }
+
+            if (counter.Count <= maxAttempts)
+            {
+                return true;
+            }
+
+            var remaining = TimeSpan.FromTicks(counter.WindowStartTicks + window.Ticks - nowUtc.Ticks);
+            retryAfterSeconds = Math.Max(1, (int)Math.Ceiling(remaining.TotalSeconds));
+            return false;
+        }
+    }
+
+    // Drops counters whose window has long passed, at most once per PruneInterval. Enumerating a
+    // ConcurrentDictionary is a safe moving snapshot and TryRemove is atomic (the same pattern as
+    // SamlRequestCache.PruneExpired). A counter removed while another thread holds its lock only
+    // loses that thread's tally to a fresh window — harmless for a best-effort limiter.
+    private void PruneStale(TimeSpan window, DateTime nowUtc)
+    {
+        var last = Interlocked.Read(ref _lastPruneTicks);
+        if (nowUtc.Ticks - last < PruneInterval.Ticks)
+        {
+            return;
+        }
+
+        // Only one thread should run the sweep per interval; the winner of the CAS does it.
+        if (Interlocked.CompareExchange(ref _lastPruneTicks, nowUtc.Ticks, last) != last)
+        {
+            return;
+        }
+
+        foreach (var kvp in _counters)
+        {
+            var counter = kvp.Value;
+            long start;
+            lock (counter)
+            {
+                start = counter.WindowStartTicks;
+            }
+
+            // Two windows of quiet before reclaiming, so an entry mid-refusal is never removed.
+            if (nowUtc.Ticks - start >= 2 * window.Ticks)
+            {
+                _counters.TryRemove(kvp.Key, out _);
+            }
+        }
+    }
+
+    // Per-key tally, accessed only under its own lock (brief, per-client — no global contention).
+    private sealed class Counter
+    {
+        internal long WindowStartTicks { get; set; }
+
+        internal int Count { get; set; }
+    }
+}
