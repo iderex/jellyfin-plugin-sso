@@ -85,7 +85,7 @@ A good bug report shouldn't leave others needing to chase you up for more inform
 
 #### How Do I Submit a Good Bug Report?
 
-> You must never report security related issues, vulnerabilities or bugs including sensitive information to the issue tracker, or elsewhere in public. See [SECURITY.md](SECURITY.md) — report them privately through GitHub's vulnerability-reporting form instead.
+> You must never report an exploitable vulnerability, or any bug report that includes sensitive information, to the issue tracker or elsewhere in public. See [SECURITY.md](SECURITY.md) — report those privately through GitHub's vulnerability-reporting form instead.
 
 We use GitHub issues to track bugs and errors. If you run into an issue with the project:
 
@@ -136,7 +136,7 @@ include Setup of env, IDE and typical getting started instructions?
 
 -->
 
-The project is built with .NET 9, targeting Jellyfin 10.11. Download the SDK from [here](https://dotnet.microsoft.com/en-us/download).
+The project is built with .NET 9, targeting Jellyfin 10.11. Download [the .NET 9 SDK](https://dotnet.microsoft.com/en-us/download).
 
 Any code editor or IDE with .NET support will work out of the box with this program.
 
