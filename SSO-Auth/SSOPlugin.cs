@@ -125,15 +125,7 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IPlugin, IHasWebPages
                 if (incoming.OidConfigs.TryGetValue(kvp.Key, out var incomingProvider))
                 {
                     incomingProvider.CanonicalLinks = kvp.Value.CanonicalLinks;
-
-                    // Blank (incl. whitespace-only) means "keep the stored secret": the field is
-                    // withheld from JSON responses, so a save that did not set a new one arrives
-                    // blank. Whitespace-only is treated as blank to match the Trim() at the point
-                    // the secret is consumed, so a value that trims to empty never wipes the live one.
-                    if (string.IsNullOrWhiteSpace(incomingProvider.OidSecret))
-                    {
-                        incomingProvider.OidSecret = kvp.Value.OidSecret;
-                    }
+                    incomingProvider.OidSecret = ResolveUpdatedSecret(incomingProvider, kvp.Value);
                 }
             }
         }
@@ -148,6 +140,31 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IPlugin, IHasWebPages
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Decides which OpenID client secret an updated provider should keep (#189), the single rule
+    /// shared by the config-page save and <c>OID/Add</c>. A non-blank incoming secret is an explicit
+    /// rotation and wins. A blank one means "keep the stored secret" — but ONLY while the provider
+    /// identity (endpoint and client id) is unchanged: if either changed, the stored secret is not
+    /// carried over (it stays blank, failing the login closed until an admin supplies one), so a
+    /// write-only secret cannot be exfiltrated by repointing the provider at a different token
+    /// endpoint. Whitespace-only counts as blank, matching the <c>Trim()</c> at the consumption site.
+    /// </summary>
+    /// <param name="incoming">The provider config about to be persisted.</param>
+    /// <param name="live">The current live provider config.</param>
+    /// <returns>The secret to persist for the updated provider.</returns>
+    internal static string ResolveUpdatedSecret(OidConfig incoming, OidConfig live)
+    {
+        if (!string.IsNullOrWhiteSpace(incoming.OidSecret))
+        {
+            return incoming.OidSecret;
+        }
+
+        var identityUnchanged =
+            string.Equals(incoming.OidEndpoint, live.OidEndpoint, StringComparison.Ordinal)
+            && string.Equals(incoming.OidClientId, live.OidClientId, StringComparison.Ordinal);
+        return identityUnchanged ? live.OidSecret : incoming.OidSecret;
     }
 
     /// <summary>

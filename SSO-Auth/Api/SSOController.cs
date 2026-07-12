@@ -341,20 +341,14 @@ public class SSOController : ControllerBase
     {
         SSOPlugin.Instance.MutateConfiguration(configuration =>
         {
-            // Preserve the server-managed canonical links (#157): this replaces the whole provider
-            // object, and CanonicalLinks is [JsonIgnore] so the posted config never carries them —
-            // re-inject the live map so a save via this API cannot wipe existing account links.
+            // Re-inject the server-managed fields this API cannot carry: CanonicalLinks is
+            // [JsonIgnore] so the posted config never has them (#157), and the write-only secret
+            // follows the same blank-means-keep rule as the config-page save (#189), centralized in
+            // ResolveUpdatedSecret so both paths agree on rotation and identity-change behavior.
             if (config != null && configuration.OidConfigs.TryGetValue(provider, out var existing))
             {
                 config.CanonicalLinks = existing.CanonicalLinks;
-
-                // Same for the write-only secret (#189): a blank incoming value means "keep the
-                // stored one", consistent with the config-page save, so updating an existing
-                // provider via this API without resupplying the secret does not wipe it.
-                if (string.IsNullOrWhiteSpace(config.OidSecret))
-                {
-                    config.OidSecret = existing.OidSecret;
-                }
+                config.OidSecret = SSOPlugin.ResolveUpdatedSecret(config, existing);
             }
 
             configuration.OidConfigs[provider] = config;

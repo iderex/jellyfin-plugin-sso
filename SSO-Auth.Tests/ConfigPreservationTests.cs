@@ -181,4 +181,36 @@ public class ConfigPreservationTests
 
         Assert.True(string.IsNullOrEmpty(incoming.OidConfigs["fresh"].OidSecret));
     }
+
+    [Fact]
+    public void ResolveUpdatedSecret_BlankAndIdentityUnchanged_KeepsLiveSecret()
+    {
+        var live = new OidConfig { OidEndpoint = "https://idp/.well-known", OidClientId = "cid", OidSecret = "live" };
+        var incoming = new OidConfig { OidEndpoint = "https://idp/.well-known", OidClientId = "cid", OidSecret = "  " };
+
+        Assert.Equal("live", SSOPlugin.ResolveUpdatedSecret(incoming, live));
+    }
+
+    [Fact]
+    public void ResolveUpdatedSecret_NonBlank_IsAlwaysKept_AsRotation()
+    {
+        var live = new OidConfig { OidEndpoint = "https://idp/.well-known", OidClientId = "cid", OidSecret = "live" };
+        var incoming = new OidConfig { OidEndpoint = "https://idp/.well-known", OidClientId = "cid", OidSecret = "rotated" };
+
+        Assert.Equal("rotated", SSOPlugin.ResolveUpdatedSecret(incoming, live));
+    }
+
+    [Theory]
+    [InlineData("https://other-idp/.well-known", "cid")] // endpoint repointed
+    [InlineData("https://idp/.well-known", "other-cid")] // client id changed
+    public void ResolveUpdatedSecret_BlankButIdentityChanged_DropsSecret_FailClosed(string endpoint, string clientId)
+    {
+        // A blank secret is NOT carried across a provider-identity change: otherwise an admin could
+        // exfiltrate the write-only secret by repointing the provider at a token endpoint they
+        // control. The secret stays blank, so the login fails closed until a new one is supplied.
+        var live = new OidConfig { OidEndpoint = "https://idp/.well-known", OidClientId = "cid", OidSecret = "live" };
+        var incoming = new OidConfig { OidEndpoint = endpoint, OidClientId = clientId, OidSecret = null };
+
+        Assert.True(string.IsNullOrEmpty(SSOPlugin.ResolveUpdatedSecret(incoming, live)));
+    }
 }
