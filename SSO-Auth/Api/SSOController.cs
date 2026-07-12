@@ -331,7 +331,7 @@ public class SSOController : ControllerBase
             // Preserve the server-managed canonical links (#157): this replaces the whole provider
             // object, and CanonicalLinks is [JsonIgnore] so the posted config never carries them —
             // re-inject the live map so a save via this API cannot wipe existing account links.
-            if (configuration.OidConfigs.TryGetValue(provider, out var existing))
+            if (config != null && configuration.OidConfigs.TryGetValue(provider, out var existing))
             {
                 config.CanonicalLinks = existing.CanonicalLinks;
             }
@@ -374,7 +374,9 @@ public class SSOController : ControllerBase
     [HttpGet("OID/GetNames")]
     public ActionResult OidProviderNames()
     {
-        return Ok(SSOPlugin.Instance.Configuration.OidConfigs.Keys);
+        // Materialize the keys under the lock (#157/F-10): returning the live KeyCollection lets the
+        // JSON formatter enumerate it outside the lock, tearing against a concurrent provider add/remove.
+        return Ok(SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs.Keys.ToList()));
     }
 
     /// <summary>
@@ -384,7 +386,8 @@ public class SSOController : ControllerBase
     [HttpGet("SAML/GetNames")]
     public ActionResult SamlProviderNames()
     {
-        return Ok(SSOPlugin.Instance.Configuration.SamlConfigs.Keys);
+        // Materialize under the lock (#157/F-10), as OID/GetNames does.
+        return Ok(SSOPlugin.Instance.ReadConfiguration(c => c.SamlConfigs.Keys.ToList()));
     }
 
     /// <summary>
@@ -605,7 +608,7 @@ public class SSOController : ControllerBase
             // Preserve the server-managed canonical links (#157), as OidAdd does: the posted config
             // never carries them ([JsonIgnore]), so re-inject the live map before the wholesale
             // replace so an API save cannot wipe existing account links.
-            if (configuration.SamlConfigs.TryGetValue(provider, out var existing))
+            if (newConfig != null && configuration.SamlConfigs.TryGetValue(provider, out var existing))
             {
                 newConfig.CanonicalLinks = existing.CanonicalLinks;
             }
@@ -1070,8 +1073,9 @@ public class SSOController : ControllerBase
     // A shallow copy of a provider map, taken under the config lock so the admin list endpoints
     // serialize a detached snapshot rather than the live dictionary (#157/F-10): a concurrent
     // provider add/remove cannot then modify the collection mid-serialization. The provider objects
-    // are shared, but their CanonicalLinks are [JsonIgnore] (never serialized) and their remaining
-    // fields only change on an admin save, which swaps the whole configuration object.
+    // are shared, but their CanonicalLinks are [JsonIgnore] (never serialized), and the only other
+    // in-place write on the hot path is the NewPath bool flipped by a challenge — a scalar write that
+    // cannot tear a JSON serialization or throw "collection modified".
     private static SerializableDictionary<string, TValue> SnapshotConfigs<TValue>(SerializableDictionary<string, TValue> source)
     {
         var copy = new SerializableDictionary<string, TValue>();
