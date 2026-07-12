@@ -85,6 +85,8 @@ Broader documentation lives in the **[Wiki](https://github.com/iderex/jellyfin-p
 
 SSO is a sensitive part of your stack, and this plugin is being built to **fail closed**: a missing signature, a weak SHA-1 signature, an out-of-bounds time window, a wrong audience, a replayed assertion, or an unrecognized identity is rejected rather than waved through. Security-relevant behavior is covered by the automated test suite.
 
+The anonymous SSO endpoints can additionally be **rate-limited per client address** (opt-in, off by default): set `EnableRateLimit` in the plugin's XML configuration, with `RateLimitMaxAttempts` (default 30) per `RateLimitWindowSeconds` (default 60) per endpoint stage, and throttled requests answered with `429 Retry-After`. The limiter keys on the connection's remote address only — **if Jellyfin runs behind a reverse proxy, configure Jellyfin's own _Known proxies_ networking setting** so the server resolves the real client from the forwarded headers; the plugin deliberately never parses `X-Forwarded-For` itself (a client-spoofable header must not steer throttling). Non-public source addresses (loopback, private ranges, CGNAT) are never throttled, so an unconfigured proxy can never pool the whole userbase into one throttled bucket. IPv6 clients are keyed on their /64. The limiter is best-effort and in-process: counters are per Jellyfin instance and reset on restart — it blunts sustained brute force at the public edge, it is not a hard quota.
+
 Found a vulnerability? Please report it **privately** via GitHub's ["Report a vulnerability"](https://github.com/iderex/jellyfin-plugin-sso/security/advisories/new) — not the public issue tracker. See [SECURITY.md](SECURITY.md).
 
 ## Contributing

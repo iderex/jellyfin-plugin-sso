@@ -497,14 +497,28 @@ async function main() {
        xhr.setRequestHeader('Content-Type', 'application/json');
        xhr.setRequestHeader('Accept', 'application/json');
        xhr.onload = function(e) {
-         resolve(xhr.response);
+         resolve({status: xhr.status, body: xhr.response});
        };
        xhr.onerror = function () {
          resolve(undefined);
        };
        xhr.send(JSON.stringify(request));
     })
-    var responseJson = JSON.parse(response);
+    var responseJson;
+    try {
+        responseJson = response && response.status === 200 ? JSON.parse(response.body) : undefined;
+    } catch (e) {
+        responseJson = undefined;
+    }
+    if (!responseJson) {
+        // A throttled (429) or failed authentication must surface as text instead of leaving the
+        // page stuck on 'Logging in...' forever (reloading only adds rate-limit hits).
+        document.querySelector('p').textContent =
+            response && response.status === 429
+                ? 'Too many login attempts. Please wait a moment and try again.'
+                : 'Login failed. Please try again.';
+        return;
+    }
     var userId = 'user-' + responseJson['User']['Id'] + '-' + responseJson['User']['ServerId'];
     responseJson['User']['EnableAutoLogin'] = true;
     localStorage.setItem(userId, JSON.stringify(responseJson['User']));

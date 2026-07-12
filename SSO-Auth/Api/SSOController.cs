@@ -78,6 +78,9 @@ public class SSOController : ControllerBase
     // (challenge -> IdP login/MFA -> POST back -> mint), matching the OpenID StateLifetime.
     private static readonly TimeSpan SamlRequestLifetime = TimeSpan.FromMinutes(15);
 
+    // Opt-in per-client rate limiter over the anonymous SSO flow endpoints (#128).
+    private static readonly SsoRateLimiter RateLimiter = new SsoRateLimiter();
+
     // Single canonical User-Agent for the plugin's outbound HTTP (discovery, avatar fetch),
     // computed once since the assembly version does not change at runtime.
     private static readonly string UserAgentString =
@@ -131,6 +134,11 @@ public class SSOController : ControllerBase
         [FromRoute] string provider,
         [FromQuery] string state) // Although this is a GET function, this function is called `Post` for consistency with SAML
     {
+        if (RateLimitCheck("callback") is { } throttled)
+        {
+            return throttled;
+        }
+
         OidConfig config;
         try
         {
@@ -223,6 +231,11 @@ public class SSOController : ControllerBase
     [HttpGet("OID/start/{provider}")]
     public async Task<ActionResult> OidChallenge(string provider, [FromQuery] bool isLinking = false)
     {
+        if (RateLimitCheck("challenge") is { } throttled)
+        {
+            return throttled;
+        }
+
         Invalidate();
         OidConfig config;
         try
@@ -421,6 +434,11 @@ public class SSOController : ControllerBase
     [Produces(MediaTypeNames.Application.Json)]
     public async Task<ActionResult> OidAuth(string provider, [FromBody] AuthResponse response)
     {
+        if (RateLimitCheck("auth") is { } throttled)
+        {
+            return throttled;
+        }
+
         if (string.IsNullOrEmpty(response?.Data))
         {
             return BadRequest("Missing data");
@@ -488,6 +506,11 @@ public class SSOController : ControllerBase
     [HttpPost("SAML/post/{provider}")]
     public ActionResult SamlPost(string provider, [FromQuery] string relayState = null)
     {
+        if (RateLimitCheck("callback") is { } throttled)
+        {
+            return throttled;
+        }
+
         SamlConfig config;
         try
         {
@@ -545,8 +568,13 @@ public class SSOController : ControllerBase
     /// <returns>A redirect to the SAML provider's auth page.</returns>
     [HttpGet("SAML/p/{provider}")]
     [HttpGet("SAML/start/{provider}")]
-    public RedirectResult SamlChallenge(string provider, [FromQuery] bool isLinking = false)
+    public ActionResult SamlChallenge(string provider, [FromQuery] bool isLinking = false)
     {
+        if (RateLimitCheck("challenge") is { } throttled)
+        {
+            return throttled;
+        }
+
         SamlConfig config;
         try
         {
@@ -659,6 +687,11 @@ public class SSOController : ControllerBase
     [Produces(MediaTypeNames.Application.Json)]
     public async Task<ActionResult> SamlAuth(string provider, [FromBody] AuthResponse response)
     {
+        if (RateLimitCheck("auth") is { } throttled)
+        {
+            return throttled;
+        }
+
         SamlConfig config;
         try
         {
@@ -1351,6 +1384,41 @@ public class SSOController : ControllerBase
         {
             _logger.LogError(e, "Failed to fetch or save the SSO avatar.");
         }
+    }
+
+    // Applies the opt-in per-client rate limit (#128) on an anonymous flow endpoint: null when the
+    // request may proceed, else a 429 carrying Retry-After. Reads the settings under the config
+    // lock; an unattributable or non-public client is never throttled (fail open, availability
+    // over throttling). Keys on RemoteIpAddress only — proxy attribution is the host's job
+    // (Jellyfin's "Known proxies" setting resolves the real client into it); see
+    // SsoRateLimiter.NormalizeClientKey. The endpoint class (challenge/callback/auth) is part of
+    // the key so one login — which hits all three — gets the full budget at each stage rather
+    // than a third of it, keeping the default generous for shared egress addresses (NAT/CGNAT).
+    private ContentResult RateLimitCheck(string endpointClass)
+    {
+        var (enabled, maxAttempts, windowSeconds) = SSOPlugin.Instance.ReadConfiguration(
+            c => (c.EnableRateLimit, c.RateLimitMaxAttempts, c.RateLimitWindowSeconds));
+        if (!enabled || maxAttempts < 1 || windowSeconds < 1)
+        {
+            return null;
+        }
+
+        var key = SsoRateLimiter.NormalizeClientKey(HttpContext.Connection.RemoteIpAddress);
+        if (key != null)
+        {
+            key = endpointClass + ":" + key;
+        }
+
+        if (RateLimiter.IsAllowed(key, maxAttempts, TimeSpan.FromSeconds(windowSeconds), DateTime.UtcNow, out var retryAfterSeconds))
+        {
+            return null;
+        }
+
+        // A human-readable body, not a bare status: the challenge/callback endpoints are navigated
+        // directly in the browser, so a blank 429 would look like a broken login (the XHR auth page
+        // reads the status, not this body). Retry-After carries the machine-readable delay.
+        Response.Headers.RetryAfter = retryAfterSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return ReturnError(StatusCodes.Status429TooManyRequests, "Too many login attempts. Please wait a moment and try again.");
     }
 
     private static void Invalidate()
