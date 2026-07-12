@@ -25,6 +25,12 @@ namespace Jellyfin.Plugin.SSO_Auth;
 /// </summary>
 public class Response
 {
+    // The only positions an enveloped SAML signature may occupy: a direct child of the Response or
+    // of the Assertion. Encodes the security-critical "no relocated signature" invariant, so it is a
+    // single constant shared by the validator and the diagnostic getter (they must never diverge).
+    private const string SignatureXPath =
+        "/samlp:Response/ds:Signature | /samlp:Response/saml:Assertion/ds:Signature";
+
     private readonly X509Certificate2 _certificate;
     private XmlDocument _xmlDoc;
     private XmlNamespaceManager _xmlNameSpaceManager; // we need this one to run our XPath queries on the SAML XML
@@ -134,9 +140,7 @@ public class Response
         // Select the signature only at a legal, position-bound location: an enveloped SAML signature
         // is a direct child of the Response or of the Assertion. A relative //ds:Signature would also
         // match a signature relocated into a wrapper or a Signature/Object, so the XPath is anchored.
-        var signatureNodes = _xmlDoc.SelectNodes(
-            "/samlp:Response/ds:Signature | /samlp:Response/saml:Assertion/ds:Signature",
-            _xmlNameSpaceManager);
+        var signatureNodes = _xmlDoc.SelectNodes(SignatureXPath, _xmlNameSpaceManager);
         if (signatureNodes == null || signatureNodes.Count == 0)
         {
             return false;
@@ -232,9 +236,7 @@ public class Response
     {
         // Same position-bound selection as IsValid, so the diagnostic reflects the signature that
         // would actually be validated rather than any signature found anywhere in the document.
-        var nodeList = _xmlDoc.SelectNodes(
-            "/samlp:Response/ds:Signature | /samlp:Response/saml:Assertion/ds:Signature",
-            _xmlNameSpaceManager);
+        var nodeList = _xmlDoc.SelectNodes(SignatureXPath, _xmlNameSpaceManager);
         if (nodeList == null || nodeList.Count == 0)
         {
             return null;
