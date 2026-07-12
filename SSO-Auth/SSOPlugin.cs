@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
+using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
 using MediaBrowser.Model.Plugins;
 using MediaBrowser.Model.Serialization;
+using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.SSO_Auth;
 
@@ -17,14 +19,18 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IPlugin, IHasWebPages
     // (notably first-logins each writing a canonical link) cannot lose one another's updates.
     private static readonly object ConfigMutationLock = new object();
 
+    private readonly ILogger<SSOPlugin> _logger;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="SSOPlugin"/> class.
     /// </summary>
     /// <param name="applicationPaths">Internal Jellyfin interface for the ApplicationPath.</param>
     /// <param name="xmlSerializer">Internal Jellyfin interface for the XML information.</param>
-    public SSOPlugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer)
+    /// <param name="logger">The logger (used to audit insecure-option saves, #140).</param>
+    public SSOPlugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer, ILogger<SSOPlugin> logger)
         : base(applicationPaths, xmlSerializer)
     {
+        _logger = logger;
         Instance = this;
     }
 
@@ -95,12 +101,41 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IPlugin, IHasWebPages
         ArgumentNullException.ThrowIfNull(configuration);
         lock (ConfigMutationLock)
         {
-            if (configuration is PluginConfiguration incoming && !ReferenceEquals(incoming, Configuration))
+            var adminSave = configuration is PluginConfiguration incoming && !ReferenceEquals(incoming, Configuration);
+            if (adminSave)
             {
-                PreserveServerManagedFields(incoming, Configuration);
+                PreserveServerManagedFields((PluginConfiguration)configuration, Configuration);
             }
 
             base.UpdateConfiguration(configuration);
+
+            // Audit after the persist, so a misbehaving logging provider can never abort the save
+            // (the toggles it reads are not touched by the persist). Matches the other SsoAudit calls,
+            // which all run after their write completes.
+            if (adminSave)
+            {
+                AuditInsecureOptions((PluginConfiguration)configuration);
+            }
+        }
+    }
+
+    // Audits any OpenID provider saved with a security check disabled (#140). Runs only on the admin
+    // save path (a fresh incoming config, not an internal login-time write), so it fires once per save
+    // rather than per login. Best-effort: a missing logger never blocks the save.
+    private void AuditInsecureOptions(PluginConfiguration incoming)
+    {
+        if (_logger == null || incoming.OidConfigs == null)
+        {
+            return;
+        }
+
+        foreach (var kvp in incoming.OidConfigs)
+        {
+            var insecure = OidcInsecureToggles.Enabled(kvp.Value);
+            if (insecure.Count > 0)
+            {
+                SsoAudit.InsecureOptionsEnabled(_logger, "OpenID", kvp.Key, insecure);
+            }
         }
     }
 

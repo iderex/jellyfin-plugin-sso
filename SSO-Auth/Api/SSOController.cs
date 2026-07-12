@@ -354,6 +354,14 @@ public class SSOController : ControllerBase
             configuration.OidConfigs[provider] = config;
         });
         SsoAudit.ProviderConfigured(_logger, OpenIdProtocol, provider);
+
+        // Audit any disabled security check (#140), so enabling an escape hatch (DisableHttps,
+        // DoNotValidateIssuerName, DoNotValidateEndpoints) via this API leaves a trace too.
+        var insecure = OidcInsecureToggles.Enabled(config);
+        if (insecure.Count > 0)
+        {
+            SsoAudit.InsecureOptionsEnabled(_logger, OpenIdProtocol, provider, insecure);
+        }
     }
 
     /// <summary>
