@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api;
@@ -56,4 +57,16 @@ internal static class SsoAudit
             "[SSO Audit] Provider removed: {Protocol} '{Provider}'.",
             protocol,
             provider?.ReplaceLineEndings(string.Empty));
+
+    /// <summary>Records a provider being saved with one or more security checks disabled (#140).</summary>
+    /// <param name="logger">The logger.</param>
+    /// <param name="protocol">The protocol (OpenID or SAML).</param>
+    /// <param name="provider">The provider name.</param>
+    /// <param name="options">The enabled insecure option names (configuration keys, not user input).</param>
+    internal static void InsecureOptionsEnabled(ILogger logger, string protocol, string provider, IReadOnlyList<string> options)
+        => logger.LogWarning(
+            "[SSO Audit] {Protocol} provider '{Provider}' saved with security checks disabled: {Options}. These weaken RFC 9700 transport/issuer/endpoint validation; keep them only if the provider genuinely requires it. DisableHttps in particular exposes the id_token signing keys (JWKS) to a man-in-the-middle.",
+            protocol,
+            provider?.ReplaceLineEndings(string.Empty),
+            string.Join(", ", options));
 }

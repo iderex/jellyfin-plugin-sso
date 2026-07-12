@@ -583,7 +583,9 @@
                   </div>
                 </div>
 
-                <div class="checkboxContainer">
+                <div
+                  class="checkboxContainer checkboxContainer-withDescription"
+                >
                   <label>
                     <input
                       is="emby-checkbox"
@@ -594,7 +596,13 @@
                     />
                     <span>Disable OpenID HTTPS Discovery (Insecure)</span>
                   </label>
-                  <div class="fieldDescription checkboxFieldDescription"></div>
+                  <div class="fieldDescription checkboxFieldDescription">
+                    ⚠ Insecure: drops TLS on the discovery, JWKS and token
+                    endpoints, so the id_token signing keys can be swapped by a
+                    man-in-the-middle and a forged login accepted. Use only on a
+                    trusted internal network. Enabling it is recorded as an
+                    audit warning.
+                  </div>
                 </div>
 
                 <div class="checkboxContainer">
@@ -628,10 +636,15 @@
                     <span>Do Not Validate OpenID Endpoints (Insecure)</span>
                   </label>
                   <div class="fieldDescription checkboxFieldDescription">
-                    May be required for Google OpenID
+                    ⚠ Insecure: disables endpoint-origin validation (a mix-up
+                    defense). May be required for Google OpenID, whose endpoints
+                    live on different hosts. Enabling it is recorded as an audit
+                    warning.
                   </div>
                 </div>
-                <div class="checkboxContainer">
+                <div
+                  class="checkboxContainer checkboxContainer-withDescription"
+                >
                   <label>
                     <input
                       is="emby-checkbox"
@@ -642,6 +655,12 @@
                     />
                     <span>Do Not Validate OpenID Issuer Name (Insecure)</span>
                   </label>
+                  <div class="fieldDescription checkboxFieldDescription">
+                    ⚠ Insecure: disables matching the discovery issuer, a mix-up
+                    defense. Only for a provider that legitimately presents a
+                    different issuer (some templated/multi-tenant setups).
+                    Enabling it is recorded as an audit warning.
+                  </div>
                 </div>
                 <div
                   class="checkboxContainer checkboxContainer-withDescription"

@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
+using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
 using MediaBrowser.Model.Plugins;
 using MediaBrowser.Model.Serialization;
+using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.SSO_Auth;
 
@@ -17,14 +19,18 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IPlugin, IHasWebPages
     // (notably first-logins each writing a canonical link) cannot lose one another's updates.
     private static readonly object ConfigMutationLock = new object();
 
+    private readonly ILogger<SSOPlugin> _logger;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="SSOPlugin"/> class.
     /// </summary>
     /// <param name="applicationPaths">Internal Jellyfin interface for the ApplicationPath.</param>
     /// <param name="xmlSerializer">Internal Jellyfin interface for the XML information.</param>
-    public SSOPlugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer)
+    /// <param name="logger">The logger (used to audit insecure-option saves, #140).</param>
+    public SSOPlugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer, ILogger<SSOPlugin> logger)
         : base(applicationPaths, xmlSerializer)
     {
+        _logger = logger;
         Instance = this;
     }
 
@@ -93,15 +99,55 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IPlugin, IHasWebPages
     public override void UpdateConfiguration(BasePluginConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
+        List<(string Provider, IReadOnlyList<string> Options)> insecureToAudit = null;
         lock (ConfigMutationLock)
         {
             if (configuration is PluginConfiguration incoming && !ReferenceEquals(incoming, Configuration))
             {
                 PreserveServerManagedFields(incoming, Configuration);
+
+                // Snapshot which providers were saved with an insecure option (#140) while under the
+                // lock, but emit the warnings AFTER releasing it (below) — logging must not run inside
+                // the global config lock, where a slow provider would block concurrent config access.
+                insecureToAudit = CollectInsecureOptions(incoming);
             }
 
             base.UpdateConfiguration(configuration);
         }
+
+        // Outside the lock, and after the save is durably persisted: a slow or misbehaving logging
+        // provider can neither block config reads/writes nor turn a completed save into a failure.
+        if (insecureToAudit != null && _logger != null)
+        {
+            foreach (var (provider, options) in insecureToAudit)
+            {
+                SsoAudit.InsecureOptionsEnabled(_logger, "OpenID", provider, options);
+            }
+        }
+    }
+
+    // Snapshots, under the caller's lock, the OpenID providers saved with a security check disabled
+    // (#140), as (provider, enabled-option-names) pairs. Pure read: it does not log, so the audit
+    // warnings can be emitted after the config lock is released. Only the admin save path reaches
+    // here (a fresh incoming config), so it fires once per save, not per login.
+    private static List<(string Provider, IReadOnlyList<string> Options)> CollectInsecureOptions(PluginConfiguration incoming)
+    {
+        var records = new List<(string, IReadOnlyList<string>)>();
+        if (incoming.OidConfigs == null)
+        {
+            return records;
+        }
+
+        foreach (var kvp in incoming.OidConfigs)
+        {
+            var insecure = OidcInsecureToggles.Enabled(kvp.Value);
+            if (insecure.Count > 0)
+            {
+                records.Add((kvp.Key, insecure));
+            }
+        }
+
+        return records;
     }
 
     /// <summary>
