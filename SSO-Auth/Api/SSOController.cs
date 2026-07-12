@@ -172,7 +172,7 @@ public class SSOController : ControllerBase
             if (timedState.Valid)
             {
                 _logger.LogInformation("Is request linking: {IsLinking}", isLinking);
-                return Content(WebResponse.Generator(data: state, provider: provider, baseUrl: GetRequestBase(config.SchemeOverride, config.PortOverride), mode: "OID", isLinking: isLinking), MediaTypeNames.Text.Html);
+                return HtmlAuthPage(WebResponse.Generator(data: state, provider: provider, baseUrl: GetRequestBase(config.SchemeOverride, config.PortOverride), mode: "OID", isLinking: isLinking));
             }
             else
             {
@@ -468,14 +468,13 @@ public class SSOController : ControllerBase
 
             if (SamlLoginPolicy.IsLoginAllowed(samlResponse.GetCustomAttributes("Role"), config.Roles))
             {
-                return Content(
-                        WebResponse.Generator(
-                            data: Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(samlResponse.Xml)),
-                            provider: provider,
-                            baseUrl: GetRequestBase(config.SchemeOverride, config.PortOverride),
-                            mode: "SAML",
-                            isLinking: isLinking),
-                        MediaTypeNames.Text.Html);
+                return HtmlAuthPage(
+                    WebResponse.Generator(
+                        data: Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(samlResponse.Xml)),
+                        provider: provider,
+                        baseUrl: GetRequestBase(config.SchemeOverride, config.PortOverride),
+                        mode: "SAML",
+                        isLinking: isLinking));
             }
 
             _logger.LogWarning(
@@ -1321,6 +1320,21 @@ public class SSOController : ControllerBase
         errorResult.ContentType = MediaTypeNames.Text.Plain;
         errorResult.StatusCode = code;
         return errorResult;
+    }
+
+    // Returns the rendered auth page as HTML with defensive response headers. The page carries the
+    // one-time state token / signed assertion and completes the login from an inline script, so it
+    // must not be framed (clickjacking), MIME-sniffed, cached, or leak its URL via Referer. A
+    // Content-Security-Policy is intentionally NOT set here: the page relies on an inline script and
+    // style, so a safe CSP needs per-response nonces threaded into WebResponse.Generator — tracked
+    // separately (it needs a real-server check that the login page still runs).
+    private ContentResult HtmlAuthPage(string html)
+    {
+        Response.Headers["X-Frame-Options"] = "DENY";
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        Response.Headers["Referrer-Policy"] = "no-referrer";
+        Response.Headers.CacheControl = "no-store";
+        return Content(html, MediaTypeNames.Text.Html);
     }
 }
 
