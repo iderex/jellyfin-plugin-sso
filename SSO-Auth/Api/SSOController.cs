@@ -527,10 +527,14 @@ public class SSOController : ControllerBase
     ///    RelayState given in the original saml request. If it is equal to "linking",
     ///    We consider this to be a linking request.
     /// </param>
+    /// <param name="formSamlResponse">
+    ///    The SAMLResponse form field, model-bound so a non-form POST binds null (and is rejected)
+    ///    instead of making Request.Form throw an unhandled 500 (#206).
+    /// </param>
     /// <returns>A webpage that will complete the client-side flow.</returns>
     [HttpPost("SAML/p/{provider}")]
     [HttpPost("SAML/post/{provider}")]
-    public ActionResult SamlPost(string provider, [FromQuery] string relayState = null)
+    public ActionResult SamlPost(string provider, [FromQuery] string relayState = null, [FromForm(Name = "SAMLResponse")] string formSamlResponse = null)
     {
         if (RateLimitCheck("callback") is { } throttled)
         {
@@ -557,7 +561,11 @@ public class SSOController : ControllerBase
 
         if (config.Enabled)
         {
-            if (!SamlResponseLoader.TryParse(config.SamlCertificate, Request.Form["SAMLResponse"], out var samlResponse)
+            // Bind SAMLResponse via [FromForm] rather than reading Request.Form directly: a non-form
+            // content-type binds null (the form value provider is skipped, so Request.Form is never
+            // touched and cannot throw the InvalidOperationException that escaped as a 500, #206), and a
+            // null body is rejected the same way as any other malformed response — a clean 400.
+            if (!SamlResponseLoader.TryParse(config.SamlCertificate, formSamlResponse, out var samlResponse)
                 || !IsSamlResponseValid(samlResponse, config, provider))
             {
                 // A malformed response (non-base64, malformed XML, prohibited DOCTYPE) fails TryLoad and
