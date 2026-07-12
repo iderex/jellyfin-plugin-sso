@@ -71,6 +71,13 @@ public class SSOController : ControllerBase
     // One-time-use tracking for consumed SAML assertion IDs (replay protection).
     private static readonly SamlReplayCache SamlReplays = new SamlReplayCache();
 
+    // Outstanding SAML AuthnRequest IDs, for InResponseTo correlation of solicited responses (#156).
+    private static readonly SamlRequestCache SamlRequests = new SamlRequestCache();
+
+    // How long an issued SAML AuthnRequest ID stays valid for correlation — the interactive leg
+    // (challenge -> IdP login/MFA -> POST back -> mint), matching the OpenID StateLifetime.
+    private static readonly TimeSpan SamlRequestLifetime = TimeSpan.FromMinutes(15);
+
     // Single canonical User-Agent for the plugin's outbound HTTP (discovery, avatar fetch),
     // computed once since the assembly version does not change at runtime.
     private static readonly string UserAgentString =
@@ -489,7 +496,7 @@ public class SSOController : ControllerBase
         {
             var samlResponse = new Response(config.SamlCertificate, Request.Form["SAMLResponse"]);
 
-            if (!IsSamlResponseValid(samlResponse, config))
+            if (!IsSamlResponseValid(samlResponse, config, provider))
             {
                 return Problem("SAML response validation failed");
             }
@@ -555,6 +562,16 @@ public class SSOController : ControllerBase
             var request = new AuthRequest(
                 config.SamlClientId.Trim(),
                 redirectUri);
+
+            // Solicited-only mode (#156): remember the request ID so the callback can require the
+            // response's InResponseTo to match a request we actually issued. Scoped by provider so
+            // two providers' request IDs cannot satisfy each other's correlation. Only for login
+            // flows — the linking callback (SamlLink) does not consume InResponseTo, so registering a
+            // linking request would only leave an id to expire unused.
+            if (config.ValidateInResponseTo && !isLinking)
+            {
+                SamlRequests.Register(provider + "\n" + request.Id, DateTime.UtcNow + SamlRequestLifetime, DateTime.UtcNow);
+            }
 
             return Redirect(request.GetRedirectUrl(config.SamlEndpoint.Trim(), relayState));
         }
@@ -631,9 +648,24 @@ public class SSOController : ControllerBase
         {
             var samlResponse = new Response(config.SamlCertificate, response.Data);
 
-            if (!IsSamlResponseValid(samlResponse, config))
+            if (!IsSamlResponseValid(samlResponse, config, provider))
             {
                 return Problem("SAML response validation failed");
+            }
+
+            // Solicited-only correlation (#156, opt-in): consume the response's InResponseTo against
+            // an AuthnRequest this server issued. Enforced here (the session-minting endpoint), like
+            // the replay check, so the id is claimed once. An unsolicited (IdP-initiated) response
+            // carries no InResponseTo and is refused; a matching id is one-time-use.
+            if (config.ValidateInResponseTo)
+            {
+                var inResponseTo = samlResponse.GetInResponseTo();
+                var requestKey = string.IsNullOrEmpty(inResponseTo) ? inResponseTo : provider + "\n" + inResponseTo;
+                if (!SamlRequests.TryConsume(requestKey, DateTime.UtcNow))
+                {
+                    _logger.LogWarning("SAML login denied: the response was not solicited by this server (unknown, expired, or already-used InResponseTo).");
+                    return Problem("SAML response was not solicited by this server");
+                }
             }
 
             // Enforce the login allow-list here too, not only at the assertion-consumer page: a caller
@@ -1034,7 +1066,7 @@ public class SSOController : ControllerBase
 
         var samlResponse = new Response(config.SamlCertificate, response.Data);
 
-        if (!IsSamlResponseValid(samlResponse, config))
+        if (!IsSamlResponseValid(samlResponse, config, provider))
         {
             return Problem("SAML response validation failed");
         }
@@ -1246,19 +1278,47 @@ public class SSOController : ControllerBase
     // weak-algorithm remediation hint. This lets an operator tell a rejected SHA-1 signature - the
     // expected post-upgrade lockout of a legacy IdP - apart from a bad certificate, an expired
     // assertion, or an audience mismatch, all of which otherwise surface as the same opaque error.
-    private bool IsSamlResponseValid(Response samlResponse, SamlConfig config)
+    private bool IsSamlResponseValid(Response samlResponse, SamlConfig config, string provider)
     {
-        if (ValidateSaml(samlResponse, config))
+        if (!ValidateSaml(samlResponse, config))
         {
-            return true;
+            // The algorithm URI is identity-provider-controlled; strip line endings inline at the log
+            // call to prevent log forging (a helper-boundary sanitizer is not recognized by CodeQL).
+            _logger.LogWarning(
+                "SAML response validation failed (signature algorithm: {Algorithm}). SHA-1 is rejected; if that is the identity provider's algorithm, reconfigure it to sign with RSA/ECDSA-SHA-256 or stronger.",
+                samlResponse.GetSignatureAlgorithm()?.ReplaceLineEndings(string.Empty));
+            return false;
         }
 
-        // The algorithm URI is identity-provider-controlled; strip line endings inline at the log
-        // call to prevent log forging (a helper-boundary sanitizer is not recognized by CodeQL).
-        _logger.LogWarning(
-            "SAML response validation failed (signature algorithm: {Algorithm}). SHA-1 is rejected; if that is the identity provider's algorithm, reconfigure it to sign with RSA/ECDSA-SHA-256 or stronger.",
-            samlResponse.GetSignatureAlgorithm()?.ReplaceLineEndings(string.Empty));
-        return false;
+        // Endpoint binding (#156, opt-in): the signed assertion must be addressed to this service
+        // provider's assertion-consumer URL, so an assertion minted for a different endpoint (or a
+        // different SP sharing the identity provider) cannot be presented here.
+        if (config.ValidateRecipient
+            && !SamlRecipientValidator.IsBound(samlResponse.GetRecipient(), samlResponse.GetDestination(), ExpectedAcsUrls(config, provider)))
+        {
+            _logger.LogWarning("SAML response rejected: the assertion Recipient or Response Destination does not match this server's assertion-consumer URL.");
+            return false;
+        }
+
+        return true;
+    }
+
+    // The assertion-consumer URLs this service provider advertises for the provider — the same value
+    // SamlChallenge puts in the AuthnRequest's AssertionConsumerServiceURL, so a signed Recipient (or
+    // Destination) must equal one. Both the new ("post") and legacy ("p") path spellings are returned:
+    // config.NewPath is process-wide mutable state a concurrent challenge can flip, and the Recipient
+    // reflects whichever the AuthnRequest advertised at challenge time, so accepting either avoids
+    // rejecting a valid login on a path-form flip; both are this provider's own ACS URLs.
+    //
+    // The host comes from GetRequestBase (the request Host). This binding is therefore only as strong
+    // as host resolution: behind a reverse proxy, configure Jellyfin's Known/Trusted Proxies so the
+    // Host cannot be spoofed, or an attacker controlling the Host can make the expected URL match a
+    // captured assertion's Recipient (defense-in-depth, not a hard guarantee). The canonical
+    // base-URL override (#139) will remove that Host dependency.
+    private string[] ExpectedAcsUrls(SamlConfig config, string provider)
+    {
+        var baseUrl = GetRequestBase(config.SchemeOverride, config.PortOverride) + "/sso/SAML/";
+        return new[] { baseUrl + "post/" + provider, baseUrl + "p/" + provider };
     }
 
     // Validates a SAML response: signature + time bounds always, plus AudienceRestriction binding to

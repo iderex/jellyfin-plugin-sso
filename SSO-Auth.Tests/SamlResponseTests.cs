@@ -34,6 +34,39 @@ public class SamlResponseTests
     }
 
     [Fact]
+    public void GetRecipient_And_GetInResponseTo_ReadFromSignedAssertion()
+    {
+        // Recipient and InResponseTo live inside the assertion, so they are covered even when only
+        // the assertion (not the whole Response) is signed — the #156 endpoint/solicited binding.
+        var fixture = SamlTestFactory.Create(
+            scope: SamlTestFactory.SignatureScope.Assertion,
+            recipient: "https://jellyfin.example/sso/SAML/post/idp",
+            inResponseTo: "_req-42");
+        var response = Load(fixture);
+
+        Assert.True(response.IsValid());
+        Assert.Equal("https://jellyfin.example/sso/SAML/post/idp", response.GetRecipient());
+        Assert.Equal("_req-42", response.GetInResponseTo());
+    }
+
+    [Fact]
+    public void GetRecipient_And_GetInResponseTo_NullWhenAbsent()
+    {
+        var response = Load(SamlTestFactory.Create());
+        Assert.Null(response.GetRecipient());
+        Assert.Null(response.GetInResponseTo());
+    }
+
+    [Fact]
+    public void GetDestination_ReadFromResponseElement_NullWhenAbsent()
+    {
+        var withDestination = Load(SamlTestFactory.Create(destination: "https://jellyfin.example/sso/SAML/post/idp"));
+        Assert.Equal("https://jellyfin.example/sso/SAML/post/idp", withDestination.GetDestination());
+
+        Assert.Null(Load(SamlTestFactory.Create()).GetDestination());
+    }
+
+    [Fact]
     public void Constructor_DocumentWithDoctype_IsRejected()
     {
         // Untrusted SAML input must not carry a DTD: XmlResolver=null blocks only external entities,

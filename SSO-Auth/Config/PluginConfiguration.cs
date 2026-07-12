@@ -68,6 +68,21 @@ public class SamlConfig
     public bool DoNotValidateAudience { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether to bind the assertion to this service provider's
+    /// assertion-consumer URL by validating the bearer SubjectConfirmationData Recipient (and the
+    /// Response Destination when present) against it. Opt-in (default off): enable it once the
+    /// identity provider is confirmed to emit a Recipient matching the configured ACS URL. Refs #156.
+    /// </summary>
+    public bool ValidateRecipient { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether to accept only solicited responses, by correlating the
+    /// assertion's InResponseTo against an AuthnRequest this server issued. Opt-in (default off):
+    /// enabling it rejects IdP-initiated (unsolicited) SSO, which carries no InResponseTo. Refs #156.
+    /// </summary>
+    public bool ValidateInResponseTo { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether the provider is enabled.
     /// </summary>
     public bool Enabled { get; set; }

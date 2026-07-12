@@ -71,6 +71,31 @@ expiry). A few provider settings must therefore match, or login is refused (fail
   now lists OpenID links by their `sub` value, which for many providers is an opaque identifier
   rather than a readable name.
 
+## SAML response binding (optional hardening)
+
+Two per-provider SAML options, both **off by default**, tie a response more tightly to this service
+provider. They are set through the SAML provider configuration (the `SAML/Add` API, like the other
+SAML options — there is no admin-UI toggle yet); include them whenever you re-post a provider's
+config so a save does not reset them.
+
+- **`ValidateRecipient`** — require the assertion's bearer `SubjectConfirmationData/@Recipient` (and
+  the Response `Destination` when present) to equal this server's assertion-consumer URL. This stops
+  an assertion minted for a different endpoint — or for a different service provider that shares the
+  identity provider — from being presented here. The Recipient is inside the signed assertion, so it
+  is trustworthy even when only the assertion (not the whole Response) is signed. **Caveat:** the
+  expected URL is built from the request host, so this binding is only as strong as your host
+  resolution — behind a reverse proxy, configure Jellyfin's Known/Trusted Proxies so the `Host`
+  header cannot be spoofed. Treat it as defense-in-depth layered on the `AudienceRestriction`,
+  signature, replay and time-bound checks, not as a standalone guarantee. (A canonical base-URL
+  override that removes the host dependency is tracked in issue #139.)
+- **`ValidateInResponseTo`** — accept only _solicited_ responses: the assertion's `InResponseTo` must
+  match an `AuthnRequest` this server issued and has not yet consumed (one-time, time-bounded).
+  **Enabling this disables IdP-initiated (unsolicited) SSO**, which carries no `InResponseTo` — leave
+  it off if your identity provider starts the login from its own dashboard. It applies to the login
+  flow only (not account linking). The outstanding-request store is **in-process**, so it requires a
+  single Jellyfin instance or sticky sessions: behind a load balancer without session affinity, the
+  challenge and the response can land on different instances and every solicited login is rejected.
+
 ## Authelia
 
 Authelia is simple to configure, and RBAC is straightforward.

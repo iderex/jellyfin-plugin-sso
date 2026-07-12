@@ -56,7 +56,10 @@ internal static class SamlTestFactory
         string? audience = null,
         string[]? audiences = null,
         SignatureScope scope = SignatureScope.Response,
-        bool signWithSha1 = false)
+        bool signWithSha1 = false,
+        string? recipient = null,
+        string? inResponseTo = null,
+        string? destination = null)
     {
         var audienceList = audiences ?? (audience == null ? null : new[] { audience });
         const string TimeFormat = "yyyy-MM-ddTHH:mm:ssZ";
@@ -69,9 +72,23 @@ internal static class SamlTestFactory
         var responseId = "_" + Guid.NewGuid().ToString("N");
         var assertionId = "_" + Guid.NewGuid().ToString("N");
 
-        var subjectConfirmationData = includeNotOnOrAfter
-            ? "<saml:SubjectConfirmationData NotOnOrAfter=\"" + effectiveNotOnOrAfter.ToUniversalTime().ToString(TimeFormat, CultureInfo.InvariantCulture) + "\" />"
-            : "<saml:SubjectConfirmationData />";
+        var subjectConfirmationAttributes = new StringBuilder();
+        if (includeNotOnOrAfter)
+        {
+            subjectConfirmationAttributes.Append(" NotOnOrAfter=\"" + effectiveNotOnOrAfter.ToUniversalTime().ToString(TimeFormat, CultureInfo.InvariantCulture) + "\"");
+        }
+
+        if (recipient != null)
+        {
+            subjectConfirmationAttributes.Append(" Recipient=\"" + SecurityElement.Escape(recipient) + "\"");
+        }
+
+        if (inResponseTo != null)
+        {
+            subjectConfirmationAttributes.Append(" InResponseTo=\"" + SecurityElement.Escape(inResponseTo) + "\"");
+        }
+
+        var subjectConfirmationData = "<saml:SubjectConfirmationData" + subjectConfirmationAttributes + " />";
 
         var conditions = string.Empty;
         if (conditionsNotBefore.HasValue || conditionsNotOnOrAfter.HasValue || audienceList != null)
@@ -104,8 +121,10 @@ internal static class SamlTestFactory
                 : "<saml:Conditions" + attributes + ">" + body + "</saml:Conditions>";
         }
 
+        var destinationAttribute = destination == null ? string.Empty : " Destination=\"" + SecurityElement.Escape(destination) + "\"";
+
         var xml =
-            "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" ID=\"" + responseId + "\" Version=\"2.0\">" +
+            "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" ID=\"" + responseId + "\" Version=\"2.0\"" + destinationAttribute + ">" +
                 "<saml:Assertion ID=\"" + assertionId + "\" Version=\"2.0\">" +
                     "<saml:Issuer>https://idp.example.com</saml:Issuer>" +
                     conditions +
