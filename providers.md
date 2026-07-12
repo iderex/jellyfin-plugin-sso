@@ -316,7 +316,7 @@ kanidm:
   OidScopes:
     - groups
   RoleClaim: groups
-  AdminsRoles:
+  AdminRoles:
     - jellyfin_admins@idm.example.com
   Roles:
     - jellyfin_users@idm.example.com
