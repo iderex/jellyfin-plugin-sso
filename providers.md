@@ -39,6 +39,26 @@ EnableFolderRoles: false
 FolderRoleMapping: []
 ```
 
+## OpenID Connect id_token requirements
+
+The plugin validates the id_token returned by your OpenID provider (signature, issuer, audience and
+expiry). A few provider settings must therefore match, or login is refused (fail-closed):
+
+- **The id_token must be signed with an asymmetric algorithm — RS256/384/512, PS256/384/512, or
+  ES256/384/512.** Tokens signed with a symmetric algorithm (HS256) or left unsigned (`alg: none`)
+  are rejected regardless of configuration. If your IdP client defaults to HS256 (some Auth0 and
+  Keycloak client templates do), switch its id_token signing algorithm to RS256. EdDSA/Ed25519
+  (OKP keys) is not supported.
+- **The provider must publish a JWKS** (its discovery document's `jwks_uri`) so the signature can be
+  verified. A rotated signing key is picked up automatically on the next login.
+- **Clocks must be roughly in sync.** Expiry is checked with a 5-minute skew allowance; if the
+  Jellyfin host or the IdP clock drifts further, every login fails — keep both on NTP.
+- **Issuer** is matched against the discovery issuer. If your IdP legitimately presents a different
+  issuer (some templated or multi-tenant setups), set `DoNotValidateIssuerName: true` for that
+  provider — this relaxes only the issuer check; signature, audience and expiry stay enforced.
+- If your IdP sends an `at_hash` claim it must match the issued access token — a correctly behaving
+  provider always satisfies this.
+
 ## Authelia
 
 Authelia is simple to configure, and RBAC is straightforward.
