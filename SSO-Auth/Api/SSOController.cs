@@ -19,6 +19,7 @@ using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Jellyfin.Plugin.SSO_Auth.Helpers;
 using MediaBrowser.Common.Api;
+using MediaBrowser.Common.Extensions;
 using MediaBrowser.Controller.Authentication;
 using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Library;
@@ -1308,6 +1309,14 @@ public class SSOController : ControllerBase
         authRequest.AppVersion = parameters.AuthResponse.AppVersion;
         authRequest.DeviceId = parameters.AuthResponse.DeviceID;
         authRequest.DeviceName = parameters.AuthResponse.DeviceName;
+
+        // Record the client IP so the SSO login shows a source address in Jellyfin's activity log,
+        // exactly as password logins do (#177): use Jellyfin's own GetNormalizedRemoteIP, the very
+        // helper its built-in login path uses. It reads the already-resolved connection address (so
+        // the plugin adds no proxy-trust logic of its own — the server's "Known proxies" setting
+        // governs it) and normalizes it the same way (IPv4-mapped IPv6 collapsed to IPv4), so the
+        // SSO entry's source address matches a password entry's for the same client byte-for-byte.
+        authRequest.RemoteEndPoint = HttpContext.GetNormalizedRemoteIP().ToString();
         _logger.LogInformation("Auth request created...");
         if (!string.IsNullOrEmpty(parameters.DefaultProvider))
         {
