@@ -345,6 +345,19 @@ public class SSOController : ControllerBase
         }
     }
 
+    // Rejects a non-loadable SAML signing certificate at the SAML/Add endpoint (#206), which persists
+    // through MutateConfiguration and so bypasses the config-page save-time validation in
+    // SSOPlugin.ValidateSamlCertificates. Without this, a garbage certificate set via the Add API would be
+    // persisted and then throw a CryptographicException on every callback (an unhandled 500). Blank is
+    // valid (a half-configured provider).
+    internal static void RejectInvalidSamlCertificate(string certificateStr)
+    {
+        if (SamlCertificate.IsInvalid(certificateStr))
+        {
+            throw new ArgumentException("The SAML signing certificate must be a Base64-encoded (DER) X.509 certificate, or left blank.");
+        }
+    }
+
     /// <summary>
     /// Adds an OpenID auth configuration. Requires administrator privileges. If the provider already exists, it will be removed and readded.
     /// </summary>
@@ -667,6 +680,7 @@ public class SSOController : ControllerBase
     public OkResult SamlAdd(string provider, [FromBody] SamlConfig newConfig)
     {
         RejectInvalidBaseUrlOverride(newConfig?.BaseUrlOverride);
+        RejectInvalidSamlCertificate(newConfig?.SamlCertificate);
         SSOPlugin.Instance.MutateConfiguration(configuration =>
         {
             // Preserve the server-managed canonical links (#157), as OidAdd does: the posted config

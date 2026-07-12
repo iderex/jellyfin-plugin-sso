@@ -282,4 +282,32 @@ public class ConfigPreservationTests
         var back = (ProviderConfigBase)serializer.Deserialize(xmlReader)!;
         Assert.Equal("https://jellyfin.example.com", back.BaseUrlOverride);
     }
+
+    // --- SAML certificate validation on save (#206) ---
+
+    [Fact]
+    public void ValidateSamlCertificates_ValidOrBlank_DoesNotThrow()
+    {
+        var incoming = new PluginConfiguration();
+        incoming.SamlConfigs["ok"] = new SamlConfig { SamlCertificate = SamlTestFactory.Create().CertificateBase64 };
+        incoming.SamlConfigs["blank"] = new SamlConfig { SamlCertificate = null };
+
+        SSOPlugin.ValidateSamlCertificates(incoming);
+    }
+
+    [Fact]
+    public void ValidateSamlCertificates_GarbageCertificate_ThrowsNamingProvider()
+    {
+        var incoming = new PluginConfiguration();
+        incoming.SamlConfigs["idp"] = new SamlConfig { SamlCertificate = "QUJD" }; // valid base64, not a cert
+
+        var ex = Assert.Throws<ArgumentException>(() => SSOPlugin.ValidateSamlCertificates(incoming));
+        Assert.Contains("idp", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ValidateSamlCertificates_NullMap_DoesNotThrow()
+    {
+        SSOPlugin.ValidateSamlCertificates(new PluginConfiguration { SamlConfigs = null });
+    }
 }

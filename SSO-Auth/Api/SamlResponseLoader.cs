@@ -1,4 +1,5 @@
 using System;
+using System.Security.Cryptography;
 using System.Xml;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api;
@@ -37,8 +38,12 @@ internal static class SamlResponseLoader
             response = new Response(certificateStr, responseString);
             return true;
         }
-        catch (Exception ex) when (ex is FormatException or XmlException)
+        catch (Exception ex) when (ex is FormatException or XmlException or CryptographicException or ArgumentException)
         {
+            // FormatException/XmlException: a malformed response body (#199). CryptographicException/
+            // ArgumentException: a null/garbage configured SamlCertificate (#206) — the save-time
+            // validation blocks that, but a legacy or hand-edited config could still carry one, so fail
+            // closed to a clean rejection here rather than an unhandled 500.
             response = null;
             return false;
         }
