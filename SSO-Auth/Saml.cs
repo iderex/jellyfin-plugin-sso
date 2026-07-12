@@ -242,9 +242,20 @@ public class Response
             return null;
         }
 
-        var signedXml = new SignedXml(_xmlDoc);
-        signedXml.LoadXml((XmlElement)nodeList[0]);
-        return signedXml.SignedInfo.SignatureMethod;
+        // This is a diagnostic used only in the failure-log path, so it must never throw: a malformed
+        // signature element makes SignedXml.LoadXml raise CryptographicException, which would turn the
+        // clean rejection its caller is about to return into an unhandled HTTP 500 (#199). Return null
+        // (unknown algorithm) on any malformed-signature exception instead.
+        try
+        {
+            var signedXml = new SignedXml(_xmlDoc);
+            signedXml.LoadXml((XmlElement)nodeList[0]);
+            return signedXml.SignedInfo.SignatureMethod;
+        }
+        catch (Exception ex) when (ex is CryptographicException or XmlException or ArgumentException or FormatException)
+        {
+            return null;
+        }
     }
 
     private List<string> GetAudiences()

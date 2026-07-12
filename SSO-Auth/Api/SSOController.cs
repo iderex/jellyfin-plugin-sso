@@ -557,11 +557,12 @@ public class SSOController : ControllerBase
 
         if (config.Enabled)
         {
-            var samlResponse = new Response(config.SamlCertificate, Request.Form["SAMLResponse"]);
-
-            if (!IsSamlResponseValid(samlResponse, config, provider))
+            if (!SamlResponseLoader.TryParse(config.SamlCertificate, Request.Form["SAMLResponse"], out var samlResponse)
+                || !IsSamlResponseValid(samlResponse, config, provider))
             {
-                return Problem("SAML response validation failed");
+                // A malformed response (non-base64, malformed XML, prohibited DOCTYPE) fails TryLoad and
+                // is rejected the same way an invalid one is — a clean 4xx, never an unhandled 500 (#199).
+                return ReturnError(StatusCodes.Status400BadRequest, "SAML response validation failed");
             }
 
             if (SamlLoginPolicy.IsLoginAllowed(samlResponse.GetCustomAttributes("Role"), config.Roles))
@@ -731,11 +732,11 @@ public class SSOController : ControllerBase
 
         if (config.Enabled)
         {
-            var samlResponse = new Response(config.SamlCertificate, response.Data);
-
-            if (!IsSamlResponseValid(samlResponse, config, provider))
+            if (!SamlResponseLoader.TryParse(config.SamlCertificate, response?.Data, out var samlResponse)
+                || !IsSamlResponseValid(samlResponse, config, provider))
             {
-                return Problem("SAML response validation failed");
+                // Malformed input is rejected the same way an invalid response is — clean 4xx, not 500 (#199).
+                return ReturnError(StatusCodes.Status400BadRequest, "SAML response validation failed");
             }
 
             // Solicited-only correlation (#156, opt-in): consume the response's InResponseTo against
@@ -1208,11 +1209,11 @@ public class SSOController : ControllerBase
             return BadRequest(NoMatchingProviderMessage);
         }
 
-        var samlResponse = new Response(config.SamlCertificate, response.Data);
-
-        if (!IsSamlResponseValid(samlResponse, config, provider))
+        if (!SamlResponseLoader.TryParse(config.SamlCertificate, response?.Data, out var samlResponse)
+            || !IsSamlResponseValid(samlResponse, config, provider))
         {
-            return Problem("SAML response validation failed");
+            // Malformed input is rejected the same way an invalid response is — clean 4xx, not 500 (#199).
+            return ReturnError(StatusCodes.Status400BadRequest, "SAML response validation failed");
         }
 
         string providerUserId = samlResponse.GetNameID();
