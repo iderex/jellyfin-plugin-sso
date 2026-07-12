@@ -82,6 +82,62 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IPlugin, IHasWebPages
     }
 
     /// <summary>
+    /// Persists a replacement configuration, re-injecting server-managed fields from the live
+    /// configuration first (#157). The admin settings page saves through this path (Jellyfin core's
+    /// UpdatePluginConfiguration) with a snapshot taken at page load, so a canonical link created by a
+    /// login since then would be absent from the posted config; re-injecting the live links stops the
+    /// save from wiping them. Takes the same lock as <see cref="MutateConfiguration"/> (reentrant, so
+    /// calls from there are safe) and skips the copy when the incoming object is the live one.
+    /// </summary>
+    /// <param name="configuration">The configuration to persist.</param>
+    public override void UpdateConfiguration(BasePluginConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        lock (ConfigMutationLock)
+        {
+            if (configuration is PluginConfiguration incoming && !ReferenceEquals(incoming, Configuration))
+            {
+                PreserveServerManagedFields(incoming, Configuration);
+            }
+
+            base.UpdateConfiguration(configuration);
+        }
+    }
+
+    /// <summary>
+    /// Copies the server-managed fields (per-provider canonical links) from <paramref name="live"/>
+    /// into <paramref name="incoming"/>, so a save built from a stale client snapshot cannot clear
+    /// them. Only providers present in <paramref name="incoming"/> are touched (a deleted provider
+    /// stays deleted; a newly added one keeps its own empty map).
+    /// </summary>
+    /// <param name="incoming">The configuration about to be persisted.</param>
+    /// <param name="live">The current live configuration to read server-managed values from.</param>
+    internal static void PreserveServerManagedFields(PluginConfiguration incoming, PluginConfiguration live)
+    {
+        if (incoming?.OidConfigs != null && live?.OidConfigs != null)
+        {
+            foreach (var kvp in live.OidConfigs)
+            {
+                if (incoming.OidConfigs.TryGetValue(kvp.Key, out var incomingProvider))
+                {
+                    incomingProvider.CanonicalLinks = kvp.Value.CanonicalLinks;
+                }
+            }
+        }
+
+        if (incoming?.SamlConfigs != null && live?.SamlConfigs != null)
+        {
+            foreach (var kvp in live.SamlConfigs)
+            {
+                if (incoming.SamlConfigs.TryGetValue(kvp.Key, out var incomingProvider))
+                {
+                    incomingProvider.CanonicalLinks = kvp.Value.CanonicalLinks;
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// Reads a value from the live configuration under the same lock as <see cref="MutateConfiguration"/>,
     /// so a read cannot tear against a concurrent write of a (non-thread-safe) configuration collection.
     /// </summary>

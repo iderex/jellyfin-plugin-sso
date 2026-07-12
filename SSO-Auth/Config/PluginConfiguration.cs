@@ -179,7 +179,12 @@ public class SamlConfig
     /// <summary>
     /// Gets or sets a mapping of canonical names from the provider to jellyfin user ids.
     /// </summary>
+    // Server-managed (written by logins), not admin-edited: persisted in the config XML but withheld
+    // from every JSON response (#157). This stops the account-link map leaking off the server, closes
+    // the tear from serializing it while a login writes it, and blocks setting links via a config PUT.
+    // Its preservation on save is handled server-side in SSOPlugin.PreserveServerManagedFields.
     [XmlElement("CanonicalLinks")]
+    [System.Text.Json.Serialization.JsonIgnore]
     public SerializableDictionary<string, Guid> CanonicalLinks
     {
         get
@@ -325,7 +330,12 @@ public class OidConfig
     /// <summary>
     /// Gets or sets a mapping of canonical names from the provider to jellyfin user ids.
     /// </summary>
+    // Server-managed (written by logins), not admin-edited: persisted in the config XML but withheld
+    // from every JSON response (#157). This stops the account-link map leaking off the server, closes
+    // the tear from serializing it while a login writes it, and blocks setting links via a config PUT.
+    // Its preservation on save is handled server-side in SSOPlugin.PreserveServerManagedFields.
     [XmlElement("CanonicalLinks")]
+    [System.Text.Json.Serialization.JsonIgnore]
     public SerializableDictionary<string, Guid> CanonicalLinks
     {
         get
