@@ -163,7 +163,19 @@ public class SSOController : ControllerBase
             // from the verified login's claims and the provider configuration, then apply them to the
             // fresh authorize state (its derivation fields are still at their defaults at this point).
             var derived = OidcAuthorizeStateBuilder.Build(result.User.Claims, config);
+
+            // Fail closed (#155): a valid OpenID login must resolve a stable subject to key the account
+            // link on. sub is an OIDC Core MUST and (post-#134) the id_token validator has verified the
+            // token, so a missing sub means a non-conformant provider — reject rather than fall back to
+            // keying on the mutable username.
+            if (derived.Valid && string.IsNullOrWhiteSpace(derived.Subject))
+            {
+                _logger.LogWarning("OpenID login denied for provider {Provider}: the id_token carried no 'sub' claim to key the account link on.", provider?.ReplaceLineEndings(string.Empty));
+                return ReturnError(StatusCodes.Status401Unauthorized, PermissionDeniedMessage);
+            }
+
             timedState.Username = derived.Username;
+            timedState.Subject = derived.Subject;
             timedState.Valid = derived.Valid;
             timedState.Admin = derived.Admin;
             timedState.EnableLiveTv = derived.EnableLiveTv;
@@ -415,7 +427,7 @@ public class SSOController : ControllerBase
             Guid userId;
             try
             {
-                userId = await CreateCanonicalLinkAndUserIfNotExist("oid", provider, timedState.Username, config.AllowExistingAccountLink).ConfigureAwait(false);
+                userId = await CreateCanonicalLinkAndUserIfNotExist("oid", provider, timedState.Subject, timedState.Username, config.AllowExistingAccountLink).ConfigureAwait(false);
             }
             catch (AccountLinkForbiddenException)
             {
@@ -669,7 +681,9 @@ public class SSOController : ControllerBase
             Guid userId;
             try
             {
-                userId = await CreateCanonicalLinkAndUserIfNotExist("saml", provider, nameId, config.AllowExistingAccountLink).ConfigureAwait(false);
+                // SAML keys the link directly on the NameID, which is already the stable subject
+                // identifier — key and account name are the same value (no migration path needed).
+                userId = await CreateCanonicalLinkAndUserIfNotExist("saml", provider, nameId, nameId, config.AllowExistingAccountLink).ConfigureAwait(false);
             }
             catch (AccountLinkForbiddenException)
             {
@@ -742,41 +756,62 @@ public class SSOController : ControllerBase
         }
     }
 
-    // Looks up a canonical link under the config lock, so the read cannot tear against a concurrent write.
-    private static Guid? TryGetCanonicalLink(string mode, string provider, string canonicalName)
+    // The provider's canonical-links map; callers must hold the config lock (ReadConfiguration /
+    // MutateConfiguration) while touching it.
+    private static SerializableDictionary<string, Guid> GetLinks(PluginConfiguration configuration, string mode, string provider)
     {
-        return SSOPlugin.Instance.ReadConfiguration(configuration =>
+        return mode.ToLowerInvariant() switch
         {
-            var links = mode.ToLowerInvariant() switch
-            {
-                "saml" => configuration.SamlConfigs[provider].CanonicalLinks,
-                "oid" => configuration.OidConfigs[provider].CanonicalLinks,
-                _ => throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'"),
-            };
-            return links.TryGetValue(canonicalName, out var id) ? id : (Guid?)null;
-        });
+            "saml" => configuration.SamlConfigs[provider].CanonicalLinks,
+            "oid" => configuration.OidConfigs[provider].CanonicalLinks,
+            _ => throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'"),
+        };
     }
 
-    private async Task<Guid> CreateCanonicalLinkAndUserIfNotExist(string mode, string provider, string canonicalName, bool allowExistingAccountLink)
+    private async Task<Guid> CreateCanonicalLinkAndUserIfNotExist(string mode, string provider, string canonicalKey, string username, bool allowExistingAccountLink)
     {
-        // Defense in depth (#95): a login without a resolvable identity must never create, adopt, or
-        // look up an account. Both callbacks reject such logins before calling here; this belt keeps
-        // the invariant if a future caller forgets.
-        if (string.IsNullOrWhiteSpace(canonicalName))
+        // Defense in depth (#95, #155): a login that resolved no stable identity key (OpenID sub /
+        // SAML NameID) or no username must never create, adopt, or look up an account. Both callbacks
+        // reject such logins before calling here; this belt keeps the invariant if a caller forgets.
+        if (string.IsNullOrWhiteSpace(canonicalKey) || string.IsNullOrWhiteSpace(username))
         {
             throw new AccountLinkForbiddenException("The SSO login did not resolve an identity; refusing to create or link an account.");
         }
 
-        // An identity already linked to a still-existing account is keyed on the canonical name.
-        // A dangling link, whose user was since deleted, is treated as if there were no link.
-        Guid? linkedUserId = null;
-        var linked = TryGetCanonicalLink(mode, provider, canonicalName);
-        if (linked.HasValue && _userManager.GetUserById(linked.Value) != null)
+        // The link is keyed on the stable identity. A legacy OpenID link (#155) was keyed on the
+        // mutable username instead; when no subject-keyed link exists yet but a legacy one resolves,
+        // adopt and re-key it — the one login that migrates reuses the exact decision the old
+        // name-keyed lookup would have made, then locks it to the subject so a later provider-side
+        // rename cannot detach it. Only OpenID differs key from name; SAML passes key == name.
+        // Both candidates are read in ONE pass under the config lock: with separate reads, a
+        // concurrent login's migration could commit between them, so this login would see the subject
+        // key before the re-key and the legacy key after it, resolve neither, and bounce a legitimate
+        // user off the adoption gate with a spurious 403. A link whose target user was deleted counts
+        // as absent (dangling links are dead, not identities).
+        var (subjectLink, legacyLink) = SSOPlugin.Instance.ReadConfiguration(configuration =>
         {
-            linkedUserId = linked;
+            var links = GetLinks(configuration, mode, provider);
+            Guid? bySubject = links.TryGetValue(canonicalKey, out var s) && _userManager.GetUserById(s) != null
+                ? s : null;
+            Guid? byName = bySubject is null
+                && !string.Equals(canonicalKey, username, StringComparison.Ordinal)
+                && links.TryGetValue(username, out var n) && _userManager.GetUserById(n) != null
+                ? n : (Guid?)null;
+            return (bySubject, byName);
+        });
+
+        var (linkedUserId, migrateLegacy) = AccountLinkResolver.ResolveCanonicalLink(subjectLink, legacyLink);
+        if (migrateLegacy)
+        {
+            MigrateCanonicalLinkKey(mode, provider, username, canonicalKey);
+            _logger.LogInformation(
+                "Migrated {Mode}/{Provider} canonical link from the legacy username key to the stable subject key.",
+                mode,
+                provider?.ReplaceLineEndings(string.Empty));
         }
 
-        Guid? existingAccountUserId = _userManager.GetUserByName(canonicalName)?.Id;
+        // Adoption of a pre-existing unlinked account still matches on the display name.
+        Guid? existingAccountUserId = _userManager.GetUserByName(username)?.Id;
 
         var decision = AccountLinkResolver.Resolve(linkedUserId, existingAccountUserId, allowExistingAccountLink);
         switch (decision.Action)
@@ -785,23 +820,23 @@ public class SSOController : ControllerBase
                 return decision.UserId;
 
             case AccountLinkAction.AdoptExistingAccount:
-                CreateCanonicalLink(mode, provider, decision.UserId, canonicalName);
-                SsoAudit.AccountAdopted(_logger, string.Equals(mode, "oid", StringComparison.Ordinal) ? OpenIdProtocol : SamlProtocol, provider, canonicalName);
+                CreateCanonicalLink(mode, provider, decision.UserId, canonicalKey);
+                SsoAudit.AccountAdopted(_logger, string.Equals(mode, "oid", StringComparison.Ordinal) ? OpenIdProtocol : SamlProtocol, provider, username);
                 return decision.UserId;
 
             case AccountLinkAction.CreateNewAccount:
-                _logger.LogInformation("SSO user {Name} doesn't exist, creating...", canonicalName.ReplaceLineEndings(string.Empty));
-                var user = await _userManager.CreateUserAsync(canonicalName).ConfigureAwait(false);
+                _logger.LogInformation("SSO user {Name} doesn't exist, creating...", username.ReplaceLineEndings(string.Empty));
+                var user = await _userManager.CreateUserAsync(username).ConfigureAwait(false);
                 user.AuthenticationProviderId = GetType().FullName;
                 // https://jonathancrozier.com/blog/how-to-generate-a-cryptographically-secure-random-string-in-dot-net-with-c-sharp
                 user.Password = _cryptoProvider.CreatePasswordHash(Convert.ToBase64String(RandomNumberGenerator.GetBytes(64))).ToString();
-                CreateCanonicalLink(mode, provider, user.Id, canonicalName);
+                CreateCanonicalLink(mode, provider, user.Id, canonicalKey);
                 return user.Id;
 
             case AccountLinkAction.RejectNameTaken:
                 _logger.LogWarning(
                     "SSO login for {Name} via {Mode}/{Provider} refused: a pre-existing unlinked Jellyfin account exists and AllowExistingAccountLink is disabled for this provider.",
-                    canonicalName.ReplaceLineEndings(string.Empty),
+                    username.ReplaceLineEndings(string.Empty),
                     mode,
                     provider?.ReplaceLineEndings(string.Empty));
                 throw new AccountLinkForbiddenException();
@@ -809,6 +844,24 @@ public class SSOController : ControllerBase
             default:
                 throw new InvalidOperationException($"Unhandled account-link action: {decision.Action}");
         }
+    }
+
+    // Re-keys a canonical link from oldKey to newKey inside the config lock (#155 legacy migration).
+    // Idempotent under concurrency: if oldKey is already gone (a concurrent login migrated first) the
+    // move is a no-op, and a LIVE newKey entry is never overwritten — only a dangling one (its target
+    // user deleted), which would otherwise block the hand-off on every subsequent login.
+    private void MigrateCanonicalLinkKey(string mode, string provider, string oldKey, string newKey)
+    {
+        SSOPlugin.Instance.MutateConfiguration(configuration =>
+            MutateLinks(configuration, mode, provider, links =>
+            {
+                if (links.TryGetValue(oldKey, out var userId)
+                    && (!links.TryGetValue(newKey, out var existing) || _userManager.GetUserById(existing) == null))
+                {
+                    links.Remove(oldKey);
+                    links[newKey] = userId;
+                }
+            }));
     }
 
     /// <summary>
@@ -1026,7 +1079,9 @@ public class SSOController : ControllerBase
             && AuthStateStore.IsRedeemableBy(timedState, response.Data, provider, DateTime.Now, StateLifetime)
             && StateManager.TryRemove(new KeyValuePair<string, TimedAuthorizeState>(response.Data, timedState)))
         {
-            return CreateCanonicalLink("oid", provider, jellyfinUserId, timedState.Username);
+            // Manual linking keys on the stable subject (#155), matching the auto-login path, so a
+            // later provider-side rename does not orphan the link the user just created.
+            return CreateCanonicalLink("oid", provider, jellyfinUserId, timedState.Subject);
         }
 
         return Problem("Something went wrong!");
@@ -1440,6 +1495,13 @@ public class TimedAuthorizeState
     /// Gets or sets the user tied to the state.
     /// </summary>
     public string Username { get; set; }
+
+    /// <summary>
+    /// Gets or sets the stable subject identifier (OpenID "sub") that keys the account link (#155).
+    /// Unlike <see cref="Username"/> it does not change when the identity provider renames the user.
+    /// Null for SAML, whose NameID plays the same role directly.
+    /// </summary>
+    public string Subject { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether the user is an administrator.

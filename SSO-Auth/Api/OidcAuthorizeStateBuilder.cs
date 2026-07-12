@@ -48,6 +48,15 @@ internal static class OidcAuthorizeStateBuilder
         var avatarUrl = ResolveAvatarUrl(claimList, config);
         var (username, valid, roles) = ScanClaims(claimList, config);
 
+        // The stable subject identifier used to key the account link (#155): the "sub" claim, which
+        // OIDC Core requires and (post-#134) the id_token validator has verified. Unlike the username
+        // (derived from the mutable preferred_username), it never changes for a given end user at a
+        // given provider, so an IdP-side rename cannot detach or re-link the account. The last "sub"
+        // wins, matching the sub fallback below. Independent of validity — the link key is needed
+        // whenever the login is valid, not only in the fallback path; the callback rejects a valid
+        // login that resolved no subject (fail closed).
+        var subject = ResolveSubject(claimList);
+
         // Map the collected roles to privileges and merge (monotonic: only ever grants).
         var grants = OidcRolePrivilegeMapper.Evaluate(roles, config);
         valid |= grants.Valid;
@@ -69,7 +78,23 @@ internal static class OidcAuthorizeStateBuilder
         // validation rejects it anyway, so no legitimate login can carry one.
         valid = valid && !string.IsNullOrWhiteSpace(username);
 
-        return new OidcAuthorizeState(username, valid, admin, enableLiveTv, enableLiveTvManagement, folders, avatarUrl);
+        return new OidcAuthorizeState(username, subject, valid, admin, enableLiveTv, enableLiveTvManagement, folders, avatarUrl);
+    }
+
+    // The last "sub" claim value, or null when none is present. Kept separate from the username
+    // derivation: sub is the identity key regardless of how the username was resolved.
+    private static string? ResolveSubject(IReadOnlyList<Claim> claims)
+    {
+        string? subject = null;
+        foreach (var claim in claims)
+        {
+            if (string.Equals(claim.Type, "sub", StringComparison.Ordinal))
+            {
+                subject = claim.Value;
+            }
+        }
+
+        return subject;
     }
 
     // Resolves the avatar URL by substituting @{claimType} tokens in the configured format, or null
@@ -157,6 +182,7 @@ internal static class OidcAuthorizeStateBuilder
     /// The authorize-state values derived from an OpenID login.
     /// </summary>
     /// <param name="Username">The resolved username (last matching preferred-username or sub claim), or null when none is present.</param>
+    /// <param name="Subject">The stable subject identifier (the "sub" claim) used to key the account link, or null when absent.</param>
     /// <param name="Valid">Whether the login is permitted (no allow-list, or a role matched the allow-list).</param>
     /// <param name="Admin">Whether the login grants administrator rights.</param>
     /// <param name="EnableLiveTv">Whether the login grants Live TV access.</param>
@@ -165,6 +191,7 @@ internal static class OidcAuthorizeStateBuilder
     /// <param name="AvatarUrl">The resolved avatar URL, or null when no avatar format is configured.</param>
     internal readonly record struct OidcAuthorizeState(
         string? Username,
+        string? Subject,
         bool Valid,
         bool Admin,
         bool EnableLiveTv,

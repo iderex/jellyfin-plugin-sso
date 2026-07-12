@@ -306,6 +306,60 @@ public class OidcAuthorizeStateBuilderTests
     }
 
     [Fact]
+    public void Subject_ExtractedFromSubClaim_IndependentOfUsername()
+    {
+        // The link key (#155) is the sub claim, derived independently of the username: a valid login
+        // via preferred_username still surfaces the sub so the account can be keyed on it.
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(("preferred_username", "alice"), ("sub", "subject-123")),
+            Config(_ => { }));
+
+        Assert.Equal("alice", result.Username);
+        Assert.Equal("subject-123", result.Subject);
+        Assert.True(result.Valid);
+    }
+
+    [Fact]
+    public void Subject_NullWhenNoSubClaim()
+    {
+        // A provider that sends no sub leaves Subject null; the callback rejects such a valid login
+        // (fail closed) rather than keying on the mutable username.
+        var result = OidcAuthorizeStateBuilder.Build(Claims(("preferred_username", "alice")), Config(_ => { }));
+
+        Assert.Equal("alice", result.Username);
+        Assert.Null(result.Subject);
+    }
+
+    [Fact]
+    public void Subject_LastSubWins()
+    {
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(("preferred_username", "alice"), ("sub", "first"), ("sub", "second")),
+            Config(_ => { }));
+
+        Assert.Equal("second", result.Subject);
+    }
+
+    [Fact]
+    public void Subject_SurfacedEvenWhenLoginInvalid()
+    {
+        // Subject extraction does not depend on validity: a role-gated login that fails still carries
+        // its sub (the callback rejects on validity, not on a missing subject here).
+        var config = Config(c =>
+        {
+            c.Roles = new[] { "jellyfin-users" };
+            c.RoleClaim = "role";
+        });
+
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(("preferred_username", "alice"), ("role", "outsiders"), ("sub", "subject-123")),
+            config);
+
+        Assert.False(result.Valid);
+        Assert.Equal("subject-123", result.Subject);
+    }
+
+    [Fact]
     public void AvatarUrlFormat_ResolvedFromClaims()
     {
         var config = Config(c => c.AvatarUrlFormat = "https://avatars.example.com/@{sub}.png");

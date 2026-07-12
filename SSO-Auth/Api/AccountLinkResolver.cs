@@ -78,6 +78,42 @@ internal static class AccountLinkResolver
 
         return new AccountLinkDecision(AccountLinkAction.CreateNewAccount, Guid.Empty);
     }
+
+    /// <summary>
+    /// Resolves which existing account link (if any) an OpenID login maps to, preferring the stable
+    /// subject-keyed link and falling back to a legacy name-keyed link left over from before #155.
+    /// Pure: the caller resolves the two candidate links (and confirms their target users still exist)
+    /// before calling, and performs the re-key I/O when <c>MigrateLegacy</c> is set.
+    /// </summary>
+    /// <param name="subjectKeyedUserId">
+    /// The user id linked under the stable subject key, if that link exists and its user still exists.
+    /// </param>
+    /// <param name="legacyNameKeyedUserId">
+    /// The user id linked under the legacy username key, if that link exists and its user still exists.
+    /// Pass <c>null</c> when the subject and username are identical (there is nothing to migrate).
+    /// </param>
+    /// <returns>
+    /// The linked user id (or null when neither link resolves), and whether the legacy link must be
+    /// re-keyed to the subject. Migration is requested only when there is no subject-keyed link yet but
+    /// a legacy one resolves — a one-time, idempotent hand-off: once re-keyed, later logins hit the
+    /// subject key directly and never consult the name again.
+    /// </returns>
+    internal static (Guid? LinkedUserId, bool MigrateLegacy) ResolveCanonicalLink(
+        Guid? subjectKeyedUserId,
+        Guid? legacyNameKeyedUserId)
+    {
+        if (subjectKeyedUserId.HasValue)
+        {
+            return (subjectKeyedUserId.Value, false);
+        }
+
+        if (legacyNameKeyedUserId.HasValue)
+        {
+            return (legacyNameKeyedUserId.Value, true);
+        }
+
+        return (null, false);
+    }
 }
 
 /// <summary>

@@ -49,4 +49,44 @@ public class AccountLinkResolverTests
         Assert.Equal(AccountLinkAction.CreateNewAccount, decision.Action);
         Assert.Equal(Guid.Empty, decision.UserId);
     }
+
+    // --- ResolveCanonicalLink: subject-keyed lookup with one-time legacy-name migration (#155) ---
+
+    private static readonly Guid Subject = Guid.Parse("33333333-3333-3333-3333-333333333333");
+    private static readonly Guid Legacy = Guid.Parse("44444444-4444-4444-4444-444444444444");
+
+    [Fact]
+    public void ResolveCanonicalLink_SubjectKeyed_IsUsed_WithoutMigration()
+    {
+        var (linkedUserId, migrate) = AccountLinkResolver.ResolveCanonicalLink(Subject, legacyNameKeyedUserId: null);
+        Assert.Equal(Subject, linkedUserId);
+        Assert.False(migrate);
+    }
+
+    [Fact]
+    public void ResolveCanonicalLink_SubjectKeyed_WinsOverLegacy_NoMigration()
+    {
+        // Once a subject-keyed link exists, the legacy name-keyed one is never consulted or migrated.
+        var (linkedUserId, migrate) = AccountLinkResolver.ResolveCanonicalLink(Subject, Legacy);
+        Assert.Equal(Subject, linkedUserId);
+        Assert.False(migrate);
+    }
+
+    [Fact]
+    public void ResolveCanonicalLink_OnlyLegacy_IsAdopted_AndMigrated()
+    {
+        // No subject-keyed link yet, but a legacy name-keyed one resolves: adopt it and signal the
+        // one-time re-key to the subject.
+        var (linkedUserId, migrate) = AccountLinkResolver.ResolveCanonicalLink(subjectKeyedUserId: null, Legacy);
+        Assert.Equal(Legacy, linkedUserId);
+        Assert.True(migrate);
+    }
+
+    [Fact]
+    public void ResolveCanonicalLink_NeitherLink_ResolvesNothing()
+    {
+        var (linkedUserId, migrate) = AccountLinkResolver.ResolveCanonicalLink(null, null);
+        Assert.Null(linkedUserId);
+        Assert.False(migrate);
+    }
 }
