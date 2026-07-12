@@ -34,6 +34,74 @@ public class SamlResponseTests
     }
 
     [Fact]
+    public void Constructor_DocumentWithDoctype_IsRejected()
+    {
+        // Untrusted SAML input must not carry a DTD: XmlResolver=null blocks only external entities,
+        // but an internal DTD still expands entities (a billion-laughs style DoS). DtdProcessing is
+        // prohibited, so a DOCTYPE is rejected outright at parse time (fail-closed). A well-formed
+        // SAML assertion never has one.
+        var withDoctype =
+            "<?xml version=\"1.0\"?>" +
+            "<!DOCTYPE samlp:Response [ <!ENTITY x \"expanded\"> ]>" +
+            "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\">" +
+                "<saml:Assertion><saml:Subject><saml:NameID>&x;</saml:NameID></saml:Subject></saml:Assertion>" +
+            "</samlp:Response>";
+        Assert.Throws<XmlException>(() =>
+            new Response(SamlFixture.ForeignCertificateBase64(), SamlFixture.Encode(withDoctype)));
+    }
+
+    [Fact]
+    public void Constructor_BillionLaughsEntityExpansion_IsRejected()
+    {
+        // The classic nested-entity amplification: it must be rejected at parse time (DTD prohibited)
+        // rather than expanded into a memory blow-up.
+        var billionLaughs =
+            "<?xml version=\"1.0\"?>" +
+            "<!DOCTYPE lolz [" +
+            "<!ENTITY lol \"lol\">" +
+            "<!ENTITY lol2 \"&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;\">" +
+            "<!ENTITY lol3 \"&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;\">" +
+            "]>" +
+            "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\">" +
+                "<saml:Assertion><saml:Subject><saml:NameID>&lol3;</saml:NameID></saml:Subject></saml:Assertion>" +
+            "</samlp:Response>";
+        Assert.Throws<XmlException>(() =>
+            new Response(SamlFixture.ForeignCertificateBase64(), SamlFixture.Encode(billionLaughs)));
+    }
+
+    [Fact]
+    public void Constructor_ExternalEntityDoctype_IsRejected()
+    {
+        // The classic XXE/SSRF shape (an external SYSTEM entity). XmlResolver=null already blocks the
+        // fetch, but DtdProcessing.Prohibit rejects the DOCTYPE outright — belt and suspenders.
+        var xxe =
+            "<?xml version=\"1.0\"?>" +
+            "<!DOCTYPE samlp:Response [ <!ENTITY xxe SYSTEM \"file:///etc/passwd\"> ]>" +
+            "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\">" +
+                "<saml:Assertion><saml:Subject><saml:NameID>&xxe;</saml:NameID></saml:Subject></saml:Assertion>" +
+            "</samlp:Response>";
+        Assert.Throws<XmlException>(() =>
+            new Response(SamlFixture.ForeignCertificateBase64(), SamlFixture.Encode(xxe)));
+    }
+
+    [Fact]
+    public void Constructor_DoctypePrependedToSignedResponse_IsRejectedBeforeSignatureCheck()
+    {
+        // A DOCTYPE smuggled in front of an otherwise-valid, correctly-signed response must be
+        // rejected at parse time — DTD rejection pre-empts signature acceptance, so an attacker
+        // cannot pair a valid signature with a malicious DTD.
+        var fixture = SamlTestFactory.Create();
+        var signedXml = fixture.Document.OuterXml;
+        var declarationEnd = signedXml.IndexOf("?>", System.StringComparison.Ordinal);
+        var withDoctype = declarationEnd >= 0
+            ? signedXml.Insert(declarationEnd + 2, "<!DOCTYPE samlp:Response [ <!ENTITY x \"y\"> ]>")
+            : "<!DOCTYPE samlp:Response [ <!ENTITY x \"y\"> ]>" + signedXml;
+
+        Assert.Throws<XmlException>(() =>
+            new Response(fixture.CertificateBase64, SamlFixture.Encode(withDoctype)));
+    }
+
+    [Fact]
     public void IsValid_NoSignature_ReturnsFalse()
     {
         // A well-formed but entirely unsigned response must never validate.
