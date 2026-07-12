@@ -45,6 +45,8 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="Duende.IdentityModel.OidcClient" Version="7.1.0" />
     <PackageReference Include="Jellyfin.Controller" Version="10.11.11" />
+    <!-- id_token validation (#134): OidcClient 7.x carries no JWT validation stack of its own. -->
+    <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.19.1" />
     <PackageReference Include="Jellyfin.Model" Version="10.11.11" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.9" />

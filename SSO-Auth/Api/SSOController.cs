@@ -277,6 +277,12 @@ public class SSOController : ControllerBase
         options.Policy.Discovery.ValidateEndpoints = !config.DoNotValidateEndpoints; // For Google and other providers with different endpoints
         options.Policy.Discovery.RequireHttps = !config.DisableHttps;
         options.Policy.Discovery.ValidateIssuerName = !config.DoNotValidateIssuerName;
+
+        // OidcClient 7.x validates nothing about the id_token unless a validator is supplied (its
+        // fallback only base64-decodes the payload). Signature validation is required and has no
+        // config toggle: an unvalidated id_token is a forgeable login (#134).
+        options.Policy.RequireIdentityTokenSignature = true;
+        options.IdentityTokenValidator = new OidcIdTokenValidator();
         return new OidcClient(options);
     }
 
