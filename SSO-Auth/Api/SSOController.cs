@@ -756,19 +756,16 @@ public class SSOController : ControllerBase
         }
     }
 
-    // Looks up a canonical link under the config lock, so the read cannot tear against a concurrent write.
-    private static Guid? TryGetCanonicalLink(string mode, string provider, string canonicalName)
+    // The provider's canonical-links map; callers must hold the config lock (ReadConfiguration /
+    // MutateConfiguration) while touching it.
+    private static SerializableDictionary<string, Guid> GetLinks(PluginConfiguration configuration, string mode, string provider)
     {
-        return SSOPlugin.Instance.ReadConfiguration(configuration =>
+        return mode.ToLowerInvariant() switch
         {
-            var links = mode.ToLowerInvariant() switch
-            {
-                "saml" => configuration.SamlConfigs[provider].CanonicalLinks,
-                "oid" => configuration.OidConfigs[provider].CanonicalLinks,
-                _ => throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'"),
-            };
-            return links.TryGetValue(canonicalName, out var id) ? id : (Guid?)null;
-        });
+            "saml" => configuration.SamlConfigs[provider].CanonicalLinks,
+            "oid" => configuration.OidConfigs[provider].CanonicalLinks,
+            _ => throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'"),
+        };
     }
 
     private async Task<Guid> CreateCanonicalLinkAndUserIfNotExist(string mode, string provider, string canonicalKey, string username, bool allowExistingAccountLink)
@@ -786,12 +783,22 @@ public class SSOController : ControllerBase
         // adopt and re-key it — the one login that migrates reuses the exact decision the old
         // name-keyed lookup would have made, then locks it to the subject so a later provider-side
         // rename cannot detach it. Only OpenID differs key from name; SAML passes key == name.
-        var subjectLink = ResolveLiveLink(mode, provider, canonicalKey);
-        Guid? legacyLink = null;
-        if (!string.Equals(canonicalKey, username, StringComparison.Ordinal))
+        // Both candidates are read in ONE pass under the config lock: with separate reads, a
+        // concurrent login's migration could commit between them, so this login would see the subject
+        // key before the re-key and the legacy key after it, resolve neither, and bounce a legitimate
+        // user off the adoption gate with a spurious 403. A link whose target user was deleted counts
+        // as absent (dangling links are dead, not identities).
+        var (subjectLink, legacyLink) = SSOPlugin.Instance.ReadConfiguration(configuration =>
         {
-            legacyLink = ResolveLiveLink(mode, provider, username);
-        }
+            var links = GetLinks(configuration, mode, provider);
+            Guid? bySubject = links.TryGetValue(canonicalKey, out var s) && _userManager.GetUserById(s) != null
+                ? s : null;
+            Guid? byName = bySubject is null
+                && !string.Equals(canonicalKey, username, StringComparison.Ordinal)
+                && links.TryGetValue(username, out var n) && _userManager.GetUserById(n) != null
+                ? n : (Guid?)null;
+            return (bySubject, byName);
+        });
 
         var (linkedUserId, migrateLegacy) = AccountLinkResolver.ResolveCanonicalLink(subjectLink, legacyLink);
         if (migrateLegacy)
@@ -839,23 +846,17 @@ public class SSOController : ControllerBase
         }
     }
 
-    // Resolves a canonical link to a still-existing user, or null when the link is absent or dangling
-    // (its user was deleted). Shared by the subject-keyed lookup and the legacy name-keyed migration.
-    private Guid? ResolveLiveLink(string mode, string provider, string key)
-    {
-        var linked = TryGetCanonicalLink(mode, provider, key);
-        return linked.HasValue && _userManager.GetUserById(linked.Value) != null ? linked : null;
-    }
-
     // Re-keys a canonical link from oldKey to newKey inside the config lock (#155 legacy migration).
-    // Idempotent: if oldKey is already gone (migrated by a concurrent login) the move is a no-op, and
-    // a pre-existing newKey is left as-is rather than overwritten.
-    private static void MigrateCanonicalLinkKey(string mode, string provider, string oldKey, string newKey)
+    // Idempotent under concurrency: if oldKey is already gone (a concurrent login migrated first) the
+    // move is a no-op, and a LIVE newKey entry is never overwritten — only a dangling one (its target
+    // user deleted), which would otherwise block the hand-off on every subsequent login.
+    private void MigrateCanonicalLinkKey(string mode, string provider, string oldKey, string newKey)
     {
         SSOPlugin.Instance.MutateConfiguration(configuration =>
             MutateLinks(configuration, mode, provider, links =>
             {
-                if (links.TryGetValue(oldKey, out var userId) && !links.ContainsKey(newKey))
+                if (links.TryGetValue(oldKey, out var userId)
+                    && (!links.TryGetValue(newKey, out var existing) || _userManager.GetUserById(existing) == null))
                 {
                     links.Remove(oldKey);
                     links[newKey] = userId;
