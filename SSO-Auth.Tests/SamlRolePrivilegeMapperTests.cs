@@ -23,6 +23,32 @@ public class SamlRolePrivilegeMapperTests
     }
 
     [Fact]
+    public void UnauthorizedRole_WithPopulatedConfig_GrantsNothing()
+    {
+        // Complement to monotonicity: a role on none of the (populated) configured lists receives no
+        // privilege. (SAML has no Valid; validity is decided by SamlLoginPolicy.)
+        var config = Config(c =>
+        {
+            c.AdminRoles = new[] { "admin" };
+            c.EnableFolderRoles = true;
+            c.FolderRoleMapping = new List<FolderRoleMap>
+            {
+                new FolderRoleMap { Role = "media", Folders = new List<string> { "movies" } },
+            };
+            c.EnableLiveTvRoles = true;
+            c.LiveTvRoles = new[] { "tv" };
+            c.LiveTvManagementRoles = new[] { "tvadmin" };
+        });
+
+        var grants = SamlRolePrivilegeMapper.Evaluate(new[] { "outsider" }, config);
+
+        Assert.False(grants.Admin);
+        Assert.False(grants.EnableLiveTv);
+        Assert.False(grants.EnableLiveTvManagement);
+        Assert.Empty(grants.Folders);
+    }
+
+    [Fact]
     public void NoConfiguredRoles_GrantsNothing()
     {
         var grants = SamlRolePrivilegeMapper.Evaluate(new[] { "anything" }, Config(_ => { }));

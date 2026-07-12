@@ -152,6 +152,24 @@ public class OidcAuthorizeStateBuilderTests
     }
 
     [Fact]
+    public void RoleClaimValidatesLoginButNoUsername_IsNotValid()
+    {
+        // The exact #95 role path: a role claim matching the allow-list makes the login valid via the
+        // role-grant merge (not the username branch), but with no username/sub claim there is no
+        // identity — the final clamp must reject it. Exercises grants.Valid=true with a null username.
+        var config = Config(c =>
+        {
+            c.Roles = new[] { "jellyfin-users" };
+            c.RoleClaim = "role";
+        });
+
+        var result = OidcAuthorizeStateBuilder.Build(Claims(("role", "jellyfin-users")), config);
+
+        Assert.Null(result.Username);
+        Assert.False(result.Valid);
+    }
+
+    [Fact]
     public void RoleGrantValid_NoUsernameClaim_IsNotValid()
     {
         // Fail closed (#95): a role matching the allow-list makes the login valid, but with no
