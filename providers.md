@@ -56,6 +56,11 @@ expiry). A few provider settings must therefore match, or login is refused (fail
 - **Issuer** is matched against the discovery issuer. If your IdP legitimately presents a different
   issuer (some templated or multi-tenant setups), set `DoNotValidateIssuerName: true` for that
   provider — this relaxes only the issuer check; signature, audience and expiry stay enforced.
+- **Authorization-response issuer (RFC 9207).** When the provider adds an `iss` parameter to the
+  authorization response (a mix-up defense), it is checked against the id_token issuer and a mismatch
+  is rejected. Providers that do not send `iss` are unaffected. If a provider legitimately sends a
+  different `iss` there, set `DoNotValidateResponseIssuer: true` for that provider to relax only this
+  check.
 - If your IdP sends an `at_hash` claim it must match the issued access token — a correctly behaving
   provider always satisfies this.
 - **A `sub` claim is required, and it must be stable.** The account link is keyed on the immutable

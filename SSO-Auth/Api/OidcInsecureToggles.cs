@@ -42,6 +42,13 @@ internal static class OidcInsecureToggles
             enabled.Add(nameof(OidConfig.DoNotValidateEndpoints));
         }
 
+        // RFC 9207 response-iss check (#125): last because it is defence-in-depth on top of the
+        // per-provider callback binding, which already resists the classic mix-up on its own.
+        if (config.DoNotValidateResponseIssuer)
+        {
+            enabled.Add(nameof(OidConfig.DoNotValidateResponseIssuer));
+        }
+
         return enabled;
     }
 }

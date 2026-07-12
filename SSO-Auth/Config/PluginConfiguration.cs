@@ -429,6 +429,13 @@ public class OidConfig : ProviderConfigBase
     public bool DoNotValidateIssuerName { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the RFC 9207 authorization-response <c>iss</c> parameter
+    /// is validated against the id_token issuer (an OpenID Connect mix-up defense). Off by default;
+    /// enabling it disables the check for a provider whose response <c>iss</c> legitimately differs.
+    /// </summary>
+    public bool DoNotValidateResponseIssuer { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether the UserInfo endpoint is used to get profile data.
     /// </summary>
     public bool DoNotLoadProfile { get; set; }

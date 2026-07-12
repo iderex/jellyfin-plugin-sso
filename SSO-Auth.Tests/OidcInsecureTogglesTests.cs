@@ -41,11 +41,23 @@ public class OidcInsecureTogglesTests
     }
 
     [Fact]
-    public void Enabled_AllThree_ReportsAll_MostSevereFirst()
+    public void Enabled_DoNotValidateResponseIssuer_ReportsIt()
     {
-        var config = new OidConfig { DisableHttps = true, DoNotValidateIssuerName = true, DoNotValidateEndpoints = true };
+        Assert.Equal(new[] { "DoNotValidateResponseIssuer" }, OidcInsecureToggles.Enabled(new OidConfig { DoNotValidateResponseIssuer = true }));
+    }
+
+    [Fact]
+    public void Enabled_AllFour_ReportsAll_MostSevereFirst()
+    {
+        var config = new OidConfig
+        {
+            DisableHttps = true,
+            DoNotValidateIssuerName = true,
+            DoNotValidateEndpoints = true,
+            DoNotValidateResponseIssuer = true,
+        };
         Assert.Equal(
-            new[] { "DisableHttps", "DoNotValidateIssuerName", "DoNotValidateEndpoints" },
+            new[] { "DisableHttps", "DoNotValidateIssuerName", "DoNotValidateEndpoints", "DoNotValidateResponseIssuer" },
             OidcInsecureToggles.Enabled(config));
     }
 
