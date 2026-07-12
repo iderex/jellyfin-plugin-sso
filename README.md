@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD041 -->
+
 > [!WARNING]
 >
 > ## ⛔ Pre-alpha software — do NOT install this on a production system
