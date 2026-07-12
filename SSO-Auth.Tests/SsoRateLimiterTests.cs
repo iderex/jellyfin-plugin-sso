@@ -44,6 +44,19 @@ public class SsoRateLimiterTests
         Assert.True(limiter.IsAllowed("1.2.3.4", 3, Window, Now + Window, out _));
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public void IsAllowed_MaxAttemptsBelowOne_DisablesLimiter_NeverBlocksAll(int maxAttempts)
+    {
+        // A misconfigured 0/negative limit must fail OPEN (disabled), never mean "block everything".
+        var limiter = new SsoRateLimiter();
+        for (var i = 0; i < 10; i++)
+        {
+            Assert.True(limiter.IsAllowed("1.2.3.4", maxAttempts, Window, Now, out _));
+        }
+    }
+
     [Fact]
     public void IsAllowed_StaysRefusedAcrossManyHits_WithinWindow_NoReadmit()
     {

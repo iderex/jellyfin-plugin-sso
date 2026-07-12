@@ -29,6 +29,10 @@ internal sealed class SsoRateLimiter
 
     private readonly ConcurrentDictionary<string, Counter> _counters = new(StringComparer.Ordinal);
 
+    // Serializes only the rare "new key" cap-check-and-insert so it is atomic; the hot "existing
+    // key" path never touches it.
+    private readonly object _capLock = new object();
+
     // Last sweep time as ticks, read/written atomically (DateTime is not torn-read-safe).
     private long _lastPruneTicks = DateTime.MinValue.Ticks;
 
@@ -96,7 +100,7 @@ internal sealed class SsoRateLimiter
     /// 2x the limit across two adjacent windows — accepted; this throttles sustained abuse.
     /// </summary>
     /// <param name="key">The client key from <see cref="NormalizeClientKey"/>; null/empty is always allowed.</param>
-    /// <param name="maxAttempts">Allowed hits per window.</param>
+    /// <param name="maxAttempts">Allowed hits per window. A value below 1 disables the limiter (always allowed), never "block everything".</param>
     /// <param name="window">The window length.</param>
     /// <param name="nowUtc">The current time.</param>
     /// <param name="retryAfterSeconds">Whole seconds until the window expires, when refused.</param>
@@ -104,7 +108,7 @@ internal sealed class SsoRateLimiter
     internal bool IsAllowed(string key, int maxAttempts, TimeSpan window, DateTime nowUtc, out int retryAfterSeconds)
     {
         retryAfterSeconds = 0;
-        if (string.IsNullOrEmpty(key))
+        if (string.IsNullOrEmpty(key) || maxAttempts < 1)
         {
             return true;
         }
@@ -112,12 +116,23 @@ internal sealed class SsoRateLimiter
         PruneStale(window, nowUtc);
         if (!_counters.TryGetValue(key, out var counter))
         {
-            if (_counters.Count >= _maxEntries)
+            // Serialize the cap check and the insert so they are atomic: a lock-free check-then-act
+            // lets concurrent distinct new keys all pass the count check before any inserts, so the
+            // tracked-key table overshoots the cap under a key-rotation flood (the login-path
+            // invariant is to keep check-then-act on shared state atomic). Only new keys pay this;
+            // the common already-tracked path above is lock-free.
+            lock (_capLock)
             {
-                return true;
-            }
+                if (!_counters.TryGetValue(key, out counter))
+                {
+                    if (_counters.Count >= _maxEntries)
+                    {
+                        return true;
+                    }
 
-            counter = _counters.GetOrAdd(key, _ => new Counter());
+                    counter = _counters.GetOrAdd(key, _ => new Counter());
+                }
+            }
         }
 
         lock (counter)

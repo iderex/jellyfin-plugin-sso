@@ -1398,8 +1398,9 @@ public class SSOController : ControllerBase
     {
         var (enabled, maxAttempts, windowSeconds) = SSOPlugin.Instance.ReadConfiguration(
             c => (c.EnableRateLimit, c.RateLimitMaxAttempts, c.RateLimitWindowSeconds));
-        if (!enabled || maxAttempts < 1 || windowSeconds < 1)
+        if (!enabled || windowSeconds < 1)
         {
+            // maxAttempts < 1 is handled inside IsAllowed (it disables the limiter there).
             return null;
         }
 
