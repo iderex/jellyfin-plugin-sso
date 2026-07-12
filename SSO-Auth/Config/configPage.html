@@ -186,12 +186,16 @@
                   <input
                     is="emby-input"
                     id="OidSecret"
-                    required=""
-                    type="text"
+                    type="password"
+                    autocomplete="off"
+                    placeholder="Leave blank to keep the current secret"
                     class="sso-text"
                   />
                   <div class="fieldDescription">
-                    The OpenID client secret. Randomly generated & shared.
+                    The OpenID client secret. Randomly generated & shared. For
+                    security it is never sent back to this page: leave it blank
+                    to keep the stored value, or enter a new secret to replace
+                    it.
                   </div>
                 </div>
 

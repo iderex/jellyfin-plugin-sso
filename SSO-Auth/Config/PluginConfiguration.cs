@@ -246,6 +246,14 @@ public class OidConfig
     /// <summary>
     /// Gets or sets OpenID shared secret.
     /// </summary>
+    // Write-only across the JSON boundary (#189): still deserialized from an incoming save (so it
+    // can be set and rotated), but serialized back out as null, so the plaintext client secret
+    // never reaches the admin browser (HAR, proxy log, shared screen) on a config-page load and
+    // cannot be read back via a config GET. It is still persisted to the config XML. On save, a
+    // blank incoming value re-injects the live secret (see SSOPlugin.PreserveServerManagedFields),
+    // so leaving the field blank keeps the stored secret; a new value replaces it. A plain
+    // [JsonIgnore] is wrong here — it is bidirectional and would also drop the value on save.
+    [System.Text.Json.Serialization.JsonConverter(typeof(WriteOnlySecretConverter))]
     public string OidSecret { get; set; }
 
     /// <summary>

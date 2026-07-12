@@ -105,10 +105,14 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IPlugin, IHasWebPages
     }
 
     /// <summary>
-    /// Copies the server-managed fields (per-provider canonical links) from <paramref name="live"/>
-    /// into <paramref name="incoming"/>, so a save built from a stale client snapshot cannot clear
-    /// them. Only providers present in <paramref name="incoming"/> are touched (a deleted provider
-    /// stays deleted; a newly added one keeps its own empty map).
+    /// Copies the server-managed fields from <paramref name="live"/> into <paramref name="incoming"/>,
+    /// so a save built from a stale client snapshot cannot clear them. Only providers present in
+    /// <paramref name="incoming"/> are touched (a deleted provider stays deleted; a newly added one
+    /// keeps its own empty map). Two kinds of field are preserved: the per-provider canonical links
+    /// (always server-owned, #157), and the OpenID client secret (#189) — the latter only when the
+    /// incoming value is blank, since the secret is withheld from JSON responses so a save that did
+    /// not set a new one arrives empty and must keep the stored value (a non-blank incoming value is
+    /// an intentional rotation and is left as-is).
     /// </summary>
     /// <param name="incoming">The configuration about to be persisted.</param>
     /// <param name="live">The current live configuration to read server-managed values from.</param>
@@ -121,6 +125,15 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IPlugin, IHasWebPages
                 if (incoming.OidConfigs.TryGetValue(kvp.Key, out var incomingProvider))
                 {
                     incomingProvider.CanonicalLinks = kvp.Value.CanonicalLinks;
+
+                    // Blank (incl. whitespace-only) means "keep the stored secret": the field is
+                    // withheld from JSON responses, so a save that did not set a new one arrives
+                    // blank. Whitespace-only is treated as blank to match the Trim() at the point
+                    // the secret is consumed, so a value that trims to empty never wipes the live one.
+                    if (string.IsNullOrWhiteSpace(incomingProvider.OidSecret))
+                    {
+                        incomingProvider.OidSecret = kvp.Value.OidSecret;
+                    }
                 }
             }
         }

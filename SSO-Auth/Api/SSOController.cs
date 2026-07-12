@@ -347,6 +347,14 @@ public class SSOController : ControllerBase
             if (config != null && configuration.OidConfigs.TryGetValue(provider, out var existing))
             {
                 config.CanonicalLinks = existing.CanonicalLinks;
+
+                // Same for the write-only secret (#189): a blank incoming value means "keep the
+                // stored one", consistent with the config-page save, so updating an existing
+                // provider via this API without resupplying the secret does not wipe it.
+                if (string.IsNullOrWhiteSpace(config.OidSecret))
+                {
+                    config.OidSecret = existing.OidSecret;
+                }
             }
 
             configuration.OidConfigs[provider] = config;
