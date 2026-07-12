@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Concurrent;
-using System.Linq;
+using System.Threading;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api;
 
@@ -13,11 +13,22 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 /// </summary>
 internal sealed class SamlRequestCache
 {
-    // A generous ceiling: at the request lifetime below, this only bites under an abandoned-login
-    // flood, and even then it evicts the soonest-to-expire entries rather than growing unbounded.
+    // A hard ceiling on outstanding entries. Registration is driven by the anonymous challenge
+    // endpoint, so this bounds memory under an abandoned-login flood; given the short request
+    // lifetime, real load never approaches it (rate-limiting at the edge, #128, is the primary
+    // defense).
     private const int MaxEntries = 100_000;
 
+    // Expired-entry sweeping is throttled to at most once per this interval. The sweep is an O(n)
+    // scan; running it on every anonymous challenge would amplify a flood into CPU load. Throttling
+    // is safe because it is only memory reclamation — TryConsume independently rejects an expired
+    // entry via its own expiry check, so a not-yet-swept entry never grants a login.
+    private static readonly TimeSpan PruneInterval = TimeSpan.FromMinutes(1);
+
     private readonly ConcurrentDictionary<string, DateTime> _outstanding = new(StringComparer.Ordinal);
+
+    // Last sweep time as ticks, read/written atomically (DateTime is not torn-read-safe).
+    private long _lastPruneTicks = DateTime.MinValue.Ticks;
 
     /// <summary>
     /// Records an issued request ID as outstanding until <paramref name="expiryUtc"/>. A blank ID is
@@ -28,8 +39,18 @@ internal sealed class SamlRequestCache
     /// <param name="nowUtc">The current time.</param>
     internal void Register(string requestId, DateTime expiryUtc, DateTime nowUtc)
     {
-        Prune(nowUtc);
+        PruneExpired(nowUtc);
         if (string.IsNullOrEmpty(requestId))
+        {
+            return;
+        }
+
+        // At the cap, refuse the NEW registration rather than evicting an existing one: a flood of
+        // fresh challenges must not displace a user already mid-login (whose entry we would otherwise
+        // drop, failing their callback). A refused challenge simply won't correlate — that one login
+        // fails closed, which under a flood is overwhelmingly attacker traffic. Overwriting an
+        // already-present key (a re-registered id) stays allowed.
+        if (_outstanding.Count >= MaxEntries && !_outstanding.ContainsKey(requestId))
         {
             return;
         }
@@ -47,7 +68,7 @@ internal sealed class SamlRequestCache
     /// <returns>True if the ID was outstanding and is now consumed; false otherwise.</returns>
     internal bool TryConsume(string requestId, DateTime nowUtc)
     {
-        Prune(nowUtc);
+        PruneExpired(nowUtc);
         if (string.IsNullOrEmpty(requestId))
         {
             return false;
@@ -56,27 +77,31 @@ internal sealed class SamlRequestCache
         return _outstanding.TryRemove(requestId, out var expiry) && expiry > nowUtc;
     }
 
-    // Drops expired entries, and if the cache is still over the ceiling, evicts the soonest-to-expire
-    // entries down to it — so the size is bounded even under a flood of never-answered challenges.
-    private void Prune(DateTime nowUtc)
+    // Drops expired entries, at most once per PruneInterval. Enumerating a ConcurrentDictionary yields
+    // a safe moving snapshot and TryRemove is atomic, so this is correct under concurrent
+    // Register/TryConsume — unlike a buffering LINQ operator (OrderBy/ToArray built via
+    // ICollection.CopyTo), which can throw when the dictionary grows mid-copy. Size is bounded by the
+    // registration cap, not by eviction here.
+    private void PruneExpired(DateTime nowUtc)
     {
+        var last = Interlocked.Read(ref _lastPruneTicks);
+        if (nowUtc.Ticks - last < PruneInterval.Ticks)
+        {
+            return;
+        }
+
+        // Only one thread should run the sweep per interval; the winner of the CAS does it.
+        if (Interlocked.CompareExchange(ref _lastPruneTicks, nowUtc.Ticks, last) != last)
+        {
+            return;
+        }
+
         foreach (var kvp in _outstanding)
         {
             if (kvp.Value <= nowUtc)
             {
                 _outstanding.TryRemove(kvp.Key, out _);
             }
-        }
-
-        var overflow = _outstanding.Count - MaxEntries;
-        if (overflow <= 0)
-        {
-            return;
-        }
-
-        foreach (var kvp in _outstanding.OrderBy(e => e.Value).Take(overflow))
-        {
-            _outstanding.TryRemove(kvp.Key, out _);
         }
     }
 }

@@ -565,8 +565,10 @@ public class SSOController : ControllerBase
 
             // Solicited-only mode (#156): remember the request ID so the callback can require the
             // response's InResponseTo to match a request we actually issued. Scoped by provider so
-            // two providers' request IDs cannot satisfy each other's correlation.
-            if (config.ValidateInResponseTo)
+            // two providers' request IDs cannot satisfy each other's correlation. Only for login
+            // flows — the linking callback (SamlLink) does not consume InResponseTo, so registering a
+            // linking request would only leave an id to expire unused.
+            if (config.ValidateInResponseTo && !isLinking)
             {
                 SamlRequests.Register(provider + "\n" + request.Id, DateTime.UtcNow + SamlRequestLifetime, DateTime.UtcNow);
             }
@@ -1293,11 +1295,11 @@ public class SSOController : ControllerBase
         // different SP sharing the identity provider) cannot be presented here.
         if (config.ValidateRecipient)
         {
-            var acsUrl = ExpectedAcsUrl(config, provider);
+            var acsUrls = ExpectedAcsUrls(config, provider);
 
             // Recipient lives inside the signed assertion, so it is always trustworthy; require it.
             var recipient = samlResponse.GetRecipient()?.Trim();
-            if (string.IsNullOrEmpty(recipient) || !string.Equals(recipient, acsUrl, StringComparison.Ordinal))
+            if (string.IsNullOrEmpty(recipient) || !acsUrls.Contains(recipient, StringComparer.Ordinal))
             {
                 _logger.LogWarning("SAML response rejected: the assertion Recipient does not match this server's assertion-consumer URL.");
                 return false;
@@ -1306,7 +1308,7 @@ public class SSOController : ControllerBase
             // Destination is Response-level, so it is only signature-covered when the whole Response
             // is signed; validate it as defense in depth only when the response carries one.
             var destination = samlResponse.GetDestination()?.Trim();
-            if (!string.IsNullOrEmpty(destination) && !string.Equals(destination, acsUrl, StringComparison.Ordinal))
+            if (!string.IsNullOrEmpty(destination) && !acsUrls.Contains(destination, StringComparer.Ordinal))
             {
                 _logger.LogWarning("SAML response rejected: the Response Destination does not match this server's assertion-consumer URL.");
                 return false;
@@ -1316,13 +1318,22 @@ public class SSOController : ControllerBase
         return true;
     }
 
-    // The assertion-consumer URL this service provider advertises for the provider — the same value
+    // The assertion-consumer URLs this service provider advertises for the provider — the same value
     // SamlChallenge puts in the AuthnRequest's AssertionConsumerServiceURL, so a signed Recipient (or
-    // Destination) must equal it. Host-derived via GetRequestBase: a spoofed Host can only cause a
-    // mismatch (rejection), never a bypass, and the canonical-base-URL override (#139) feeds it too.
-    private string ExpectedAcsUrl(SamlConfig config, string provider)
+    // Destination) must equal one. Both the new ("post") and legacy ("p") path spellings are returned:
+    // config.NewPath is process-wide mutable state a concurrent challenge can flip, and the Recipient
+    // reflects whichever the AuthnRequest advertised at challenge time, so accepting either avoids
+    // rejecting a valid login on a path-form flip; both are this provider's own ACS URLs.
+    //
+    // The host comes from GetRequestBase (the request Host). This binding is therefore only as strong
+    // as host resolution: behind a reverse proxy, configure Jellyfin's Known/Trusted Proxies so the
+    // Host cannot be spoofed, or an attacker controlling the Host can make the expected URL match a
+    // captured assertion's Recipient (defense-in-depth, not a hard guarantee). The canonical
+    // base-URL override (#139) will remove that Host dependency.
+    private string[] ExpectedAcsUrls(SamlConfig config, string provider)
     {
-        return GetRequestBase(config.SchemeOverride, config.PortOverride) + $"/sso/SAML/{(config.NewPath ? "post" : "p")}/" + provider;
+        var baseUrl = GetRequestBase(config.SchemeOverride, config.PortOverride) + "/sso/SAML/";
+        return new[] { baseUrl + "post/" + provider, baseUrl + "p/" + provider };
     }
 
     // Validates a SAML response: signature + time bounds always, plus AudienceRestriction binding to

@@ -71,8 +71,32 @@ public class SamlRequestCacheTests
         cache.Register("_old", Now.AddMinutes(1), Now);
 
         // A later registration prunes the expired entry; the old id is gone (would fail consume).
-        cache.Register("_new", Now.AddMinutes(20).AddMinutes(15), Now.AddMinutes(20));
+        // (TryConsume also rejects it on expiry, so this additionally relies on it not being present.)
+        cache.Register("_new", Now.AddMinutes(35), Now.AddMinutes(20));
         Assert.False(cache.TryConsume("_old", Now.AddMinutes(20)));
         Assert.True(cache.TryConsume("_new", Now.AddMinutes(20)));
+    }
+
+    [Fact]
+    public void OverflowCap_DoesNotThrow_AndPreservesInFlightEntry()
+    {
+        // The cap is the reason the eviction code exists; it was the untested path that threw an
+        // ArgumentException under concurrent LINQ eviction. Register an early "in-flight" id, then
+        // flood well past the cap: registration must never throw, and the pre-existing in-flight id
+        // must NOT be evicted (a flood of fresh challenges cannot displace a user mid-login).
+        var cache = new SamlRequestCache();
+        var expiry = Now.AddMinutes(15);
+        cache.Register("_inflight", expiry, Now);
+
+        var exception = Record.Exception(() =>
+        {
+            for (var i = 0; i < 100_050; i++)
+            {
+                cache.Register("_flood-" + i.ToString(System.Globalization.CultureInfo.InvariantCulture), expiry, Now);
+            }
+        });
+
+        Assert.Null(exception);
+        Assert.True(cache.TryConsume("_inflight", Now));
     }
 }
