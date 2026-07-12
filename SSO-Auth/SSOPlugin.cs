@@ -112,6 +112,7 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IPlugin, IHasWebPages
                 // (canonical links) also reuse the live object and are intentionally not revalidated here,
                 // so a slow/bad override can never throw on the login path.
                 ValidateBaseUrlOverrides(incoming);
+                ValidateSamlCertificates(incoming);
 
                 PreserveServerManagedFields(incoming, Configuration);
 
@@ -163,6 +164,28 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IPlugin, IHasWebPages
             foreach (var kvp in incoming.SamlConfigs)
             {
                 Check("SAML", kvp.Key, kvp.Value?.BaseUrlOverride);
+            }
+        }
+    }
+
+    // Throws if any SAML provider's signing certificate (#206) is set but not a loadable X.509
+    // certificate, rejecting the save fail-closed before it is persisted so a garbage certificate cannot
+    // make every callback throw an unhandled 500. Blank is valid (a half-configured provider). Only this
+    // admin config-page save path validates here; SAML/Add validates its own incoming provider at the
+    // controller (RejectInvalidSamlCertificate), and login-path writes reuse the live object.
+    internal static void ValidateSamlCertificates(PluginConfiguration incoming)
+    {
+        if (incoming.SamlConfigs == null)
+        {
+            return;
+        }
+
+        foreach (var kvp in incoming.SamlConfigs)
+        {
+            if (SamlCertificate.IsInvalid(kvp.Value?.SamlCertificate))
+            {
+                throw new ArgumentException(
+                    $"SAML provider '{kvp.Key?.ReplaceLineEndings(string.Empty)}' has an invalid signing certificate; it must be a Base64-encoded (DER) X.509 certificate.");
             }
         }
     }

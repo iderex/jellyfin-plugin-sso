@@ -93,4 +93,15 @@ public class SamlResponseParsingTests
         Assert.True(SamlResponseLoader.TryParse(SamlFixture.ForeignCertificateBase64(), SamlFixture.Encode(xml), out var response));
         Assert.Null(response.GetSignatureAlgorithm());
     }
+
+    [Fact]
+    public void TryParse_GarbageCertificate_ReturnsFalse()
+    {
+        // A non-loadable configured SamlCertificate (a legacy or hand-edited config) must fail closed to a
+        // clean rejection rather than the unhandled CryptographicException 500 it produced before (#206).
+        var fixture = SamlTestFactory.Create();
+
+        Assert.False(SamlResponseLoader.TryParse("QUJD", fixture.EncodeResponse(), out var response));
+        Assert.Null(response);
+    }
 }
