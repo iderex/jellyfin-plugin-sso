@@ -313,8 +313,12 @@ public class SSOController : ControllerBase
     [HttpGet("OID/Del/{provider}")]
     public void OidDel(string provider)
     {
-        SSOPlugin.Instance.MutateConfiguration(configuration => configuration.OidConfigs.Remove(provider));
-        SsoAudit.ProviderRemoved(_logger, OpenIdProtocol, provider);
+        var removed = false;
+        SSOPlugin.Instance.MutateConfiguration(configuration => removed = configuration.OidConfigs.Remove(provider));
+        if (removed)
+        {
+            SsoAudit.ProviderRemoved(_logger, OpenIdProtocol, provider);
+        }
     }
 
     /// <summary>
@@ -565,8 +569,13 @@ public class SSOController : ControllerBase
     [HttpGet("SAML/Del/{provider}")]
     public OkResult SamlDel(string provider)
     {
-        SSOPlugin.Instance.MutateConfiguration(configuration => configuration.SamlConfigs.Remove(provider));
-        SsoAudit.ProviderRemoved(_logger, SamlProtocol, provider);
+        var removed = false;
+        SSOPlugin.Instance.MutateConfiguration(configuration => removed = configuration.SamlConfigs.Remove(provider));
+        if (removed)
+        {
+            SsoAudit.ProviderRemoved(_logger, SamlProtocol, provider);
+        }
+
         return Ok();
     }
 
