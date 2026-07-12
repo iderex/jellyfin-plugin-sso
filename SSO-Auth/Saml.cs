@@ -11,6 +11,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Security.Cryptography.Xml;
 using System.Text;
@@ -117,30 +118,79 @@ public class Response
     /// <returns>Whether the XML response is valid.</returns>
     public bool IsValid()
     {
-        var nodeList = _xmlDoc.SelectNodes("//ds:Signature", _xmlNameSpaceManager);
-
-        var signedXml = new SignedXml(_xmlDoc);
-
-        if (nodeList.Count == 0)
+        // Exactly one assertion must be present (fail closed). Every claim reader consumes the
+        // Response's direct-child Assertion[1], so a response carrying a second such assertion — the
+        // SAML assertion-injection / XML-signature-wrapping class — is rejected before any reader can
+        // be pointed at attacker-controlled content. The count is scoped to direct children (the
+        // nodes the readers can actually select): a spec-legal supporting assertion nested in
+        // saml:Advice is not miscounted, and wrapping is independently blocked by the position-bound
+        // signature selection, the enveloped-within check, and the reference-covers-{root|assertion}
+        // check below.
+        if (_xmlDoc.SelectNodes("/samlp:Response/saml:Assertion", _xmlNameSpaceManager)?.Count != 1)
         {
             return false;
         }
 
-        signedXml.LoadXml((XmlElement)nodeList[0]);
-        return ValidateSignatureReference(signedXml)
-            && IsSignatureAlgorithmAllowed(signedXml)
-            && signedXml.CheckSignature(_certificate, true)
-            && IsWithinTimeBounds();
+        // Select the signature only at a legal, position-bound location: an enveloped SAML signature
+        // is a direct child of the Response or of the Assertion. A relative //ds:Signature would also
+        // match a signature relocated into a wrapper or a Signature/Object, so the XPath is anchored.
+        var signatureNodes = _xmlDoc.SelectNodes(
+            "/samlp:Response/ds:Signature | /samlp:Response/saml:Assertion/ds:Signature",
+            _xmlNameSpaceManager);
+        if (signatureNodes == null || signatureNodes.Count == 0)
+        {
+            return false;
+        }
+
+        var signatureElement = (XmlElement)signatureNodes[0];
+
+        try
+        {
+            var signedXml = new SignedXml(_xmlDoc);
+            signedXml.LoadXml(signatureElement);
+
+            return ValidateSignatureReference(signedXml, signatureElement)
+                && IsSignatureAlgorithmAllowed(signedXml)
+                && signedXml.CheckSignature(_certificate, true)
+                && IsWithinTimeBounds();
+        }
+        catch (Exception ex) when (ex is CryptographicException or ArgumentException or FormatException or XmlException)
+        {
+            // A malformed signature on this untrusted-input path is rejected as invalid rather than
+            // surfacing as an unhandled 500 (fail closed). SignedXml.LoadXml / CheckSignature throw
+            // these on, e.g., a duplicate reference ID (CryptographicException) or a "#"-only /
+            // non-NCName reference fragment (ArgumentException); catching them here keeps the whole
+            // signature path fail-closed without swallowing unrelated errors.
+            return false;
+        }
     }
 
-    // Reject weak/legacy signature and digest algorithms (e.g. RSA-SHA1, SHA-1 digest) before the
-    // cryptographic check, so a misconfigured or downgraded identity provider is not trusted.
+    // Reject weak/legacy signature and digest algorithms (e.g. RSA-SHA1, SHA-1 digest) and any
+    // canonicalization/transform outside the comment-free-C14N + enveloped-signature allowlist,
+    // before the cryptographic check, so a misconfigured or downgraded identity provider — or a
+    // wrapping attack leaning on a comment-preserving or filtering transform — is not trusted.
     // Runs after ValidateSignatureReference, which guarantees exactly one reference exists.
     private static bool IsSignatureAlgorithmAllowed(SignedXml signedXml)
     {
+        if (!SamlSignatureAlgorithms.IsCanonicalizationAllowed(signedXml.SignedInfo.CanonicalizationMethod))
+        {
+            return false;
+        }
+
         var digestMethods = new List<string>();
         foreach (Reference reference in signedXml.SignedInfo.References)
         {
+            var transforms = new List<string>();
+            foreach (Transform transform in reference.TransformChain)
+            {
+                transforms.Add(transform.Algorithm);
+            }
+
+            if (!SamlSignatureAlgorithms.AreTransformsAllowed(transforms))
+            {
+                return false;
+            }
+
             digestMethods.Add(reference.DigestMethod);
         }
 
@@ -180,7 +230,11 @@ public class Response
     /// <returns>The SignedInfo signature-method URI, or null if unsigned.</returns>
     public string GetSignatureAlgorithm()
     {
-        var nodeList = _xmlDoc.SelectNodes("//ds:Signature", _xmlNameSpaceManager);
+        // Same position-bound selection as IsValid, so the diagnostic reflects the signature that
+        // would actually be validated rather than any signature found anywhere in the document.
+        var nodeList = _xmlDoc.SelectNodes(
+            "/samlp:Response/ds:Signature | /samlp:Response/saml:Assertion/ds:Signature",
+            _xmlNameSpaceManager);
         if (nodeList == null || nodeList.Count == 0)
         {
             return null;
@@ -251,35 +305,57 @@ public class Response
         return latest;
     }
 
-    // an XML signature can "cover" not the whole document, but only a part of it
-    // .NET's built in "CheckSignature" does not cover this case, it will validate to true.
-    // We should check the signature reference, so it "references" the id of the root document element! If not - it's a hack
-    private bool ValidateSignatureReference(SignedXml signedXml)
+    // A single same-document reference is required, and it must cover the element whose content is
+    // actually read: the Response root or the (single) Assertion. .NET's CheckSignature validates the
+    // digest but not WHAT is signed, so without this a signature over an unrelated node would pass.
+    // The signature must additionally be enveloped inside the element its reference covers — a
+    // signature relocated outside it (a wrapping/relocation attack) is rejected even if its digest
+    // still matches the copied element elsewhere in the tree.
+    private bool ValidateSignatureReference(SignedXml signedXml, XmlElement signatureElement)
     {
-        if (signedXml.SignedInfo.References.Count != 1) // no ref at all
+        if (signedXml.SignedInfo.References.Count != 1) // exactly one reference, no more, no less
         {
             return false;
         }
 
         var reference = (Reference)signedXml.SignedInfo.References[0];
-        var id = reference.Uri.Substring(1);
 
-        var idElement = signedXml.GetIdElement(_xmlDoc, id);
-
-        if (idElement == _xmlDoc.DocumentElement)
+        // A same-document ID reference only ("#id"); an empty (whole-document "") or external URI is
+        // rejected. A "#"-only or non-NCName fragment never reaches here — SignedXml.LoadXml resolves
+        // the reference eagerly and throws on it, which IsValid catches and turns into a rejection.
+        if (string.IsNullOrEmpty(reference.Uri) || reference.Uri[0] != '#')
         {
-            return true;
+            return false;
         }
-        else // sometimes its not the "root" doc-element that is being signed, but the "assertion" element
+
+        var idElement = signedXml.GetIdElement(_xmlDoc, reference.Uri.Substring(1));
+        if (idElement == null)
         {
-            var assertionNode = _xmlDoc.SelectSingleNode("/samlp:Response/saml:Assertion", _xmlNameSpaceManager) as XmlElement;
-            if (assertionNode != idElement)
+            return false;
+        }
+
+        var assertionNode = _xmlDoc.SelectSingleNode("/samlp:Response/saml:Assertion", _xmlNameSpaceManager) as XmlElement;
+        if (idElement != _xmlDoc.DocumentElement && idElement != assertionNode)
+        {
+            return false;
+        }
+
+        return IsEnvelopedWithin(signatureElement, idElement);
+    }
+
+    // Whether the signature element is a descendant of the element its reference covers (an enveloped
+    // signature sits inside the element it signs). Rejects a signature moved outside that element.
+    private static bool IsEnvelopedWithin(XmlElement signatureElement, XmlElement signedElement)
+    {
+        for (var parent = signatureElement.ParentNode; parent != null; parent = parent.ParentNode)
+        {
+            if (parent == signedElement)
             {
-                return false;
+                return true;
             }
         }
 
-        return true;
+        return false;
     }
 
     // Fail-closed time-bound validation: an assertion is accepted only if it carries at least one

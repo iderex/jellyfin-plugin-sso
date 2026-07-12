@@ -48,13 +48,13 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 
 ## Features
 
-- **OpenID Connect and SAML 2.0** — use either or both, with multiple providers side by side. See the [Provider Guides](providers.md) for per-IdP setup.
-- **Role-based access control** — map identity-provider groups/roles to Jellyfin access: login, administrator, library folders, and Live TV.
-- **Hardened, fail-closed login path** — SSO identities bind to the stable `sub` / `NameID`, so a matching username cannot take over an existing account; a first login that collides with an unlinked account is refused unless explicitly allowed. SAML responses are validated fail-closed: single-reference signature (XML-signature-wrapping aware), DTDs rejected outright (no XXE, no entity-expansion DoS), enforced time bounds, `AudienceRestriction`, and one-time-use replay protection. The OpenID login state is bound to its provider and single-use, closing cross-provider state replay, and the returned `id_token` is validated fail-closed — signature against the provider's published JWKS (asymmetric RS/PS/ES algorithms only), issuer, audience, and expiry (see the [id_token requirements](providers.md#openid-connect-id_token-requirements)). Server-side avatar fetches are SSRF-guarded.
-- **Tested** — a growing xUnit test suite covers the security-critical validation paths, and every change runs through CI (build, format, CodeQL) before merge.
-- **Avatar sync, Quick Connect support, and self-service account linking** at `/SSOViews/linking`.
+- **OpenID Connect and SAML 2.0** — either or both, multiple providers side by side. See the [Provider Guides](providers.md).
+- **Role-based access control** — map identity-provider groups/roles to login, administrator, library folders, and Live TV.
+- **Hardened, fail-closed login path** — identities bound to the stable `sub` / `NameID`, fail-closed SAML and `id_token` validation, and SSRF-guarded avatar fetches. Details on the [Security Model](https://github.com/iderex/jellyfin-plugin-sso/wiki/Security-Model) page.
+- **Avatar sync, Quick Connect, and self-service account linking**.
+- **Tested** — a growing xUnit suite over the security-critical paths, with CI (build, format, CodeQL) on every change.
 
-> More of the feature set from the sibling project is being ported here deliberately, one reviewed change at a time; this list reflects what is actually implemented today.
+> The feature set from the sibling project is being ported here one reviewed change at a time; this list reflects what is implemented today.
 
 ## Installing
 
