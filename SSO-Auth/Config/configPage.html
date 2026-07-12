@@ -668,6 +668,29 @@
                   <label>
                     <input
                       is="emby-checkbox"
+                      id="DoNotValidateResponseIssuer"
+                      name="DoNotValidateResponseIssuer"
+                      type="checkbox"
+                      class="sso-toggle"
+                    />
+                    <span
+                      >Do Not Validate Authorization-Response Issuer
+                      (Insecure)</span
+                    >
+                  </label>
+                  <div class="fieldDescription checkboxFieldDescription">
+                    ⚠ Insecure: disables the RFC 9207 <code>iss</code> check, an
+                    OpenID Connect mix-up defense. Only for a provider whose
+                    authorization response legitimately carries a different
+                    issuer. Enabling it is recorded as an audit warning.
+                  </div>
+                </div>
+                <div
+                  class="checkboxContainer checkboxContainer-withDescription"
+                >
+                  <label>
+                    <input
+                      is="emby-checkbox"
                       id="DoNotLoadProfile"
                       name="DoNotLoadProfile"
                       type="checkbox"

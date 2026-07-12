@@ -175,6 +175,17 @@ public class SSOController : ControllerBase
                 return ReturnError(StatusCodes.Status400BadRequest, $"Error logging in: {result.Error} - {result.ErrorDescription}");
             }
 
+            // RFC 9207 (#125): the library parses the authorization-response `iss` but never checks it.
+            // When present it must name the same issuer as the redeemed id_token (which OidcIdTokenValidator
+            // already validated against the discovery issuer); a mismatch means the response came from a
+            // different authorization server than the one we hold a token for — a mix-up — so reject.
+            if (!config.DoNotValidateResponseIssuer
+                && OidcResponseIssuer.IsMismatch(Request.Query["iss"], result.IdentityToken))
+            {
+                _logger.LogWarning("OpenID login denied for provider {Provider}: the authorization-response issuer did not match the id_token issuer (RFC 9207 mix-up check).", provider?.ReplaceLineEndings(string.Empty));
+                return ReturnError(StatusCodes.Status400BadRequest, "SSO response validation failed");
+            }
+
             // Derive the authorize-state values (username, validity, admin, Live TV, folders, avatar)
             // from the verified login's claims and the provider configuration, then apply them to the
             // fresh authorize state (its derivation fields are still at their defaults at this point).
