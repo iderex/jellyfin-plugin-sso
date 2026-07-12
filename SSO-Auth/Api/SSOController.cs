@@ -46,6 +46,10 @@ public class SSOController : ControllerBase
     private const string ProviderDoesNotExistMessage = "Provider does not exist";
     private const string PermissionDeniedMessage = "Error. Check permissions.";
 
+    // Display names for the audit log (the internal link-map mode tokens are the lowercase "oid"/"saml").
+    private const string OpenIdProtocol = "OpenID";
+    private const string SamlProtocol = "SAML";
+
     private readonly IUserManager _userManager;
     private readonly ISessionManager _sessionManager;
     private readonly IAuthorizationContext _authContext;
@@ -298,6 +302,7 @@ public class SSOController : ControllerBase
     public void OidAdd(string provider, [FromBody] OidConfig config)
     {
         SSOPlugin.Instance.MutateConfiguration(configuration => configuration.OidConfigs[provider] = config);
+        SsoAudit.ProviderConfigured(_logger, OpenIdProtocol, provider);
     }
 
     /// <summary>
@@ -308,7 +313,11 @@ public class SSOController : ControllerBase
     [HttpGet("OID/Del/{provider}")]
     public void OidDel(string provider)
     {
-        SSOPlugin.Instance.MutateConfiguration(configuration => configuration.OidConfigs.Remove(provider));
+        var removed = SSOPlugin.Instance.MutateConfiguration(configuration => configuration.OidConfigs.Remove(provider));
+        if (removed)
+        {
+            SsoAudit.ProviderRemoved(_logger, OpenIdProtocol, provider);
+        }
     }
 
     /// <summary>
@@ -420,6 +429,7 @@ public class SSOController : ControllerBase
                 DefaultProvider = config.DefaultProvider?.Trim(),
                 AvatarUrl = timedState.AvatarURL,
             }).ConfigureAwait(false);
+            SsoAudit.LoginSucceeded(_logger, OpenIdProtocol, provider, timedState.Username, timedState.Admin);
             return Ok(authenticationResult);
         }
 
@@ -545,6 +555,7 @@ public class SSOController : ControllerBase
     public OkResult SamlAdd(string provider, [FromBody] SamlConfig newConfig)
     {
         SSOPlugin.Instance.MutateConfiguration(configuration => configuration.SamlConfigs[provider] = newConfig);
+        SsoAudit.ProviderConfigured(_logger, SamlProtocol, provider);
         return Ok();
     }
 
@@ -557,7 +568,12 @@ public class SSOController : ControllerBase
     [HttpGet("SAML/Del/{provider}")]
     public OkResult SamlDel(string provider)
     {
-        SSOPlugin.Instance.MutateConfiguration(configuration => configuration.SamlConfigs.Remove(provider));
+        var removed = SSOPlugin.Instance.MutateConfiguration(configuration => configuration.SamlConfigs.Remove(provider));
+        if (removed)
+        {
+            SsoAudit.ProviderRemoved(_logger, SamlProtocol, provider);
+        }
+
         return Ok();
     }
 
@@ -667,6 +683,7 @@ public class SSOController : ControllerBase
                 DefaultProvider = config.DefaultProvider?.Trim(),
                 AvatarUrl = null,
             }).ConfigureAwait(false);
+            SsoAudit.LoginSucceeded(_logger, SamlProtocol, provider, nameId, derived.Admin);
             return Ok(authenticationResult);
         }
 
@@ -763,6 +780,7 @@ public class SSOController : ControllerBase
 
             case AccountLinkAction.AdoptExistingAccount:
                 CreateCanonicalLink(mode, provider, decision.UserId, canonicalName);
+                SsoAudit.AccountAdopted(_logger, string.Equals(mode, "oid", StringComparison.Ordinal) ? OpenIdProtocol : SamlProtocol, provider, canonicalName);
                 return decision.UserId;
 
             case AccountLinkAction.CreateNewAccount:
