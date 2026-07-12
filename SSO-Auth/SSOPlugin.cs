@@ -62,6 +62,26 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IPlugin, IHasWebPages
     }
 
     /// <summary>
+    /// Applies a mutation that returns a result (e.g. whether a removal changed anything) under the
+    /// same single lock and persists it, so the read-modify-write and the result observation are one
+    /// atomic operation.
+    /// </summary>
+    /// <typeparam name="T">The value the mutation returns.</typeparam>
+    /// <param name="mutate">The mutation to apply to the live configuration.</param>
+    /// <returns>The value returned by <paramref name="mutate"/>.</returns>
+    public T MutateConfiguration<T>(Func<PluginConfiguration, T> mutate)
+    {
+        ArgumentNullException.ThrowIfNull(mutate);
+        lock (ConfigMutationLock)
+        {
+            var configuration = Configuration;
+            var result = mutate(configuration);
+            UpdateConfiguration(configuration);
+            return result;
+        }
+    }
+
+    /// <summary>
     /// Reads a value from the live configuration under the same lock as <see cref="MutateConfiguration"/>,
     /// so a read cannot tear against a concurrent write of a (non-thread-safe) configuration collection.
     /// </summary>
