@@ -21,6 +21,35 @@ public class OidcRolePrivilegeMapperTests
     }
 
     [Fact]
+    public void UnauthorizedRole_WithPopulatedConfig_GrantsNothing()
+    {
+        // Monotonicity alone would be satisfied by a mapper that grants everything; this pins the
+        // complement — a role on NONE of the (populated) configured lists receives no privilege and
+        // is not valid.
+        var config = Config(c =>
+        {
+            c.Roles = new[] { "user" };
+            c.AdminRoles = new[] { "admin" };
+            c.EnableFolderRoles = true;
+            c.FolderRoleMapping = new List<FolderRoleMap>
+            {
+                new FolderRoleMap { Role = "media", Folders = new List<string> { "movies" } },
+            };
+            c.EnableLiveTvRoles = true;
+            c.LiveTvRoles = new[] { "tv" };
+            c.LiveTvManagementRoles = new[] { "tvadmin" };
+        });
+
+        var grants = OidcRolePrivilegeMapper.Evaluate(new[] { "outsider" }, config);
+
+        Assert.False(grants.Valid);
+        Assert.False(grants.Admin);
+        Assert.False(grants.EnableLiveTv);
+        Assert.False(grants.EnableLiveTvManagement);
+        Assert.Empty(grants.Folders);
+    }
+
+    [Fact]
     public void NoConfiguredRoles_GrantsNothing()
     {
         var grants = OidcRolePrivilegeMapper.Evaluate(new[] { "anything" }, Config(_ => { }));
