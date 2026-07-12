@@ -92,4 +92,125 @@ public class ConfigPreservationTests
         Assert.Contains("CanonicalLinks", xml, StringComparison.Ordinal);
         Assert.Contains("sub-secret", xml, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void OidSecret_SerializedValueIsHidden_ButStaysDeserializableAndInXml()
+    {
+        var config = new OidConfig { OidClientId = "client", OidSecret = "s3cr3t-value" };
+
+        // JSON responses (API / core getPluginConfiguration) must not leak the secret VALUE. The
+        // property is still emitted, but as null (write-only), so the plaintext never leaves the server.
+        var json = System.Text.Json.JsonSerializer.Serialize(config);
+        Assert.DoesNotContain("s3cr3t-value", json, StringComparison.Ordinal);
+        Assert.Contains("\"OidSecret\":null", json, StringComparison.Ordinal);
+        Assert.Contains("client", json, StringComparison.Ordinal);
+
+        // Jellyfin core serializes the plugin config with a camelCase naming policy; the value must
+        // stay hidden there too (the property name differs, the hidden-value guarantee must not).
+        var camel = System.Text.Json.JsonSerializer.Serialize(
+            config,
+            new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
+        Assert.DoesNotContain("s3cr3t-value", camel, StringComparison.Ordinal);
+
+        // XML (on-disk config) must still persist the secret, so it survives a restart.
+        var serializer = new XmlSerializer(typeof(OidConfig));
+        using var writer = new System.IO.StringWriter();
+        serializer.Serialize(writer, config);
+        var xml = writer.ToString();
+        Assert.Contains("OidSecret", xml, StringComparison.Ordinal);
+        Assert.Contains("s3cr3t-value", xml, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OidSecret_IsDeserializedFromJson_SoItCanBeSetAndRotated()
+    {
+        // The write half: unlike a bidirectional [JsonIgnore], an incoming secret on a save (config
+        // PUT / OID/Add) must survive System.Text.Json deserialization — this is the exact boundary
+        // the config page crosses, and the case that a bidirectional ignore silently broke.
+        const string body = "{\"OidClientId\":\"client\",\"OidSecret\":\"typed-secret\"}";
+        var parsed = System.Text.Json.JsonSerializer.Deserialize<OidConfig>(body);
+        Assert.Equal("typed-secret", parsed!.OidSecret);
+    }
+
+    [Fact]
+    public void Rotation_ThroughJsonThenPreserve_KeepsTheNewSecret()
+    {
+        // The realistic rotation path: a config PUT carrying a new secret is deserialized, then
+        // PreserveServerManagedFields runs against the live config — the new secret must win.
+        var live = new PluginConfiguration();
+        live.OidConfigs["idp"] = new OidConfig { OidSecret = "old-secret" };
+
+        var incoming = new PluginConfiguration();
+        incoming.OidConfigs["idp"] = System.Text.Json.JsonSerializer.Deserialize<OidConfig>(
+            "{\"OidSecret\":\"rotated-secret\"}")!;
+
+        SSOPlugin.PreserveServerManagedFields(incoming, live);
+
+        Assert.Equal("rotated-secret", incoming.OidConfigs["idp"].OidSecret);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Preserve_BlankIncomingSecret_KeepsLiveSecret(string? incomingSecret)
+    {
+        // A save that did not set a new secret arrives blank (the value is withheld from JSON), and
+        // must keep the stored one — fail closed, a blank save never wipes the live secret.
+        // Whitespace-only counts as blank, to match the Trim() where the secret is consumed.
+        var live = new PluginConfiguration();
+        live.OidConfigs["idp"] = new OidConfig { OidSecret = "live-secret" };
+        var incoming = new PluginConfiguration();
+        incoming.OidConfigs["idp"] = new OidConfig { OidSecret = incomingSecret };
+
+        SSOPlugin.PreserveServerManagedFields(incoming, live);
+
+        Assert.Equal("live-secret", incoming.OidConfigs["idp"].OidSecret);
+    }
+
+    [Fact]
+    public void Preserve_NewProviderWithBlankSecret_StaysBlank()
+    {
+        // A brand-new provider has no live secret to re-inject, so a blank stays blank (the OIDC
+        // flow then fails closed for lack of a secret rather than adopting some other value).
+        var live = new PluginConfiguration();
+        var incoming = new PluginConfiguration();
+        incoming.OidConfigs["fresh"] = new OidConfig { OidSecret = null };
+
+        SSOPlugin.PreserveServerManagedFields(incoming, live);
+
+        Assert.True(string.IsNullOrEmpty(incoming.OidConfigs["fresh"].OidSecret));
+    }
+
+    [Fact]
+    public void ResolveUpdatedSecret_BlankAndIdentityUnchanged_KeepsLiveSecret()
+    {
+        var live = new OidConfig { OidEndpoint = "https://idp/.well-known", OidClientId = "cid", OidSecret = "live" };
+        var incoming = new OidConfig { OidEndpoint = "https://idp/.well-known", OidClientId = "cid", OidSecret = "  " };
+
+        Assert.Equal("live", SSOPlugin.ResolveUpdatedSecret(incoming, live));
+    }
+
+    [Fact]
+    public void ResolveUpdatedSecret_NonBlank_IsAlwaysKept_AsRotation()
+    {
+        var live = new OidConfig { OidEndpoint = "https://idp/.well-known", OidClientId = "cid", OidSecret = "live" };
+        var incoming = new OidConfig { OidEndpoint = "https://idp/.well-known", OidClientId = "cid", OidSecret = "rotated" };
+
+        Assert.Equal("rotated", SSOPlugin.ResolveUpdatedSecret(incoming, live));
+    }
+
+    [Theory]
+    [InlineData("https://other-idp/.well-known", "cid")] // endpoint repointed
+    [InlineData("https://idp/.well-known", "other-cid")] // client id changed
+    public void ResolveUpdatedSecret_BlankButIdentityChanged_DropsSecret_FailClosed(string endpoint, string clientId)
+    {
+        // A blank secret is NOT carried across a provider-identity change: otherwise an admin could
+        // exfiltrate the write-only secret by repointing the provider at a token endpoint they
+        // control. The secret stays blank, so the login fails closed until a new one is supplied.
+        var live = new OidConfig { OidEndpoint = "https://idp/.well-known", OidClientId = "cid", OidSecret = "live" };
+        var incoming = new OidConfig { OidEndpoint = endpoint, OidClientId = clientId, OidSecret = null };
+
+        Assert.True(string.IsNullOrEmpty(SSOPlugin.ResolveUpdatedSecret(incoming, live)));
+    }
 }

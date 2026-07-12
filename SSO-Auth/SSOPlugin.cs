@@ -105,10 +105,14 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IPlugin, IHasWebPages
     }
 
     /// <summary>
-    /// Copies the server-managed fields (per-provider canonical links) from <paramref name="live"/>
-    /// into <paramref name="incoming"/>, so a save built from a stale client snapshot cannot clear
-    /// them. Only providers present in <paramref name="incoming"/> are touched (a deleted provider
-    /// stays deleted; a newly added one keeps its own empty map).
+    /// Copies the server-managed fields from <paramref name="live"/> into <paramref name="incoming"/>,
+    /// so a save built from a stale client snapshot cannot clear them. Only providers present in
+    /// <paramref name="incoming"/> are touched (a deleted provider stays deleted; a newly added one
+    /// keeps its own empty map). Two kinds of field are preserved: the per-provider canonical links
+    /// (always server-owned, #157), and the OpenID client secret (#189) — the latter only when the
+    /// incoming value is blank, since the secret is withheld from JSON responses so a save that did
+    /// not set a new one arrives empty and must keep the stored value (a non-blank incoming value is
+    /// an intentional rotation and is left as-is).
     /// </summary>
     /// <param name="incoming">The configuration about to be persisted.</param>
     /// <param name="live">The current live configuration to read server-managed values from.</param>
@@ -121,6 +125,7 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IPlugin, IHasWebPages
                 if (incoming.OidConfigs.TryGetValue(kvp.Key, out var incomingProvider))
                 {
                     incomingProvider.CanonicalLinks = kvp.Value.CanonicalLinks;
+                    incomingProvider.OidSecret = ResolveUpdatedSecret(incomingProvider, kvp.Value);
                 }
             }
         }
@@ -135,6 +140,31 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IPlugin, IHasWebPages
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Decides which OpenID client secret an updated provider should keep (#189), the single rule
+    /// shared by the config-page save and <c>OID/Add</c>. A non-blank incoming secret is an explicit
+    /// rotation and wins. A blank one means "keep the stored secret" — but ONLY while the provider
+    /// identity (endpoint and client id) is unchanged: if either changed, the stored secret is not
+    /// carried over (it stays blank, failing the login closed until an admin supplies one), so a
+    /// write-only secret cannot be exfiltrated by repointing the provider at a different token
+    /// endpoint. Whitespace-only counts as blank, matching the <c>Trim()</c> at the consumption site.
+    /// </summary>
+    /// <param name="incoming">The provider config about to be persisted.</param>
+    /// <param name="live">The current live provider config.</param>
+    /// <returns>The secret to persist for the updated provider.</returns>
+    internal static string ResolveUpdatedSecret(OidConfig incoming, OidConfig live)
+    {
+        if (!string.IsNullOrWhiteSpace(incoming.OidSecret))
+        {
+            return incoming.OidSecret;
+        }
+
+        var identityUnchanged =
+            string.Equals(incoming.OidEndpoint, live.OidEndpoint, StringComparison.Ordinal)
+            && string.Equals(incoming.OidClientId, live.OidClientId, StringComparison.Ordinal);
+        return identityUnchanged ? live.OidSecret : incoming.OidSecret;
     }
 
     /// <summary>
