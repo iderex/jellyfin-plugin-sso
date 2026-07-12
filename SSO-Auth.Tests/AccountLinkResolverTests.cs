@@ -89,4 +89,24 @@ public class AccountLinkResolverTests
         Assert.Null(linkedUserId);
         Assert.False(migrate);
     }
+
+    // --- ResolveLinkWrite: atomic check-then-link outcome (#133) ---
+
+    [Fact]
+    public void ResolveLinkWrite_NoExistingLink_WritesCandidate()
+    {
+        var (effective, wrote) = AccountLinkResolver.ResolveLinkWrite(existingLiveLinkUserId: null, Subject);
+        Assert.Equal(Subject, effective);
+        Assert.True(wrote);
+    }
+
+    [Fact]
+    public void ResolveLinkWrite_ExistingLiveLink_UsesWinner_WithoutWriting()
+    {
+        // A concurrent first-login already linked this identity: use its account, do NOT overwrite it
+        // and do NOT report a write (so the caller does not re-emit the adoption audit).
+        var (effective, wrote) = AccountLinkResolver.ResolveLinkWrite(existingLiveLinkUserId: Existing, Subject);
+        Assert.Equal(Existing, effective);
+        Assert.False(wrote);
+    }
 }

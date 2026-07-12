@@ -114,6 +114,23 @@ internal static class AccountLinkResolver
 
         return (null, false);
     }
+
+    /// <summary>
+    /// Decides the outcome of the atomic "link this identity unless it is already linked" step (#133):
+    /// if a live link already exists (a concurrent first-login won the race), that winner is used and
+    /// nothing is written; otherwise the candidate is linked. The caller performs this inside a single
+    /// read-modify-write so the check and the write cannot interleave, and audits an adoption only when
+    /// <c>WroteLink</c> is true. Pure so the no-overwrite / wrote-flag contract is unit-testable.
+    /// </summary>
+    /// <param name="existingLiveLinkUserId">The user already linked to this identity (with a still-existing account), or null.</param>
+    /// <param name="candidateUserId">The user to link when no live link exists (the adopted or newly created account).</param>
+    /// <returns>The effective user id, and whether this call should write the link.</returns>
+    internal static (Guid EffectiveUserId, bool WroteLink) ResolveLinkWrite(Guid? existingLiveLinkUserId, Guid candidateUserId)
+    {
+        return existingLiveLinkUserId.HasValue
+            ? (existingLiveLinkUserId.Value, false)
+            : (candidateUserId, true);
+    }
 }
 
 /// <summary>

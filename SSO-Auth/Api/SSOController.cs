@@ -788,29 +788,9 @@ public class SSOController : ControllerBase
     // whole read-modify-write is serialized and concurrent first-logins cannot lose each other's links.
     private static void MutateLinks(PluginConfiguration configuration, string mode, string provider, Action<SerializableDictionary<string, Guid>> mutate)
     {
-        switch (mode.ToLowerInvariant())
-        {
-            case "saml":
-            {
-                var providerConfig = configuration.SamlConfigs[provider];
-                var links = providerConfig.CanonicalLinks;
-                mutate(links);
-                providerConfig.CanonicalLinks = links;
-                break;
-            }
-
-            case "oid":
-            {
-                var providerConfig = configuration.OidConfigs[provider];
-                var links = providerConfig.CanonicalLinks;
-                mutate(links);
-                providerConfig.CanonicalLinks = links;
-                break;
-            }
-
-            default:
-                throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'");
-        }
+        var links = GetLinks(configuration, mode, provider);
+        mutate(links);
+        SetLinks(configuration, mode, provider, links);
     }
 
     // The provider's canonical-links map; callers must hold the config lock (ReadConfiguration /
@@ -823,6 +803,23 @@ public class SSOController : ControllerBase
             "oid" => configuration.OidConfigs[provider].CanonicalLinks,
             _ => throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'"),
         };
+    }
+
+    // Reassigns a provider's canonical-links map, so a lazily-created (previously-null) map is
+    // persisted. Pairs with GetLinks; both must run under the config lock.
+    private static void SetLinks(PluginConfiguration configuration, string mode, string provider, SerializableDictionary<string, Guid> links)
+    {
+        switch (mode.ToLowerInvariant())
+        {
+            case "saml":
+                configuration.SamlConfigs[provider].CanonicalLinks = links;
+                break;
+            case "oid":
+                configuration.OidConfigs[provider].CanonicalLinks = links;
+                break;
+            default:
+                throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'");
+        }
     }
 
     private async Task<Guid> CreateCanonicalLinkAndUserIfNotExist(string mode, string provider, string canonicalKey, string username, bool allowExistingAccountLink)
@@ -877,18 +874,32 @@ public class SSOController : ControllerBase
                 return decision.UserId;
 
             case AccountLinkAction.AdoptExistingAccount:
-                CreateCanonicalLink(mode, provider, decision.UserId, canonicalKey);
-                SsoAudit.AccountAdopted(_logger, string.Equals(mode, "oid", StringComparison.Ordinal) ? OpenIdProtocol : SamlProtocol, provider, username);
-                return decision.UserId;
+            {
+                // Atomic check-then-link (#133): if a concurrent first-login already linked this
+                // identity, that winner is used and no second write or duplicate audit occurs.
+                var (adoptedUserId, wrote) = LinkCanonicalIfAbsent(mode, provider, canonicalKey, decision.UserId);
+                if (wrote)
+                {
+                    SsoAudit.AccountAdopted(_logger, string.Equals(mode, "oid", StringComparison.Ordinal) ? OpenIdProtocol : SamlProtocol, provider, username);
+                }
+
+                return adoptedUserId;
+            }
 
             case AccountLinkAction.CreateNewAccount:
+            {
                 _logger.LogInformation("SSO user {Name} doesn't exist, creating...", username.ReplaceLineEndings(string.Empty));
                 var user = await _userManager.CreateUserAsync(username).ConfigureAwait(false);
                 user.AuthenticationProviderId = GetType().FullName;
                 // https://jonathancrozier.com/blog/how-to-generate-a-cryptographically-secure-random-string-in-dot-net-with-c-sharp
                 user.Password = _cryptoProvider.CreatePasswordHash(Convert.ToBase64String(RandomNumberGenerator.GetBytes(64))).ToString();
-                CreateCanonicalLink(mode, provider, user.Id, canonicalKey);
-                return user.Id;
+
+                // Atomic check-then-link (#133): if a concurrent first-login for the same identity
+                // linked meanwhile, use its account — this freshly created user is left unlinked rather
+                // than overwriting the winner's link (a rare, benign orphan, not a duplicate login).
+                var (effectiveUserId, _) = LinkCanonicalIfAbsent(mode, provider, canonicalKey, user.Id);
+                return effectiveUserId;
+            }
 
             case AccountLinkAction.RejectNameTaken:
                 _logger.LogWarning(
@@ -901,6 +912,32 @@ public class SSOController : ControllerBase
             default:
                 throw new InvalidOperationException($"Unhandled account-link action: {decision.Action}");
         }
+    }
+
+    // Atomically links canonicalKey to candidateUserId unless a live link already exists for it (#133).
+    // The existence check and the write are ONE MutateConfiguration read-modify-write, so two concurrent
+    // first-logins for the same identity cannot both write or both adopt: the loser observes the
+    // winner's link and reports WroteLink=false (so the caller does not re-emit the adoption audit).
+    // The link write goes straight into the config (no discarded ActionResult), so a failure to persist
+    // propagates rather than falling through as a successful adoption.
+    private (Guid EffectiveUserId, bool WroteLink) LinkCanonicalIfAbsent(string mode, string provider, string canonicalKey, Guid candidateUserId)
+    {
+        return SSOPlugin.Instance.MutateConfiguration(configuration =>
+        {
+            var links = GetLinks(configuration, mode, provider);
+            Guid? existing = links.TryGetValue(canonicalKey, out var current) && _userManager.GetUserById(current) != null
+                ? current
+                : (Guid?)null;
+
+            var (effectiveUserId, wroteLink) = AccountLinkResolver.ResolveLinkWrite(existing, candidateUserId);
+            if (wroteLink)
+            {
+                links[canonicalKey] = effectiveUserId;
+                SetLinks(configuration, mode, provider, links);
+            }
+
+            return (effectiveUserId, wroteLink);
+        });
     }
 
     // Re-keys a canonical link from oldKey to newKey inside the config lock (#155 legacy migration).
