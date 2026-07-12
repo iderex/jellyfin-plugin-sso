@@ -716,6 +716,42 @@
                   </div>
                 </div>
 
+                <div class="inputContainer">
+                  <label
+                    class="inputLabel inputLabelUnfocused"
+                    for="BaseUrlOverride"
+                    >Base URL Override</label
+                  >
+                  <input
+                    is="emby-input"
+                    id="BaseUrlOverride"
+                    type="text"
+                    class="sso-text"
+                  />
+                  <div class="fieldDescription">
+                    The canonical external base URL of this server, e.g.
+                    <code>https://jellyfin.example.com</code>. When set, the
+                    redirect URI and SAML base URL are built from it instead of
+                    the request host, so a spoofed or proxy-forwarded host
+                    cannot redirect the login elsewhere. It overrides the scheme
+                    and port overrides above.
+                  </div>
+                  <div class="fieldDescription" style="color: #cc3333">
+                    ⚠ Recommended. When left blank, the redirect URI derives
+                    from the request Host header; behind a reverse proxy that is
+                    only safe if Jellyfin's Known Proxies is set and the proxy
+                    sends a trusted X-Forwarded-Host (not a client-supplied one)
+                    — setting this override is the robust fix. This is the base
+                    URL, not the redirect URI — register
+                    <code
+                      >&lt;this
+                      URL&gt;/sso/OID/redirect/&lt;ProviderName&gt;</code
+                    >
+                    (or the legacy <code>/sso/OID/r/&lt;ProviderName&gt;</code>)
+                    as the exact redirect URI at your provider.
+                  </div>
+                </div>
+
                 <button
                   id="SaveProvider"
                   is="emby-button"

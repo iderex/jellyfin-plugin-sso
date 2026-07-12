@@ -57,10 +57,25 @@ public class PluginConfiguration : MediaBrowser.Model.Plugins.BasePluginConfigur
 }
 
 /// <summary>
+/// Configuration shared by every SSO provider (OpenID and SAML).
+/// </summary>
+public abstract class ProviderConfigBase
+{
+    /// <summary>
+    /// Gets or sets the canonical external base URL for this provider, e.g.
+    /// <c>https://jellyfin.example.com</c>. When set, the provider's derived external URLs (the OpenID
+    /// redirect_uri, or the SAML base and assertion-consumer URL) are built from it instead of the request
+    /// <c>Host</c> header (#139), so a spoofed or proxy-forwarded host cannot redirect the login elsewhere.
+    /// It overrides the scheme and port overrides. Blank keeps the request-host behavior.
+    /// </summary>
+    public string BaseUrlOverride { get; set; }
+}
+
+/// <summary>
 /// The configuration required for a SAML flow.
 /// </summary>
 [XmlRoot("PluginConfiguration")]
-public class SamlConfig
+public class SamlConfig : ProviderConfigBase
 {
     private SerializableDictionary<string, Guid> _canonicalLinks;
 
@@ -229,7 +244,7 @@ public class SamlConfig
 /// The configuration required for a OpenID flow.
 /// </summary>
 [XmlRoot("PluginConfiguration")]
-public class OidConfig
+public class OidConfig : ProviderConfigBase
 {
     private SerializableDictionary<string, Guid> _canonicalLinks;
 

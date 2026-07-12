@@ -213,4 +213,73 @@ public class ConfigPreservationTests
 
         Assert.True(string.IsNullOrEmpty(SSOPlugin.ResolveUpdatedSecret(incoming, live)));
     }
+
+    // --- Base-URL override validation on save (#139) ---
+
+    [Fact]
+    public void ValidateBaseUrlOverrides_ValidOrBlankOnBothProtocols_DoesNotThrow()
+    {
+        var incoming = new PluginConfiguration();
+        incoming.OidConfigs["idp"] = new OidConfig { BaseUrlOverride = "https://jellyfin.example.com" };
+        incoming.OidConfigs["idp-blank"] = new OidConfig { BaseUrlOverride = null };
+        incoming.SamlConfigs["saml"] = new SamlConfig { BaseUrlOverride = "https://sso.example.com/jellyfin" };
+        incoming.SamlConfigs["saml-blank"] = new SamlConfig { BaseUrlOverride = "   " };
+
+        SSOPlugin.ValidateBaseUrlOverrides(incoming);
+    }
+
+    [Fact]
+    public void ValidateBaseUrlOverrides_MalformedOidOverride_ThrowsNamingProviderAndProtocol()
+    {
+        var incoming = new PluginConfiguration();
+        incoming.OidConfigs["idp"] = new OidConfig { BaseUrlOverride = "not-a-url" };
+
+        var ex = Assert.Throws<ArgumentException>(() => SSOPlugin.ValidateBaseUrlOverrides(incoming));
+        Assert.Contains("idp", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("OpenID", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ValidateBaseUrlOverrides_MalformedSamlOverride_Throws()
+    {
+        var incoming = new PluginConfiguration();
+        incoming.SamlConfigs["saml"] = new SamlConfig { BaseUrlOverride = "ftp://example.com" };
+
+        var ex = Assert.Throws<ArgumentException>(() => SSOPlugin.ValidateBaseUrlOverrides(incoming));
+        Assert.Contains("SAML", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ValidateBaseUrlOverrides_NullConfigMaps_DoNotThrow()
+    {
+        var incoming = new PluginConfiguration { OidConfigs = null, SamlConfigs = null };
+
+        SSOPlugin.ValidateBaseUrlOverrides(incoming);
+    }
+
+    [Theory]
+    [InlineData(typeof(OidConfig))]
+    [InlineData(typeof(SamlConfig))]
+    public void BaseUrlOverride_InheritedFromProviderConfigBase_RoundTripsThroughXml(Type configType)
+    {
+        // BaseUrlOverride lives on the shared ProviderConfigBase (#139); confirm XmlSerializer still emits
+        // and reads back the inherited property for both derived config types, so the base-class
+        // extraction did not change the on-disk config contract.
+        var config = (ProviderConfigBase)Activator.CreateInstance(configType)!;
+        config.BaseUrlOverride = "https://jellyfin.example.com";
+
+        var serializer = new XmlSerializer(configType);
+        using var writer = new System.IO.StringWriter();
+        serializer.Serialize(writer, config);
+        var xml = writer.ToString();
+        Assert.Contains("BaseUrlOverride", xml, StringComparison.Ordinal);
+        Assert.Contains("https://jellyfin.example.com", xml, StringComparison.Ordinal);
+
+        using var stringReader = new System.IO.StringReader(xml);
+        using var xmlReader = System.Xml.XmlReader.Create(
+            stringReader,
+            new System.Xml.XmlReaderSettings { DtdProcessing = System.Xml.DtdProcessing.Prohibit, XmlResolver = null });
+        var back = (ProviderConfigBase)serializer.Deserialize(xmlReader)!;
+        Assert.Equal("https://jellyfin.example.com", back.BaseUrlOverride);
+    }
 }

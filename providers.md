@@ -71,6 +71,33 @@ expiry). A few provider settings must therefore match, or login is refused (fail
   now lists OpenID links by their `sub` value, which for many providers is an opaque identifier
   rather than a readable name.
 
+## Canonical base URL (recommended hardening)
+
+By default the plugin builds the OpenID `redirect_uri` and the SAML base URL from the request `Host`
+header. Behind a reverse proxy that forwards an unfiltered `X-Forwarded-Host`, a client can influence
+that host and point the authorization response — the authorization code included — at another origin.
+Exact redirect-URI matching at the provider is the backstop, but it only helps if you register an
+**exact** redirect URI (not a wildcard); many self-hosted providers allow wildcards.
+
+- **Set `BaseUrlOverride`** (OpenID: the "Base URL Override" field in the admin page; SAML: the
+  `BaseUrlOverride` config value, like the other SAML options) to your canonical external base URL,
+  e.g. `https://jellyfin.example.com`. When set, every `redirect_uri` and SAML URL is built from it and
+  the request `Host` is ignored, so a spoofed host cannot redirect the login. It must be an absolute
+  `http`/`https` URL with no query or fragment; a malformed value is rejected when you save. It
+  overrides the per-provider scheme and port overrides.
+- **Register the exact callback URLs used by your deployment**, matching the override. OpenID may use
+  `<base URL>/sso/OID/redirect/<ProviderName>` or the legacy `<base URL>/sso/OID/r/<ProviderName>`;
+  SAML may use `<base URL>/sso/SAML/post/<ProviderName>` or `<base URL>/sso/SAML/p/<ProviderName>`.
+  Register the form your deployment actually uses; do not rely on wildcard redirect URIs.
+- **Sub-path deployments:** if Jellyfin is served under a path (e.g. `https://example.com/jellyfin`),
+  include that path in the override — it becomes authoritative and the request's own path base is not
+  added. Omitting it breaks every `/sso/...` URL.
+- If you leave `BaseUrlOverride` blank, the URLs fall back to the request `Host`; setting
+  `BaseUrlOverride` is the robust mitigation. Relying on the fallback behind a reverse proxy is safe
+  only if Jellyfin's **Known Proxies** is set **and** the proxy sends a trusted `X-Forwarded-Host`
+  (not a client-supplied one). Known Proxies alone only decides which upstreams may supply forwarded
+  headers — it does not by itself make a forwarded host trustworthy.
+
 ## SAML response binding (optional hardening)
 
 Two per-provider SAML options, both **off by default**, tie a response more tightly to this service
@@ -83,11 +110,11 @@ config so a save does not reset them.
   an assertion minted for a different endpoint — or for a different service provider that shares the
   identity provider — from being presented here. The Recipient is inside the signed assertion, so it
   is trustworthy even when only the assertion (not the whole Response) is signed. **Caveat:** the
-  expected URL is built from the request host, so this binding is only as strong as your host
-  resolution — behind a reverse proxy, configure Jellyfin's Known/Trusted Proxies so the `Host`
-  header cannot be spoofed. Treat it as defense-in-depth layered on the `AudienceRestriction`,
-  signature, replay and time-bound checks, not as a standalone guarantee. (A canonical base-URL
-  override that removes the host dependency is tracked in issue #139.)
+  expected URL is built from the base URL, so this binding is only as strong as host resolution unless
+  you pin it — set `BaseUrlOverride` (see [Canonical base URL](#canonical-base-url-recommended-hardening))
+  to make it exact. The request-host fallback is only safe if Jellyfin's Known Proxies is set **and**
+  the proxy sends a trusted `X-Forwarded-Host`. Treat it as defense-in-depth layered on the `AudienceRestriction`,
+  signature, replay and time-bound checks, not as a standalone guarantee.
 - **`ValidateInResponseTo`** — accept only _solicited_ responses: the assertion's `InResponseTo` must
   match an `AuthnRequest` this server issued and has not yet consumed (one-time, time-bounded).
   **Enabling this disables IdP-initiated (unsolicited) SSO**, which carries no `InResponseTo` — leave

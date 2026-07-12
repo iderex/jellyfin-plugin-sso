@@ -204,7 +204,7 @@ public class SSOController : ControllerBase
             if (timedState.Valid)
             {
                 _logger.LogInformation("Is request linking: {IsLinking}", isLinking);
-                return HtmlAuthPage(WebResponse.Generator(data: state, provider: provider, baseUrl: GetRequestBase(config.SchemeOverride, config.PortOverride), mode: "OID", isLinking: isLinking));
+                return HtmlAuthPage(WebResponse.Generator(data: state, provider: provider, baseUrl: GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), mode: "OID", isLinking: isLinking));
             }
             else
             {
@@ -257,7 +257,7 @@ public class SSOController : ControllerBase
                 config.NewPath = newPath;
             }
 
-            string redirectUri = GetRequestBase(config.SchemeOverride, config.PortOverride) + $"/sso/OID/{(newPath ? "redirect" : "r")}/" + provider;
+            string redirectUri = GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride) + $"/sso/OID/{(newPath ? "redirect" : "r")}/" + provider;
 
             var oidcClient = CreateOidcClient(config, redirectUri, string.Join(" ", config.OidScopes.Prepend("openid profile")));
             var state = await oidcClient.PrepareLoginAsync().ConfigureAwait(false);
@@ -327,8 +327,22 @@ public class SSOController : ControllerBase
     private OidcClient CreateCallbackOidcClient(OidConfig config, string provider)
     {
         var scopes = config.OidScopes == null ? new string[2] : config.OidScopes;
-        var redirectUri = GetRequestBase(config.SchemeOverride, config.PortOverride) + $"/sso/OID/{OidcCallbackPath.RedirectSegment(Request.Path.Value)}/" + provider;
+        var redirectUri = GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride) + $"/sso/OID/{OidcCallbackPath.RedirectSegment(Request.Path.Value)}/" + provider;
         return CreateOidcClient(config, redirectUri, string.Join(" ", scopes.Prepend("openid profile")));
+    }
+
+    // Rejects a malformed canonical base-URL override (#139) at the OID/SAML Add endpoints. These persist
+    // through MutateConfiguration, which passes the live configuration object, so they bypass the
+    // config-page save-time validation in SSOPlugin.UpdateConfiguration (which only runs for a fresh
+    // incoming config). Without this, a malformed override set via the Add API would be persisted and then
+    // silently fall back to the request Host at login. Throwing keeps it out of the store, so the
+    // "rejected at every admin write path" invariant holds. Blank is valid (the feature is off).
+    internal static void RejectInvalidBaseUrlOverride(string baseUrlOverride)
+    {
+        if (CanonicalBaseUrl.IsInvalidOverride(baseUrlOverride))
+        {
+            throw new ArgumentException("The Base URL override must be an absolute http(s) URL such as https://jellyfin.example.com, or left blank.");
+        }
     }
 
     /// <summary>
@@ -340,6 +354,7 @@ public class SSOController : ControllerBase
     [HttpPost("OID/Add/{provider}")]
     public void OidAdd(string provider, [FromBody] OidConfig config)
     {
+        RejectInvalidBaseUrlOverride(config?.BaseUrlOverride);
         SSOPlugin.Instance.MutateConfiguration(configuration =>
         {
             // Re-inject the server-managed fields this API cannot carry: CanonicalLinks is
@@ -555,7 +570,7 @@ public class SSOController : ControllerBase
                     WebResponse.Generator(
                         data: Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(samlResponse.Xml)),
                         provider: provider,
-                        baseUrl: GetRequestBase(config.SchemeOverride, config.PortOverride),
+                        baseUrl: GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride),
                         mode: "SAML",
                         isLinking: isLinking));
             }
@@ -605,7 +620,7 @@ public class SSOController : ControllerBase
                 config.NewPath = newPath;
             }
 
-            string redirectUri = GetRequestBase(config.SchemeOverride, config.PortOverride) + $"/sso/SAML/{(newPath ? "post" : "p")}/" + provider;
+            string redirectUri = GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride) + $"/sso/SAML/{(newPath ? "post" : "p")}/" + provider;
             string relayState = null;
             if (isLinking)
             {
@@ -642,6 +657,7 @@ public class SSOController : ControllerBase
     [HttpPost("SAML/Add/{provider}")]
     public OkResult SamlAdd(string provider, [FromBody] SamlConfig newConfig)
     {
+        RejectInvalidBaseUrlOverride(newConfig?.BaseUrlOverride);
         SSOPlugin.Instance.MutateConfiguration(configuration =>
         {
             // Preserve the server-managed canonical links (#157), as OidAdd does: the posted config
@@ -1482,14 +1498,15 @@ public class SSOController : ControllerBase
     // reflects whichever the AuthnRequest advertised at challenge time, so accepting either avoids
     // rejecting a valid login on a path-form flip; both are this provider's own ACS URLs.
     //
-    // The host comes from GetRequestBase (the request Host). This binding is therefore only as strong
-    // as host resolution: behind a reverse proxy, configure Jellyfin's Known/Trusted Proxies so the
-    // Host cannot be spoofed, or an attacker controlling the Host can make the expected URL match a
-    // captured assertion's Recipient (defense-in-depth, not a hard guarantee). The canonical
-    // base-URL override (#139) will remove that Host dependency.
+    // The host comes from GetRequestBase. With BaseUrlOverride set (#139) it is the pinned canonical
+    // host, so this binding is exact regardless of the request Host. Without it the host is the request
+    // Host, so the binding is only as strong as host resolution: behind a reverse proxy, configure
+    // Jellyfin's Known/Trusted Proxies (or set BaseUrlOverride) so the Host cannot be spoofed, or an
+    // attacker controlling the Host can make the expected URL match a captured assertion's Recipient
+    // (defense-in-depth, not a hard guarantee).
     private string[] ExpectedAcsUrls(SamlConfig config, string provider)
     {
-        var baseUrl = GetRequestBase(config.SchemeOverride, config.PortOverride) + "/sso/SAML/";
+        var baseUrl = GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride) + "/sso/SAML/";
         return new[] { baseUrl + "post/" + provider, baseUrl + "p/" + provider };
     }
 
@@ -1592,8 +1609,24 @@ public class SSOController : ControllerBase
         return buffer;
     }
 
-    private string GetRequestBase(string schemeOverride = null, int? portOverride = null)
+    private string GetRequestBase(string schemeOverride = null, int? portOverride = null, string baseUrlOverride = null)
     {
+        // A configured canonical base URL is authoritative: it removes the dependency on the request
+        // Host (spoofable behind a proxy forwarding X-Forwarded-Host), so redirect_uri and the SAML base
+        // cannot be poisoned (#139). A malformed value is rejected at every admin write path (the config
+        // page via UpdateConfiguration, and OID/SAML Add via RejectInvalidBaseUrlOverride), so it should
+        // never reach here. If one does anyway (a hand-edited or restored config), fail closed rather than
+        // silently reverting to the spoofable request Host: only a blank override uses the host fallback.
+        if (!string.IsNullOrWhiteSpace(baseUrlOverride))
+        {
+            if (CanonicalBaseUrl.TryNormalize(baseUrlOverride, out var canonical))
+            {
+                return canonical;
+            }
+
+            throw new InvalidOperationException("The configured Base URL override is not a valid absolute http(s) URL.");
+        }
+
         int requestPort;
 
         if (portOverride != null)
