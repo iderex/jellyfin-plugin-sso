@@ -288,7 +288,7 @@ const ssoConfigurationPage = {
     });
   },
   saveProvider: (page, provider_name) => {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const form_elements = ssoConfigurationPage.listArgumentsByType(page);
 
       ApiClient.getPluginConfiguration(
@@ -343,15 +343,28 @@ const ssoConfigurationPage = {
         ApiClient.updatePluginConfiguration(
           ssoConfigurationPage.pluginUniqueId,
           config,
-        ).then(function (result) {
-          Dashboard.processPluginConfigurationUpdateResult(result);
-          ssoConfigurationPage.loadConfiguration(page);
-          ssoConfigurationPage.loadProvider(page, provider_name);
+        ).then(
+          function (result) {
+            Dashboard.processPluginConfigurationUpdateResult(result);
+            ssoConfigurationPage.loadConfiguration(page);
+            ssoConfigurationPage.loadProvider(page, provider_name);
 
-          page.querySelector("#selectProvider").value = provider_name;
-          Dashboard.alert("Settings saved.");
-          resolve();
-        });
+            page.querySelector("#selectProvider").value = provider_name;
+            Dashboard.alert("Settings saved.");
+            resolve();
+          },
+          // Rejection handler attached directly to the save call, so it reports only a genuine save
+          // failure (e.g. the server rejecting a malformed Base URL Override, #139) and not an error
+          // thrown by the post-save UI work above. This replaces the prior silent no-op.
+          function () {
+            Dashboard.alert({
+              title: "Save failed",
+              message:
+                "Could not save the provider. Check that the Base URL Override is a full URL such as https://jellyfin.example.com, or leave it blank.",
+            });
+            reject(new Error("Provider save failed"));
+          },
+        );
       });
     });
   },
@@ -373,7 +386,9 @@ export default function initSsoConfigurationPage(view) {
   view.querySelector("#SaveProvider").addEventListener("click", (e) => {
     const target_provider = view.querySelector("#OidProviderName").value;
 
-    ssoConfigurationPage.saveProvider(view, target_provider);
+    // The save already alerts the admin on failure; swallow the rejection here so a failed save is not
+    // an unhandled promise rejection (the rejection exists so callers can distinguish failure from success).
+    ssoConfigurationPage.saveProvider(view, target_provider).catch(() => {});
 
     e.preventDefault();
     return false;

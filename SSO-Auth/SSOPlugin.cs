@@ -104,6 +104,15 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IPlugin, IHasWebPages
         {
             if (configuration is PluginConfiguration incoming && !ReferenceEquals(incoming, Configuration))
             {
+                // Reject the save fail-closed before anything is persisted if a base-URL override is
+                // malformed (#139), so a bad value can never reach the login path. This validates the
+                // config-page save (a fresh incoming config); the OID/SAML Add endpoints write through
+                // MutateConfiguration (the live object, so this branch is skipped) and validate their own
+                // incoming provider at the controller via RejectInvalidBaseUrlOverride. Login-path writes
+                // (canonical links) also reuse the live object and are intentionally not revalidated here,
+                // so a slow/bad override can never throw on the login path.
+                ValidateBaseUrlOverrides(incoming);
+
                 PreserveServerManagedFields(incoming, Configuration);
 
                 // Snapshot which providers were saved with an insecure option (#140) while under the
@@ -122,6 +131,38 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IPlugin, IHasWebPages
             foreach (var (provider, options) in insecureToAudit)
             {
                 SsoAudit.InsecureOptionsEnabled(_logger, "OpenID", provider, options);
+            }
+        }
+    }
+
+    // Throws if any provider's canonical base-URL override (#139) is set but not a valid absolute
+    // http/https base URL, rejecting the save fail-closed before anything is persisted. A blank value is
+    // valid (the feature is off). The provider name is line-ending-stripped inline in case it reaches a
+    // log through the thrown exception.
+    internal static void ValidateBaseUrlOverrides(PluginConfiguration incoming)
+    {
+        static void Check(string protocol, string provider, string value)
+        {
+            if (CanonicalBaseUrl.IsInvalidOverride(value))
+            {
+                throw new ArgumentException(
+                    $"{protocol} provider '{provider?.ReplaceLineEndings(string.Empty)}' has an invalid Base URL override; it must be an absolute http(s) URL such as https://jellyfin.example.com.");
+            }
+        }
+
+        if (incoming.OidConfigs != null)
+        {
+            foreach (var kvp in incoming.OidConfigs)
+            {
+                Check("OpenID", kvp.Key, kvp.Value?.BaseUrlOverride);
+            }
+        }
+
+        if (incoming.SamlConfigs != null)
+        {
+            foreach (var kvp in incoming.SamlConfigs)
+            {
+                Check("SAML", kvp.Key, kvp.Value?.BaseUrlOverride);
             }
         }
     }
