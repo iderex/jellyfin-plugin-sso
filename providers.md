@@ -71,6 +71,24 @@ expiry). A few provider settings must therefore match, or login is refused (fail
   now lists OpenID links by their `sub` value, which for many providers is an opaque identifier
   rather than a readable name.
 
+## SAML response binding (optional hardening)
+
+Two per-provider SAML options, both **off by default**, tie a response more tightly to this service
+provider. Set them in the provider's SAML configuration once the identity provider is confirmed to
+support them.
+
+- **`ValidateRecipient`** — require the assertion's bearer `SubjectConfirmationData/@Recipient` (and
+  the Response `Destination` when present) to equal this server's assertion-consumer URL. This stops
+  an assertion minted for a different endpoint — or for a different service provider that shares the
+  identity provider — from being presented here. The Recipient is inside the signed assertion, so it
+  is trustworthy even when only the assertion (not the whole Response) is signed. The expected URL is
+  derived from the server's own address; if you front Jellyfin with a reverse proxy, make sure the
+  forwarded scheme/host are correct (a mismatch causes a rejection, never a bypass).
+- **`ValidateInResponseTo`** — accept only _solicited_ responses: the assertion's `InResponseTo` must
+  match an `AuthnRequest` this server issued and has not yet consumed (one-time, time-bounded).
+  **Enabling this disables IdP-initiated (unsolicited) SSO**, which carries no `InResponseTo` — leave
+  it off if your identity provider starts the login from its own dashboard.
+
 ## Authelia
 
 Authelia is simple to configure, and RBAC is straightforward.

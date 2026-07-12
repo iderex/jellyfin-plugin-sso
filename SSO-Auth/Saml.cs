@@ -310,6 +310,48 @@ public class Response
     }
 
     /// <summary>
+    /// Gets the bearer SubjectConfirmationData's Recipient — the assertion-consumer URL the identity
+    /// provider minted this assertion for. It lives inside the assertion, so it is covered by the
+    /// signature regardless of whether the whole Response or only the Assertion is signed. The caller
+    /// binds it to this service provider's own ACS URL (#156).
+    /// </summary>
+    /// <returns>The Recipient attribute, or null when absent.</returns>
+    public string GetRecipient()
+    {
+        var node = _xmlDoc.SelectSingleNode("/samlp:Response/saml:Assertion[1]/saml:Subject/saml:SubjectConfirmation/saml:SubjectConfirmationData", _xmlNameSpaceManager) as XmlElement;
+        var recipient = node?.GetAttribute("Recipient");
+        return string.IsNullOrEmpty(recipient) ? null : recipient;
+    }
+
+    /// <summary>
+    /// Gets the bearer SubjectConfirmationData's InResponseTo — the ID of the AuthnRequest this
+    /// assertion answers. Signed (inside the assertion), so the caller can trust it to correlate the
+    /// response against a request this service provider actually issued (#156). Absent on an
+    /// IdP-initiated (unsolicited) response.
+    /// </summary>
+    /// <returns>The InResponseTo attribute, or null when absent.</returns>
+    public string GetInResponseTo()
+    {
+        var node = _xmlDoc.SelectSingleNode("/samlp:Response/saml:Assertion[1]/saml:Subject/saml:SubjectConfirmation/saml:SubjectConfirmationData", _xmlNameSpaceManager) as XmlElement;
+        var inResponseTo = node?.GetAttribute("InResponseTo");
+        return string.IsNullOrEmpty(inResponseTo) ? null : inResponseTo;
+    }
+
+    /// <summary>
+    /// Gets the Response element's Destination — the endpoint the identity provider sent this response
+    /// to. Response-level, so it is only signature-covered when the whole Response (not merely the
+    /// Assertion) is signed; the caller therefore treats it as a defense-in-depth check on top of the
+    /// always-signed <see cref="GetRecipient"/> (#156).
+    /// </summary>
+    /// <returns>The Destination attribute, or null when absent.</returns>
+    public string GetDestination()
+    {
+        var node = _xmlDoc.SelectSingleNode("/samlp:Response", _xmlNameSpaceManager) as XmlElement;
+        var destination = node?.GetAttribute("Destination");
+        return string.IsNullOrEmpty(destination) ? null : destination;
+    }
+
+    /// <summary>
     /// Gets the UPN attribute from the XML response.
     /// </summary>
     /// <returns>The UPN attribute.</returns>
@@ -476,6 +518,12 @@ public class AuthRequest
         /// </summary>
         Base64 = 1
     }
+
+    /// <summary>
+    /// Gets the request's unique ID (the value sent as the AuthnRequest ID). The service provider
+    /// records it so a later response's InResponseTo can be correlated to this request (#156).
+    /// </summary>
+    public string Id => _id;
 
     /// <summary>
     /// Gets the SAML request.
