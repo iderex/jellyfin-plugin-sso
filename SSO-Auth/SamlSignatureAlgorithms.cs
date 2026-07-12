@@ -28,6 +28,62 @@ internal static class SamlSignatureAlgorithms
         "http://www.w3.org/2001/04/xmlenc#sha512",
     };
 
+    // Only comment-free canonicalization is accepted, exclusive or inclusive. The "#WithComments"
+    // variants are deliberately excluded: they preserve XML comments through canonicalization, which
+    // breaks "sign what is seen" (content can differ from what was digested) — Microsoft flags them
+    // for exactly this reason. These serve both as the SignedInfo CanonicalizationMethod and as the
+    // canonicalization step allowed inside a reference's transform chain.
+    private static readonly HashSet<string> AllowedCanonicalizationMethods = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "http://www.w3.org/2001/10/xml-exc-c14n#",
+        "http://www.w3.org/TR/2001/REC-xml-c14n-20010315",
+    };
+
+    // A reference transform chain may contain only the enveloped-signature transform and comment-free
+    // canonicalization. Anything else — XPath/XSLT filters, decryption, or comment-preserving c14n —
+    // is rejected: those are the levers XML-signature-wrapping uses to make the digested bytes differ
+    // from the element that is actually read.
+    private static readonly HashSet<string> AllowedTransforms = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "http://www.w3.org/2000/09/xmldsig#enveloped-signature",
+        "http://www.w3.org/2001/10/xml-exc-c14n#",
+        "http://www.w3.org/TR/2001/REC-xml-c14n-20010315",
+    };
+
+    /// <summary>
+    /// Whether the SignedInfo canonicalization method is a comment-free exclusive/inclusive C14N.
+    /// </summary>
+    /// <param name="canonicalizationMethod">The SignedInfo canonicalization-method URI.</param>
+    /// <returns>True only if the method is on the allowlist.</returns>
+    internal static bool IsCanonicalizationAllowed(string canonicalizationMethod)
+        => AllowedCanonicalizationMethods.Contains(canonicalizationMethod ?? string.Empty);
+
+    /// <summary>
+    /// Whether every transform in a reference's chain is on the allowlist (enveloped-signature or
+    /// comment-free C14N), and there is at least one.
+    /// </summary>
+    /// <param name="transforms">The transform-algorithm URIs of one reference, in order.</param>
+    /// <returns>True only if there is at least one transform and all are allowed.</returns>
+    internal static bool AreTransformsAllowed(IEnumerable<string> transforms)
+    {
+        if (transforms == null)
+        {
+            return false;
+        }
+
+        var any = false;
+        foreach (var transform in transforms)
+        {
+            any = true;
+            if (!AllowedTransforms.Contains(transform ?? string.Empty))
+            {
+                return false;
+            }
+        }
+
+        return any;
+    }
+
     /// <summary>
     /// Whether the signature method and every reference digest method are on the allowlist.
     /// </summary>

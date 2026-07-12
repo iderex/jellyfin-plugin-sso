@@ -82,4 +82,68 @@ public class SamlSignatureAlgorithmsTests
     {
         Assert.False(SamlSignatureAlgorithms.IsAllowed("urn:made:up", new[] { DigestSha256 }));
     }
+
+    // --- Canonicalization allowlist (#137) ---
+
+    private const string ExcC14n = "http://www.w3.org/2001/10/xml-exc-c14n#";
+    private const string InclusiveC14n = "http://www.w3.org/TR/2001/REC-xml-c14n-20010315";
+    private const string ExcC14nWithComments = "http://www.w3.org/2001/10/xml-exc-c14n#WithComments";
+    private const string InclusiveC14nWithComments = "http://www.w3.org/TR/2001/REC-xml-c14n-20010315#WithComments";
+    private const string EnvelopedSignature = "http://www.w3.org/2000/09/xmldsig#enveloped-signature";
+
+    [Theory]
+    [InlineData(ExcC14n)]
+    [InlineData(InclusiveC14n)]
+    public void IsCanonicalizationAllowed_CommentFreeC14n_ReturnsTrue(string method)
+    {
+        Assert.True(SamlSignatureAlgorithms.IsCanonicalizationAllowed(method));
+    }
+
+    [Theory]
+    [InlineData(ExcC14nWithComments)]
+    [InlineData(InclusiveC14nWithComments)]
+    [InlineData("urn:made:up")]
+    [InlineData(null)]
+    public void IsCanonicalizationAllowed_WithCommentsOrUnknown_ReturnsFalse(string? method)
+    {
+        // Comment-preserving c14n breaks "sign what is seen", so it is rejected.
+        Assert.False(SamlSignatureAlgorithms.IsCanonicalizationAllowed(method!));
+    }
+
+    [Fact]
+    public void AreTransformsAllowed_EnvelopedThenC14n_ReturnsTrue()
+    {
+        Assert.True(SamlSignatureAlgorithms.AreTransformsAllowed(new[] { EnvelopedSignature, ExcC14n }));
+    }
+
+    [Fact]
+    public void AreTransformsAllowed_EnvelopedOnly_ReturnsTrue()
+    {
+        Assert.True(SamlSignatureAlgorithms.AreTransformsAllowed(new[] { EnvelopedSignature }));
+    }
+
+    [Fact]
+    public void AreTransformsAllowed_WithCommentsTransform_ReturnsFalse()
+    {
+        Assert.False(SamlSignatureAlgorithms.AreTransformsAllowed(new[] { EnvelopedSignature, ExcC14nWithComments }));
+    }
+
+    [Fact]
+    public void AreTransformsAllowed_UnknownTransform_ReturnsFalse()
+    {
+        // An XPath/XSLT filter transform is a wrapping lever — reject the whole chain.
+        Assert.False(SamlSignatureAlgorithms.AreTransformsAllowed(new[] { EnvelopedSignature, "http://www.w3.org/TR/1999/REC-xslt-19991116" }));
+    }
+
+    [Fact]
+    public void AreTransformsAllowed_Empty_ReturnsFalse()
+    {
+        Assert.False(SamlSignatureAlgorithms.AreTransformsAllowed(new List<string>()));
+    }
+
+    [Fact]
+    public void AreTransformsAllowed_Null_ReturnsFalse()
+    {
+        Assert.False(SamlSignatureAlgorithms.AreTransformsAllowed(null!));
+    }
 }

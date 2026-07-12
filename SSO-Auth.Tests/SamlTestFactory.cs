@@ -57,6 +57,9 @@ internal static class SamlTestFactory
         string[]? audiences = null,
         SignatureScope scope = SignatureScope.Response,
         bool signWithSha1 = false,
+        bool signWithCommentsC14n = false,
+        bool signWithInclusiveC14n = false,
+        bool includeAdviceAssertion = false,
         string? recipient = null,
         string? inResponseTo = null,
         string? destination = null)
@@ -123,11 +126,18 @@ internal static class SamlTestFactory
 
         var destinationAttribute = destination == null ? string.Empty : " Destination=\"" + SecurityElement.Escape(destination) + "\"";
 
+        // A spec-legal supporting assertion nested inside saml:Advice, part of the signed content.
+        // It must NOT be miscounted as a second top-level assertion by the single-assertion check.
+        var advice = includeAdviceAssertion
+            ? "<saml:Advice><saml:Assertion ID=\"_advice\" Version=\"2.0\"><saml:Issuer>https://idp.example.com</saml:Issuer></saml:Assertion></saml:Advice>"
+            : string.Empty;
+
         var xml =
             "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" ID=\"" + responseId + "\" Version=\"2.0\"" + destinationAttribute + ">" +
                 "<saml:Assertion ID=\"" + assertionId + "\" Version=\"2.0\">" +
                     "<saml:Issuer>https://idp.example.com</saml:Issuer>" +
                     conditions +
+                    advice +
                     "<saml:Subject>" +
                         (includeNameId ? "<saml:NameID>" + SecurityElement.Escape(nameId) + "</saml:NameID>" : string.Empty) +
                         "<saml:SubjectConfirmation Method=\"urn:oasis:names:tc:SAML:2.0:cm:bearer\">" +
@@ -144,21 +154,36 @@ internal static class SamlTestFactory
         document.LoadXml(xml);
 
         var referenceId = scope == SignatureScope.Response ? responseId : assertionId;
-        SignElement(document, referenceId, rsa, certificate, signWithSha1);
+        SignElement(document, referenceId, rsa, certificate, signWithSha1, signWithCommentsC14n, signWithInclusiveC14n);
 
         return new SamlFixture(certificate, document, responseId, assertionId);
     }
 
-    private static void SignElement(XmlDocument document, string referenceId, RSA signingKey, X509Certificate2 certificate, bool useSha1)
+    private static void SignElement(XmlDocument document, string referenceId, RSA signingKey, X509Certificate2 certificate, bool useSha1, bool useWithCommentsC14n, bool useInclusiveC14n)
     {
         var signedXml = new SignedXml(document) { SigningKey = signingKey };
 
         var reference = new Reference("#" + referenceId) { DigestMethod = useSha1 ? SignedXml.XmlDsigSHA1Url : SignedXml.XmlDsigSHA256Url };
         reference.AddTransform(new XmlDsigEnvelopedSignatureTransform());
-        reference.AddTransform(new XmlDsigExcC14NTransform());
+        if (useWithCommentsC14n)
+        {
+            reference.AddTransform(new XmlDsigExcC14NWithCommentsTransform());
+        }
+        else if (useInclusiveC14n)
+        {
+            reference.AddTransform(new XmlDsigC14NTransform());
+        }
+        else
+        {
+            reference.AddTransform(new XmlDsigExcC14NTransform());
+        }
+
         signedXml.AddReference(reference);
 
-        signedXml.SignedInfo!.CanonicalizationMethod = SignedXml.XmlDsigExcC14NTransformUrl;
+        signedXml.SignedInfo!.CanonicalizationMethod =
+            useWithCommentsC14n ? SignedXml.XmlDsigExcC14NWithCommentsTransformUrl
+            : useInclusiveC14n ? SignedXml.XmlDsigC14NTransformUrl
+            : SignedXml.XmlDsigExcC14NTransformUrl;
         signedXml.SignedInfo.SignatureMethod = useSha1 ? SignedXml.XmlDsigRSASHA1Url : SignedXml.XmlDsigRSASHA256Url;
 
         var keyInfo = new KeyInfo();

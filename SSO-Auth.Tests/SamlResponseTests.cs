@@ -192,6 +192,77 @@ public class SamlResponseTests
         Assert.False(Load(fixture).IsValid());
     }
 
+    // --- Signature-wrapping hardening (#137): single-assertion, bound signature, c14n allowlist ---
+
+    [Fact]
+    public void IsValid_TwoAssertions_ReturnsFalse()
+    {
+        // Single-assertion invariant: even a byte-for-byte duplicate of the validly-signed assertion
+        // makes the count two, which is rejected outright — the readers must never face a choice of
+        // assertions to consume.
+        var fixture = SamlTestFactory.Create(scope: SamlTestFactory.SignatureScope.Assertion);
+        var doc = fixture.Document;
+        var assertion = doc.GetElementsByTagName("Assertion", "urn:oasis:names:tc:SAML:2.0:assertion")[0]!;
+        doc.DocumentElement!.AppendChild(assertion.CloneNode(true));
+
+        Assert.False(Load(fixture).IsValid());
+    }
+
+    [Fact]
+    public void IsValid_SignatureRelocatedOutsideSignedElement_ReturnsFalse()
+    {
+        // Sign the assertion, then move the enveloped signature out of the assertion up to the
+        // Response. The reference still names the assertion ID, but the signature no longer sits
+        // inside the element it covers — a relocation attack, rejected by the envelopment check.
+        var fixture = SamlTestFactory.Create(scope: SamlTestFactory.SignatureScope.Assertion);
+        var doc = fixture.Document;
+        var signature = doc.GetElementsByTagName("Signature", "http://www.w3.org/2000/09/xmldsig#")[0]!;
+        signature.ParentNode!.RemoveChild(signature);
+        doc.DocumentElement!.AppendChild(signature);
+
+        Assert.False(Load(fixture).IsValid());
+    }
+
+    [Fact]
+    public void IsValid_WithCommentsCanonicalization_ReturnsFalse()
+    {
+        // A cryptographically valid signature that uses comment-preserving canonicalization must be
+        // rejected: "#WithComments" c14n is off the allowlist because it breaks sign-what-is-seen.
+        var fixture = SamlTestFactory.Create(signWithCommentsC14n: true);
+        Assert.False(Load(fixture).IsValid());
+    }
+
+    [Fact]
+    public void IsValid_NestedAdviceAssertion_ReturnsTrue()
+    {
+        // A spec-legal supporting assertion nested in saml:Advice (part of the signed content) is a
+        // descendant, not a second top-level assertion, so the single-assertion invariant — scoped
+        // to the Response's direct-child assertions — must still accept the response.
+        var fixture = SamlTestFactory.Create(scope: SamlTestFactory.SignatureScope.Assertion, includeAdviceAssertion: true);
+        Assert.True(Load(fixture).IsValid());
+    }
+
+    [Fact]
+    public void IsValid_InclusiveCanonicalization_ReturnsTrue()
+    {
+        // Inclusive (non-exclusive) comment-free C14N is on the allowlist — an IdP using it must
+        // still authenticate. Guards that allowlist entry end-to-end (the default fixture is exclusive).
+        var fixture = SamlTestFactory.Create(signWithInclusiveC14n: true);
+        Assert.True(Load(fixture).IsValid());
+    }
+
+    [Fact]
+    public void IsValid_EmptyFragmentReferenceUri_ReturnsFalse_DoesNotThrow()
+    {
+        // A crafted <ds:Reference URI="#"> (empty fragment) must fail closed as invalid, not throw
+        // (which would surface as a 500 on this unauthenticated path).
+        var fixture = SamlTestFactory.Create();
+        var reference = fixture.Document.GetElementsByTagName("Reference", "http://www.w3.org/2000/09/xmldsig#")[0] as System.Xml.XmlElement;
+        reference!.SetAttribute("URI", "#");
+
+        Assert.False(Load(fixture).IsValid());
+    }
+
     // --- Signature/digest algorithm allowlist (A-3: reject SHA-1) ---
 
     [Fact]
