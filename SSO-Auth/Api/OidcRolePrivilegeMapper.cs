@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Jellyfin.Plugin.SSO_Auth.Config;
@@ -30,12 +31,12 @@ internal static class OidcRolePrivilegeMapper
 
         foreach (var role in roles)
         {
-            if (config.Roles != null && config.Roles.Any(allowed => role.Equals(allowed)))
+            if (config.Roles != null && config.Roles.Any(allowed => role.Equals(allowed, StringComparison.Ordinal)))
             {
                 valid = true;
             }
 
-            if (config.AdminRoles != null && config.AdminRoles.Any(adminRole => role.Equals(adminRole)))
+            if (config.AdminRoles != null && config.AdminRoles.Any(adminRole => role.Equals(adminRole, StringComparison.Ordinal)))
             {
                 admin = true;
             }
@@ -47,7 +48,7 @@ internal static class OidcRolePrivilegeMapper
                 // when FolderRoleMapping is null (an admin misconfiguration; fails closed). Tracked in #89.
                 foreach (var folderRoleMap in config.FolderRoleMapping)
                 {
-                    if (role.Equals(folderRoleMap.Role?.Trim()))
+                    if (role.Equals(folderRoleMap.Role?.Trim(), StringComparison.Ordinal))
                     {
                         folders.AddRange(folderRoleMap.Folders);
                     }
@@ -56,12 +57,12 @@ internal static class OidcRolePrivilegeMapper
 
             if (config.EnableLiveTvRoles)
             {
-                if (config.LiveTvRoles != null && config.LiveTvRoles.Any(liveTvRole => role.Equals(liveTvRole)))
+                if (config.LiveTvRoles != null && config.LiveTvRoles.Any(liveTvRole => role.Equals(liveTvRole, StringComparison.Ordinal)))
                 {
                     enableLiveTv = true;
                 }
 
-                if (config.LiveTvManagementRoles != null && config.LiveTvManagementRoles.Any(managementRole => role.Equals(managementRole)))
+                if (config.LiveTvManagementRoles != null && config.LiveTvManagementRoles.Any(managementRole => role.Equals(managementRole, StringComparison.Ordinal)))
                 {
                     enableLiveTvManagement = true;
                 }

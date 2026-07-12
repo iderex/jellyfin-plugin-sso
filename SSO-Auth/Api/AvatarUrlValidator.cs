@@ -26,7 +26,7 @@ internal static class AvatarUrlValidator
             return false;
         }
 
-        if (parsed.Scheme != Uri.UriSchemeHttp && parsed.Scheme != Uri.UriSchemeHttps)
+        if (!string.Equals(parsed.Scheme, Uri.UriSchemeHttp, StringComparison.Ordinal) && !string.Equals(parsed.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal))
         {
             return false;
         }

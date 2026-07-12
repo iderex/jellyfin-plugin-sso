@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Jellyfin.Plugin.SSO_Auth.Config;
 
@@ -37,7 +38,7 @@ internal static class SamlRolePrivilegeMapper
             {
                 foreach (string allowedRole in config.AdminRoles)
                 {
-                    if (allowedRole.Equals(role))
+                    if (allowedRole.Equals(role, StringComparison.Ordinal))
                     {
                         admin = true;
                     }
@@ -48,7 +49,7 @@ internal static class SamlRolePrivilegeMapper
             {
                 foreach (FolderRoleMap folderRoleMap in config.FolderRoleMapping)
                 {
-                    if (folderRoleMap.Role.Equals(role))
+                    if (folderRoleMap.Role.Equals(role, StringComparison.Ordinal))
                     {
                         folders.AddRange(folderRoleMap.Folders);
                     }
@@ -61,7 +62,7 @@ internal static class SamlRolePrivilegeMapper
                 {
                     foreach (string allowedLiveTvRole in config.LiveTvRoles)
                     {
-                        if (allowedLiveTvRole.Equals(role))
+                        if (allowedLiveTvRole.Equals(role, StringComparison.Ordinal))
                         {
                             enableLiveTv = true;
                         }
@@ -72,7 +73,7 @@ internal static class SamlRolePrivilegeMapper
                 {
                     foreach (string allowedLiveTvManagementRole in config.LiveTvManagementRoles)
                     {
-                        if (allowedLiveTvManagementRole.Equals(role))
+                        if (allowedLiveTvManagementRole.Equals(role, StringComparison.Ordinal))
                         {
                             enableLiveTvManagement = true;
                         }

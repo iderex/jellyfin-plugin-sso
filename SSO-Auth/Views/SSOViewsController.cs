@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -51,7 +52,7 @@ public class SSOViewsController : ControllerBase
             return NotFound("Pages is null or empty");
         }
 
-        var view = pages.FirstOrDefault(pageInfo => pageInfo.Name == viewName, null);
+        var view = pages.FirstOrDefault(pageInfo => string.Equals(pageInfo.Name, viewName, StringComparison.Ordinal), null);
 
         if (view == null)
         {

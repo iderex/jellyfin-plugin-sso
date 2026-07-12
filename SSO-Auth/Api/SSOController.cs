@@ -449,7 +449,7 @@ public class SSOController : ControllerBase
             return BadRequest(NoMatchingProviderMessage);
         }
 
-        bool isLinking = relayState == "linking";
+        bool isLinking = string.Equals(relayState, "linking", StringComparison.Ordinal);
 
         // relayState is attacker-controllable; strip line endings inline at the log call to prevent
         // log forging (structured logging alone does not sanitize a newline-bearing value).
@@ -1299,7 +1299,7 @@ public class SSOController : ControllerBase
             requestPort = -1;
         }
 
-        if (schemeOverride != "http" && schemeOverride != "https")
+        if (!string.Equals(schemeOverride, "http", StringComparison.Ordinal) && !string.Equals(schemeOverride, "https", StringComparison.Ordinal))
         {
             schemeOverride = null;
         }

@@ -110,7 +110,7 @@ internal static class OidcAuthorizeStateBuilder
         var roles = new List<string>();
         foreach (var claim in claims)
         {
-            if (claim.Type == (config.DefaultUsernameClaim?.Trim() ?? "preferred_username"))
+            if (string.Equals(claim.Type, config.DefaultUsernameClaim?.Trim() ?? "preferred_username", StringComparison.Ordinal))
             {
                 username = claim.Value;
                 if (config.Roles == null || config.Roles.Length == 0)
@@ -119,7 +119,7 @@ internal static class OidcAuthorizeStateBuilder
                 }
             }
 
-            if (roleClaimSegments.Length > 0 && claim.Type == roleClaimSegments[0])
+            if (roleClaimSegments.Length > 0 && string.Equals(claim.Type, roleClaimSegments[0], StringComparison.Ordinal))
             {
                 roles.AddRange(OidcRoleExtractor.ExtractRoles(roleClaimSegments, claim.Value));
             }
@@ -135,7 +135,7 @@ internal static class OidcAuthorizeStateBuilder
         var valid = false;
         foreach (var claim in claims)
         {
-            if (claim.Type == "sub")
+            if (string.Equals(claim.Type, "sub", StringComparison.Ordinal))
             {
                 username = claim.Value;
 
