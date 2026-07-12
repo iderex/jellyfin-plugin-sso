@@ -326,7 +326,18 @@ public class SSOController : ControllerBase
     [HttpPost("OID/Add/{provider}")]
     public void OidAdd(string provider, [FromBody] OidConfig config)
     {
-        SSOPlugin.Instance.MutateConfiguration(configuration => configuration.OidConfigs[provider] = config);
+        SSOPlugin.Instance.MutateConfiguration(configuration =>
+        {
+            // Preserve the server-managed canonical links (#157): this replaces the whole provider
+            // object, and CanonicalLinks is [JsonIgnore] so the posted config never carries them —
+            // re-inject the live map so a save via this API cannot wipe existing account links.
+            if (configuration.OidConfigs.TryGetValue(provider, out var existing))
+            {
+                config.CanonicalLinks = existing.CanonicalLinks;
+            }
+
+            configuration.OidConfigs[provider] = config;
+        });
         SsoAudit.ProviderConfigured(_logger, OpenIdProtocol, provider);
     }
 
@@ -353,7 +364,7 @@ public class SSOController : ControllerBase
     [HttpGet("OID/Get")]
     public ActionResult OidProviders()
     {
-        return Ok(SSOPlugin.Instance.Configuration.OidConfigs);
+        return Ok(SSOPlugin.Instance.ReadConfiguration(c => SnapshotConfigs(c.OidConfigs)));
     }
 
     /// <summary>
@@ -589,7 +600,18 @@ public class SSOController : ControllerBase
     [HttpPost("SAML/Add/{provider}")]
     public OkResult SamlAdd(string provider, [FromBody] SamlConfig newConfig)
     {
-        SSOPlugin.Instance.MutateConfiguration(configuration => configuration.SamlConfigs[provider] = newConfig);
+        SSOPlugin.Instance.MutateConfiguration(configuration =>
+        {
+            // Preserve the server-managed canonical links (#157), as OidAdd does: the posted config
+            // never carries them ([JsonIgnore]), so re-inject the live map before the wholesale
+            // replace so an API save cannot wipe existing account links.
+            if (configuration.SamlConfigs.TryGetValue(provider, out var existing))
+            {
+                newConfig.CanonicalLinks = existing.CanonicalLinks;
+            }
+
+            configuration.SamlConfigs[provider] = newConfig;
+        });
         SsoAudit.ProviderConfigured(_logger, SamlProtocol, provider);
         return Ok();
     }
@@ -620,7 +642,7 @@ public class SSOController : ControllerBase
     [HttpGet("SAML/Get")]
     public ActionResult SamlProviders()
     {
-        return Ok(SSOPlugin.Instance.Configuration.SamlConfigs);
+        return Ok(SSOPlugin.Instance.ReadConfiguration(c => SnapshotConfigs(c.SamlConfigs)));
     }
 
     /// <summary>
@@ -999,17 +1021,7 @@ public class SSOController : ControllerBase
             return StatusCode(StatusCodes.Status403Forbidden, "Non-admin is not allowed to query other user's mappings.");
         }
 
-        var mappings = new SerializableDictionary<string, IEnumerable<string>>();
-        var providerList = SSOPlugin.Instance.Configuration.SamlConfigs;
-
-        foreach (var providerName in providerList.Keys)
-        {
-            var canonLinks = providerList[providerName].CanonicalLinks;
-            var canonKeys = from link in canonLinks where link.Value == jellyfinUserId select link.Key;
-            mappings[providerName] = canonKeys;
-        }
-
-        return mappings;
+        return BuildLinksByUser("saml", jellyfinUserId);
     }
 
     /// <summary>
@@ -1027,17 +1039,48 @@ public class SSOController : ControllerBase
             return StatusCode(StatusCodes.Status403Forbidden, "Non-admin is not allowed to query other user's mappings.");
         }
 
-        var mappings = new SerializableDictionary<string, IEnumerable<string>>();
-        var providerList = SSOPlugin.Instance.Configuration.OidConfigs;
+        return BuildLinksByUser("oid", jellyfinUserId);
+    }
 
-        foreach (var providerName in providerList.Keys)
+    // Builds the provider -> [link keys for this user] map under the config lock, materializing each
+    // provider's matches with ToList (#157/F-10). The previous version assigned a deferred LINQ query
+    // that enumerated the live CanonicalLinks during JSON serialization — outside any lock — which
+    // could tear against a concurrent login writing a link ("collection modified during enumeration").
+    private static SerializableDictionary<string, IEnumerable<string>> BuildLinksByUser(string mode, Guid jellyfinUserId)
+    {
+        return SSOPlugin.Instance.ReadConfiguration(configuration =>
         {
-            var canonLinks = providerList[providerName].CanonicalLinks;
-            var canonKeys = from link in canonLinks where link.Value == jellyfinUserId select link.Key;
-            mappings[providerName] = canonKeys;
+            var providerList = string.Equals(mode, "saml", StringComparison.Ordinal)
+                ? (IEnumerable<KeyValuePair<string, SerializableDictionary<string, Guid>>>)configuration.SamlConfigs.Select(p => new KeyValuePair<string, SerializableDictionary<string, Guid>>(p.Key, p.Value.CanonicalLinks))
+                : configuration.OidConfigs.Select(p => new KeyValuePair<string, SerializableDictionary<string, Guid>>(p.Key, p.Value.CanonicalLinks));
+
+            var mappings = new SerializableDictionary<string, IEnumerable<string>>();
+            foreach (var provider in providerList)
+            {
+                mappings[provider.Key] = provider.Value
+                    .Where(link => link.Value == jellyfinUserId)
+                    .Select(link => link.Key)
+                    .ToList();
+            }
+
+            return mappings;
+        });
+    }
+
+    // A shallow copy of a provider map, taken under the config lock so the admin list endpoints
+    // serialize a detached snapshot rather than the live dictionary (#157/F-10): a concurrent
+    // provider add/remove cannot then modify the collection mid-serialization. The provider objects
+    // are shared, but their CanonicalLinks are [JsonIgnore] (never serialized) and their remaining
+    // fields only change on an admin save, which swaps the whole configuration object.
+    private static SerializableDictionary<string, TValue> SnapshotConfigs<TValue>(SerializableDictionary<string, TValue> source)
+    {
+        var copy = new SerializableDictionary<string, TValue>();
+        foreach (var kvp in source)
+        {
+            copy[kvp.Key] = kvp.Value;
         }
 
-        return mappings;
+        return copy;
     }
 
     /// <summary>
