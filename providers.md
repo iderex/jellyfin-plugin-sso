@@ -58,6 +58,10 @@ expiry). A few provider settings must therefore match, or login is refused (fail
   provider — this relaxes only the issuer check; signature, audience and expiry stay enforced.
 - If your IdP sends an `at_hash` claim it must match the issued access token — a correctly behaving
   provider always satisfies this.
+- **A `sub` claim is required.** The account link is keyed on the immutable `sub`, not on the
+  (mutable) username — so renaming a user at the identity provider keeps their Jellyfin account
+  linked, and a recycled username cannot inherit another user's account. Links created by older
+  plugin versions (keyed on the username) migrate to `sub` automatically on the user's next login.
 
 ## Authelia
 
