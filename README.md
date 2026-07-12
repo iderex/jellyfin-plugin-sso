@@ -1,3 +1,9 @@
+> [!WARNING]
+>
+> ## ⛔ Pre-alpha software — do NOT install this on a production system
+>
+> This plugin is in **pre-alpha**. It exists **exclusively for developers to test** — nothing else. Under **no circumstances** should it be installed on a production system or put in front of a real Jellyfin instance with real user accounts: it is a login path under active reconstruction, and you must expect **breaking changes, incomplete features, and security gaps that are still being closed**. Wait for a stable release before using it anywhere that matters.
+
 <h1 align="center">Jellyfin SSO Plugin</h1>
 
 <p align="center">
