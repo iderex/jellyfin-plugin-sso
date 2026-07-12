@@ -99,34 +99,43 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IPlugin, IHasWebPages
     public override void UpdateConfiguration(BasePluginConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
+        List<(string Provider, IReadOnlyList<string> Options)> insecureToAudit = null;
         lock (ConfigMutationLock)
         {
-            var adminSave = configuration is PluginConfiguration incoming && !ReferenceEquals(incoming, Configuration);
-            if (adminSave)
+            if (configuration is PluginConfiguration incoming && !ReferenceEquals(incoming, Configuration))
             {
-                PreserveServerManagedFields((PluginConfiguration)configuration, Configuration);
+                PreserveServerManagedFields(incoming, Configuration);
+
+                // Snapshot which providers were saved with an insecure option (#140) while under the
+                // lock, but emit the warnings AFTER releasing it (below) — logging must not run inside
+                // the global config lock, where a slow provider would block concurrent config access.
+                insecureToAudit = CollectInsecureOptions(incoming);
             }
 
             base.UpdateConfiguration(configuration);
+        }
 
-            // Audit after the persist, so a misbehaving logging provider can never abort the save
-            // (the toggles it reads are not touched by the persist). Matches the other SsoAudit calls,
-            // which all run after their write completes.
-            if (adminSave)
+        // Outside the lock, and after the save is durably persisted: a slow or misbehaving logging
+        // provider can neither block config reads/writes nor turn a completed save into a failure.
+        if (insecureToAudit != null && _logger != null)
+        {
+            foreach (var (provider, options) in insecureToAudit)
             {
-                AuditInsecureOptions((PluginConfiguration)configuration);
+                SsoAudit.InsecureOptionsEnabled(_logger, "OpenID", provider, options);
             }
         }
     }
 
-    // Audits any OpenID provider saved with a security check disabled (#140). Runs only on the admin
-    // save path (a fresh incoming config, not an internal login-time write), so it fires once per save
-    // rather than per login. Best-effort: a missing logger never blocks the save.
-    private void AuditInsecureOptions(PluginConfiguration incoming)
+    // Snapshots, under the caller's lock, the OpenID providers saved with a security check disabled
+    // (#140), as (provider, enabled-option-names) pairs. Pure read: it does not log, so the audit
+    // warnings can be emitted after the config lock is released. Only the admin save path reaches
+    // here (a fresh incoming config), so it fires once per save, not per login.
+    private static List<(string Provider, IReadOnlyList<string> Options)> CollectInsecureOptions(PluginConfiguration incoming)
     {
-        if (_logger == null || incoming.OidConfigs == null)
+        var records = new List<(string, IReadOnlyList<string>)>();
+        if (incoming.OidConfigs == null)
         {
-            return;
+            return records;
         }
 
         foreach (var kvp in incoming.OidConfigs)
@@ -134,9 +143,11 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IPlugin, IHasWebPages
             var insecure = OidcInsecureToggles.Enabled(kvp.Value);
             if (insecure.Count > 0)
             {
-                SsoAudit.InsecureOptionsEnabled(_logger, "OpenID", kvp.Key, insecure);
+                records.Add((kvp.Key, insecure));
             }
         }
+
+        return records;
     }
 
     /// <summary>
