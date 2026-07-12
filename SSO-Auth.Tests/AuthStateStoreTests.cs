@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Xunit;
@@ -80,6 +81,57 @@ public class AuthStateStoreTests
     [Fact]
     public void IsRedeemableBy_Expired_False()
         => Assert.False(AuthStateStore.IsRedeemableBy(State("p", "tok", true, Now.AddMinutes(-2)), "tok", "p", Now, Lifetime));
+
+    // --- Single-use / invalidate-immediately (#138: upstream 9p4 v4.0.0.4 fix, PR #343 / 5b3d70d) ---
+    // Upstream v4.0.0.3 invalidated the OpenID authorize state only by expiry (Invalidate()) after a
+    // successful auth, leaving the consumed `state` redeemable again within its ~15-min lifetime — a
+    // replay. The fix removed the consumed state immediately; here OidAuth removes it atomically as the
+    // redemption gate (TryRemove(KeyValuePair), #133), so it is single-use even under concurrent replay.
+    // These pin that invariant so a future refactor cannot silently reintroduce the replay window.
+
+    [Fact]
+    public void ConsumedState_AtomicClaimSucceedsOnce_ThenReplayIsRejected()
+    {
+        var store = new ConcurrentDictionary<string, TimedAuthorizeState>();
+        var state = State("p", "tok", true, Now);
+        store.TryAdd("tok", state);
+
+        var claim = new KeyValuePair<string, TimedAuthorizeState>("tok", state);
+        Assert.True(store.TryRemove(claim)); // the redeeming request wins the atomic claim
+        Assert.False(store.TryRemove(claim)); // a replay of the same state finds it already consumed
+        Assert.False(store.TryGetValue("tok", out _)); // and it is gone from the store
+    }
+
+    [Fact]
+    public void ConsumedState_IsNoLongerRedeemable()
+    {
+        var store = new ConcurrentDictionary<string, TimedAuthorizeState>();
+        var state = State("p", "tok", true, Now);
+        store.TryAdd("tok", state);
+        store.TryRemove(new KeyValuePair<string, TimedAuthorizeState>("tok", state));
+
+        // A replay looks the state up (now absent) and the redemption gate fails closed on the null.
+        store.TryGetValue("tok", out var afterConsume);
+        Assert.Null(afterConsume);
+        Assert.False(AuthStateStore.IsRedeemableBy(afterConsume, "tok", "p", Now, Lifetime));
+    }
+
+    [Fact]
+    public async Task ConcurrentRedemption_OfSameState_ClaimsExactlyOnce()
+    {
+        // Two requests racing to redeem the same state: the atomic TryRemove(KeyValuePair) must let
+        // exactly one win, so a doubled callback cannot mint two sessions from one authorize state.
+        var store = new ConcurrentDictionary<string, TimedAuthorizeState>();
+        var state = State("p", "tok", true, Now);
+        store.TryAdd("tok", state);
+        var claim = new KeyValuePair<string, TimedAuthorizeState>("tok", state);
+
+        var a = Task.Run(() => store.TryRemove(claim), TestContext.Current.CancellationToken);
+        var b = Task.Run(() => store.TryRemove(claim), TestContext.Current.CancellationToken);
+        var results = await Task.WhenAll(a, b);
+
+        Assert.Single(results, redeemed => redeemed); // exactly one request claimed the state
+    }
 
     [Fact]
     public void InvalidateExpired_RemovesOnlyExpiredEntries()
