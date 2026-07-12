@@ -13,10 +13,12 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 /// </summary>
 internal sealed class SamlRequestCache
 {
-    // A hard ceiling on outstanding entries. Registration is driven by the anonymous challenge
-    // endpoint, so this bounds memory under an abandoned-login flood; given the short request
-    // lifetime, real load never approaches it (rate-limiting at the edge, #128, is the primary
-    // defense).
+    // An approximate ceiling on outstanding entries. Registration is driven by the anonymous
+    // challenge endpoint, so this bounds memory under an abandoned-login flood. The check-then-insert
+    // is not serialized (that would put a lock on the anonymous hot path), so concurrent registers can
+    // transiently overshoot by at most the number of in-flight threads — immaterial against a
+    // best-effort DoS backstop. Given the short request lifetime, real load never approaches it;
+    // rate-limiting at the edge (#128) is the primary defense.
     private const int MaxEntries = 100_000;
 
     // Expired-entry sweeping is throttled to at most once per this interval. The sweep is an O(n)

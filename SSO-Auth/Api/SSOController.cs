@@ -1293,26 +1293,11 @@ public class SSOController : ControllerBase
         // Endpoint binding (#156, opt-in): the signed assertion must be addressed to this service
         // provider's assertion-consumer URL, so an assertion minted for a different endpoint (or a
         // different SP sharing the identity provider) cannot be presented here.
-        if (config.ValidateRecipient)
+        if (config.ValidateRecipient
+            && !SamlRecipientValidator.IsBound(samlResponse.GetRecipient(), samlResponse.GetDestination(), ExpectedAcsUrls(config, provider)))
         {
-            var acsUrls = ExpectedAcsUrls(config, provider);
-
-            // Recipient lives inside the signed assertion, so it is always trustworthy; require it.
-            var recipient = samlResponse.GetRecipient()?.Trim();
-            if (string.IsNullOrEmpty(recipient) || !acsUrls.Contains(recipient, StringComparer.Ordinal))
-            {
-                _logger.LogWarning("SAML response rejected: the assertion Recipient does not match this server's assertion-consumer URL.");
-                return false;
-            }
-
-            // Destination is Response-level, so it is only signature-covered when the whole Response
-            // is signed; validate it as defense in depth only when the response carries one.
-            var destination = samlResponse.GetDestination()?.Trim();
-            if (!string.IsNullOrEmpty(destination) && !acsUrls.Contains(destination, StringComparer.Ordinal))
-            {
-                _logger.LogWarning("SAML response rejected: the Response Destination does not match this server's assertion-consumer URL.");
-                return false;
-            }
+            _logger.LogWarning("SAML response rejected: the assertion Recipient or Response Destination does not match this server's assertion-consumer URL.");
+            return false;
         }
 
         return true;
