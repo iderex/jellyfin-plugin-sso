@@ -880,7 +880,15 @@ public class SSOController : ControllerBase
                 var (adoptedUserId, wrote) = LinkCanonicalIfAbsent(mode, provider, canonicalKey, decision.UserId);
                 if (wrote)
                 {
-                    SsoAudit.AccountAdopted(_logger, string.Equals(mode, "oid", StringComparison.Ordinal) ? OpenIdProtocol : SamlProtocol, provider, username);
+                    // Strip line endings from the route/IdP-controlled values inline at the call, so a
+                    // log-forging sanitizer is visible here and not only inside SsoAudit (CodeQL does
+                    // not track sanitizers across the helper boundary); SsoAudit also strips them at
+                    // the sink, so this is belt-and-suspenders.
+                    SsoAudit.AccountAdopted(
+                        _logger,
+                        string.Equals(mode, "oid", StringComparison.Ordinal) ? OpenIdProtocol : SamlProtocol,
+                        provider?.ReplaceLineEndings(string.Empty),
+                        username?.ReplaceLineEndings(string.Empty));
                 }
 
                 return adoptedUserId;
