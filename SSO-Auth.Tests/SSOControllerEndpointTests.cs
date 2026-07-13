@@ -1,6 +1,9 @@
 using System;
+using System.Collections;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Config;
 using Microsoft.AspNetCore.Mvc;
 using Xunit;
 
@@ -59,6 +62,86 @@ public class SSOControllerEndpointTests
         var harness = new SsoControllerHarness();
 
         Assert.Throws<ArgumentException>(() => harness.Controller.SamlChallenge("does-not-exist"));
+    }
+
+    [Fact]
+    public async Task OidPost_DisabledProvider_ReturnsBadRequest()
+    {
+        var harness = new SsoControllerHarness(c => c.OidConfigs["keycloak"] = new OidConfig { Enabled = false });
+
+        var result = await harness.Controller.OidPost("keycloak", "some-state");
+
+        // Assert the body, not just the type: a missing/invalid state also returns a 400, so pinning
+        // the "no matching provider" message keeps this test on the disabled-provider fallthrough.
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Equal("No matching provider found", badRequest.Value);
+    }
+
+    [Fact]
+    public async Task OidPost_EnabledProvider_MissingState_ReturnsBadRequest()
+    {
+        var harness = new SsoControllerHarness(c => c.OidConfigs["keycloak"] = new OidConfig { Enabled = true });
+
+        var result = await harness.Controller.OidPost("keycloak", string.Empty);
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Equal("Missing state", badRequest.Value);
+    }
+
+    [Fact]
+    public async Task OidPost_EnabledProvider_UnknownState_ReturnsBadRequest()
+    {
+        var harness = new SsoControllerHarness(c => c.OidConfigs["keycloak"] = new OidConfig { Enabled = true });
+
+        var result = await harness.Controller.OidPost("keycloak", "not-a-real-state-token");
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Equal("Invalid or expired state", badRequest.Value);
+    }
+
+    [Fact]
+    public void SamlChallenge_DisabledProvider_Throws()
+    {
+        // A configured-but-disabled provider skips the challenge block and hits the same throwing
+        // fallthrough as an unknown provider (SSOController.cs) — pin that so it stays fail-closed.
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig { Enabled = false });
+
+        Assert.Throws<ArgumentException>(() => harness.Controller.SamlChallenge("adfs"));
+    }
+
+    [Fact]
+    public void OidProviderNames_ReturnsSeededNames()
+    {
+        var harness = new SsoControllerHarness(c =>
+        {
+            c.OidConfigs["keycloak"] = new OidConfig();
+            c.OidConfigs["authelia"] = new OidConfig();
+        });
+
+        var result = Assert.IsType<OkObjectResult>(harness.Controller.OidProviderNames());
+        var names = Assert.IsType<List<string>>(result.Value);
+        Assert.Equal(2, names.Count);
+        Assert.Contains("keycloak", names);
+        Assert.Contains("authelia", names);
+    }
+
+    [Fact]
+    public void SamlProviderNames_ReturnsSeededNames()
+    {
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig());
+
+        var result = Assert.IsType<OkObjectResult>(harness.Controller.SamlProviderNames());
+        var names = Assert.IsType<List<string>>(result.Value);
+        Assert.Equal(new[] { "adfs" }, names);
+    }
+
+    [Fact]
+    public void OidStates_NoFlowsInProgress_ReturnsEmpty()
+    {
+        var harness = new SsoControllerHarness();
+
+        var result = Assert.IsType<OkObjectResult>(harness.Controller.OidStates());
+        Assert.Empty(Assert.IsAssignableFrom<IEnumerable>(result.Value));
     }
 }
 
