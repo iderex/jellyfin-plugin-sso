@@ -143,11 +143,13 @@ public class CanonicalBaseUrlTests
         Assert.Equal("https://host.example.com:8443", result);
     }
 
-    [Fact]
-    public void Resolve_PathBase_IsKept_AndTrailingSlashTrimmed()
+    [Theory]
+    [InlineData("/jellyfin", "https://host.example.com/jellyfin")] // path base kept
+    [InlineData("/jellyfin/", "https://host.example.com/jellyfin")] // trailing slash trimmed
+    public void Resolve_PathBase_IsKept_AndTrailingSlashTrimmed(string pathBase, string expected)
     {
-        var result = CanonicalBaseUrl.Resolve(null, "https", "host.example.com", 443, "/jellyfin", null, null);
+        var result = CanonicalBaseUrl.Resolve(null, "https", "host.example.com", 443, pathBase, null, null);
 
-        Assert.Equal("https://host.example.com/jellyfin", result);
+        Assert.Equal(expected, result);
     }
 }
