@@ -2,9 +2,9 @@
 
 > [!WARNING]
 >
-> ## ⛔ Pre-alpha software — do NOT install this on a production system
+> ## ⛔ In-Development — do NOT install this on a production system
 >
-> This plugin is in **pre-alpha**. It exists **exclusively for developers to test** — nothing else. Under **no circumstances** should it be installed on a production system or put in front of a real Jellyfin instance with real user accounts: it is a login path under active reconstruction, and you must expect **breaking changes, incomplete features, and security gaps that are still being closed**. Wait for a stable release before using it anywhere that matters.
+> This plugin is at the **In-Development** stage — the first rung of its maturity ladder (**In-Development → Alpha → Beta → Release Candidate → Full Release**; see the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap)). It exists **exclusively for developers to test** — nothing else. Under **no circumstances** should it be installed on a production system or put in front of a real Jellyfin instance with real user accounts: it is a login path under active reconstruction, and you must expect **breaking changes, incomplete features, and security gaps that are still being closed**. Wait for a **Full Release** before using it anywhere that matters.
 
 <h1 align="center">Jellyfin SSO Plugin</h1>
 
@@ -33,13 +33,13 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 >
 > Its hardened sibling project, **`jellyfin-plugin-sso-V2`** (private), is the reference this repository draws on — a good deal still remains to be ported across from there, deliberately, one reviewed change at a time.
 >
-> **Status:** early and under active development. See [Installing](#installing) — for now the reliable path is building from source; a packaged release will follow once the security-hardening pass reaches its first milestone.
+> **Status:** **In-Development** — the first stage of the maturity ladder. See the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap) for what each stage gates, and [Installing](#installing) — for now the reliable path is building from source; a packaged release will follow as the security-hardening pass advances the maturity stages.
 
 > ### 🤖 A note on AI and on contributions
 >
-> The maintainer is a non-native English speaker, so **[Claude](https://www.anthropic.com/claude)** (Anthropic) assists him in two ways: it **translates documentation and comments into English** — the README, the wiki, the in-repo guides, and code comments — and it **helps generate and analyse code** during development.
+> I am a non-native English speaker, so **[Claude](https://www.anthropic.com/claude)** (Anthropic) assists me in two ways: it **translates documentation and comments into English** — the README, the wiki, the in-repo guides, and code comments — and it **helps generate and analyse code** during development.
 >
-> - **A human owns and reviews everything.** Claude never produces finished code, a complete pull request, or any other artifact that lands unexamined. Every AI-assisted change — translated text or code — is reviewed, understood, edited, and evaluated by the maintainer before it merges; he holds responsibility for it. The AI proposes; the human decides.
+> - **A human owns and reviews everything.** Claude never produces finished code, a complete pull request, or any other artifact that lands unexamined. Every AI-assisted change — translated text or code — is reviewed, understood, edited, and evaluated by me before it merges; I hold responsibility for it. The AI proposes; the human decides.
 > - **The AI is not in the product.** It plays **no role at runtime**, in authentication, or in processing your users' data.
 >
 > The review discipline around this is modelled — as far as is practical for a volunteer project — on the change-control expected of **TÜV/BSI-certified software in critical sectors such as healthcare**: every change is issue-driven, adversarially reviewed on the login path, and documented before it merges. It is an approximation of that practice, not a certification.
