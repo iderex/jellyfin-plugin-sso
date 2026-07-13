@@ -85,11 +85,12 @@ export async function serverAddress({ basePath = "/web" }) {
     });
 }
 
-// Duplicated with WebResponse.cs; tracked in #63.
-// https://github.com/9p4/jellyfin-plugin-sso/blob/38558d762a13422862240af4060bdd1bb1618d57/SSO-Auth/WebResponse.cs#L363-L401
-function getDeviceName() {
-  return "DUMMY";
-}
+// The browser-to-device-name derivation is defined once, in the server-rendered auth-completion
+// page (WebResponse.cs). This linking view is not a login client, so it does not re-derive that
+// value; it registers under a fixed placeholder identifier. This is kept byte-identical to the
+// prior behavior on purpose - deriving a real device name here would change the name SSO-view
+// sessions register under, which is a separate, deliberate behavior change.
+const deviceName = "DUMMY";
 
 function getDeviceId() {
   return localStorage.getItem("_deviceId2");
@@ -132,7 +133,7 @@ const localApiClient = new jellyfinApiclient.ApiClient(
   server,
   appName,
   appVersion,
-  getDeviceName(),
+  deviceName,
   deviceId,
 );
 localApiClient.setAuthenticationInfo(
@@ -144,7 +145,7 @@ const connections = new jellyfinApiclient.ConnectionManager(
   credentials,
   appName,
   appVersion,
-  getDeviceName(),
+  deviceName,
   deviceId,
   capabilities,
 );
