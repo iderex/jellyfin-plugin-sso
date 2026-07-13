@@ -109,6 +109,11 @@ public class SSOController : ControllerBase
     // not torn-read-safe). Mutable, so it sits after the readonly static fields to satisfy field ordering.
     private static long _lastStatePruneTicks = DateTime.MinValue.Ticks;
 
+    // Atomic cursor for throttling the capacity-full warning (#246, CWE-400): under a flood every refused
+    // challenge would otherwise emit a warning, amplifying the flood into unbounded log volume. Warn at
+    // most once per StatePruneInterval.
+    private static long _lastCapWarnTicks = DateTime.MinValue.Ticks;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="SSOController"/> class.
     /// </summary>
@@ -326,7 +331,18 @@ public class SSOController : ControllerBase
             // instead of silently proceeding to a callback that would then fail with "invalid state".
             if (!AuthStateStore.TryAdd(StateManager, state.State, new TimedAuthorizeState(state, DateTime.Now) { IsLinking = isLinking, Provider = provider }, MaxStateEntries))
             {
-                _logger.LogWarning("OpenID authorize state not started for provider {Provider}: a CSPRNG-token collision (effectively impossible) or the store is at capacity.", provider?.ReplaceLineEndings(string.Empty));
+                // The state value is a CSPRNG token, so a collision is effectively impossible; a refusal
+                // here is almost always the capacity backstop under a flood. Throttle the warning to at
+                // most once per interval so the flood cannot amplify into unbounded log volume (#246).
+                var warnNow = DateTime.Now.Ticks;
+                var lastWarn = Interlocked.Read(ref _lastCapWarnTicks);
+                if (warnNow >= lastWarn
+                    && warnNow - lastWarn >= StatePruneInterval.Ticks
+                    && Interlocked.CompareExchange(ref _lastCapWarnTicks, warnNow, lastWarn) == lastWarn)
+                {
+                    _logger.LogWarning("OpenID authorize state refused for provider {Provider}: a CSPRNG-token collision (effectively impossible) or the store is at capacity (warning throttled).", provider?.ReplaceLineEndings(string.Empty));
+                }
+
                 return ReturnError(StatusCodes.Status500InternalServerError, "Could not start login; please retry.");
             }
 
@@ -1647,7 +1663,11 @@ public class SSOController : ControllerBase
         // here, at its sole call site.
         var now = DateTime.Now;
         var last = Interlocked.Read(ref _lastStatePruneTicks);
-        if (now.Ticks - last < StatePruneInterval.Ticks)
+
+        // Skip only when a non-negative, sub-interval amount of time has passed. A backward wall-clock step
+        // (now.Ticks < last) does NOT skip — it prunes and resets the cursor — so a clock correction cannot
+        // stall the sweep and leave the capped store refusing fresh challenges (#246).
+        if (now.Ticks >= last && now.Ticks - last < StatePruneInterval.Ticks)
         {
             return;
         }
