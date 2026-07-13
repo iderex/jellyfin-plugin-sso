@@ -24,8 +24,10 @@ internal static class OidcRoleExtractor
     /// <param name="claimValue">The matched claim's value (a raw role, or a JSON object for a nested path).</param>
     /// <returns>
     /// The extracted roles: the raw claim value as a single role for a one-segment path; otherwise the
-    /// string array reached by walking the JSON path. An empty list when the path does not resolve to a
-    /// JSON array (missing segment, non-object node, or non-array terminal).
+    /// string elements of the array reached by walking the JSON path (non-string elements are ignored).
+    /// Returns an empty list when the path does not resolve to a JSON array (missing segment, non-object
+    /// node, or non-array terminal) and when the claim value is malformed JSON — a multi-segment parse
+    /// fails closed to no roles rather than throwing (#216).
     /// </returns>
     internal static List<string> ExtractRoles(string[] roleClaimSegments, string claimValue)
     {
