@@ -62,7 +62,10 @@ internal sealed class SsoRateLimiter
     /// Normalizes the client's connection address into a rate-limit key. Returns null (= do not
     /// throttle, fail open) when no address can be attributed. IPv6 is keyed on its /64 prefix —
     /// a single residential allocation — since per-/128 keying is evadable by address rotation;
-    /// IPv4-mapped IPv6 is keyed as the underlying IPv4.
+    /// IPv4-mapped IPv6 is keyed as the underlying IPv4. IPv4-in-IPv6 transition sources (6to4,
+    /// the NAT64 well-known prefix, IPv4-compatible) are keyed on their embedded IPv4, not the
+    /// shared transition /64, so distinct NATed clients behind one prefix are not collapsed into
+    /// one bucket where a single abuser would throttle them all (#194).
     /// </summary>
     /// <param name="remoteIp">The connection's remote address. Deliberately the ONLY input: the
     /// plugin never parses X-Forwarded-For itself. Jellyfin's own forwarded-headers middleware
@@ -102,6 +105,26 @@ internal sealed class SsoRateLimiter
         }
 
         var bytes = ip.GetAddressBytes();
+
+        // IPv4-in-IPv6 transition sources carry the client-identifying IPv4 in bits that /64 keying
+        // treats coarsely. For the well-known NAT64 prefix (64:ff9b::/96) and the IPv4-compatible
+        // form (::/96) the IPv4 sits in the low 64 bits that /64 ZEROS, so every distinct client
+        // behind the prefix collapses into one shared bucket and one abuser would throttle them all
+        // — this fix's target. Key on the embedded IPv4 instead: it is the true client identity, so a
+        // NAT64/IPv4-compatible source now buckets exactly like the same native IPv4. (For 6to4,
+        // 2002::/16, the IPv4 is in bytes 2-5, so this instead COLLAPSES a multi-/64 6to4 site onto
+        // its one gateway IPv4 — the same egress-identity keying a native NAT already gets, and it
+        // closes a rotate-within-your-own-/48 evasion hole; a bounded, deliberate trade for a
+        // deprecated form.) The extraction is the same one IsBlockedAddress applied above, so the two
+        // never disagree, and any source reaching here has a PUBLIC embedded IPv4 (a blocked/internal
+        // one already returned null) — this only re-buckets, never returns null, so throttling is
+        // preserved (fail closed). A network-specific NAT64 prefix (RFC 6052 NSP) is not recognized
+        // and falls through to /64 below, as does any non-transition IPv6.
+        if (AvatarUrlValidator.TryExtractEmbeddedIPv4(bytes, out var embedded))
+        {
+            return embedded.ToString();
+        }
+
         Array.Clear(bytes, 8, 8);
         return string.Create(CultureInfo.InvariantCulture, $"{new IPAddress(bytes)}/64");
     }
