@@ -59,9 +59,11 @@ jobs:
         # Only upload where the GITHUB_TOKEN can write security events: pushes to main
         # and same-repo human PRs. Fork and Dependabot pull requests run with a
         # read-only token, so the upload is skipped there — the gate step below still
-        # runs and blocks on findings. (This runs before the gate, so no always() is
-        # needed; the gate's pass/fail is independent of the upload.)
+        # runs and blocks on findings. continue-on-error keeps the security gate
+        # independent of the upload: a transient code-scanning upload failure must not
+        # skip the "Fail on actionable findings" step below.
         if: github.event_name == 'push' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]')
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
         with:
           sarif_file: results.sarif
