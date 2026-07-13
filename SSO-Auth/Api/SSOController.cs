@@ -1437,7 +1437,11 @@ public class SSOController : ControllerBase
             // from the raw subtype — image/svg+xml is rejected because a stored SVG can carry script (#217).
             if (!AvatarContentType.TryResolveExtension(mediaType, out var extension))
             {
-                throw new InvalidOperationException("Avatar content type is not an allowed raster image, got: " + (mediaType ?? "(none)"));
+                // Log the rejected type sanitized inline at the log call (mediaType is server-controlled),
+                // and keep the thrown/caught exception message generic so no untrusted text reaches the
+                // logged exception — mirrors the disallowed-URL warning above.
+                _logger.LogWarning("Refusing avatar with disallowed content type: {MediaType}", (mediaType ?? "(none)").ReplaceLineEndings(string.Empty));
+                throw new InvalidOperationException("Avatar content type is not an allowed raster image.");
             }
 
             const long MaxAvatarBytes = 10 * 1024 * 1024;
