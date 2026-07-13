@@ -166,12 +166,8 @@ public class SSOController : ControllerBase
             return throttled;
         }
 
-        OidConfig config;
-        try
-        {
-            config = GetOidConfig(provider);
-        }
-        catch (KeyNotFoundException)
+        var config = FindOidConfig(provider);
+        if (config is null)
         {
             return BadRequest(NoMatchingProviderMessage);
         }
@@ -275,15 +271,7 @@ public class SSOController : ControllerBase
         }
 
         Invalidate();
-        OidConfig config;
-        try
-        {
-            config = GetOidConfig(provider);
-        }
-        catch (KeyNotFoundException)
-        {
-            throw new ArgumentException(ProviderDoesNotExistMessage);
-        }
+        var config = FindOidConfig(provider) ?? throw new ArgumentException(ProviderDoesNotExistMessage);
 
         if (config.Enabled)
         {
@@ -351,17 +339,17 @@ public class SSOController : ControllerBase
         throw new ArgumentException(ProviderDoesNotExistMessage);
     }
 
-    // Reads a provider's config under the config lock, so an anonymous login-path index does not race an
+    // Reads a provider's config under the config lock, so an anonymous login-path lookup does not race an
     // admin Add/Del mutating the live provider dictionary in place — a Dictionary read-during-write is
     // undefined behaviour in .NET (throw, misread, or a spin on a corrupted chain during a resize) (#252).
-    // Throws KeyNotFoundException for an unknown provider, exactly as the direct index did, so the existing
-    // catch at each call site is unchanged. An uncontended lock is nanoseconds; it is only held long during
-    // a first-login/admin persist, which is exactly when a consistent read matters.
-    private static OidConfig GetOidConfig(string provider) =>
-        SSOPlugin.Instance.ReadConfiguration(configuration => configuration.OidConfigs[provider]);
+    // Returns null for an unknown provider so call sites branch on a null check instead of catching
+    // KeyNotFoundException as control flow (#241). An uncontended lock is nanoseconds; it is only held long
+    // during a first-login/admin persist, which is exactly when a consistent read matters.
+    private static OidConfig FindOidConfig(string provider) =>
+        SSOPlugin.Instance.ReadConfiguration(configuration => configuration.OidConfigs.TryGetValue(provider, out var config) ? config : null);
 
-    private static SamlConfig GetSamlConfig(string provider) =>
-        SSOPlugin.Instance.ReadConfiguration(configuration => configuration.SamlConfigs[provider]);
+    private static SamlConfig FindSamlConfig(string provider) =>
+        SSOPlugin.Instance.ReadConfiguration(configuration => configuration.SamlConfigs.TryGetValue(provider, out var config) ? config : null);
 
     // Builds the OidcClient that both the challenge and the callback use. Pure mechanical assembly:
     // the redirect URI and the scope string are the only two inputs the endpoints derive differently,
@@ -611,12 +599,8 @@ public class SSOController : ControllerBase
             return BadRequest("Missing data");
         }
 
-        OidConfig config;
-        try
-        {
-            config = GetOidConfig(provider);
-        }
-        catch (KeyNotFoundException)
+        var config = FindOidConfig(provider);
+        if (config is null)
         {
             return BadRequest(NoMatchingProviderMessage);
         }
@@ -682,12 +666,8 @@ public class SSOController : ControllerBase
             return throttled;
         }
 
-        SamlConfig config;
-        try
-        {
-            config = GetSamlConfig(provider);
-        }
-        catch (KeyNotFoundException)
+        var config = FindSamlConfig(provider);
+        if (config is null)
         {
             return BadRequest(NoMatchingProviderMessage);
         }
@@ -752,15 +732,7 @@ public class SSOController : ControllerBase
             return throttled;
         }
 
-        SamlConfig config;
-        try
-        {
-            config = GetSamlConfig(provider);
-        }
-        catch (KeyNotFoundException)
-        {
-            throw new ArgumentException(ProviderDoesNotExistMessage);
-        }
+        var config = FindSamlConfig(provider) ?? throw new ArgumentException(ProviderDoesNotExistMessage);
 
         if (config.Enabled)
         {
@@ -871,12 +843,8 @@ public class SSOController : ControllerBase
             return throttled;
         }
 
-        SamlConfig config;
-        try
-        {
-            config = GetSamlConfig(provider);
-        }
-        catch (KeyNotFoundException)
+        var config = FindSamlConfig(provider);
+        if (config is null)
         {
             return BadRequest(NoMatchingProviderMessage);
         }
@@ -1364,12 +1332,8 @@ public class SSOController : ControllerBase
     [Produces(MediaTypeNames.Application.Json)]
     private ActionResult SamlLink(string provider, Guid jellyfinUserId, AuthResponse response)
     {
-        SamlConfig config;
-        try
-        {
-            config = GetSamlConfig(provider);
-        }
-        catch (KeyNotFoundException)
+        var config = FindSamlConfig(provider);
+        if (config is null)
         {
             return BadRequest(NoMatchingProviderMessage);
         }
@@ -1413,12 +1377,7 @@ public class SSOController : ControllerBase
             return BadRequest("Missing data");
         }
 
-        try
-        {
-            // Touch the indexer only to verify the provider exists; it throws if it does not.
-            _ = GetOidConfig(provider);
-        }
-        catch (KeyNotFoundException)
+        if (FindOidConfig(provider) is null)
         {
             return BadRequest(NoMatchingProviderMessage);
         }
