@@ -49,9 +49,10 @@ jobs:
 
       - name: Audit workflows (SARIF for code scanning)
         # --no-build: install zizmor from its prebuilt wheel only, never executing a
-        # source-dist build script. --format=sarif always exits 0; the gate step
-        # below is what fails the build.
-        run: uvx --no-build "zizmor@${ZIZMOR_VERSION}" --min-severity=low --format=sarif . > results.sarif
+        # source-dist build script. --strict-collection: fail closed if any workflow
+        # fails to parse, so a malformed/tampered file cannot slip past the audit.
+        # --format=sarif always exits 0; the gate step below is what fails the build.
+        run: uvx --no-build "zizmor@${ZIZMOR_VERSION}" --strict-collection --min-severity=low --format=sarif . > results.sarif
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -63,6 +64,6 @@ jobs:
           category: zizmor
 
       - name: Fail on actionable findings
-        run: uvx --no-build "zizmor@${ZIZMOR_VERSION}" --min-severity=low --format=plain .
+        run: uvx --no-build "zizmor@${ZIZMOR_VERSION}" --strict-collection --min-severity=low --format=plain .
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
