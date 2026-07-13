@@ -9,17 +9,32 @@ on:
 permissions:
   contents: read
 
+# Cancel a superseded run on the same ref so a new push / PR update does not
+# queue behind an obsolete build.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
 
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      with:
+        # No step pushes via git, so do not leave the GITHUB_TOKEN persisted in
+        # .git/config (zizmor "artipacked" hardening — shrinks the credential blast radius).
+        persist-credentials: false
     - name: Setup .NET
       uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
       with:
         dotnet-version: 9.0.x
+        # Cache the NuGet global-packages folder keyed on the committed lockfiles,
+        # so a clean --locked-mode restore is a cache hit.
+        cache: true
+        cache-dependency-path: '**/packages.lock.json'
     - name: Jellyfin compatibility metadata check
       run: bash scripts/check-jellyfin-compat.sh
     - name: Restore dependencies

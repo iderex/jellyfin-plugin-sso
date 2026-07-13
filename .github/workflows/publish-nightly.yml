@@ -14,15 +14,23 @@ jobs:
   build:
 
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      with:
+        # The release/manifest steps authenticate with GITHUB_TOKEN via their action
+        # inputs, not the git remote, so the persisted checkout token is unneeded.
+        persist-credentials: false
     - name: Setup .NET
       uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
       with:
         dotnet-version: 9.0.x
+        cache: true
+        cache-dependency-path: '**/packages.lock.json'
     - name: Restore dependencies
-      run: dotnet restore
+      # Match the CI build: --locked-mode rejects a drifted or tampered dependency graph.
+      run: dotnet restore --locked-mode
     - name: Build Dotnet
       run: dotnet build --no-restore --warnaserror
     - name: "Flag as nightly in build.yaml"
@@ -55,7 +63,10 @@ jobs:
       id: publish-assets
       uses: softprops/action-gh-release@132dbbba49e22bd4837f09b46d32a8edaf6baa58
       with:
-          prerelease: false
+          # Mark the nightly as a prerelease so the manifest step's ignorePrereleases
+          # filter keeps 0.0.0.9000 out of the production manifest.json every plugin-repo
+          # consumer fetches. Shipping it as a full release polluted that catalog.
+          prerelease: true
           fail_on_unmatched_files: true
           tag_name: nightly
           files: |
@@ -73,4 +84,3 @@ jobs:
         repository: ${{ github.repository }}
         pagesBranch: manifest-release
         pagesFile: manifest.json
-
