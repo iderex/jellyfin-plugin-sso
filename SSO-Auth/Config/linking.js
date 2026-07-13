@@ -80,8 +80,6 @@ const ssoConfigLinking = {
         true,
       ).then((resp) => {
         resp.json().then((provider_map) => {
-          console.log({ provider_map, currentUserId });
-
           Object.keys(provider_map).forEach((provider_name) => {
             const provider_container = container.querySelector(
               `.sso-provider-existing-links-container[data-provider="${CSS.escape(provider_name)}"]`,
@@ -183,7 +181,6 @@ const ssoConfigLinking = {
       });
 
     Promise.all(delete_requests).then((values) => {
-      console.log({ message: "Delete requests handled", values });
       window.location.reload();
     });
   },

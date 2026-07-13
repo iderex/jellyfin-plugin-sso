@@ -9,7 +9,6 @@ using System.Net.Mime;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Security.Cryptography;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Duende.IdentityModel.OidcClient;
@@ -1970,12 +1969,6 @@ public class TimedAuthorizeState
     {
         State = state;
         Created = created;
-        Valid = false;
-        Admin = false;
-        IsLinking = false;
-        EnableLiveTv = false;
-        EnableLiveTvManagement = false;
-        AvatarURL = null;
     }
 
     /// <summary>
