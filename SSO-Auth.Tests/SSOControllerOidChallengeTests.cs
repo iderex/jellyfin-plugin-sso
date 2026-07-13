@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -30,6 +31,7 @@ public class SSOControllerOidChallengeTests
     [Fact]
     public async Task OidChallenge_RequirePkceButProviderDoesNotAdvertiseS256_Returns400()
     {
+        var requested = new List<string>();
         var harness = new SsoControllerHarness(
             c => c.OidConfigs["kc"] = new OidConfig
             {
@@ -39,11 +41,18 @@ public class SSOControllerOidChallengeTests
                 RequirePkce = true,
             },
             // Discovery is served but omits code_challenge_methods_supported, so S256 is not advertised.
-            httpResponder: _ => Json("{\"issuer\":\"https://idp-no-s256.example.com\"}"));
+            httpResponder: request =>
+            {
+                requested.Add(request.RequestUri!.AbsoluteUri);
+                return Json("{\"issuer\":\"https://idp-no-s256.example.com\"}");
+            });
 
         var result = await harness.Controller.OidChallenge("kc");
 
         Assert.Equal(400, Assert.IsType<ContentResult>(result).StatusCode);
+        // The 400 must come from the PKCE gate, which only fires after the discovery document is fetched
+        // and found to lack S256 — so the discovery endpoint must actually have been contacted.
+        Assert.Contains("https://idp-no-s256.example.com/.well-known/openid-configuration", requested);
     }
 
     [Fact]
