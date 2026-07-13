@@ -862,12 +862,52 @@ public class SSOController : ControllerBase
     /// <returns>Whether this API endpoint succeeded.</returns>
     [Authorize(Policy = Policies.RequiresElevation)]
     [HttpPost("Unregister/{username}")]
-    public ActionResult Unregister(string username, [FromBody] string provider)
+    public async Task<ActionResult> Unregister(string username, [FromBody] string provider)
     {
-        User user = _userManager.GetUserByName(username);
+        var user = _userManager.GetUserByName(username);
+        if (user is null)
+        {
+            return NotFound();
+        }
+
+        // SSO login resolves through the per-provider CanonicalLinks maps, not AuthenticationProviderId,
+        // so revoking SSO means removing this user's canonical links from every provider — otherwise the
+        // account would still sign in via SSO (#213). Done under the config lock. NOTE: with a provider's
+        // AllowExistingAccountLink enabled, the same-named account can be re-adopted on the next SSO login,
+        // so a hard revoke there also needs the local account disabled or renamed; with the fail-closed
+        // default (adoption off) the revoke is durable.
+        var revoked = RemoveCanonicalLinksForUser(user.Id);
+
+        // Switch the account back to the requested auth provider and PERSIST it — the previous version set
+        // this in memory only and never called UpdateUserAsync, so the switch was silently discarded.
         user.AuthenticationProviderId = provider;
+        await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
+
+        _logger.LogInformation("Unregistered SSO for user {UserId}: removed {Count} canonical link(s).", user.Id, revoked);
 
         return Ok();
+    }
+
+    // Removes every canonical link pointing at the given user across all SAML and OpenID providers, so an
+    // SSO login no longer resolves to the account. Runs under the config lock and returns the number of
+    // links removed.
+    private static int RemoveCanonicalLinksForUser(Guid userId)
+    {
+        return SSOPlugin.Instance.MutateConfiguration(configuration =>
+        {
+            int removed = 0;
+            foreach (var config in configuration.SamlConfigs.Values)
+            {
+                removed += CanonicalLinkRevoker.RemoveUser(config.CanonicalLinks, userId);
+            }
+
+            foreach (var config in configuration.OidConfigs.Values)
+            {
+                removed += CanonicalLinkRevoker.RemoveUser(config.CanonicalLinks, userId);
+            }
+
+            return removed;
+        });
     }
 
     // Applies a mutation to a provider's canonical-links map on the LIVE configuration, reassigning the
