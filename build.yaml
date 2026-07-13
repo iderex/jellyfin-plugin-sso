@@ -14,6 +14,10 @@ artifacts:
   - "SSO-Auth.dll"
   - "Duende.IdentityModel.OidcClient.dll"
   - "Duende.IdentityModel.dll"
+  # Duende.IdentityModel's own runtime dependency the host does not provide (a latent
+  # omission from the #134 list, surfaced verifying #181 against SSO-Auth.deps.json —
+  # its only parent is Duende.IdentityModel, not the SAML crypto chain below).
+  - "Microsoft.Bcl.Memory.dll"
   # id_token validation (#134): the runtime closure of the JWT validator that the
   # Jellyfin host does not provide. Jellyfin 10.11 ships no Microsoft.IdentityModel.*
   # and no Microsoft.Bcl.Cryptography, so these must travel in the plugin zip or every
@@ -24,6 +28,17 @@ artifacts:
   - "Microsoft.IdentityModel.Logging.dll"
   - "Microsoft.IdentityModel.Abstractions.dll"
   - "Microsoft.Bcl.Cryptography.dll"
+  # SAML XML-signature validation (#181): the runtime closure of the direct
+  # System.Security.Cryptography.Xml reference — Pkcs, then Asn1 (its other dependency,
+  # Microsoft.Bcl.Cryptography, is already listed above for OIDC). None of these are in
+  # the ASP.NET Core shared framework Jellyfin 10.11 (.NET 9) runs on, so without them
+  # the packaged plugin throws FileNotFoundException the moment SignedXml runs — every
+  # packaged SAML login fails, even though local build/dotnet test are green (they run
+  # against the full publish output). Keep in sync with `dotnet publish -c Release` on
+  # every dependency change.
+  - "System.Security.Cryptography.Xml.dll"
+  - "System.Security.Cryptography.Pkcs.dll"
+  - "System.Formats.Asn1.dll"
 changelog: |
   4.0.0.4: Fix security issue in SAML
   4.0.0.0: Jellyfin 10.11
