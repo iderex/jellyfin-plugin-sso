@@ -61,6 +61,12 @@ expiry). A few provider settings must therefore match, or login is refused (fail
   is rejected. Providers that do not send `iss` are unaffected. If a provider legitimately sends a
   different `iss` there, set `DoNotValidateResponseIssuer: true` for that provider to relax only this
   check.
+- **PKCE (RFC 9700 §2.1.1).** The plugin always sends a PKCE `code_challenge` (S256), but a server that
+  ignores PKCE would silently downgrade cross-session authorization-code-injection protection. On login
+  the provider's discovery document is checked for `S256` in `code_challenge_methods_supported`; if it is
+  absent, an `[SSO Audit]` warning is logged and the login still proceeds. Set `RequirePkce: true` for a
+  provider to fail the login closed instead when `S256` is not advertised (or the discovery document
+  cannot be read).
 - If your IdP sends an `at_hash` claim it must match the issued access token — a correctly behaving
   provider always satisfies this.
 - **A `sub` claim is required, and it must be stable.** The account link is keyed on the immutable

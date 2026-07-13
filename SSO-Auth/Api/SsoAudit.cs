@@ -58,6 +58,14 @@ internal static class SsoAudit
             protocol,
             provider?.ReplaceLineEndings(string.Empty));
 
+    /// <summary>Records that a provider's authorization server does not advertise PKCE S256 support (#141).</summary>
+    /// <param name="logger">The logger.</param>
+    /// <param name="provider">The provider name.</param>
+    internal static void PkceNotAdvertised(ILogger logger, string provider)
+        => logger.LogWarning(
+            "[SSO Audit] OpenID provider '{Provider}' does not advertise PKCE (S256) in its discovery document (code_challenge_methods_supported). PKCE is still sent, but a server that ignores it leaves cross-session authorization-code injection undetectable (RFC 9700 §2.1.1). Set RequirePkce to fail closed once the provider supports it.",
+            provider?.ReplaceLineEndings(string.Empty));
+
     /// <summary>Records a provider being saved with one or more security checks disabled (#140).</summary>
     /// <param name="logger">The logger.</param>
     /// <param name="protocol">The protocol (OpenID or SAML).</param>
