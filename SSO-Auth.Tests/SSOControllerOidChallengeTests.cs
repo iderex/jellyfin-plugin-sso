@@ -90,17 +90,17 @@ public class SSOControllerOidChallengeTests
             httpResponder: request =>
             {
                 var url = request.RequestUri!.AbsoluteUri;
-                if (url.Contains(".well-known/openid-configuration", StringComparison.Ordinal))
+                if (url == authority + "/.well-known/openid-configuration")
                 {
                     return Json(Discovery(authority));
                 }
 
-                if (url.Contains("/jwks", StringComparison.Ordinal))
+                if (url == authority + "/jwks")
                 {
                     return Json("{\"keys\":[]}");
                 }
 
-                // A challenge should only fetch discovery (and its JWKS); anything else is unexpected and
+                // A challenge should only fetch discovery and its JWKS; any other URL is unexpected and
                 // fails the request so a regression that reaches, e.g., the token endpoint is caught.
                 return new HttpResponseMessage(HttpStatusCode.NotFound);
             });
