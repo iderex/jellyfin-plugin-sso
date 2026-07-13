@@ -10,11 +10,24 @@ on:
 permissions:
   contents: read
 
+# Cancel a superseded analysis on the same ref; the next push re-analyzes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   analyze:
     name: Build and analyze
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          # A full clone lets SonarCloud attribute issues to the right commits/authors.
+          fetch-depth: 0
+          # The scanner reads git history, not the remote; drop the persisted push token.
+          persist-credentials: false
       - name: Set up JDK 17
         uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
         with:
@@ -24,11 +37,10 @@ jobs:
         uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: 9.0.x
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          # A full clone lets SonarCloud attribute issues to the right commits/authors.
-          fetch-depth: 0
+          # Cache the NuGet global-packages folder keyed on the committed lockfiles.
+          # Runs after checkout so the lockfiles exist to be hashed.
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
       - name: Cache SonarCloud packages
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
