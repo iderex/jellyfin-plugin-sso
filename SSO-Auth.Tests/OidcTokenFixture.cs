@@ -36,10 +36,19 @@ internal sealed class OidcTokenFixture : IDisposable
             + "\"n\":\"" + Base64UrlEncoder.Encode(p.Modulus) + "\",\"e\":\"" + Base64UrlEncoder.Encode(p.Exponent) + "\"}]}";
     }
 
-    /// <summary>Produces a signed id_token for the given subject and username.</summary>
-    internal string IdToken(string subject, string username)
+    /// <summary>
+    /// Produces a signed id_token for the given username. A non-empty <paramref name="subject"/> is
+    /// emitted as the "sub" claim; passing null/empty omits it (for the missing-sub rejection path).
+    /// </summary>
+    internal string IdToken(string? subject, string username)
     {
         var now = DateTime.UtcNow;
+        var claims = new Dictionary<string, object> { ["preferred_username"] = username };
+        if (!string.IsNullOrEmpty(subject))
+        {
+            claims["sub"] = subject;
+        }
+
         var descriptor = new SecurityTokenDescriptor
         {
             Issuer = Issuer,
@@ -47,11 +56,7 @@ internal sealed class OidcTokenFixture : IDisposable
             IssuedAt = now - TimeSpan.FromMinutes(1),
             NotBefore = now - TimeSpan.FromMinutes(1),
             Expires = now + TimeSpan.FromMinutes(5),
-            Claims = new Dictionary<string, object>
-            {
-                ["sub"] = subject,
-                ["preferred_username"] = username,
-            },
+            Claims = claims,
             SigningCredentials = new SigningCredentials(new RsaSecurityKey(_rsa) { KeyId = KeyId }, SecurityAlgorithms.RsaSha256),
         };
         return new JsonWebTokenHandler().CreateToken(descriptor);

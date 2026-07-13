@@ -55,11 +55,43 @@ public class SSOControllerOidPostTests
         Assert.Equal(400, Assert.IsType<ContentResult>(result).StatusCode);
     }
 
-    // Builds a harness whose HTTP responder serves the fixture's discovery/JWKS/token endpoints, seeds the
-    // matching authorize state, and sets the callback request path and query.
-    private static SsoControllerHarness ArrangeCallback(OidcTokenFixture fixture, string query)
+    [Fact]
+    public async Task OidPost_TokenExchangeFails_Returns400()
     {
-        var idToken = fixture.IdToken(subject: "sub-1", username: "alice");
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        // The authorization-code exchange fails at the token endpoint, so ProcessResponseAsync errors and
+        // the callback is refused rather than minting a login.
+        var harness = ArrangeCallback(fixture, query: "?code=test-code&state=state-1", tokenEndpointFails: true);
+
+        var result = await harness.Controller.OidPost("kc", "state-1");
+
+        Assert.Equal(400, Assert.IsType<ContentResult>(result).StatusCode);
+    }
+
+    [Fact]
+    public async Task OidPost_IdTokenWithoutSub_Returns401()
+    {
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        // Fail closed (#155): a validated id_token carrying no `sub` claim resolves no stable subject to
+        // key the account link on, so the login is refused.
+        var harness = ArrangeCallback(fixture, query: "?code=test-code&state=state-1", idToken: fixture.IdToken(subject: null, username: "alice"));
+
+        var result = await harness.Controller.OidPost("kc", "state-1");
+
+        Assert.Equal(401, Assert.IsType<ContentResult>(result).StatusCode);
+    }
+
+    // Builds a harness whose HTTP responder serves the fixture's discovery/JWKS/token endpoints, seeds the
+    // matching authorize state, and sets the callback request path and query. The token endpoint returns
+    // <paramref name="idToken"/> (a valid signed token by default), or a 400 when
+    // <paramref name="tokenEndpointFails"/> is set.
+    private static SsoControllerHarness ArrangeCallback(
+        OidcTokenFixture fixture,
+        string query,
+        string? idToken = null,
+        bool tokenEndpointFails = false)
+    {
+        idToken ??= fixture.IdToken(subject: "sub-1", username: "alice");
 
         var harness = new SsoControllerHarness(
             c => c.OidConfigs["kc"] = new OidConfig
@@ -86,7 +118,9 @@ public class SSOControllerOidPostTests
 
                 if (url == fixture.TokenUrl)
                 {
-                    return Json(fixture.TokenEndpointJson(idToken));
+                    return tokenEndpointFails
+                        ? new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent("{\"error\":\"invalid_grant\"}", Encoding.UTF8, "application/json") }
+                        : Json(fixture.TokenEndpointJson(idToken));
                 }
 
                 return new HttpResponseMessage(HttpStatusCode.NotFound);
