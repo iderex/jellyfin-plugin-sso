@@ -57,10 +57,17 @@ public class PluginConfiguration : MediaBrowser.Model.Plugins.BasePluginConfigur
 }
 
 /// <summary>
-/// Configuration shared by every SSO provider (OpenID and SAML).
+/// Configuration shared by every SSO provider (OpenID and SAML). Both <see cref="SamlConfig"/> and
+/// <see cref="OidConfig"/> inherit these members; the concrete types are what get XML-serialized
+/// (SerializableDictionary serializes each value as its concrete type), so inherited members emit the
+/// same as declared ones and no <c>[XmlInclude]</c>/polymorphism handling is needed (#204). XML
+/// deserialization is by element name, so moving these up — which places them before the
+/// provider-specific elements in newly written XML — does not stop existing configs from loading.
 /// </summary>
 public abstract class ProviderConfigBase
 {
+    private SerializableDictionary<string, Guid> _canonicalLinks;
+
     /// <summary>
     /// Gets or sets the canonical external base URL for this provider, e.g.
     /// <c>https://jellyfin.example.com</c>. When set, the provider's derived external URLs (the OpenID
@@ -69,6 +76,124 @@ public abstract class ProviderConfigBase
     /// It overrides the scheme and port overrides. Blank keeps the request-host behavior.
     /// </summary>
     public string BaseUrlOverride { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the provider is enabled.
+    /// </summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether RBAC is enabled.
+    /// </summary>
+    public bool EnableAuthorization { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether an SSO login may adopt a pre-existing, unlinked
+    /// Jellyfin account whose username matches the SSO name. Off by default (fail closed): a first
+    /// login that matches an existing account is rejected rather than taking it over.
+    /// </summary>
+    public bool AllowExistingAccountLink { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether all folders are allowed by default.
+    /// </summary>
+    public bool EnableAllFolders { get; set; }
+
+    /// <summary>
+    /// Gets or sets what folders should users have access to by default.
+    /// </summary>
+    public string[] EnabledFolders { get; set; }
+
+    /// <summary>
+    /// Gets or sets the roles that are checked to determine whether the user is an administrator.
+    /// </summary>
+    public string[] AdminRoles { get; set; }
+
+    /// <summary>
+    /// Gets or sets what roles are checked to determine whether the user is allowed to use Jellyfin.
+    /// </summary>
+    public string[] Roles { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether RBAC is used to manage folder access.
+    /// </summary>
+    public bool EnableFolderRoles { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether RBAC is used to manage Live TV access.
+    /// </summary>
+    public bool EnableLiveTvRoles { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether Live TV is enabled by default.
+    /// </summary>
+    public bool EnableLiveTv { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether Live TV is allowed to be managed by default.
+    /// </summary>
+    public bool EnableLiveTvManagement { get; set; }
+
+    /// <summary>
+    /// Gets or sets the roles that are checked to determine whether the user is allowed to view Live TV.
+    /// </summary>
+    public string[] LiveTvRoles { get; set; }
+
+    /// <summary>
+    /// Gets or sets the roles that are checked to determine whether the user is allowed to manage Live TV.
+    /// </summary>
+    public string[] LiveTvManagementRoles { get; set; }
+
+    /// <summary>
+    /// Gets or sets which folders map to what roles in RBAC.
+    /// </summary>
+    [XmlArray("FolderRoleMappings")]
+    [XmlArrayItem(typeof(FolderRoleMap), ElementName = "FolderRoleMappings")]
+    public List<FolderRoleMap> FolderRoleMapping { get; set; }
+
+    /// <summary>
+    /// Gets or sets the default provider the user after logging in with SSO.
+    /// </summary>
+    public string DefaultProvider { get; set; }
+
+    /// <summary>
+    /// Gets or sets the redirect scheme override.
+    /// </summary>
+    public string SchemeOverride { get; set; }
+
+    /// <summary>
+    /// Gets or sets the redirect port override.
+    /// </summary>
+    public int? PortOverride { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the last non-linking login used the newer redirect path
+    /// spelling (the "/start/" form rather than the legacy short form). This is server-managed runtime
+    /// state, not an admin-facing setting: every non-linking challenge overwrites it from the incoming
+    /// request path so that a later linking flow — which cannot know which redirect path the identity
+    /// provider has registered — reuses the same spelling. It is persisted in the config XML for that
+    /// reason, not because it is user-configurable.
+    /// </summary>
+    public bool NewPath { get; set; }
+
+    /// <summary>
+    /// Gets or sets a mapping of canonical names from the provider to jellyfin user ids.
+    /// </summary>
+    // Server-managed (written by logins), not admin-edited: persisted in the config XML but withheld
+    // from every JSON response (#157). This stops the account-link map leaking off the server, closes
+    // the tear from serializing it while a login writes it, and blocks setting links via a config PUT.
+    // Its preservation on save is handled server-side in SSOPlugin.PreserveServerManagedFields.
+    [XmlElement("CanonicalLinks")]
+    [System.Text.Json.Serialization.JsonIgnore]
+    public SerializableDictionary<string, Guid> CanonicalLinks
+    {
+        // Self-healing lazy init: the backing map is created and stored on first access, so a direct
+        // `CanonicalLinks[key] = id` persists into the stored map instead of a discarded throwaway.
+        // Every access runs under the config lock (ReadConfiguration/MutateConfiguration), so the
+        // assignment cannot race; an empty map serializes the same as the old throwaway did.
+        get => _canonicalLinks ??= new SerializableDictionary<string, Guid>();
+        set => _canonicalLinks = value;
+    }
 }
 
 /// <summary>
@@ -77,8 +202,6 @@ public abstract class ProviderConfigBase
 [XmlRoot("PluginConfiguration")]
 public class SamlConfig : ProviderConfigBase
 {
-    private SerializableDictionary<string, Guid> _canonicalLinks;
-
     /// <summary>
     /// Gets or sets the SAML information endpoint.
     /// </summary>
@@ -121,124 +244,6 @@ public class SamlConfig : ProviderConfigBase
     /// enabling it rejects IdP-initiated (unsolicited) SSO, which carries no InResponseTo. Refs #156.
     /// </summary>
     public bool ValidateInResponseTo { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether the provider is enabled.
-    /// </summary>
-    public bool Enabled { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether RBAC is enabled.
-    /// </summary>
-    public bool EnableAuthorization { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether an SSO login may adopt a pre-existing, unlinked
-    /// Jellyfin account whose username matches the SSO name. Off by default (fail closed): a first
-    /// login that matches an existing account is rejected rather than taking it over.
-    /// </summary>
-    public bool AllowExistingAccountLink { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether all folders are allowed by default.
-    /// </summary>
-    public bool EnableAllFolders { get; set; }
-
-    /// <summary>
-    /// Gets or sets what folders should users have access to by default.
-    /// </summary>
-    public string[] EnabledFolders { get; set; }
-
-    /// <summary>
-    /// Gets or sets the roles that are checked to determine whether the user is an administrator.
-    /// </summary>
-    public string[] AdminRoles { get; set; }
-
-    /// <summary>
-    /// Gets or sets what roles are checked to determine whether the user is allowed to use Jellyfin.
-    /// </summary>
-    public string[] Roles { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether RBAC is used to manage folder access.
-    /// </summary>
-    public bool EnableFolderRoles { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether RBAC is used to manage Live TV access.
-    /// </summary>
-    public bool EnableLiveTvRoles { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether Live TV is enabled by default.
-    /// </summary>
-    public bool EnableLiveTv { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether Live TV is allowed to be managed by default.
-    /// </summary>
-    public bool EnableLiveTvManagement { get; set; }
-
-    /// <summary>
-    /// Gets or sets the roles that are checked to determine whether the user is allowed to view Live TV.
-    /// </summary>
-    public string[] LiveTvRoles { get; set; }
-
-    /// <summary>
-    /// Gets or sets the roles that are checked to determine whether the user is allowed to manage Live TV.
-    /// </summary>
-    public string[] LiveTvManagementRoles { get; set; }
-
-    /// <summary>
-    /// Gets or sets which folders map to what roles in RBAC.
-    /// </summary>
-    [XmlArray("FolderRoleMappings")]
-    [XmlArrayItem(typeof(FolderRoleMap), ElementName = "FolderRoleMappings")]
-    public List<FolderRoleMap> FolderRoleMapping { get; set; }
-
-    /// <summary>
-    /// Gets or sets the default provider the user after logging in with SSO.
-    /// </summary>
-    public string DefaultProvider { get; set; }
-
-    /// <summary>
-    /// Gets or sets the redirect scheme override.
-    /// </summary>
-    public string SchemeOverride { get; set; }
-
-    /// <summary>
-    /// Gets or sets the redirect port override.
-    /// </summary>
-    public int? PortOverride { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether the last non-linking login used the newer redirect path
-    /// spelling (the "/start/" form rather than the legacy short form). This is server-managed runtime
-    /// state, not an admin-facing setting: every non-linking challenge overwrites it from the incoming
-    /// request path so that a later linking flow — which cannot know which redirect path the identity
-    /// provider has registered — reuses the same spelling. It is persisted in the config XML for that
-    /// reason, not because it is user-configurable.
-    /// </summary>
-    public bool NewPath { get; set; }
-
-    /// <summary>
-    /// Gets or sets a mapping of canonical names from the provider to jellyfin user ids.
-    /// </summary>
-    // Server-managed (written by logins), not admin-edited: persisted in the config XML but withheld
-    // from every JSON response (#157). This stops the account-link map leaking off the server, closes
-    // the tear from serializing it while a login writes it, and blocks setting links via a config PUT.
-    // Its preservation on save is handled server-side in SSOPlugin.PreserveServerManagedFields.
-    [XmlElement("CanonicalLinks")]
-    [System.Text.Json.Serialization.JsonIgnore]
-    public SerializableDictionary<string, Guid> CanonicalLinks
-    {
-        // Self-healing lazy init: the backing map is created and stored on first access, so a direct
-        // `CanonicalLinks[key] = id` persists into the stored map instead of a discarded throwaway.
-        // Every access runs under the config lock (ReadConfiguration/MutateConfiguration), so the
-        // assignment cannot race; an empty map serializes the same as the old throwaway did.
-        get => _canonicalLinks ??= new SerializableDictionary<string, Guid>();
-        set => _canonicalLinks = value;
-    }
 }
 
 /// <summary>
@@ -247,8 +252,6 @@ public class SamlConfig : ProviderConfigBase
 [XmlRoot("PluginConfiguration")]
 public class OidConfig : ProviderConfigBase
 {
-    private SerializableDictionary<string, Guid> _canonicalLinks;
-
     /// <summary>
     /// Gets or sets the OpenID well-known information endpoint.
     /// </summary>
@@ -273,80 +276,6 @@ public class OidConfig : ProviderConfigBase
     public string OidSecret { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the provider is enabled.
-    /// </summary>
-    public bool Enabled { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether RBAC is enabled.
-    /// </summary>
-    public bool EnableAuthorization { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether an SSO login may adopt a pre-existing, unlinked
-    /// Jellyfin account whose username matches the SSO name. Off by default (fail closed): a first
-    /// login that matches an existing account is rejected rather than taking it over.
-    /// </summary>
-    public bool AllowExistingAccountLink { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether all folders are allowed by default.
-    /// </summary>
-    public bool EnableAllFolders { get; set; }
-
-    /// <summary>
-    /// Gets or sets what folders should users have access to by default.
-    /// </summary>
-    public string[] EnabledFolders { get; set; }
-
-    /// <summary>
-    /// Gets or sets the roles that are checked to determine whether the user is an administrator.
-    /// </summary>
-    public string[] AdminRoles { get; set; }
-
-    /// <summary>
-    /// Gets or sets what roles are checked to determine whether the user is allowed to use Jellyfin.
-    /// </summary>
-    public string[] Roles { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether RBAC is used to manage folder access.
-    /// </summary>
-    public bool EnableFolderRoles { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether RBAC is used to manage Live TV access.
-    /// </summary>
-    public bool EnableLiveTvRoles { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether Live TV is enabled by default.
-    /// </summary>
-    public bool EnableLiveTv { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether Live TV is allowed to be managed by default.
-    /// </summary>
-    public bool EnableLiveTvManagement { get; set; }
-
-    /// <summary>
-    /// Gets or sets the roles that are checked to determine whether the user is allowed to view Live TV.
-    /// </summary>
-    public string[] LiveTvRoles { get; set; }
-
-    /// <summary>
-    /// Gets or sets the roles that are checked to determine whether the user is allowed to manage Live TV.
-    /// </summary>
-    public string[] LiveTvManagementRoles { get; set; }
-
-    /// <summary>
-    /// Gets or sets which folders map to what roles in RBAC.
-    /// </summary>
-    [XmlArray("FolderRoleMappings")]
-    [XmlArrayItem(typeof(FolderRoleMap), ElementName = "FolderRoleMappings")]
-    public List<FolderRoleMap> FolderRoleMapping { get; set; }
-
-    /// <summary>
     /// Gets or sets the claim to check roles against. Separated by "."s.
     /// </summary>
     public string RoleClaim { get; set; }
@@ -355,50 +284,6 @@ public class OidConfig : ProviderConfigBase
     /// Gets or Sets additional Scopes to request access to in the authorization request.
     /// </summary>
     public string[] OidScopes { get; set; }
-
-    /// <summary>
-    /// Gets or sets the default provider the user after logging in with SSO.
-    /// </summary>
-    public string DefaultProvider { get; set; }
-
-    /// <summary>
-    /// Gets or sets the redirect scheme override.
-    /// </summary>
-    public string SchemeOverride { get; set; }
-
-    /// <summary>
-    /// Gets or sets the redirect port override.
-    /// </summary>
-    public int? PortOverride { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether the last non-linking login used the newer redirect path
-    /// spelling (the "/start/" form rather than the legacy short form). This is server-managed runtime
-    /// state, not an admin-facing setting: every non-linking challenge overwrites it from the incoming
-    /// request path so that a later linking flow — which cannot know which redirect path the identity
-    /// provider has registered — reuses the same spelling. It is persisted in the config XML for that
-    /// reason, not because it is user-configurable.
-    /// </summary>
-    public bool NewPath { get; set; }
-
-    /// <summary>
-    /// Gets or sets a mapping of canonical names from the provider to jellyfin user ids.
-    /// </summary>
-    // Server-managed (written by logins), not admin-edited: persisted in the config XML but withheld
-    // from every JSON response (#157). This stops the account-link map leaking off the server, closes
-    // the tear from serializing it while a login writes it, and blocks setting links via a config PUT.
-    // Its preservation on save is handled server-side in SSOPlugin.PreserveServerManagedFields.
-    [XmlElement("CanonicalLinks")]
-    [System.Text.Json.Serialization.JsonIgnore]
-    public SerializableDictionary<string, Guid> CanonicalLinks
-    {
-        // Self-healing lazy init: the backing map is created and stored on first access, so a direct
-        // `CanonicalLinks[key] = id` persists into the stored map instead of a discarded throwaway.
-        // Every access runs under the config lock (ReadConfiguration/MutateConfiguration), so the
-        // assignment cannot race; an empty map serializes the same as the old throwaway did.
-        get => _canonicalLinks ??= new SerializableDictionary<string, Guid>();
-        set => _canonicalLinks = value;
-    }
 
     /// <summary>
     /// Gets or sets the default username claim when creating new accounts.

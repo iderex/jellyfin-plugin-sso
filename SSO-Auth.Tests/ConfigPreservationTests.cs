@@ -285,6 +285,187 @@ public class ConfigPreservationTests
         Assert.Equal("https://jellyfin.example.com", back.BaseUrlOverride);
     }
 
+    // --- Shared-member consolidation into ProviderConfigBase (#204) ---
+
+    [Fact]
+    public void SamlConfig_WithSharedAndSpecificMembers_RoundTripsThroughXml()
+    {
+        // The shared members (Enabled, roles, overrides, NewPath, CanonicalLinks, …) now live on
+        // ProviderConfigBase. Serializing the concrete type must still emit and read back every one of
+        // them, so the on-disk config contract is unchanged by the base-class extraction.
+        var original = new SamlConfig
+        {
+            // Shared (base) members:
+            BaseUrlOverride = "https://jellyfin.example.com",
+            Enabled = true,
+            EnableAuthorization = true,
+            AllowExistingAccountLink = true,
+            EnableAllFolders = true,
+            EnabledFolders = new[] { "folder-a", "folder-b" },
+            AdminRoles = new[] { "admin" },
+            Roles = new[] { "user" },
+            EnableFolderRoles = true,
+            EnableLiveTvRoles = true,
+            EnableLiveTv = true,
+            EnableLiveTvManagement = true,
+            LiveTvRoles = new[] { "tv" },
+            LiveTvManagementRoles = new[] { "tv-admin" },
+            FolderRoleMapping = new System.Collections.Generic.List<FolderRoleMap>
+            {
+                new FolderRoleMap { Role = "user", Folders = new System.Collections.Generic.List<string> { "folder-a" } },
+            },
+            DefaultProvider = "provider",
+            SchemeOverride = "https",
+            PortOverride = 8443,
+            NewPath = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["nameid-1"] = User },
+
+            // Provider-specific members:
+            SamlEndpoint = "https://idp/saml",
+            SamlClientId = "sp-entity",
+            SamlAudience = "sp-audience",
+            DoNotValidateAudience = true,
+            ValidateRecipient = true,
+            ValidateInResponseTo = true,
+        };
+
+        var back = RoundTripXml(original);
+
+        Assert.Equal(original.BaseUrlOverride, back.BaseUrlOverride);
+        Assert.True(back.Enabled);
+        Assert.True(back.EnableAuthorization);
+        Assert.True(back.AllowExistingAccountLink);
+        Assert.True(back.EnableAllFolders);
+        Assert.Equal(original.EnabledFolders, back.EnabledFolders);
+        Assert.Equal(original.AdminRoles, back.AdminRoles);
+        Assert.Equal(original.Roles, back.Roles);
+        Assert.True(back.EnableFolderRoles);
+        Assert.True(back.EnableLiveTvRoles);
+        Assert.True(back.EnableLiveTv);
+        Assert.True(back.EnableLiveTvManagement);
+        Assert.Equal(original.LiveTvRoles, back.LiveTvRoles);
+        Assert.Equal(original.LiveTvManagementRoles, back.LiveTvManagementRoles);
+        Assert.Equal("user", back.FolderRoleMapping[0].Role);
+        Assert.Equal("folder-a", back.FolderRoleMapping[0].Folders[0]);
+        Assert.Equal("provider", back.DefaultProvider);
+        Assert.Equal("https", back.SchemeOverride);
+        Assert.Equal(8443, back.PortOverride);
+        Assert.True(back.NewPath);
+        Assert.Equal(User, back.CanonicalLinks["nameid-1"]);
+
+        Assert.Equal("https://idp/saml", back.SamlEndpoint);
+        Assert.Equal("sp-entity", back.SamlClientId);
+        Assert.Equal("sp-audience", back.SamlAudience);
+        Assert.True(back.DoNotValidateAudience);
+        Assert.True(back.ValidateRecipient);
+        Assert.True(back.ValidateInResponseTo);
+    }
+
+    [Fact]
+    public void OidConfig_WithSharedAndSpecificMembers_RoundTripsThroughXml()
+    {
+        var original = new OidConfig
+        {
+            // Shared (base) members:
+            BaseUrlOverride = "https://jellyfin.example.com",
+            Enabled = true,
+            SchemeOverride = "https",
+            PortOverride = 8443,
+            NewPath = true,
+            Roles = new[] { "user" },
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = User },
+
+            // Provider-specific members:
+            OidEndpoint = "https://idp/.well-known",
+            OidClientId = "client",
+            OidSecret = "s3cr3t",
+            OidScopes = new[] { "openid", "profile" },
+            RequirePkce = true,
+        };
+
+        var back = RoundTripXml(original);
+
+        Assert.Equal(original.BaseUrlOverride, back.BaseUrlOverride);
+        Assert.True(back.Enabled);
+        Assert.Equal("https", back.SchemeOverride);
+        Assert.Equal(8443, back.PortOverride);
+        Assert.True(back.NewPath);
+        Assert.Equal(original.Roles, back.Roles);
+        Assert.Equal(User, back.CanonicalLinks["sub-1"]);
+
+        Assert.Equal("https://idp/.well-known", back.OidEndpoint);
+        Assert.Equal("client", back.OidClientId);
+        Assert.Equal("s3cr3t", back.OidSecret);
+        Assert.Equal(original.OidScopes, back.OidScopes);
+        Assert.True(back.RequirePkce);
+    }
+
+    [Fact]
+    public void LegacyElementOrder_StillDeserializes_AfterMembersMovedToBase()
+    {
+        // Existing installs wrote the config with the shared members AFTER the provider-specific ones
+        // (their pre-#204 declaration order); the base-class extraction reverses that in newly written
+        // XML. XML deserialization is by element name, not position, so an on-disk config in the old
+        // order must still load every value. Element order here is deliberately the pre-refactor one.
+        const string legacyXml = @"<?xml version=""1.0"" encoding=""utf-16""?>
+<PluginConfiguration xmlns:xsi=""http://www.w3.org/2001/XMLSchema-instance"" xmlns:xsd=""http://www.w3.org/2001/XMLSchema"">
+  <SamlEndpoint>https://idp/saml</SamlEndpoint>
+  <SamlClientId>sp-entity</SamlClientId>
+  <DoNotValidateAudience>true</DoNotValidateAudience>
+  <Enabled>true</Enabled>
+  <EnableAuthorization>true</EnableAuthorization>
+  <Roles>
+    <string>user</string>
+  </Roles>
+  <SchemeOverride>https</SchemeOverride>
+  <PortOverride>8443</PortOverride>
+  <NewPath>true</NewPath>
+  <CanonicalLinks>
+    <item>
+      <key>
+        <string>nameid-1</string>
+      </key>
+      <value>
+        <guid>11111111-1111-1111-1111-111111111111</guid>
+      </value>
+    </item>
+  </CanonicalLinks>
+  <BaseUrlOverride>https://jellyfin.example.com</BaseUrlOverride>
+</PluginConfiguration>";
+
+        var serializer = new XmlSerializer(typeof(SamlConfig));
+        using var stringReader = new System.IO.StringReader(legacyXml);
+        using var xmlReader = System.Xml.XmlReader.Create(
+            stringReader,
+            new System.Xml.XmlReaderSettings { DtdProcessing = System.Xml.DtdProcessing.Prohibit, XmlResolver = null });
+        var back = (SamlConfig)serializer.Deserialize(xmlReader)!;
+
+        Assert.Equal("https://idp/saml", back.SamlEndpoint);
+        Assert.Equal("sp-entity", back.SamlClientId);
+        Assert.True(back.DoNotValidateAudience);
+        Assert.True(back.Enabled);
+        Assert.True(back.EnableAuthorization);
+        Assert.Equal(new[] { "user" }, back.Roles);
+        Assert.Equal("https", back.SchemeOverride);
+        Assert.Equal(8443, back.PortOverride);
+        Assert.True(back.NewPath);
+        Assert.Equal(User, back.CanonicalLinks["nameid-1"]);
+        Assert.Equal("https://jellyfin.example.com", back.BaseUrlOverride);
+    }
+
+    private static T RoundTripXml<T>(T value)
+    {
+        var serializer = new XmlSerializer(typeof(T));
+        using var writer = new System.IO.StringWriter();
+        serializer.Serialize(writer, value);
+
+        using var stringReader = new System.IO.StringReader(writer.ToString());
+        using var xmlReader = System.Xml.XmlReader.Create(
+            stringReader,
+            new System.Xml.XmlReaderSettings { DtdProcessing = System.Xml.DtdProcessing.Prohibit, XmlResolver = null });
+        return (T)serializer.Deserialize(xmlReader)!;
+    }
+
     // --- SAML certificate validation on save (#206) ---
 
     [Fact]

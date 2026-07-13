@@ -75,8 +75,8 @@ internal static class OidcRolePrivilegeMapper
     /// <summary>
     /// The privileges a set of roles grants under a provider configuration.
     /// </summary>
-    /// <param name="Valid">Whether any role is on the login allow-list (<see cref="OidConfig.Roles"/>).</param>
-    /// <param name="Admin">Whether any role is on the admin list (<see cref="OidConfig.AdminRoles"/>).</param>
+    /// <param name="Valid">Whether any role is on the login allow-list (<see cref="ProviderConfigBase.Roles"/>).</param>
+    /// <param name="Admin">Whether any role is on the admin list (<see cref="ProviderConfigBase.AdminRoles"/>).</param>
     /// <param name="EnableLiveTv">Whether any role grants Live TV (only when role-based Live TV is enabled).</param>
     /// <param name="EnableLiveTvManagement">Whether any role grants Live TV management (only when role-based Live TV is enabled).</param>
     /// <param name="Folders">The folders granted by matching folder-role mappings (only when folder roles are enabled).</param>
