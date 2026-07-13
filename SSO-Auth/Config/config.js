@@ -254,7 +254,12 @@ const ssoConfigurationPage = {
         });
 
         form_elements.check_fields.forEach((id) => {
-          if (provider[id]) page.querySelector("#" + id).checked = provider[id];
+          // Always set the checkbox from the loaded provider so switching providers
+          // resets stale toggles. Setting it only when truthy left a previous
+          // provider's checked box in place, which a later save could silently
+          // persist as true — a security downgrade for toggles like
+          // DoNotValidateEndpoints / DisableHttps.
+          page.querySelector("#" + id).checked = Boolean(provider[id]);
         });
 
         form_elements.role_map_fields.forEach((id) => {
