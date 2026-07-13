@@ -12,9 +12,9 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 /// <summary>
 /// Builds real, cryptographically-signed SAML 2.0 responses (and deliberately broken variants)
 /// against a throw-away self-signed certificate, so tests exercise the actual signature-validation
-/// path in <see cref="Jellyfin.Plugin.SSO_Auth.Response"/> rather than mocks.
+/// path in <see cref="Jellyfin.Plugin.SSO_Auth.SamlResponse"/> rather than mocks.
 ///
-/// Scoped to what the current <see cref="Jellyfin.Plugin.SSO_Auth.Response"/> validates
+/// Scoped to what the current <see cref="Jellyfin.Plugin.SSO_Auth.SamlResponse"/> validates
 /// (signature, signature scope, SubjectConfirmationData/@NotOnOrAfter). It grows as the
 /// validation surface is hardened (audience, recipient, InResponseTo, ... — see docs/ROADMAP.md).
 /// </summary>

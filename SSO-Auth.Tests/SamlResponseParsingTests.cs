@@ -8,7 +8,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 /// <summary>
 /// Tests for the malformed-input handling on the SAML callback (#199): <see cref="SamlResponseLoader.TryParse"/>
 /// maps the constructor's malformed-input exceptions to a fail-closed <see langword="false"/> (so the
-/// endpoints return a clean 4xx rather than an unhandled HTTP 500), and <see cref="Response.GetSignatureAlgorithm"/>
+/// endpoints return a clean 4xx rather than an unhandled HTTP 500), and <see cref="SamlResponse.GetSignatureAlgorithm"/>
 /// — a failure-log diagnostic — never throws on a malformed signature element.
 /// </summary>
 public class SamlResponseParsingTests
