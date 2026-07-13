@@ -6,6 +6,7 @@ using MediaBrowser.Model;
 using MediaBrowser.Model.Plugins;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
+using Microsoft.Net.Http.Headers;
 
 namespace Jellyfin.Plugin.SSO_Auth.Views;
 
@@ -16,6 +17,16 @@ namespace Jellyfin.Plugin.SSO_Auth.Views;
 [Route("[controller]")]
 public class SSOViewsController : ControllerBase
 {
+    // The embedded view assets only change with the plugin version, so a version-derived ETag lets clients
+    // 304-revalidate instead of re-downloading jellyfin-apiClient.esm.min.js (~79 KB) + emby-restyle.css on
+    // every linking-page load (#253). Derived from the FILE version (set per release by the build), not the
+    // AssemblyVersion (which can stay static across releases and would then serve stale assets after an
+    // update). The same tag across assets is correct: a client sends the ETag it cached for a given URL, and
+    // the server compares it against that URL's current tag.
+    private static readonly EntityTagHeaderValue AssetETag = new EntityTagHeaderValue(
+        "\"" + System.Diagnostics.FileVersionInfo.GetVersionInfo(
+            typeof(SSOViewsController).Assembly.Location).FileVersion + "\"");
+
     private readonly ILogger<SSOViewsController> _logger;
 
     /// <summary>
@@ -67,6 +78,6 @@ public class SSOViewsController : ControllerBase
             return NotFound();
         }
 #nullable disable
-        return File(stream, MimeTypes.GetMimeType(view.EmbeddedResourcePath));
+        return File(stream, MimeTypes.GetMimeType(view.EmbeddedResourcePath), lastModified: null, entityTag: AssetETag);
     }
 }
