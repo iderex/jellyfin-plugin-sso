@@ -58,17 +58,27 @@ const ssoConfigurationPage = {
       .forEach((e) => e.remove());
 
     const checkboxes = folders.Items.map((folder) => {
+      // The library folder Name/Id come from the Jellyfin core API; build the row with
+      // createElement/textContent (never innerHTML) so a folder named e.g. `<img onerror=...>`
+      // stays inert on the config page (#221). Mirrors linking.js populateExistingLinks.
       const out = document.createElement("label");
+      // Tag the row with the class the re-render cleanup (querySelectorAll above) removes, so a
+      // second populate deterministically clears the old rows instead of relying on the
+      // emby-checkbox upgrade to add it — otherwise folder IDs could be duplicated on re-populate.
+      out.classList.add("emby-checkbox-label");
 
-      out.innerHTML = `
-        <input
-          is="emby-checkbox"
-          class="folder-checkbox chkFolder"
-          data-id="${folder.Id}"
-          type="checkbox"
-        />
-        <span>${folder.Name}</span>
-      `;
+      // createElement's `is` option upgrades the customized built-in; the attribute is set as well
+      // so CSS attribute selectors and the web-components polyfill see it.
+      const checkbox = document.createElement("input", { is: "emby-checkbox" });
+      checkbox.setAttribute("is", "emby-checkbox");
+      checkbox.classList.add("folder-checkbox", "chkFolder");
+      checkbox.type = "checkbox";
+      checkbox.dataset.id = folder.Id;
+
+      const label = document.createElement("span");
+      label.textContent = folder.Name;
+
+      out.append(checkbox, label);
 
       return out;
     });
