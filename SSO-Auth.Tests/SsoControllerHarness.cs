@@ -40,7 +40,10 @@ internal sealed class SsoControllerHarness
 
     public PluginConfiguration Configuration { get; }
 
-    public SsoControllerHarness(Action<PluginConfiguration>? configure = null, IPAddress? clientIp = null)
+    public SsoControllerHarness(
+        Action<PluginConfiguration>? configure = null,
+        IPAddress? clientIp = null,
+        Func<HttpRequestMessage, HttpResponseMessage>? httpResponder = null)
     {
         Configuration = new PluginConfiguration();
         configure?.Invoke(Configuration);
@@ -56,6 +59,15 @@ internal sealed class SsoControllerHarness
         SessionManager = Substitute.For<ISessionManager>();
         AuthContext = Substitute.For<IAuthorizationContext>();
 
+        // With no responder the factory returns null (an unreachable network — the controller's discovery
+        // fetch fails closed). With one, every CreateClient() hands back a client backed by the stub, so
+        // OpenID discovery/JWKS can be served in-process.
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        if (httpResponder is not null)
+        {
+            httpClientFactory.CreateClient(Arg.Any<string>()).Returns(_ => new HttpClient(new StubHttpMessageHandler(httpResponder)));
+        }
+
         Controller = new SSOController(
             Substitute.For<ILogger<SSOController>>(),
             Substitute.For<ILoggerFactory>(),
@@ -64,7 +76,7 @@ internal sealed class SsoControllerHarness
             AuthContext,
             Substitute.For<ICryptoProvider>(),
             Substitute.For<IProviderManager>(),
-            Substitute.For<IHttpClientFactory>(),
+            httpClientFactory,
             Substitute.For<IServerConfigurationManager>())
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
