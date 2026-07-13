@@ -1,0 +1,95 @@
+# OpenSSF Scorecard — supply-chain hygiene self-audit.
+#
+# Scorecard scores the repository against the OpenSSF supply-chain best-practice
+# checks (Branch-Protection, Token-Permissions, Pinned-Dependencies,
+# Dangerous-Workflow, etc.) and uploads the findings as SARIF to the
+# code-scanning tab. The score is treated as a checklist, not a guarantee: each
+# check is triaged (fixed or documented-accept), same as the other security
+# insights.
+#
+# Runs where publishing is valid: on push to the default branch, on a weekly
+# schedule (keeps the Maintained check fresh and re-scores on upstream changes),
+# and on branch_protection_rule changes (the only event that lets the
+# Branch-Protection check see the ruleset). No pull_request trigger — that path
+# is experimental upstream and cannot publish results.
+#
+# Hardened per the repo's workflow policy (see zizmor.yml): every action is
+# SHA-pinned with a version comment, checkout runs with persist-credentials:false,
+# permissions are declared read-only at the top level and the write scopes are
+# granted only on the job that needs them. This is a self-audit only — it does
+# not build, test, or touch the publish/release pipeline. Note: publish_results
+# below publishes the OpenSSF supply-chain *score* to the OpenSSF API (the public
+# badge), not any software artifact — it is unrelated to the plugin release
+# pipeline and only works when run from the default branch.
+name: Scorecard supply-chain security
+
+on:
+  # Branch-Protection check only reads the default branch's ruleset.
+  branch_protection_rule:
+  # Keeps the Maintained check current and re-scores against upstream drift.
+  schedule:
+    - cron: "27 4 * * 1"
+  push:
+    branches: [main]
+
+# Read-only by default; the analysis job adds only the scopes it needs. A
+# read-only top-level declaration is itself one of the Token-Permissions checks
+# Scorecard rewards. Declared as an explicit scope rather than read-all so it is
+# minimal and specific (the job overrides this block with its own scopes).
+permissions:
+  contents: read
+
+# A newer run on the same ref supersedes an in-flight one; this is an audit, not
+# a publish, so cancelling a superseded run is safe.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # publish_results only works from the default branch; guard so a run on any
+    # other ref (e.g. a branch_protection_rule event on a non-default branch)
+    # does not attempt to publish.
+    if: github.event.repository.default_branch == github.ref_name
+    permissions:
+      # Clone the repo (public clone would also work anonymously, but declaring
+      # the scope keeps checkout robust and is what Scorecard's Token-Permissions
+      # check expects at the job level).
+      contents: read
+      # Upload the SARIF result to the code-scanning dashboard.
+      security-events: write
+      # Publish results to the OpenSSF API (badge + public score) via OIDC.
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # Public repo: publish the score to the OpenSSF API so the badge and
+          # the REST API reflect the current result.
+          publish_results: true
+
+      # Keep the raw SARIF as a run artifact for offline inspection/debugging.
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: SARIF file
+          path: results.sarif
+          retention-days: 5
+
+      # Surface the findings in the code-scanning tab, alongside CodeQL and zizmor.
+      - name: Upload to code-scanning
+        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
+        with:
+          sarif_file: results.sarif
+          category: scorecard
