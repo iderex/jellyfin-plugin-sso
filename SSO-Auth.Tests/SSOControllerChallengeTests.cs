@@ -1,4 +1,5 @@
 using System.Threading.Tasks;
+using Jellyfin.Plugin.SSO_Auth;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Microsoft.AspNetCore.Mvc;
 using Xunit;
@@ -25,6 +26,8 @@ public class SSOControllerChallengeTests
         var result = Assert.IsType<RedirectResult>(harness.Controller.SamlChallenge("adfs"));
 
         Assert.StartsWith("https://idp.example.com/sso", result.Url);
+        // The redirect carries the deflated+encoded AuthnRequest, so it must be a real SAML redirect.
+        Assert.Contains("SAMLRequest=", result.Url);
     }
 
     [Fact]
@@ -39,18 +42,22 @@ public class SSOControllerChallengeTests
     }
 
     [Fact]
-    public void OidProviders_ReturnsOkSnapshot()
+    public void OidProviders_ReturnsOkSnapshotContainingTheProvider()
     {
         var harness = new SsoControllerHarness(c => c.OidConfigs["keycloak"] = new OidConfig());
 
-        Assert.IsType<OkObjectResult>(harness.Controller.OidProviders());
+        var ok = Assert.IsType<OkObjectResult>(harness.Controller.OidProviders());
+        var snapshot = Assert.IsType<SerializableDictionary<string, OidConfig>>(ok.Value);
+        Assert.True(snapshot.ContainsKey("keycloak"));
     }
 
     [Fact]
-    public void SamlProviders_ReturnsOkSnapshot()
+    public void SamlProviders_ReturnsOkSnapshotContainingTheProvider()
     {
         var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig());
 
-        Assert.IsType<OkObjectResult>(harness.Controller.SamlProviders());
+        var ok = Assert.IsType<OkObjectResult>(harness.Controller.SamlProviders());
+        var snapshot = Assert.IsType<SerializableDictionary<string, SamlConfig>>(ok.Value);
+        Assert.True(snapshot.ContainsKey("adfs"));
     }
 }
