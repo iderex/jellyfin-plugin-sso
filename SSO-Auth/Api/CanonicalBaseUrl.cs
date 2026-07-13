@@ -93,22 +93,28 @@ internal static class CanonicalBaseUrl
             throw new InvalidOperationException("The configured Base URL override is not a valid absolute http(s) URL.");
         }
 
-        var requestPort = portOverride ?? port ?? -1;
-
-        if ((requestPort == 80 && string.Equals(scheme, "http", StringComparison.OrdinalIgnoreCase))
-            || (requestPort == 443 && string.Equals(scheme, "https", StringComparison.OrdinalIgnoreCase)))
-        {
-            requestPort = -1;
-        }
-
+        // Only a literal http/https scheme override is honored; anything else falls back to the request
+        // scheme. Resolve the effective scheme FIRST so the default-port elision below decides against the
+        // scheme that will actually appear in the URL (#272).
         if (!string.Equals(schemeOverride, "http", StringComparison.Ordinal) && !string.Equals(schemeOverride, "https", StringComparison.Ordinal))
         {
             schemeOverride = null;
         }
 
+        var effectiveScheme = schemeOverride ?? scheme;
+        var requestPort = portOverride ?? port ?? -1;
+
+        // Elide the default port for the EFFECTIVE scheme, so a TLS-terminating proxy (http request +
+        // schemeOverride=https + port 443) yields the canonical https://host, not https://host:443.
+        if ((requestPort == 80 && string.Equals(effectiveScheme, "http", StringComparison.OrdinalIgnoreCase))
+            || (requestPort == 443 && string.Equals(effectiveScheme, "https", StringComparison.OrdinalIgnoreCase)))
+        {
+            requestPort = -1;
+        }
+
         return new UriBuilder
         {
-            Scheme = schemeOverride ?? scheme,
+            Scheme = effectiveScheme,
             Host = host,
             Port = requestPort,
             Path = pathBase,

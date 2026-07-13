@@ -108,6 +108,13 @@ Exact redirect-URI matching at the provider is the backstop, but it only helps i
   only if Jellyfin's **Known Proxies** is set **and** the proxy sends a trusted `X-Forwarded-Host`
   (not a client-supplied one). Known Proxies alone only decides which upstreams may supply forwarded
   headers — it does not by itself make a forwarded host trustworthy.
+- **Scheme override behind a TLS-terminating proxy (fallback path only):** when `SchemeOverride` sets a
+  scheme that differs from the one Jellyfin sees — a proxy terminates TLS, so Jellyfin receives `http`
+  while the public site is `https` — the derived `redirect_uri` and SAML base use the **canonical** form,
+  without the default port: `https://host`, not `https://host:443` (and, symmetrically, `http://host`,
+  not `http://host:80`). Register that canonical no-port form at your provider. If you previously pinned
+  an explicit `:443`/`:80` `redirect_uri` to work around the old port-in-URL behavior, switch it to the
+  no-port form.
 
 ## SAML response binding (optional hardening)
 
