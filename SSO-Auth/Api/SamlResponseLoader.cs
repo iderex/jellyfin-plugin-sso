@@ -14,6 +14,13 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 /// </summary>
 internal static class SamlResponseLoader
 {
+    // Maximum accepted length of the Base64 SAMLResponse. Real responses are single-digit KB; 256 KB is
+    // generous headroom for role-heavy assertions and bounds the base64 decode + whitespace-preserving DOM
+    // parse on the unauthenticated callback path (#249), where a multi-MB body would otherwise cost ~100 MB
+    // of transient allocations before any signature is checked. The DTD prohibition stops entity expansion
+    // but not raw bulk, and the rate limiter is opt-in — this is the always-on cap.
+    internal const int MaxEncodedResponseLength = 256 * 1024;
+
     /// <summary>
     /// Tries to parse a SAML response, returning <see langword="false"/> (rather than throwing) on the
     /// malformed-input exceptions the <see cref="Response"/> constructor raises.
@@ -28,6 +35,14 @@ internal static class SamlResponseLoader
         // yields a null string on the unauthenticated ACS endpoint); reject it here rather than let
         // Convert.FromBase64String(null) raise ArgumentNullException and escape as an unhandled 500.
         if (string.IsNullOrEmpty(responseString))
+        {
+            response = null;
+            return false;
+        }
+
+        // Reject an oversized body before decoding/parsing it (#249) — fail closed, same clean rejection
+        // as any other malformed response, with no crypto or allocation spent on the untrusted bulk.
+        if (responseString.Length > MaxEncodedResponseLength)
         {
             response = null;
             return false;

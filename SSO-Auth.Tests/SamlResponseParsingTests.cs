@@ -67,6 +67,18 @@ public class SamlResponseParsingTests
     }
 
     [Fact]
+    public void TryParse_OversizedResponse_ReturnsFalse()
+    {
+        // A body over the length cap is rejected before any base64 decode / DOM parse (#249) — fail
+        // closed, with no crypto or bulk allocation spent on an untrusted multi-MB body.
+        var fixture = SamlTestFactory.Create();
+        var oversized = new string('A', SamlResponseLoader.MaxEncodedResponseLength + 1);
+
+        Assert.False(SamlResponseLoader.TryParse(fixture.CertificateBase64, oversized, out var response));
+        Assert.Null(response);
+    }
+
+    [Fact]
     public void GetSignatureAlgorithm_ValidResponse_ReturnsTheSignatureMethod()
     {
         var fixture = SamlTestFactory.Create();
