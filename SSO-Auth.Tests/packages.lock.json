@@ -21,6 +21,15 @@
           "Microsoft.TestPlatform.TestHost": "18.7.0"
         }
       },
+      "NSubstitute": {
+        "type": "Direct",
+        "requested": "[5.3.0, )",
+        "resolved": "5.3.0",
+        "contentHash": "lJ47Cps5Qzr86N99lcwd+OUvQma7+fBgr8+Mn+aOC0WrlqMNkdivaYD9IvnZ5Mqo6Ky3LS7ZI+tUq1/s9ERd0Q==",
+        "dependencies": {
+          "Castle.Core": "5.1.1"
+        }
+      },
       "xunit.runner.visualstudio": {
         "type": "Direct",
         "requested": "[3.1.5, )",
@@ -40,6 +49,14 @@
         "type": "Transitive",
         "resolved": "2.5.4",
         "contentHash": "1QroTY1PVCZOSG9FnkkCrmCKk/+bZCgI/YXq376HnYwUDJ4Ho0EaV4YaA/5v5WYLnwIwIO7RZkdWbg9pxIpueQ=="
+      },
+      "Castle.Core": {
+        "type": "Transitive",
+        "resolved": "5.1.1",
+        "contentHash": "rpYtIczkzGpf+EkZgDr9CClTdemhsrwA/W5hMoPjLkRFnXzH44zDLoovXeKtmxb1ykXK9aJVODSpiJml8CTw2g==",
+        "dependencies": {
+          "System.Diagnostics.EventLog": "6.0.0"
+        }
       },
       "Diacritics": {
         "type": "Transitive",
@@ -443,6 +460,11 @@
         "type": "Transitive",
         "resolved": "10.0.4",
         "contentHash": "WBD8SloNQ9Fp+6Iz+H42w5/VdwYPz9q7iuT6V5ng2FrtR1bYsewmQ3i2PqRR4NnuSZobJ/XtiKkbQyrheDHHdQ=="
+      },
+      "System.Diagnostics.EventLog": {
+        "type": "Transitive",
+        "resolved": "6.0.0",
+        "contentHash": "lcyUiXTsETK2ALsZrX+nWuHSIQeazhqPphLfaRxzdGaG93+0kELqpgEHtwWOlQe7+jSFnKwaCAgL4kjeZCQJnw=="
       },
       "System.Formats.Asn1": {
         "type": "Transitive",
