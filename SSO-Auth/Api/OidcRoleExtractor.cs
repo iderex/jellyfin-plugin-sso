@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -23,8 +24,10 @@ internal static class OidcRoleExtractor
     /// <param name="claimValue">The matched claim's value (a raw role, or a JSON object for a nested path).</param>
     /// <returns>
     /// The extracted roles: the raw claim value as a single role for a one-segment path; otherwise the
-    /// string array reached by walking the JSON path. An empty list when the path does not resolve to a
-    /// JSON array (missing segment, non-object node, or non-array terminal).
+    /// string elements of the array reached by walking the JSON path (non-string elements are ignored).
+    /// Returns an empty list when the path does not resolve to a JSON array (missing segment, non-object
+    /// node, or non-array terminal) and when the claim value is malformed JSON — a multi-segment parse
+    /// fails closed to no roles rather than throwing (#216).
     /// </returns>
     internal static List<string> ExtractRoles(string[] roleClaimSegments, string claimValue)
     {
@@ -34,37 +37,46 @@ internal static class OidcRoleExtractor
             return new List<string> { claimValue };
         }
 
-        // A multi-segment path parses the claim value as a JSON object and walks it. A JSON null
-        // yields no roles; a malformed or non-object value throws (surfaced by the caller as a
-        // failed login, i.e. fail-closed).
-        var json = JsonConvert.DeserializeObject<IDictionary<string, object>>(claimValue);
-        if (json is null)
+        // A multi-segment path parses the claim value as a JSON object and walks it. The claim value is
+        // attacker-influenced, so any malformed or unexpected shape (non-object root, non-object node,
+        // non-array terminal, or a terminal array of non-strings) must fail CLOSED to an empty role set
+        // rather than throw an unhandled 500 on the public callback (#216).
+        try
         {
-            return new List<string>();
-        }
-
-        // Walk the intermediate segments; any missing key or non-object node yields no roles.
-        for (int i = 1; i < roleClaimSegments.Length - 1; i++)
-        {
-            var segment = roleClaimSegments[i];
-            if (!json.TryGetValue(segment, out var nextToken) || nextToken is not JObject nextObject)
-            {
-                return new List<string>();
-            }
-
-            json = nextObject.ToObject<IDictionary<string, object>>();
+            var json = JsonConvert.DeserializeObject<IDictionary<string, object>>(claimValue);
             if (json is null)
             {
                 return new List<string>();
             }
-        }
 
-        // The terminal segment must resolve to a JSON array of role strings.
-        if (!json.TryGetValue(roleClaimSegments[^1], out var rolesToken) || rolesToken is not JArray rolesArray)
+            // Walk the intermediate segments; any missing key or non-object node yields no roles.
+            for (int i = 1; i < roleClaimSegments.Length - 1; i++)
+            {
+                var segment = roleClaimSegments[i];
+                if (!json.TryGetValue(segment, out var nextToken) || nextToken is not JObject nextObject)
+                {
+                    return new List<string>();
+                }
+
+                json = nextObject.ToObject<IDictionary<string, object>>();
+                if (json is null)
+                {
+                    return new List<string>();
+                }
+            }
+
+            // The terminal segment must resolve to a JSON array; take only its string elements so a
+            // terminal array of objects or numbers cannot throw.
+            if (!json.TryGetValue(roleClaimSegments[^1], out var rolesToken) || rolesToken is not JArray rolesArray)
+            {
+                return new List<string>();
+            }
+
+            return rolesArray.Where(token => token.Type == JTokenType.String).Select(token => token.Value<string>()).ToList();
+        }
+        catch (JsonException)
         {
             return new List<string>();
         }
-
-        return rolesArray.ToObject<List<string>>();
     }
 }
