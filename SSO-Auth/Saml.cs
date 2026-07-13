@@ -41,35 +41,12 @@ public class Response
     /// <param name="certificateStr">The certificate formatted as a Base64 string.</param>
     /// <param name="responseString">The SAML response formatted as a string.</param>
     public Response(string certificateStr, string responseString)
-        : this(Convert.FromBase64String(certificateStr), responseString)
     {
-    }
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="Response"/> class.
-    /// </summary>
-    /// <param name="certificateBytes">The certificate formatted as an array of bytes.</param>
-    /// <param name="responseString">The SAML response formatted as a string.</param>
-    public Response(byte[] certificateBytes, string responseString) : this(certificateBytes)
-    {
+        // Decode and load the certificate, then load the response — in that exact order, so the exception
+        // sequence SamlResponseLoader.TryParse catches is unchanged: FormatException (bad certificate
+        // base64), CryptographicException (bad certificate), then FormatException/XmlException (bad body).
+        _certificate = X509CertificateLoader.LoadCertificate(Convert.FromBase64String(certificateStr));
         LoadXmlFromBase64(responseString);
-    }
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="Response"/> class.
-    /// </summary>
-    /// <param name="certificateStr">The certificate formatted as a Base64 string.</param>
-    public Response(string certificateStr) : this(Convert.FromBase64String(certificateStr))
-    {
-    }
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="Response"/> class.
-    /// </summary>
-    /// <param name="certificateBytes">The certificate formatted as an array of bytes.</param>
-    public Response(byte[] certificateBytes)
-    {
-        _certificate = X509CertificateLoader.LoadCertificate(certificateBytes);
     }
 
     /// <summary>
@@ -441,97 +418,6 @@ public class Response
     }
 
     /// <summary>
-    /// Gets the UPN attribute from the XML response.
-    /// </summary>
-    /// <returns>The UPN attribute.</returns>
-    public virtual string GetUpn()
-    {
-        return GetCustomAttribute("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/upn");
-    }
-
-    /// <summary>
-    /// Gets the email attribute from the XML response.
-    /// </summary>
-    /// <returns>The email attribute.</returns>
-    public virtual string GetEmail()
-    {
-        return GetCustomAttribute("User.email")
-               // some providers (for example Azure AD) put last name into an attribute named "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress"
-               ?? GetCustomAttribute("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress")
-               // some providers put last name into an attribute named "mail"
-               ?? GetCustomAttribute("mail");
-    }
-
-    /// <summary>
-    /// Gets the First Name attribute from the XML response.
-    /// </summary>
-    /// <returns>The First Name attribute.</returns>
-    public virtual string GetFirstName()
-    {
-        return GetCustomAttribute("first_name")
-               // some providers (for example Azure AD) put last name into an attribute named "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname"
-               ?? GetCustomAttribute("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname")
-               ?? GetCustomAttribute("User.FirstName")
-               // some providers put last name into an attribute named "givenName"
-               ?? GetCustomAttribute("givenName");
-    }
-
-    /// <summary>
-    /// Gets the Last Name attribute from the XML response.
-    /// </summary>
-    /// <returns>The Last Name attribute.</returns>
-    public virtual string GetLastName()
-    {
-        return GetCustomAttribute("last_name")
-               // some providers (for example Azure AD) put last name into an attribute named "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/surname"
-               ?? GetCustomAttribute("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/surname")
-               ?? GetCustomAttribute("User.LastName")
-               // some providers put last name into an attribute named "sn"
-               ?? GetCustomAttribute("sn");
-    }
-
-    /// <summary>
-    /// Gets the department attribute from the XML response.
-    /// </summary>
-    /// <returns>The department attribute.</returns>
-    public virtual string GetDepartment()
-    {
-        return GetCustomAttribute("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/department")
-               ?? GetCustomAttribute("department");
-    }
-
-    /// <summary>
-    /// Gets the phone attribute from the XML response.
-    /// </summary>
-    /// <returns>The phone attribute.</returns>
-    public virtual string GetPhone()
-    {
-        return GetCustomAttribute("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/homephone")
-               ?? GetCustomAttribute("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/telephonenumber");
-    }
-
-    /// <summary>
-    /// Gets the company attribute from the XML response.
-    /// </summary>
-    /// <returns>The company attribute.</returns>
-    public virtual string GetCompany()
-    {
-        return GetCustomAttribute("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/companyname")
-               ?? GetCustomAttribute("organization")
-               ?? GetCustomAttribute("User.CompanyName");
-    }
-
-    /// <summary>
-    /// Gets the location attribute from the XML response.
-    /// </summary>
-    /// <returns>The location attribute.</returns>
-    public virtual string GetLocation()
-    {
-        return GetCustomAttribute("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/location")
-               ?? GetCustomAttribute("physicalDeliveryOfficeName");
-    }
-
-    /// <summary>
     /// Gets the first custom attribute from the XML response.
     /// </summary>
     /// <param name="attr">The custom attribute to query.</param>
@@ -598,17 +484,6 @@ public class AuthRequest
     }
 
     /// <summary>
-    /// The formatting of the AuthRequest.
-    /// </summary>
-    public enum AuthRequestFormat
-    {
-        /// <summary>
-        /// Base64 request.
-        /// </summary>
-        Base64 = 1
-    }
-
-    /// <summary>
     /// Gets the request's unique ID (the value sent as the AuthnRequest ID). The service provider
     /// records it so a later response's InResponseTo can be correlated to this request (#156).
     /// </summary>
@@ -617,9 +492,8 @@ public class AuthRequest
     /// <summary>
     /// Gets the SAML request.
     /// </summary>
-    /// <param name="format">The format the request should be returned in.</param>
-    /// <returns>The request as a string, either Base64 or not, depending on the format parameter.</returns>
-    public string GetRequest(AuthRequestFormat format)
+    /// <returns>The request as a Base64-encoded, DEFLATE-compressed string.</returns>
+    public string GetRequest()
     {
         using var sw = new StringWriter();
         var xws = new XmlWriterSettings();
@@ -646,18 +520,13 @@ public class AuthRequest
             xw.WriteEndElement();
         }
 
-        if (format == AuthRequestFormat.Base64)
-        {
-            // https://stackoverflow.com/questions/25120025/acs75005-the-request-is-not-a-valid-saml2-protocol-message-is-showing-always%3C/a%3E
-            var memoryStream = new MemoryStream();
-            var writer = new StreamWriter(new DeflateStream(memoryStream, CompressionMode.Compress, true), new UTF8Encoding(false));
-            writer.Write(sw.ToString());
-            writer.Close();
-            var result = Convert.ToBase64String(memoryStream.GetBuffer(), 0, (int)memoryStream.Length, Base64FormattingOptions.None);
-            return result;
-        }
-
-        return null;
+        // https://stackoverflow.com/questions/25120025/acs75005-the-request-is-not-a-valid-saml2-protocol-message-is-showing-always%3C/a%3E
+        var memoryStream = new MemoryStream();
+        var writer = new StreamWriter(new DeflateStream(memoryStream, CompressionMode.Compress, true), new UTF8Encoding(false));
+        writer.Write(sw.ToString());
+        writer.Close();
+        var result = Convert.ToBase64String(memoryStream.GetBuffer(), 0, (int)memoryStream.Length, Base64FormattingOptions.None);
+        return result;
     }
 
     /// <summary>
@@ -672,7 +541,7 @@ public class AuthRequest
 
         var queryStringSeparator = samlEndpoint.Contains('?') ? "&" : "?";
 
-        var url = samlEndpoint + queryStringSeparator + "SAMLRequest=" + HttpUtility.UrlEncode(GetRequest(AuthRequestFormat.Base64));
+        var url = samlEndpoint + queryStringSeparator + "SAMLRequest=" + HttpUtility.UrlEncode(GetRequest());
 
         if (!string.IsNullOrEmpty(relayState))
         {
