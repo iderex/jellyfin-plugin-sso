@@ -70,6 +70,10 @@ Copy the **full publish output** (`SSO-Auth.dll` and every dependency DLL beside
 
 A packaged release installable from a plugin repository will be published once the hardening pass reaches its first release milestone.
 
+**Client support:** SSO sign-in runs in the Jellyfin **Web UI** and in clients that support **Quick Connect** (the mobile and TV apps drive the login through Quick Connect). A native client that does not support Quick Connect cannot complete the browser redirect flow — use the Web UI or a Quick Connect client there.
+
+**Coming from the old plugin repository?** This project is the maintained continuation of the archived `9p4/jellyfin-plugin-sso`. If your Jellyfin still points at the old `9p4` manifest, it will not receive updates from here. Once packaged releases resume, switch the plugin-repository URL to this repository's manifest; until then, build from source as above. The plugin GUID is unchanged, so an in-place update keeps your existing configuration.
+
 ## Configuration
 
 Configure your providers on the plugin's settings page (**Dashboard → Plugins → SSO-Auth**) and via the admin API. The [Provider Guides](providers.md) walk through setup for common identity providers.
