@@ -15,9 +15,12 @@
 #
 # Hardened per the repo's workflow policy (see zizmor.yml): every action is
 # SHA-pinned with a version comment, checkout runs with persist-credentials:false,
-# permissions are declared read-only at the top level and the single write scope
-# is granted only on the job that needs it. This is a self-audit only — it does
-# not build, test, or touch the publish/release pipeline.
+# permissions are declared read-only at the top level and the write scopes are
+# granted only on the job that needs them. This is a self-audit only — it does
+# not build, test, or touch the publish/release pipeline. Note: publish_results
+# below publishes the OpenSSF supply-chain *score* to the OpenSSF API (the public
+# badge), not any software artifact — it is unrelated to the plugin release
+# pipeline and only works when run from the default branch.
 name: Scorecard supply-chain security
 
 on:
@@ -31,8 +34,10 @@ on:
 
 # Read-only by default; the analysis job adds only the scopes it needs. A
 # read-only top-level declaration is itself one of the Token-Permissions checks
-# Scorecard rewards.
-permissions: read-all
+# Scorecard rewards. Declared as an explicit scope rather than read-all so it is
+# minimal and specific (the job overrides this block with its own scopes).
+permissions:
+  contents: read
 
 # A newer run on the same ref supersedes an in-flight one; this is an audit, not
 # a publish, so cancelling a superseded run is safe.
@@ -50,6 +55,10 @@ jobs:
     # does not attempt to publish.
     if: github.event.repository.default_branch == github.ref_name
     permissions:
+      # Clone the repo (public clone would also work anonymously, but declaring
+      # the scope keeps checkout robust and is what Scorecard's Token-Permissions
+      # check expects at the job level).
+      contents: read
       # Upload the SARIF result to the code-scanning dashboard.
       security-events: write
       # Publish results to the OpenSSF API (badge + public score) via OIDC.
