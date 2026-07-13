@@ -54,6 +54,34 @@ jobs:
     - name: Test
       run: dotnet test --no-build --verbosity normal
 
+  # Verify the plugin's used Jellyfin API surface actually exists on the OLDEST server it claims to
+  # support (build.yaml targetAbi), not only in the newer SDK the shipping build compiles against. A
+  # member added after the floor would compile against the SDK but throw MissingMethodException at
+  # login on an older 10.11 server (#142). Builds SSO-Auth against Jellyfin.* pinned to that floor.
+  abi-floor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      with:
+        persist-credentials: false
+    - name: Setup .NET
+      uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+      with:
+        dotnet-version: 9.0.x
+    - name: Derive the targetAbi floor
+      id: floor
+      run: |
+        floor=$(grep -oP 'targetAbi:\s*"?\K[0-9]+\.[0-9]+\.[0-9]+' build.yaml | head -1)
+        echo "version=$floor" >> "$GITHUB_OUTPUT"
+        echo "Building against Jellyfin $floor (the declared targetAbi floor)."
+    - name: Build against the ABI floor
+      # A deliberately different Jellyfin version than the shipping build, so locked-mode is off here;
+      # --warnaserror turns any missing or changed API on the floor into a hard failure.
+      env:
+        FLOOR: ${{ steps.floor.outputs.version }}
+      run: dotnet build SSO-Auth/SSO-Auth.csproj -c Release --warnaserror -p:JellyfinVersion="$FLOOR" -p:RestoreLockedMode=false
+
   # Verify the plugin actually packages as a loadable Jellyfin plugin (JPRM builds it against the
   # targeted ABI and produces the manifest) on every PR, not only at release time.
   package:
