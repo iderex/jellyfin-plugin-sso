@@ -702,6 +702,26 @@
                     May be required for Cloudflare OpenID
                   </div>
                 </div>
+                <div
+                  class="checkboxContainer checkboxContainer-withDescription"
+                >
+                  <label>
+                    <input
+                      is="emby-checkbox"
+                      id="RequirePkce"
+                      name="RequirePkce"
+                      type="checkbox"
+                      class="sso-toggle"
+                    />
+                    <span>Require PKCE (S256)</span>
+                  </label>
+                  <div class="fieldDescription checkboxFieldDescription">
+                    Refuse login unless the provider's discovery document
+                    advertises PKCE (S256) in code_challenge_methods_supported
+                    (RFC 9700 §2.1.1). When off, an unsupported provider only
+                    logs an audit warning and the login proceeds.
+                  </div>
+                </div>
 
                 <div class="inputContainer">
                   <label

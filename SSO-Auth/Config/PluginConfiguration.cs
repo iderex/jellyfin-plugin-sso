@@ -439,6 +439,15 @@ public class OidConfig : ProviderConfigBase
     /// Gets or sets a value indicating whether the UserInfo endpoint is used to get profile data.
     /// </summary>
     public bool DoNotLoadProfile { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the authorization server must advertise PKCE with S256
+    /// (in the discovery document's <c>code_challenge_methods_supported</c>) before a login proceeds.
+    /// When true, a login is refused if the server does not advertise S256 — fail closed, RFC 9700
+    /// §2.1.1. When false (the default), an unsupported server only logs an <c>[SSO Audit]</c> warning
+    /// and the login proceeds (PKCE is still sent, but the server may ignore it).
+    /// </summary>
+    public bool RequirePkce { get; set; }
 }
 
 /// <summary>

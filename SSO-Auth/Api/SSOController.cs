@@ -75,6 +75,12 @@ public class SSOController : ControllerBase
     // Outstanding SAML AuthnRequest IDs, for InResponseTo correlation of solicited responses (#156).
     private static readonly SamlRequestCache SamlRequests = new SamlRequestCache();
 
+    // Cache of per-discovery-URL PKCE-S256 support (#141), so a login does not fetch discovery every time
+    // (the document changes rarely). Only definitive results are cached; a fetch failure is not cached, so
+    // it retries on the next login. The short TTL bounds how long a provider's changed support is stale.
+    private static readonly ConcurrentDictionary<string, (bool Supported, DateTime FetchedAt)> PkceSupportCache = new();
+    private static readonly TimeSpan PkceSupportCacheTtl = TimeSpan.FromMinutes(15);
+
     // How long an issued SAML AuthnRequest ID stays valid for correlation — the interactive leg
     // (challenge -> IdP login/MFA -> POST back -> mint), matching the OpenID StateLifetime.
     private static readonly TimeSpan SamlRequestLifetime = TimeSpan.FromMinutes(15);
@@ -261,6 +267,27 @@ public class SSOController : ControllerBase
 
         if (config.Enabled)
         {
+            // RFC 9700 §2.1.1: confirm the authorization server advertises PKCE (S256) before relying on
+            // it. OidcClient sends code_challenge unconditionally but never checks this, so a server that
+            // ignores PKCE would silently downgrade authorization-code-injection protection (#141). Fail
+            // closed when the provider is marked RequirePkce; otherwise emit an audit warning and proceed.
+            var pkceSupported = await ProviderAdvertisesPkceS256Async(config, provider).ConfigureAwait(false);
+            if (pkceSupported == false)
+            {
+                if (config.RequirePkce)
+                {
+                    _logger.LogWarning("OpenID login refused for provider {Provider}: RequirePkce is set but the authorization server does not advertise PKCE (S256).", provider?.ReplaceLineEndings(string.Empty));
+                    return ReturnError(StatusCodes.Status400BadRequest, "The identity provider does not advertise the required PKCE (S256) support.");
+                }
+
+                SsoAudit.PkceNotAdvertised(_logger, provider);
+            }
+            else if (pkceSupported is null && config.RequirePkce)
+            {
+                _logger.LogWarning("OpenID login refused for provider {Provider}: RequirePkce is set but the discovery document could not be read to confirm PKCE (S256).", provider?.ReplaceLineEndings(string.Empty));
+                return ReturnError(StatusCodes.Status400BadRequest, "The identity provider's PKCE (S256) support could not be verified.");
+            }
+
             bool newPath = config.NewPath;
             if (!isLinking)
             {
@@ -328,6 +355,53 @@ public class SSOController : ControllerBase
         options.Policy.RequireIdentityTokenSignature = true;
         options.IdentityTokenValidator = new OidcIdTokenValidator();
         return new OidcClient(options);
+    }
+
+    // Fetches the provider's OpenID discovery document and reports whether it advertises PKCE S256 (#141):
+    // true when advertised, false when the document was read but does not advertise it, null when it could
+    // not be fetched/read. The discovery URL is the admin-configured authority + the well-known path (the
+    // same document OidcClient uses); the fetch is bounded by a timeout and never throws — a transient
+    // failure returns null so the caller decides (fail closed only under RequirePkce). Best-effort: this
+    // does not replace OidcClient's own discovery, which fails the login if the provider is truly down.
+    private async Task<bool?> ProviderAdvertisesPkceS256Async(OidConfig config, string provider)
+    {
+        var authority = config.OidEndpoint?.Trim();
+        if (string.IsNullOrEmpty(authority) || !Uri.TryCreate(authority, UriKind.Absolute, out _))
+        {
+            return null;
+        }
+
+        // OidEndpoint is usually the issuer/authority, but some providers (e.g. PocketID) configure the
+        // full .well-known URL; append the discovery path only when it is not already present, matching how
+        // OidcClient resolves the same document.
+        var trimmed = authority.TrimEnd('/');
+        var discoveryUrl = trimmed.EndsWith("/.well-known/openid-configuration", StringComparison.OrdinalIgnoreCase)
+            ? trimmed
+            : trimmed + "/.well-known/openid-configuration";
+
+        if (PkceSupportCache.TryGetValue(discoveryUrl, out var cached) && DateTime.UtcNow - cached.FetchedAt < PkceSupportCacheTtl)
+        {
+            return cached.Supported;
+        }
+
+        try
+        {
+            using var client = _httpClientFactory.CreateClient();
+            client.Timeout = TimeSpan.FromSeconds(10);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgentString);
+            var json = await client.GetStringAsync(discoveryUrl).ConfigureAwait(false);
+            var supported = PkceDiscovery.SupportsS256(json);
+            PkceSupportCache[discoveryUrl] = (supported, DateTime.UtcNow);
+            return supported;
+        }
+        catch (Exception e)
+        {
+            _logger.LogWarning(
+                e,
+                "Could not fetch the OpenID discovery document for provider {Provider} to verify PKCE support; proceeding unless RequirePkce is set.",
+                provider?.ReplaceLineEndings(string.Empty));
+            return null;
+        }
     }
 
     // Callback-side client: the redirect URI is rebuilt from the callback's own route (the IdP calls
