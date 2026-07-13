@@ -205,6 +205,7 @@ public class SamlAttackShapeTests
 
         // Adding the (unsigned) advice perturbs the signed Response, so IsValid is false; the
         // load-bearing assertion is that identity extraction never returns the advice's "attacker".
+        Assert.False(response.IsValid());
         Assert.NotEqual("attacker", response.GetNameID());
         Assert.Equal("alice", response.GetNameID());
     }
