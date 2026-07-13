@@ -30,5 +30,5 @@ The latest released version is the only supported version.
 ## Repository security controls
 
 - **Secret scanning** and **push protection** are enabled, so a leaked credential — an identity-provider client secret, a CI token — is blocked before it can be pushed.
-- **Dependabot** is enabled, and every CI build fails on a known-vulnerable dependency.
-- Every pull request runs CodeQL, a GitHub Actions workflow audit (zizmor), a dependency review, a Trojan-Source/Unicode check, and a build with warnings treated as errors. Changes to the login path additionally go through an adversarial security review before they merge.
+- **Dependabot** opens dependency-update pull requests; a dependency-review check blocks a pull request that introduces or upgrades to a known-vulnerable dependency; and the build fails on any known-vulnerable dependency, transitive ones included.
+- Pull requests to `main` run CodeQL, a Trojan-Source/Unicode check, and a build with warnings treated as errors; a GitHub Actions workflow audit (zizmor) runs on every pull request. Changes to the login path additionally go through an adversarial security review before they merge.
