@@ -142,23 +142,30 @@ public class SamlAttackShapeTests
     }
 
     [Fact]
-    public void IsValid_ForeignNamespacedIdOnDecoy_DoesNotSatisfyReference_ReturnsFalse()
+    public void IsValid_ForeignNamespacedIdDecoy_IsInert_HonestAssertionStillValidates()
     {
-        // A decoy assertion is injected whose ID is declared only through a FOREIGN-namespace
-        // attribute (xml:id), a shape parsers have historically resolved inconsistently. Here the
-        // decoy also carries the reference's target value, attempting to make the "#id" reference bind
-        // to attacker content. It must not: rejection stands (the extra assertion also trips the
-        // single-assertion invariant), and the foreign-namespaced id never becomes a valid signature
-        // target.
+        // 'Fragile Lock' foreign-namespace ID pollution: a decoy element carries the signed
+        // assertion's ID value only through a FOREIGN-namespace attribute (xml:id), the kind some
+        // parsers resolve inconsistently. It is deliberately NOT a second saml:Assertion, so the
+        // single-assertion invariant is not what does the work — this isolates ID resolution itself.
+        // The enveloped-signature "#id" reference must keep binding to the real assertion (whose plain
+        // ID it names): .NET's GetIdElement resolves only unprefixed Id/ID/id, so the xml:id decoy is
+        // invisible and the pollution is inert — the honest signature still validates and extraction
+        // still reads the signed "alice". If a change ever let the xml:id target the signature, the
+        // reference would resolve to the decoy, the digest would no longer match, and this would flip
+        // to a rejection — which the assertions below would catch.
         var fixture = SamlTestFactory.Create(nameId: "alice", scope: SamlTestFactory.SignatureScope.Assertion);
         var doc = fixture.Document;
-        var decoy = BuildEvilAssertion(doc, "attacker");
+        var decoy = doc.CreateElement("saml", "AuthnStatement", SamlNs);
         var xmlId = doc.CreateAttribute("xml", "id", "http://www.w3.org/XML/1998/namespace");
         xmlId.Value = fixture.AssertionId;
         decoy.SetAttributeNode(xmlId);
         doc.DocumentElement!.PrependChild(decoy);
 
-        Assert.False(Load(fixture).IsValid());
+        var response = Load(fixture);
+
+        Assert.True(response.IsValid());
+        Assert.Equal("alice", response.GetNameID());
     }
 
     // --- Signature relocated into a decoy wrapper outside the covered element ---
