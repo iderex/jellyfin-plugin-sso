@@ -455,7 +455,7 @@ async function link(request) {
        xhr.setRequestHeader('Accept', 'application/json');
 
        xhr.setRequestHeader(
-           'X-Emby-Authorization', 
+           'Authorization',
            `MediaBrowser Client=""${request.appName}"",Device=""${request.deviceName}"",DeviceId=""${request.deviceId}"",Version=""${request.appVersion}"",Token=""${jfToken}""`)
 
        xhr.onload = function(e) {
