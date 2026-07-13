@@ -26,3 +26,9 @@ reporting.
 ## Supported versions
 
 The latest released version is the only supported version.
+
+## Repository security controls
+
+- **Secret scanning** and **push protection** are enabled, so a leaked credential — an identity-provider client secret, a CI token — is blocked before it can be pushed.
+- **Dependabot** is enabled, and every CI build fails on a known-vulnerable dependency.
+- Every pull request runs CodeQL, a GitHub Actions workflow audit (zizmor), a dependency review, a Trojan-Source/Unicode check, and a build with warnings treated as errors. Changes to the login path additionally go through an adversarial security review before they merge.
