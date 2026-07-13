@@ -38,9 +38,10 @@ internal static class OidcRoleExtractor
         }
 
         // A multi-segment path parses the claim value as a JSON object and walks it. The claim value is
-        // attacker-influenced, so any malformed or unexpected shape (non-object root, non-object node,
-        // non-array terminal, or a terminal array of non-strings) must fail CLOSED to an empty role set
-        // rather than throw an unhandled 500 on the public callback (#216).
+        // attacker-influenced, so it must never throw an unhandled 500 on the public callback (#216): any
+        // malformed or non-resolving shape (non-object root, non-object node, non-array terminal) fails
+        // closed to an empty role set, and the terminal array is filtered to its string elements — a mixed
+        // array keeps its strings, an array with no strings yields none.
         try
         {
             var json = JsonConvert.DeserializeObject<IDictionary<string, object>>(claimValue);
