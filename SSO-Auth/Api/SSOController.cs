@@ -1432,9 +1432,16 @@ public class SSOController : ControllerBase
 
             // Media types are case-insensitive (RFC 7231); use the parsed type with parameters stripped.
             var mediaType = avatarResponse.Content.Headers.ContentType?.MediaType;
-            if (string.IsNullOrEmpty(mediaType) || !mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+
+            // Allow only raster image types and derive the stored extension from that allow-list, never
+            // from the raw subtype — image/svg+xml is rejected because a stored SVG can carry script (#217).
+            if (!AvatarContentType.TryResolveExtension(mediaType, out var extension))
             {
-                throw new InvalidOperationException("Content type of avatar URL is not an image, got: " + (mediaType ?? "(none)"));
+                // Log the rejected type sanitized inline at the log call (mediaType is server-controlled),
+                // and keep the thrown/caught exception message generic so no untrusted text reaches the
+                // logged exception — mirrors the disallowed-URL warning above.
+                _logger.LogWarning("Refusing avatar with disallowed content type: {MediaType}", (mediaType ?? "(none)").ReplaceLineEndings(string.Empty));
+                throw new InvalidOperationException("Avatar content type is not an allowed raster image.");
             }
 
             const long MaxAvatarBytes = 10 * 1024 * 1024;
@@ -1443,7 +1450,6 @@ public class SSOController : ControllerBase
                 throw new InvalidOperationException("Avatar exceeds the maximum allowed size.");
             }
 
-            var extension = mediaType.Split('/')[^1];
             using var stream = await ReadCappedAsync(avatarResponse, MaxAvatarBytes, timeout.Token).ConfigureAwait(false);
 
             var userDataPath =
