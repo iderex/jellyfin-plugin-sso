@@ -58,7 +58,11 @@ jobs:
           category: zizmor
 
       - name: Fail on actionable findings
-        # Regular persona: the actionable security set zizmor recommends for CI.
-        run: uvx "zizmor@${ZIZMOR_VERSION}" --format=plain .
+        # Regular persona + --min-severity=low: the actionable security set zizmor
+        # recommends for CI. Info-level advisories (e.g. superfluous-actions asking
+        # to swap softprops/action-gh-release for a `gh release` script — a separate,
+        # maintainer-gated release-pipeline decision) stay in the SARIF above but do
+        # not gate the build.
+        run: uvx "zizmor@${ZIZMOR_VERSION}" --min-severity=low --format=plain .
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
