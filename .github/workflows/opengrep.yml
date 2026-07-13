@@ -1,0 +1,62 @@
+# Opengrep (open-source Semgrep fork) gate that enforces this repo's greppable
+# security invariants as lint rules (tools/opengrep/rules.yml) — one rule per
+# invariant, added as each is discovered. The rules are `generic`-mode token
+# patterns, so this gate does not depend on a language parser and is
+# deterministic; every rule is verified to produce zero findings on the current
+# tree and to fire on a regression.
+#
+# Supply chain: Opengrep ships no official Action and no published container
+# image, so this pins the exact self-contained release binary by version AND by
+# SHA-256 (no `curl | bash`, no floating "latest"). Bump both together when the
+# version moves. Keep the only `uses:` (checkout) SHA-pinned and
+# persist-credentials:false so this workflow itself passes the zizmor gate.
+name: Repo Invariant Lint (Opengrep)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: ["**"]
+
+permissions: {}
+
+# Cancel a superseded run on the same ref so a new push / PR update does not
+# queue behind an obsolete check.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  opengrep:
+    name: Enforce greppable invariants
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      # Pinned Opengrep release (opengrep/opengrep). Bump VERSION and SHA256
+      # together — the SHA is the sha256sum of the opengrep_manylinux_x86 asset
+      # for this exact tag and makes the download tamper-evident.
+      OPENGREP_VERSION: "v1.25.0"
+      OPENGREP_SHA256: "9ac4aebb47ba3f7b0d8fc641ac8749cb6c2f253f616131a67d9631e00d4bea33"
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          # No step pushes via git, so do not persist the GITHUB_TOKEN in .git/config.
+          persist-credentials: false
+
+      - name: Install Opengrep (pinned binary, checksum-verified)
+        run: |
+          set -euo pipefail
+          url="https://github.com/opengrep/opengrep/releases/download/${OPENGREP_VERSION}/opengrep_manylinux_x86"
+          # --proto '=https' --tlsv1.2: refuse any non-HTTPS transport, including
+          # on a redirect, so the download cannot be downgraded to plaintext.
+          curl -fSL --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 -o opengrep "$url"
+          echo "${OPENGREP_SHA256}  opengrep" | sha256sum -c -
+          chmod +x opengrep
+
+      - name: Enforce repo invariants
+        # --error makes a finding exit non-zero (the gate). The ruleset is a
+        # local file, so the scan runs fully offline.
+        run: ./opengrep scan --config tools/opengrep/rules.yml --error .
