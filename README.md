@@ -37,10 +37,12 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 
 > ### 🤖 A note on AI and on contributions
 >
-> The maintainer is a non-native English speaker, so **[Claude](https://www.anthropic.com/claude)** (Anthropic) is used to **translate documentation and comments into English** — the README, the wiki, the in-repo guides, and code comments.
+> The maintainer is a non-native English speaker, so **[Claude](https://www.anthropic.com/claude)** (Anthropic) assists him in two ways: it **translates documentation and comments into English** — the README, the wiki, the in-repo guides, and code comments — and it **helps generate and analyse code** during development.
 >
-> - **A human reviews it.** Every AI-translated text is reviewed and edited by the maintainer before it lands; he holds responsibility for it.
+> - **A human owns and reviews everything.** Claude never produces finished code, a complete pull request, or any other artifact that lands unexamined. Every AI-assisted change — translated text or code — is reviewed, understood, edited, and evaluated by the maintainer before it merges; he holds responsibility for it. The AI proposes; the human decides.
 > - **The AI is not in the product.** It plays **no role at runtime**, in authentication, or in processing your users' data.
+>
+> The review discipline around this is modelled — as far as is practical for a volunteer project — on the change-control expected of **TÜV/BSI-certified software in critical sectors such as healthcare**: every change is issue-driven, adversarially reviewed on the login path, and documented before it merges. It is an approximation of that practice, not a certification.
 >
 > Provided in the spirit of transparent AI use, in line with the EU AI Act's transparency principles (Art. 50).
 >

@@ -145,6 +145,8 @@ Any code editor or IDE with .NET support will work out of the box with this prog
 - [VSCode](https://code.visualstudio.com/docs/languages/dotnet)
 - [N/Vim](https://github.com/OmniSharp/Omnisharp-vim)
 
+Before opening a pull request, please read the **[note on AI and on contributions](https://github.com/iderex/jellyfin-plugin-sso/blob/main/README.md#-a-note-on-ai-and-on-contributions)** in the README. This is a security-sensitive login path: every change is issue-driven, adversarially reviewed on the login path, and documented before it merges, and you are expected to understand and own every line you propose — a pull request that is unreviewed AI output will be turned away.
+
 ### Improving The Documentation
 
 <!-- TODO
