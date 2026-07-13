@@ -391,8 +391,6 @@ export default function initSsoConfigurationPage(view) {
   ssoConfigurationPage.addTextAreaStyle(view);
   ssoConfigurationPage.loadConfiguration(view);
 
-  ssoConfigurationPage.listArgumentsByType(view);
-
   view.querySelector("#SaveProvider").addEventListener("click", (e) => {
     const target_provider = view.querySelector("#OidProviderName").value;
 
@@ -427,7 +425,6 @@ export default function initSsoConfigurationPage(view) {
     const current_mappings =
       ssoConfigurationPage.serializeRoleMappings(container);
     current_mappings.push({ Role: "", Folders: [] });
-    console.log(current_mappings);
     ssoConfigurationPage.populateRoleMappings(current_mappings, container);
   });
 

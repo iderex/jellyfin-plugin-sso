@@ -1,6 +1,5 @@
 import jellyfinApiclient from "./jellyfin-apiClient.esm.min.js";
 window.jellyfinApiclient = jellyfinApiclient;
-console.log(jellyfinApiclient);
 
 // https://github.com/jellyfin/jellyfin-web/blob/9067b0e397cc8b38635d661ce86ddd83194f3202/src/scripts/clientUtils.js#L19-L76
 export async function serverAddress({ basePath = "/web" }) {
@@ -120,7 +119,6 @@ await awaitLocalStorage();
 const credentials = new jellyfinApiclient.Credentials();
 
 const server = await serverAddress({ basePath: "/SSOViews" });
-console.log({ server: server });
 const deviceId = getDeviceId();
 const appName = "SSO-Auth";
 const appVersion = "0.0.0.9000";

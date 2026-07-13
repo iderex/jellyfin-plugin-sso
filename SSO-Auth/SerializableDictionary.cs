@@ -22,53 +22,6 @@ public class SerializableDictionary<TKey, TValue>
     }
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="SerializableDictionary{TKey,TValue}"/> class.
-    /// </summary>
-    /// <param name="dictionary">Dictionary to convert from.</param>
-    public SerializableDictionary(IDictionary<TKey, TValue> dictionary) : base(dictionary)
-    {
-        // Empty
-    }
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="SerializableDictionary{TKey,TValue}"/> class.
-    /// </summary>
-    /// <param name="dictionary">Dictionary to convert from.</param>
-    /// <param name="comparer">Comparer for the dictionary.</param>
-    public SerializableDictionary(IDictionary<TKey, TValue> dictionary, IEqualityComparer<TKey> comparer) : base(dictionary, comparer)
-    {
-        // Empty
-    }
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="SerializableDictionary{TKey,TValue}"/> class.
-    /// </summary>
-    /// <param name="comparer">Comparer for the dictionary.</param>
-    public SerializableDictionary(IEqualityComparer<TKey> comparer) : base(comparer)
-    {
-        // Empty
-    }
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="SerializableDictionary{TKey,TValue}"/> class.
-    /// </summary>
-    /// <param name="capacity">Capacity of the dictionary.</param>
-    public SerializableDictionary(int capacity) : base(capacity)
-    {
-        // Empty
-    }
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="SerializableDictionary{TKey,TValue}"/> class.
-    /// </summary>
-    /// <param name="capacity">Capacity of the dictionary.</param>
-    /// <param name="comparer">Comparer for the dictionary.</param>
-    public SerializableDictionary(int capacity, IEqualityComparer<TKey> comparer) : base(capacity, comparer)
-    {
-        // Empty
-    }
-
-    /// <summary>
     /// Gets the schema of the XML object.
     /// </summary>
     /// <returns>Nothing.</returns>
