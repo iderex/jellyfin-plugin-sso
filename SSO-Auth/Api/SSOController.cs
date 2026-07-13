@@ -801,14 +801,7 @@ public class SSOController : ControllerBase
             // Enforce one-time use so a captured assertion cannot be replayed to mint another session.
             // Enforced only here (the session-minting endpoint), not at the SAML/post ACS which merely
             // renders the intermediate page, so the two-step post-then-auth flow consumes the id once.
-            var samlNow = DateTime.UtcNow;
-            var replayRetention = SamlReplayCache.ComputeRetention(samlNow, samlResponse.GetNotOnOrAfter());
-
-            // Scope the replay key by provider so two IdPs that happen to emit the same assertion ID
-            // cannot block each other; a missing ID stays empty so TryConsume still fails closed.
-            var assertionId = samlResponse.GetAssertionId();
-            var replayKey = string.IsNullOrEmpty(assertionId) ? assertionId : provider + "\n" + assertionId;
-            if (!SamlReplays.TryConsume(replayKey, replayRetention, samlNow))
+            if (!TryConsumeSamlReplay(samlResponse, provider))
             {
                 return Problem("SAML assertion has already been used");
             }
@@ -1249,6 +1242,14 @@ public class SSOController : ControllerBase
             return ReturnError(StatusCodes.Status400BadRequest, "SAML response validation failed");
         }
 
+        // Enforce one-time use here too (#219): without it, a captured, still-valid assertion could be
+        // replayed to bind its NameID to the caller's account. The linking flow issues no AuthnRequest,
+        // so InResponseTo is not correlated here — the replay cache is the applicable one-time-use control.
+        if (!TryConsumeSamlReplay(samlResponse, provider))
+        {
+            return Problem("SAML assertion has already been used");
+        }
+
         string providerUserId = samlResponse.GetNameID();
 
         return CreateCanonicalLink("saml", provider, jellyfinUserId, providerUserId);
@@ -1511,6 +1512,19 @@ public class SSOController : ControllerBase
     private static void Invalidate()
     {
         AuthStateStore.InvalidateExpired(StateManager, DateTime.Now, StateLifetime);
+    }
+
+    // Consumes the SAML assertion's ID against the provider-scoped replay cache for one-time use.
+    // Returns false when the assertion was already used (or carries no ID — a missing ID stays empty,
+    // so TryConsume fails closed). The key is scoped by provider so two IdPs emitting the same assertion
+    // ID cannot block each other. Shared by SamlAuth (session mint) and SamlLink (account linking, #219).
+    private bool TryConsumeSamlReplay(Response samlResponse, string provider)
+    {
+        var samlNow = DateTime.UtcNow;
+        var replayRetention = SamlReplayCache.ComputeRetention(samlNow, samlResponse.GetNotOnOrAfter());
+        var assertionId = samlResponse.GetAssertionId();
+        var replayKey = string.IsNullOrEmpty(assertionId) ? assertionId : provider + "\n" + assertionId;
+        return SamlReplays.TryConsume(replayKey, replayRetention, samlNow);
     }
 
     // Validates the SAML response and, on failure, logs the declared signature algorithm plus the
