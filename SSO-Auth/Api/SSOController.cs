@@ -1627,9 +1627,20 @@ public class SSOController : ControllerBase
             key = endpointClass + ":" + key;
         }
 
-        if (RateLimiter.IsAllowed(key, maxAttempts, TimeSpan.FromSeconds(windowSeconds), DateTime.UtcNow, out var retryAfterSeconds))
+        var now = DateTime.UtcNow;
+        if (RateLimiter.IsAllowed(key, maxAttempts, TimeSpan.FromSeconds(windowSeconds), now, out var retryAfterSeconds))
         {
             return null;
+        }
+
+        // Bounded observability signal (#195): so an operator can notice a sustained brute-force or a
+        // reverse proxy misconfigured to pool every client into one bucket, without the notice itself
+        // becoming a log/CPU amplifier. The limiter emits at most one line per interval, carrying only
+        // an aggregate count (no client key — nothing to sanitize or forge); a returned 0 stays silent.
+        var throttledCount = RateLimiter.RecordThrottledHit(now);
+        if (throttledCount > 0)
+        {
+            _logger.LogWarning("SSO rate limit engaged on the anonymous login endpoints: {Count} request(s) throttled since the last notice; further notices are suppressed for at least a minute.", throttledCount);
         }
 
         // A human-readable body, not a bare status: the challenge/callback endpoints are navigated

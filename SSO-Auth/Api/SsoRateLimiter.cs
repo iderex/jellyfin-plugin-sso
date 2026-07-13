@@ -27,6 +27,12 @@ internal sealed class SsoRateLimiter
     // reset inline by the next hit on its key, so sweeping is only memory reclamation.
     private static readonly TimeSpan PruneInterval = TimeSpan.FromMinutes(1);
 
+    // The throttle-engaged observability signal (#195) fires at most once per this interval. A
+    // per-refusal log would amplify the very flood the limiter blunts into unbounded log/CPU volume
+    // (a self-inflicted DoS on an anonymous endpoint), so the signal is bounded the same way the
+    // prune sweep and the #246 capacity warning are: one CAS winner per interval drains a tally.
+    private static readonly TimeSpan SignalInterval = TimeSpan.FromMinutes(1);
+
     private readonly ConcurrentDictionary<string, Counter> _counters = new(StringComparer.Ordinal);
 
     // Serializes only the rare "new key" cap-check-and-insert so it is atomic; the hot "existing
@@ -35,6 +41,13 @@ internal sealed class SsoRateLimiter
 
     // Last sweep time as ticks, read/written atomically (DateTime is not torn-read-safe).
     private long _lastPruneTicks = DateTime.MinValue.Ticks;
+
+    // Bounded observability signal (#195). Every refusal increments the tally; a signal drains it into
+    // a single log line at most once per SignalInterval. Interlocked keeps both atomic; a hit lost or
+    // double-counted around the drain is harmless for a best-effort operator signal (never a security
+    // decision). Last signal time as ticks, read/written atomically like _lastPruneTicks.
+    private long _throttledHits;
+    private long _lastSignalTicks = DateTime.MinValue.Ticks;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SsoRateLimiter"/> class.
@@ -160,6 +173,42 @@ internal sealed class SsoRateLimiter
             retryAfterSeconds = Math.Max(1, (int)Math.Ceiling(remaining.TotalSeconds));
             return false;
         }
+    }
+
+    /// <summary>
+    /// Records one throttled (refused) hit and reports whether an observability signal is due. Every
+    /// refusal increments a bounded tally; a signal fires at most once per <see cref="SignalInterval"/>,
+    /// returning (and resetting) the count accumulated since the last one so the caller emits a single
+    /// "N throttled" log line. Returns 0 while suppressed inside the current interval. This never scales
+    /// with attack volume — one line per interval, not per request — and carries only a count, no client
+    /// key, so it cannot amplify a flood into log/CPU volume nor forge log lines. It does NOT change the
+    /// throttling decision (that is <see cref="IsAllowed"/>'s alone); it only observes it.
+    /// </summary>
+    /// <param name="nowUtc">The current time.</param>
+    /// <returns>The throttled-hit count to log when a signal is due this interval; otherwise 0.</returns>
+    internal long RecordThrottledHit(DateTime nowUtc)
+    {
+        Interlocked.Increment(ref _throttledHits);
+
+        var last = Interlocked.Read(ref _lastSignalTicks);
+
+        // Suppress only when a non-negative, sub-interval amount of time has passed since the last
+        // signal (mirrors the #246 warning throttle). A backward wall-clock step does NOT suppress —
+        // it signals and resets the cursor — so a clock correction cannot stall the signal. On the
+        // first refusal (cursor at MinValue) the elapsed span is huge, so the onset signals at once.
+        if (nowUtc.Ticks >= last && nowUtc.Ticks - last < SignalInterval.Ticks)
+        {
+            return 0;
+        }
+
+        // Only the CAS winner drains the tally; losers fall back to suppressed. A racing increment
+        // between the CAS and the Exchange is folded into the next interval's count, not lost outright.
+        if (Interlocked.CompareExchange(ref _lastSignalTicks, nowUtc.Ticks, last) != last)
+        {
+            return 0;
+        }
+
+        return Interlocked.Exchange(ref _throttledHits, 0);
     }
 
     // Drops counters whose window has long passed, at most once per PruneInterval. Enumerating a
