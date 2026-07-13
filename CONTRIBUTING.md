@@ -37,7 +37,7 @@ If you then still feel the need to ask a question and need clarification, we rec
 
 - Open an [Issue](https://github.com/iderex/jellyfin-plugin-sso/issues/new).
 - Provide as much context as you can about what you're running into.
-- Provide project and platform versions (nodejs, npm, etc), depending on what seems relevant.
+- Provide the relevant versions: your .NET SDK version, the Jellyfin server version, and the SSO provider type (OpenID Connect or SAML, and which identity provider).
 
 We will then take care of the issue as soon as possible.
 
@@ -145,6 +145,16 @@ Any code editor or IDE with .NET support will work out of the box with this prog
 - [VSCode](https://code.visualstudio.com/docs/languages/dotnet)
 - [N/Vim](https://github.com/OmniSharp/Omnisharp-vim)
 
+**Building and testing.** CI runs these on every pull request and they must pass:
+
+```sh
+dotnet build --no-restore --warnaserror     # warnings are errors, exactly as in CI
+dotnet test --no-build --verbosity normal   # the xUnit project SSO-Auth.Tests must stay green
+npx prettier --check "**/*.{js,html,md,css,scss}"   # for any .js/.html/.md/.css change
+```
+
+**Branching and pull requests.** `main` is the released line and is PR-only. Branch every change — even a one-liner — off `main` for fixes and security work, or off the feature branch for features, using a short kebab-case name with a `fix/`, `harden/`, `feature/`, `chore/`, or `refactor/` prefix. Reference the issue your change addresses (`Closes #N`) and fill in the [pull request template](.github/pull_request_template.md).
+
 Before opening a pull request, please read the **[note on AI and on contributions](https://github.com/iderex/jellyfin-plugin-sso/blob/main/README.md#-a-note-on-ai-and-on-contributions)** in the README. This is a security-sensitive login path: every change is issue-driven, adversarially reviewed on the login path, and documented before it merges, and you are expected to understand and own every line you propose — a pull request that is unreviewed AI output will be turned away.
 
 ### Improving The Documentation
@@ -164,11 +174,11 @@ Short, imperative subject line (`Add SAML replay cache`, not `feat: add ...`); e
 
 ### C#
 
-We format all C# code according to the .NET formatter. Run `dotnet build .` and fix any warnings that come up.
+We format all C# code according to the .NET formatter. Build with `dotnet build --no-restore --warnaserror` (the same command CI runs, so warnings fail the build) and fix anything it reports, and keep `dotnet test` green.
 
 ### HTML/CSS/JS/Markdown
 
-We use [Prettier](https://prettier.io) to format these files.
+We use [Prettier](https://prettier.io) to format these files. Run `npx prettier --write "**/*.{js,html,md,css,scss}"` before committing, and `npx prettier --check "**/*.{js,html,md,css,scss}"` to confirm — CI enforces the check (only `*.min.js` is exempt).
 
 <!-- TODO
 

@@ -30,7 +30,7 @@ persistence, or the release pipeline.
 ## Verification
 
 - [ ] `dotnet build --no-restore --warnaserror` is green.
-- [ ] `dotnet test` is green (once the test project exists).
+- [ ] `dotnet test` is green.
 - [ ] Prettier is clean for any `.js` / `.html` / `.md` / `.css` change.
 
 ## Notes
