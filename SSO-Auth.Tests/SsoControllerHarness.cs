@@ -38,7 +38,7 @@ internal sealed class SsoControllerHarness
 
     public PluginConfiguration Configuration { get; }
 
-    public SsoControllerHarness(Action<PluginConfiguration> configure = null)
+    public SsoControllerHarness(Action<PluginConfiguration>? configure = null)
     {
         Configuration = new PluginConfiguration();
         configure?.Invoke(Configuration);
