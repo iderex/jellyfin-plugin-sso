@@ -1,0 +1,56 @@
+name: unicode-guard
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Cancel a superseded run on the same ref so a new push / PR update does not
+# queue behind an obsolete check.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bidi:
+    name: Reject Trojan Source Unicode
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          # No step pushes via git, so do not persist the GITHUB_TOKEN in .git/config.
+          persist-credentials: false
+      - name: Reject bidirectional / invisible Unicode control characters
+        run: |
+          # Trojan Source (CVE-2021-42574): bidirectional overrides/isolates/marks and
+          # zero-width characters can make source render differently from how it executes,
+          # hiding malicious logic from a human reviewer. Reject them in tracked text files.
+          # (*UTF) enables PCRE2 UTF-8 so \x{...} matches codepoints, not raw bytes; -I skips
+          # binary files (the tracked tree is UTF-8; a binary-marked file also shows as binary
+          # in the PR diff, which defeats the visual-deception the attack relies on). Em dashes,
+          # accents, and other benign non-ASCII are not in the set.
+          pattern='(*UTF)[\x{202A}-\x{202E}\x{2066}-\x{2069}\x{200E}\x{200F}\x{061C}\x{200B}-\x{200D}]'
+          # git grep: 0 = a match was found, 1 = clean, >=2 = scanner/tooling error. Capture the
+          # code (the `|| rc=$?` keeps `set -e` from aborting on the clean exit-1) and FAIL CLOSED
+          # on any error rather than mistaking a broken scanner for a clean tree.
+          rc=0
+          git grep -nIP "$pattern" -- . || rc=$?
+          case "$rc" in
+            0)
+              echo "::error::Dangerous bidirectional/invisible Unicode found (Trojan Source, CVE-2021-42574). Remove these control characters."
+              exit 1
+              ;;
+            1)
+              echo "No bidirectional or invisible Unicode control characters found."
+              ;;
+            *)
+              echo "::error::unicode-guard scanner error (git grep exit $rc) — failing closed instead of assuming the tree is clean."
+              exit 1
+              ;;
+          esac
