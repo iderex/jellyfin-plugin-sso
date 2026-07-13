@@ -1,3 +1,4 @@
+using System;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Xunit;
 
@@ -32,5 +33,22 @@ public class ProviderScopedKeyTests
     public void For_DistinctProviders_ProduceDistinctKeysForTheSameId()
     {
         Assert.NotEqual(ProviderScopedKey.For("a", "id"), ProviderScopedKey.For("b", "id"));
+    }
+
+    [Fact]
+    public void For_MissingId_ProducesAKeyBothOneTimeCachesRefuse()
+    {
+        // The security boundary the empty-id passthrough relies on: a missing correlation id yields a
+        // blank key, and both one-time-use caches fail closed on a blank key, so it can never be
+        // registered or consumed — no replay or InResponseTo-correlation bypass.
+        var now = DateTime.UtcNow;
+        var replayKey = ProviderScopedKey.For("kc", string.Empty);
+        var requestKey = ProviderScopedKey.For("kc", null);
+
+        Assert.False(new SamlReplayCache().TryConsume(replayKey, now.AddMinutes(10), now));
+
+        var requests = new SamlRequestCache();
+        requests.Register(requestKey!, now.AddMinutes(15), now);
+        Assert.False(requests.TryConsume(requestKey!, now));
     }
 }
