@@ -140,6 +140,51 @@ public class SsoRateLimiterTests
     }
 
     [Fact]
+    public void RecordThrottledHit_FirstRefusal_SignalsOnsetImmediately_ThenSuppressesWithinInterval()
+    {
+        // The onset of throttling must be visible at once (an operator should see a brute-force start),
+        // then the signal is bounded: further refusals inside the same interval accumulate silently.
+        var limiter = new SsoRateLimiter();
+        Assert.Equal(1, limiter.RecordThrottledHit(Now));
+
+        for (var i = 0; i < 1000; i++)
+        {
+            Assert.Equal(0, limiter.RecordThrottledHit(Now.AddSeconds(1)));
+        }
+    }
+
+    [Fact]
+    public void RecordThrottledHit_DoesNotScaleWithVolume_OneSignalPerInterval_CarryingTheAccumulatedCount()
+    {
+        // The signal fires at most once per minute regardless of flood size, and each signal reports
+        // every refusal since the previous one — so a flood yields one bounded line, not one per hit.
+        var limiter = new SsoRateLimiter();
+        Assert.Equal(1, limiter.RecordThrottledHit(Now)); // onset drains the first hit
+
+        for (var i = 0; i < 500; i++)
+        {
+            limiter.RecordThrottledHit(Now.AddSeconds(5)); // accumulate, all suppressed
+        }
+
+        // A minute after the onset the next refusal drains the whole accumulated tally in one line.
+        Assert.Equal(501, limiter.RecordThrottledHit(Now.AddMinutes(1)));
+        // ...and the tally has reset, so the immediate follow-up is suppressed again.
+        Assert.Equal(0, limiter.RecordThrottledHit(Now.AddMinutes(1)));
+    }
+
+    [Fact]
+    public void RecordThrottledHit_BackwardClockStep_StillSignals_NeverStalls()
+    {
+        // A wall-clock correction must not be able to wedge the signal shut: a step backwards fires
+        // (and re-anchors the cursor) rather than being read as "still inside the interval".
+        var limiter = new SsoRateLimiter();
+        Assert.Equal(1, limiter.RecordThrottledHit(Now));
+        Assert.Equal(0, limiter.RecordThrottledHit(Now.AddSeconds(1)));
+
+        Assert.Equal(2, limiter.RecordThrottledHit(Now.AddMinutes(-5)));
+    }
+
+    [Fact]
     public void NormalizeClientKey_PublicIpv4_UsesFullAddress()
     {
         Assert.Equal("1.2.3.4", SsoRateLimiter.NormalizeClientKey(IPAddress.Parse("1.2.3.4")));
