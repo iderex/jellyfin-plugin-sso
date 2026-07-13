@@ -2,13 +2,13 @@
 # workflow YAML is release-critical attack surface — publish-nightly.yml runs on
 # every push to main with contents:write — so it is audited like any other code.
 #
-# The gate runs at --min-severity=low: it fails the build on any actionable
-# (low/medium/high/critical) finding and uploads the same set to the
-# code-scanning tab. Info-level advisories are deliberately excluded — they are
-# stylistic (unnamed jobs, undocumented permissions) or context-blind (e.g.
-# superfluous-actions wants the release action swapped for a `gh release` script,
-# a separate maintainer-gated release-pipeline change). That backlog is tracked
-# as a code-quality task, not gated here.
+# The audit runs the full pedantic persona but gates at --min-severity=low: the
+# build fails on any actionable (low/medium/high/critical) finding and uploads
+# the same set to the code-scanning tab. Info/help-level advisories are excluded
+# from the gate — they are stylistic (unnamed jobs, undocumented permissions) or
+# context-blind (e.g. superfluous-actions wants the release action swapped for a
+# `gh release` script, a separate maintainer-gated release-pipeline change). That
+# backlog is tracked as a code-quality task, not gated here.
 #
 # Rule for future workflow changes: every new or edited workflow must pass this
 # gate before merge. Keep actions SHA-pinned, keep checkout on
@@ -47,7 +47,7 @@ jobs:
         # --no-build: install zizmor from its prebuilt wheel only, never executing a
         # source-dist build script. --format=sarif always exits 0; the gate step
         # below is what fails the build.
-        run: uvx --no-build "zizmor@${ZIZMOR_VERSION}" --min-severity=low --format=sarif . > results.sarif
+        run: uvx --no-build "zizmor@${ZIZMOR_VERSION}" --pedantic --min-severity=low --format=sarif . > results.sarif
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -59,6 +59,6 @@ jobs:
           category: zizmor
 
       - name: Fail on actionable findings
-        run: uvx --no-build "zizmor@${ZIZMOR_VERSION}" --min-severity=low --format=plain .
+        run: uvx --no-build "zizmor@${ZIZMOR_VERSION}" --pedantic --min-severity=low --format=plain .
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
