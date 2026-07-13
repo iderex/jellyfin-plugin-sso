@@ -71,11 +71,21 @@ public class OidcRoleExtractorTests
     }
 
     [Fact]
-    public void MultiSegmentPath_MalformedClaimValue_Throws()
+    public void MultiSegmentPath_MalformedClaimValue_ReturnsEmpty()
     {
-        // Characterizes the upstream behavior: a multi-segment path over a malformed (non-JSON-object)
-        // claim value throws (surfaces as a 500 in the controller = fail-closed). Pinned so it stays deliberate.
-        Assert.ThrowsAny<Newtonsoft.Json.JsonException>(
-            () => OidcRoleExtractor.ExtractRoles(new[] { "realm_access", "roles" }, "not-json"));
+        // #216: a multi-segment path over a malformed (non-JSON) claim value fails CLOSED to no roles
+        // instead of throwing an unhandled 500 on the public callback.
+        Assert.Empty(OidcRoleExtractor.ExtractRoles(new[] { "realm_access", "roles" }, "not-json"));
+    }
+
+    [Fact]
+    public void TerminalArrayWithNonStringElements_KeepsOnlyStrings()
+    {
+        // #216: a terminal array mixing strings with objects/numbers must not throw; only the string
+        // elements are taken as roles.
+        var roles = OidcRoleExtractor.ExtractRoles(
+            new[] { "realm_access", "roles" },
+            "{\"roles\":[\"users\",1,{\"nested\":true},\"admins\"]}");
+        Assert.Equal(new List<string> { "users", "admins" }, roles);
     }
 }

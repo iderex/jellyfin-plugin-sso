@@ -1343,12 +1343,16 @@ public class SSOController : ControllerBase
             {
                 user.SetPreference(PreferenceKind.EnabledFolders, parameters.EnabledFolders);
             }
+
+            // Live TV access/management are role-derived grants too, so they must respect the same
+            // EnableAuthorization master switch. Applied unconditionally they let a provider grant (or
+            // silently toggle) Live TV on every login even when the admin turned SSO permission
+            // management off (#215).
+            user.SetPermission(PermissionKind.EnableLiveTvAccess, parameters.EnableLiveTv);
+            user.SetPermission(PermissionKind.EnableLiveTvManagement, parameters.EnableLiveTvManagement);
         }
 
         await TrySetUserAvatarAsync(user, parameters.AvatarUrl).ConfigureAwait(false);
-
-        user.SetPermission(PermissionKind.EnableLiveTvAccess, parameters.EnableLiveTv);
-        user.SetPermission(PermissionKind.EnableLiveTvManagement, parameters.EnableLiveTvManagement);
 
         await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
 
@@ -1414,9 +1418,16 @@ public class SSOController : ControllerBase
 
             client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgentString);
 
+            // One deadline for the whole fetch: with ResponseHeadersRead the client Timeout stops
+            // applying once the headers arrive, so a malicious endpoint could send headers immediately
+            // then trickle the body forever. A single 10s token passed into GetAsync AND every body
+            // ReadAsync bounds the header wait and the streamed read together, while keeping the
+            // streaming size cap (#220).
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
             // ResponseHeadersRead so the body is streamed, not fully buffered, before ReadCappedAsync
             // enforces the size limit; otherwise the cap runs only after the whole download is in memory.
-            using var avatarResponse = await client.GetAsync(avatarUri, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+            using var avatarResponse = await client.GetAsync(avatarUri, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
             avatarResponse.EnsureSuccessStatusCode();
 
             // Media types are case-insensitive (RFC 7231); use the parsed type with parameters stripped.
@@ -1433,7 +1444,7 @@ public class SSOController : ControllerBase
             }
 
             var extension = mediaType.Split('/')[^1];
-            using var stream = await ReadCappedAsync(avatarResponse, MaxAvatarBytes).ConfigureAwait(false);
+            using var stream = await ReadCappedAsync(avatarResponse, MaxAvatarBytes, timeout.Token).ConfigureAwait(false);
 
             var userDataPath =
                 Path.Combine(
@@ -1617,16 +1628,16 @@ public class SSOController : ControllerBase
 
     // Copies the response body into memory, aborting if it exceeds the cap, so a hostile endpoint cannot
     // exhaust resources with an unbounded (or Content-Length-lying) download.
-    private static async ValueTask<MemoryStream> ReadCappedAsync(HttpResponseMessage response, long maxBytes)
+    private static async ValueTask<MemoryStream> ReadCappedAsync(HttpResponseMessage response, long maxBytes, CancellationToken cancellationToken)
     {
         var buffer = new MemoryStream();
-        var source = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+        var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         await using (source.ConfigureAwait(false))
         {
             var chunk = new byte[81920];
             long total = 0;
             int read;
-            while ((read = await source.ReadAsync(chunk).ConfigureAwait(false)) > 0)
+            while ((read = await source.ReadAsync(chunk, cancellationToken).ConfigureAwait(false)) > 0)
             {
                 total += read;
                 if (total > maxBytes)
@@ -1635,7 +1646,7 @@ public class SSOController : ControllerBase
                     throw new InvalidOperationException("Avatar exceeds the maximum allowed size.");
                 }
 
-                await buffer.WriteAsync(chunk.AsMemory(0, read)).ConfigureAwait(false);
+                await buffer.WriteAsync(chunk.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
             }
         }
 
