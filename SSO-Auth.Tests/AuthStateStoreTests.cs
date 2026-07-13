@@ -195,4 +195,36 @@ public class AuthStateStoreTests
         Assert.False(store.ContainsKey("seed-expired"));
         Assert.Equal(5000, store.Count);
     }
+
+    // --- TryAdd cap (#246): bound the store; refuse a new state at capacity, never evict in-flight ---
+
+    [Fact]
+    public void TryAdd_BelowCap_AddsTheState()
+    {
+        var store = new ConcurrentDictionary<string, TimedAuthorizeState>();
+
+        Assert.True(AuthStateStore.TryAdd(store, "a", State("p", "a", false, Now), maxEntries: 2));
+        Assert.True(AuthStateStore.TryAdd(store, "b", State("p", "b", false, Now), maxEntries: 2));
+        Assert.Equal(2, store.Count);
+    }
+
+    [Fact]
+    public void TryAdd_AtCap_RefusesANewKeyAndKeepsTheInFlightState()
+    {
+        var store = new ConcurrentDictionary<string, TimedAuthorizeState>();
+        Assert.True(AuthStateStore.TryAdd(store, "in-flight", State("p", "in-flight", false, Now), maxEntries: 1));
+
+        // At the cap, a fresh challenge is refused rather than evicting the user already mid-login.
+        Assert.False(AuthStateStore.TryAdd(store, "new", State("p", "new", false, Now), maxEntries: 1));
+        Assert.Single(store);
+        Assert.True(store.ContainsKey("in-flight"));
+    }
+
+    [Fact]
+    public void TryAdd_DuplicateKey_ReturnsFalse()
+    {
+        var store = new ConcurrentDictionary<string, TimedAuthorizeState>();
+        Assert.True(AuthStateStore.TryAdd(store, "a", State("p", "a", false, Now), maxEntries: 10));
+        Assert.False(AuthStateStore.TryAdd(store, "a", State("p", "a", false, Now), maxEntries: 10));
+    }
 }

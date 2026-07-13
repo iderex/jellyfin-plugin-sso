@@ -51,6 +51,11 @@ public class SSOController : ControllerBase
     private const string OpenIdProtocol = "OpenID";
     private const string SamlProtocol = "SAML";
 
+    // An approximate ceiling on outstanding OpenID authorize states, so an anonymous challenge flood cannot
+    // grow the store without bound (mirrors SamlRequestCache); at the cap a fresh challenge is refused rather
+    // than evicting an in-flight state, and rate-limiting at the edge (#128) is the primary defense (#246).
+    private const int MaxStateEntries = 100_000;
+
     private readonly IUserManager _userManager;
     private readonly ISessionManager _sessionManager;
     private readonly IAuthorizationContext _authContext;
@@ -68,6 +73,13 @@ public class SSOController : ControllerBase
     // bounds the whole interactive leg (OidChallenge -> IdP login/MFA/consent -> callback -> mint),
     // so it must accommodate a real user completing MFA, not just a fast round trip.
     private static readonly TimeSpan StateLifetime = TimeSpan.FromMinutes(15);
+
+    // The expired-state sweep (Invalidate) is an O(n) scan; throttling it to at most once per this interval
+    // stops an anonymous challenge flood from amplifying into CPU load (mirrors SamlRequestCache). This only
+    // defers memory reclamation — IsCurrentFor/IsRedeemableBy reject an expired state independently, so a
+    // not-yet-swept entry never grants a login. Its atomic cursor (_lastStatePruneTicks) is a mutable field
+    // and so sits after the readonly static fields below (#246).
+    private static readonly TimeSpan StatePruneInterval = TimeSpan.FromMinutes(1);
 
     // One-time-use tracking for consumed SAML assertion IDs (replay protection).
     private static readonly SamlReplayCache SamlReplays = new SamlReplayCache();
@@ -92,6 +104,10 @@ public class SSOController : ControllerBase
     // computed once since the assembly version does not change at runtime.
     private static readonly string UserAgentString =
         $"Jellyfin-Plugin-SSO-Auth +{System.Diagnostics.FileVersionInfo.GetVersionInfo(Assembly.GetExecutingAssembly().Location).FileVersion} (https://github.com/iderex/jellyfin-plugin-sso)";
+
+    // Atomic cursor for the throttled authorize-state sweep (#246), read/written via Interlocked (a long is
+    // not torn-read-safe). Mutable, so it sits after the readonly static fields to satisfy field ordering.
+    private static long _lastStatePruneTicks = DateTime.MinValue.Ticks;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SSOController"/> class.
@@ -308,10 +324,10 @@ public class SSOController : ControllerBase
             // IsLinking tracks whether this is a linking request rather than a login. The state value
             // is a fresh CSPRNG token, so a collision is effectively impossible; log if it ever occurs
             // instead of silently proceeding to a callback that would then fail with "invalid state".
-            if (!StateManager.TryAdd(state.State, new TimedAuthorizeState(state, DateTime.Now) { IsLinking = isLinking, Provider = provider }))
+            if (!AuthStateStore.TryAdd(StateManager, state.State, new TimedAuthorizeState(state, DateTime.Now) { IsLinking = isLinking, Provider = provider }, MaxStateEntries))
             {
-                _logger.LogWarning("OpenID authorize-state collision for provider {Provider}; login not started.", provider?.ReplaceLineEndings(string.Empty));
-                return ReturnError(StatusCodes.Status500InternalServerError, "Could not start login due to a state collision; please retry.");
+                _logger.LogWarning("OpenID authorize state not started for provider {Provider}: a CSPRNG-token collision (effectively impossible) or the store is at capacity.", provider?.ReplaceLineEndings(string.Empty));
+                return ReturnError(StatusCodes.Status500InternalServerError, "Could not start login; please retry.");
             }
 
             return Redirect(state.StartUrl);
@@ -1625,7 +1641,23 @@ public class SSOController : ControllerBase
 
     private static void Invalidate()
     {
-        AuthStateStore.InvalidateExpired(StateManager, DateTime.Now, StateLifetime);
+        // Throttle the O(n) expired-state sweep to at most once per StatePruneInterval so an anonymous
+        // challenge flood does not amplify into CPU load; the CAS makes exactly one thread per interval
+        // run it (#246). The store keeps InvalidateExpired itself pure/unthrottled — the throttle lives
+        // here, at its sole call site.
+        var now = DateTime.Now;
+        var last = Interlocked.Read(ref _lastStatePruneTicks);
+        if (now.Ticks - last < StatePruneInterval.Ticks)
+        {
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref _lastStatePruneTicks, now.Ticks, last) != last)
+        {
+            return;
+        }
+
+        AuthStateStore.InvalidateExpired(StateManager, now, StateLifetime);
     }
 
     // Consumes the SAML assertion's ID against the provider-scoped replay cache for one-time use.
