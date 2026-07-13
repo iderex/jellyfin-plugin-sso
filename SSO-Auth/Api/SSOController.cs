@@ -793,7 +793,7 @@ public class SSOController : ControllerBase
             // linking request would only leave an id to expire unused.
             if (config.ValidateInResponseTo && !isLinking)
             {
-                SamlRequests.Register(provider + "\n" + request.Id, DateTime.UtcNow + SamlRequestLifetime, DateTime.UtcNow);
+                SamlRequests.Register(ProviderScopedKey.For(provider, request.Id), DateTime.UtcNow + SamlRequestLifetime, DateTime.UtcNow);
             }
 
             return Redirect(request.GetRedirectUrl(config.SamlEndpoint.Trim(), relayState));
@@ -897,7 +897,7 @@ public class SSOController : ControllerBase
             if (config.ValidateInResponseTo)
             {
                 var inResponseTo = samlResponse.GetInResponseTo();
-                var requestKey = string.IsNullOrEmpty(inResponseTo) ? inResponseTo : provider + "\n" + inResponseTo;
+                var requestKey = ProviderScopedKey.For(provider, inResponseTo);
                 if (!SamlRequests.TryConsume(requestKey, DateTime.UtcNow))
                 {
                     _logger.LogWarning("SAML login denied: the response was not solicited by this server (unknown, expired, or already-used InResponseTo).");
@@ -1684,7 +1684,7 @@ public class SSOController : ControllerBase
         var samlNow = DateTime.UtcNow;
         var replayRetention = SamlReplayCache.ComputeRetention(samlNow, samlResponse.GetNotOnOrAfter());
         var assertionId = samlResponse.GetAssertionId();
-        var replayKey = string.IsNullOrEmpty(assertionId) ? assertionId : provider + "\n" + assertionId;
+        var replayKey = ProviderScopedKey.For(provider, assertionId);
         return SamlReplays.TryConsume(replayKey, replayRetention, samlNow);
     }
 
