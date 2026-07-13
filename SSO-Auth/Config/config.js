@@ -62,6 +62,10 @@ const ssoConfigurationPage = {
       // createElement/textContent (never innerHTML) so a folder named e.g. `<img onerror=...>`
       // stays inert on the config page (#221). Mirrors linking.js populateExistingLinks.
       const out = document.createElement("label");
+      // Tag the row with the class the re-render cleanup (querySelectorAll above) removes, so a
+      // second populate deterministically clears the old rows instead of relying on the
+      // emby-checkbox upgrade to add it — otherwise folder IDs could be duplicated on re-populate.
+      out.classList.add("emby-checkbox-label");
 
       // createElement's `is` option upgrades the customized built-in; the attribute is set as well
       // so CSS attribute selectors and the web-components polyfill see it.
