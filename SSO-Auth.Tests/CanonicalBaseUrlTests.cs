@@ -122,15 +122,28 @@ public class CanonicalBaseUrlTests
     }
 
     [Theory]
-    [InlineData("http", "http://host.example.com")] // literal http honored
-    [InlineData("https", "https://host.example.com")] // literal https honored
-    [InlineData("ftp", "https://host.example.com")] // anything else falls back to the request scheme
-    [InlineData("HTTP", "https://host.example.com")] // case-sensitive: not honored
-    [InlineData("", "https://host.example.com")]
+    [InlineData("http", "http://host.example.com:8096")] // literal http honored
+    [InlineData("https", "https://host.example.com:8096")] // literal https honored
+    [InlineData("ftp", "https://host.example.com:8096")] // anything else falls back to the request scheme
+    [InlineData("HTTP", "https://host.example.com:8096")] // case-sensitive: not honored
+    [InlineData("", "https://host.example.com:8096")]
     public void Resolve_SchemeOverride_OnlyLiteralHttpOrHttpsHonored(string schemeOverride, string expected)
     {
-        // Request scheme is https, port 443 (elided) so only the scheme decision shows.
-        var result = CanonicalBaseUrl.Resolve(null, "https", "host.example.com", 443, string.Empty, schemeOverride, null);
+        // Non-default port so port elision does not mask the scheme decision.
+        var result = CanonicalBaseUrl.Resolve(null, "https", "host.example.com", 8096, string.Empty, schemeOverride, null);
+
+        Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData("http", "https", 443, "https://host.example.com")] // TLS-terminating proxy: http request, https override, 443 elided
+    [InlineData("https", "http", 80, "http://host.example.com")] // symmetric: https request, http override, 80 elided
+    public void Resolve_ElidesDefaultPortForTheEffectiveScheme(string requestScheme, string schemeOverride, int port, string expected)
+    {
+        // The default-port elision must decide against the scheme that actually appears in the URL
+        // (schemeOverride), not the request scheme — otherwise the canonical URL keeps an explicit
+        // :443 / :80 (#272).
+        var result = CanonicalBaseUrl.Resolve(null, requestScheme, "host.example.com", port, string.Empty, schemeOverride, null);
 
         Assert.Equal(expected, result);
     }
