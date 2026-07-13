@@ -122,13 +122,16 @@ internal static class AvatarUrlValidator
 
     /// <summary>
     /// Extracts the IPv4 address embedded in an IPv4-in-IPv6 transition address (6to4 <c>2002::/16</c>, the
-    /// NAT64 well-known prefix <c>64:ff9b::/96</c>, or the deprecated IPv4-compatible <c>::/96</c> form), so a
-    /// blocked internal IPv4 cannot be reached by wrapping it in one of these formats.
+    /// NAT64 well-known prefix <c>64:ff9b::/96</c>, or the deprecated IPv4-compatible <c>::/96</c> form). Two
+    /// callers share this single definition so they cannot disagree on what an embedded IPv4 is: the SSRF
+    /// classifier unwraps it so a blocked internal IPv4 cannot be reached by wrapping it in one of these
+    /// formats, and the rate limiter (<see cref="SsoRateLimiter.NormalizeClientKey"/>) keys a transition
+    /// source on its embedded IPv4 instead of collapsing every such client into one shared /64 bucket.
     /// </summary>
     /// <param name="bytes">The 16 bytes of the IPv6 address.</param>
     /// <param name="embedded">The embedded IPv4 address when one is present; otherwise null.</param>
     /// <returns>True when an embedded IPv4 address was extracted.</returns>
-    private static bool TryExtractEmbeddedIPv4(byte[] bytes, out IPAddress embedded)
+    internal static bool TryExtractEmbeddedIPv4(byte[] bytes, out IPAddress embedded)
     {
         embedded = null;
 

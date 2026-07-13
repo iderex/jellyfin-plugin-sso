@@ -209,6 +209,80 @@ public class SsoRateLimiterTests
     }
 
     [Fact]
+    public void NormalizeClientKey_Nat64WellKnownPrefix_KeysOnEmbeddedIpv4_NotSharedSlash64()
+    {
+        // SIIT-DC synthesizes inbound IPv4 into 64:ff9b::/96, embedding the client IPv4 in the low 32
+        // bits that /64 keying would zero. Two distinct NATed clients must land in distinct buckets
+        // (matching their native-IPv4 keys), not collapse into one 64:ff9b::/64 shared-throttle bucket.
+        var a = SsoRateLimiter.NormalizeClientKey(IPAddress.Parse("64:ff9b::808:808")); // 8.8.8.8
+        var b = SsoRateLimiter.NormalizeClientKey(IPAddress.Parse("64:ff9b::909:909")); // 9.9.9.9
+
+        Assert.Equal("8.8.8.8", a);
+        Assert.Equal("9.9.9.9", b);
+        Assert.NotEqual(a, b);
+    }
+
+    [Fact]
+    public void NormalizeClientKey_Nat64EmbeddedIpv4_SharesBucketWithNativeIpv4_SameClient()
+    {
+        // The embedded public IPv4 IS the client identity, so a NAT64-translated hit and a native-IPv4
+        // hit from the same address share one bucket — the correct, consistent view, not key confusion.
+        Assert.Equal(
+            SsoRateLimiter.NormalizeClientKey(IPAddress.Parse("8.8.8.8")),
+            SsoRateLimiter.NormalizeClientKey(IPAddress.Parse("64:ff9b::808:808")));
+    }
+
+    [Fact]
+    public void NormalizeClientKey_6to4_KeysOnEmbeddedIpv4_NotSharedSlash64()
+    {
+        // 6to4 (2002::/16) embeds the IPv4 in bytes 2-5; 2002:0808:0808::/48 carries 8.8.8.8. Distinct
+        // embedded IPv4s must not collapse into one 2002:.../64 bucket.
+        var a = SsoRateLimiter.NormalizeClientKey(IPAddress.Parse("2002:808:808::1"));   // 8.8.8.8
+        var b = SsoRateLimiter.NormalizeClientKey(IPAddress.Parse("2002:909:909::1"));   // 9.9.9.9
+
+        Assert.Equal("8.8.8.8", a);
+        Assert.Equal("9.9.9.9", b);
+        Assert.NotEqual(a, b);
+    }
+
+    [Fact]
+    public void NormalizeClientKey_Ipv4Compatible_KeysOnEmbeddedIpv4_NotSharedSlash64()
+    {
+        // Deprecated IPv4-compatible (::/96): the low 32 bits are the client IPv4. Distinct clients
+        // must separate rather than share the ::/64 bucket.
+        var a = SsoRateLimiter.NormalizeClientKey(IPAddress.Parse("::8.8.8.8"));
+        var b = SsoRateLimiter.NormalizeClientKey(IPAddress.Parse("::9.9.9.9"));
+
+        Assert.Equal("8.8.8.8", a);
+        Assert.Equal("9.9.9.9", b);
+        Assert.NotEqual(a, b);
+    }
+
+    [Fact]
+    public void NormalizeClientKey_TransitionClients_ThrottleIndependently_NoSharedLockout()
+    {
+        // End-to-end: two distinct NAT64 clients must have independent budgets — one exhausting its
+        // limit must not throttle the other (the shared-bucket lockout class this fix removes).
+        var limiter = new SsoRateLimiter();
+        var abuser = SsoRateLimiter.NormalizeClientKey(IPAddress.Parse("64:ff9b::808:808"));
+        var victim = SsoRateLimiter.NormalizeClientKey(IPAddress.Parse("64:ff9b::909:909"));
+
+        Assert.True(limiter.IsAllowed(abuser, 1, Window, Now, out _));
+        Assert.False(limiter.IsAllowed(abuser, 1, Window, Now, out _));
+        Assert.True(limiter.IsAllowed(victim, 1, Window, Now, out _));
+    }
+
+    [Fact]
+    public void NormalizeClientKey_NonTransitionIpv6_StillKeysOnSlash64()
+    {
+        // A regular global-unicast IPv6 (no embedded IPv4) keeps /64 keying, so rotation within one
+        // allocation still cannot evade — the transition handling must not widen this.
+        Assert.Equal(
+            "2001:db8:1:2::/64",
+            SsoRateLimiter.NormalizeClientKey(IPAddress.Parse("2001:db8:1:2:3:4:5:6")));
+    }
+
+    [Fact]
     public void NormalizeClientKey_NullRemote_ReturnsNull_FailOpen()
     {
         Assert.Null(SsoRateLimiter.NormalizeClientKey(null));
