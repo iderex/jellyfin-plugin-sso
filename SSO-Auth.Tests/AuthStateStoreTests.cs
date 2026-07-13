@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Xunit;
@@ -194,5 +195,76 @@ public class AuthStateStoreTests
 
         Assert.False(store.ContainsKey("seed-expired"));
         Assert.Equal(5000, store.Count);
+    }
+
+    // --- TryAdd cap (#246): bound the store; refuse a new state at capacity, never evict in-flight ---
+
+    [Fact]
+    public void TryAdd_BelowCap_AddsTheState()
+    {
+        var store = new ConcurrentDictionary<string, TimedAuthorizeState>();
+
+        Assert.True(AuthStateStore.TryAdd(store, "a", State("p", "a", false, Now), maxEntries: 2));
+        Assert.True(AuthStateStore.TryAdd(store, "b", State("p", "b", false, Now), maxEntries: 2));
+        Assert.Equal(2, store.Count);
+    }
+
+    [Fact]
+    public void TryAdd_AtCap_RefusesANewKeyAndKeepsTheInFlightState()
+    {
+        var store = new ConcurrentDictionary<string, TimedAuthorizeState>();
+        Assert.True(AuthStateStore.TryAdd(store, "in-flight", State("p", "in-flight", false, Now), maxEntries: 1));
+
+        // At the cap, a fresh challenge is refused rather than evicting the user already mid-login.
+        Assert.False(AuthStateStore.TryAdd(store, "new", State("p", "new", false, Now), maxEntries: 1));
+        Assert.Single(store);
+        Assert.True(store.ContainsKey("in-flight"));
+    }
+
+    [Fact]
+    public void TryAdd_DuplicateKey_ReturnsFalse()
+    {
+        var store = new ConcurrentDictionary<string, TimedAuthorizeState>();
+        Assert.True(AuthStateStore.TryAdd(store, "a", State("p", "a", false, Now), maxEntries: 10));
+        Assert.False(AuthStateStore.TryAdd(store, "a", State("p", "a", false, Now), maxEntries: 10));
+    }
+
+    [Fact]
+    public async Task TryAdd_UnderContention_StaysBoundedAndRejectsSome()
+    {
+        const int cap = 50;
+        const int taskCount = 8;
+        const int perTask = 30;
+        var store = new ConcurrentDictionary<string, TimedAuthorizeState>();
+        var rejected = 0;
+
+        var tasks = new Task[taskCount];
+        for (var t = 0; t < taskCount; t++)
+        {
+            var id = t;
+            tasks[t] = Task.Run(
+                () =>
+                {
+                    for (var i = 0; i < perTask; i++)
+                    {
+                        var key = $"t{id}-k{i}";
+                        if (!AuthStateStore.TryAdd(store, key, State("p", key, false, Now), cap))
+                        {
+                            Interlocked.Increment(ref rejected);
+                        }
+                    }
+                },
+                TestContext.Current.CancellationToken);
+        }
+
+        await Task.WhenAll(tasks);
+
+        // The unsynchronized check-then-add can transiently overshoot by at most the in-flight thread
+        // count, so the invariant is BOUNDED (not "never exceeds cap"): the cap is reached, the store
+        // stays within cap + taskCount, and once full some inserts are rejected — the concurrent
+        // rejection path.
+        Assert.True(store.Count >= cap);
+        Assert.True(store.Count <= cap + taskCount);
+        Assert.True(rejected > 0);
     }
 }

@@ -28,6 +28,33 @@ internal static class AuthStateStore
     }
 
     /// <summary>
+    /// Adds a new authorize state unless the store already holds <paramref name="maxEntries"/> entries.
+    /// At the cap a NEW key is refused (that one login fails closed) rather than evicting an in-flight
+    /// state — evicting would drop a user already mid-login (a mass-lockout hazard under a flood). This
+    /// bounds memory under an anonymous challenge flood on the busiest login endpoint, mirroring
+    /// <see cref="SamlRequestCache"/>. The check-then-insert is not serialized (no lock on the anonymous
+    /// hot path), so concurrent adds can transiently overshoot by at most the number of in-flight threads.
+    /// </summary>
+    /// <param name="states">The state store.</param>
+    /// <param name="key">The authorize-state value used as the key.</param>
+    /// <param name="value">The state to store.</param>
+    /// <param name="maxEntries">The approximate ceiling on stored entries.</param>
+    /// <returns>True if the state was added; false if the key already existed or the store is at capacity.</returns>
+    internal static bool TryAdd(
+        ConcurrentDictionary<string, TimedAuthorizeState> states,
+        string key,
+        TimedAuthorizeState value,
+        int maxEntries)
+    {
+        if (states.Count >= maxEntries && !states.ContainsKey(key))
+        {
+            return false;
+        }
+
+        return states.TryAdd(key, value);
+    }
+
+    /// <summary>
     /// Whether a stored state still belongs to the given provider and has not expired. Used at the
     /// OpenID callback before a state is validated: a state minted for one provider must not be
     /// accepted on another provider's callback, and a state older than its lifetime is not honored.
