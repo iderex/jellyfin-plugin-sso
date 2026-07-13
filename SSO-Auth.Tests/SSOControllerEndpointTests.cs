@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.SSO_Auth.Api;
@@ -70,7 +71,10 @@ public class SSOControllerEndpointTests
 
         var result = await harness.Controller.OidPost("keycloak", "some-state");
 
-        Assert.IsType<BadRequestObjectResult>(result);
+        // Assert the body, not just the type: a missing/invalid state also returns a 400, so pinning
+        // the "no matching provider" message keeps this test on the disabled-provider fallthrough.
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Equal("No matching provider found", badRequest.Value);
     }
 
     [Fact]
@@ -116,6 +120,7 @@ public class SSOControllerEndpointTests
 
         var result = Assert.IsType<OkObjectResult>(harness.Controller.OidProviderNames());
         var names = Assert.IsType<List<string>>(result.Value);
+        Assert.Equal(2, names.Count);
         Assert.Contains("keycloak", names);
         Assert.Contains("authelia", names);
     }
@@ -127,15 +132,16 @@ public class SSOControllerEndpointTests
 
         var result = Assert.IsType<OkObjectResult>(harness.Controller.SamlProviderNames());
         var names = Assert.IsType<List<string>>(result.Value);
-        Assert.Contains("adfs", names);
+        Assert.Equal(new[] { "adfs" }, names);
     }
 
     [Fact]
-    public void OidStates_NoFlowsInProgress_ReturnsOk()
+    public void OidStates_NoFlowsInProgress_ReturnsEmpty()
     {
         var harness = new SsoControllerHarness();
 
-        Assert.IsType<OkObjectResult>(harness.Controller.OidStates());
+        var result = Assert.IsType<OkObjectResult>(harness.Controller.OidStates());
+        Assert.Empty(Assert.IsAssignableFrom<IEnumerable>(result.Value));
     }
 }
 
