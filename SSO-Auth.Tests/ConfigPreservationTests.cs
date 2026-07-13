@@ -66,7 +66,9 @@ public class ConfigPreservationTests
         var live = new PluginConfiguration { OidConfigs = null, SamlConfigs = null };
 
         // Fail-safe: a malformed config with missing maps must not NRE the save path.
-        SSOPlugin.PreserveServerManagedFields(incoming, live);
+        var exception = Record.Exception(() => SSOPlugin.PreserveServerManagedFields(incoming, live));
+
+        Assert.Null(exception);
     }
 
     [Fact]
