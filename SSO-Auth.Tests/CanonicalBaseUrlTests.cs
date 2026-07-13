@@ -87,7 +87,9 @@ public class CanonicalBaseUrlTests
     [InlineData("https://example.com/jellyfin/")]
     public void RejectInvalidBaseUrlOverride_BlankOrValid_DoesNotThrow(string? raw)
     {
-        SSOController.RejectInvalidBaseUrlOverride(raw);
+        var exception = Record.Exception(() => SSOController.RejectInvalidBaseUrlOverride(raw));
+
+        Assert.Null(exception);
     }
 
     // Resolve (#242): the base-URL decision GetRequestBase used to make inline against the live Request.

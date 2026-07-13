@@ -36,9 +36,14 @@ public class SamlCertificateTests
     [Fact]
     public void RejectInvalidSamlCertificate_ValidOrBlank_DoesNotThrow()
     {
-        SSOController.RejectInvalidSamlCertificate(SamlTestFactory.Create().CertificateBase64);
-        SSOController.RejectInvalidSamlCertificate(null);
-        SSOController.RejectInvalidSamlCertificate(string.Empty);
+        var exception = Record.Exception(() =>
+        {
+            SSOController.RejectInvalidSamlCertificate(SamlTestFactory.Create().CertificateBase64);
+            SSOController.RejectInvalidSamlCertificate(null);
+            SSOController.RejectInvalidSamlCertificate(string.Empty);
+        });
+
+        Assert.Null(exception);
     }
 
     [Fact]
