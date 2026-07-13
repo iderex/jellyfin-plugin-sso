@@ -353,6 +353,15 @@ public class SSOController : ControllerBase
         PkceSupportCache.Clear();
     }
 
+    // Test-only seed of a single authorize-state entry so a test can exercise the OidAuth callback
+    // (which consumes an already-validated state that the browser redirect leg normally populates)
+    // without standing up the full token-exchange flow. Same test-only surface as ResetOidStateForTests
+    // (internal, InternalsVisibleTo, no endpoint/DI) — never reachable in production.
+    internal static void SeedOidStateForTests(string token, TimedAuthorizeState state)
+    {
+        StateManager[token] = state;
+    }
+
     // Reads a provider's config under the config lock, so an anonymous login-path lookup does not race an
     // admin Add/Del mutating the live provider dictionary in place — a Dictionary read-during-write is
     // undefined behaviour in .NET (throw, misread, or a spin on a corrupted chain during a resize) (#252).
