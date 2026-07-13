@@ -18,7 +18,7 @@ public class WebResponseTests
         // A value chosen to break out of a single-quoted literal and inject markup, if unescaped.
         var hostileData = "abc'; </script><script>alert(1)</script>//";
 
-        var html = WebResponse.Generator(hostileData, "keycloak", "https://jf.example.com", "SAML");
+        var html = WebResponse.Generator(hostileData, "keycloak", "https://jf.example.com", "SAML", "n0nce");
 
         // Emitted via JSON serialization (double-quoted, encoded) rather than a raw single-quoted
         // concatenation.
@@ -37,7 +37,7 @@ public class WebResponseTests
         // textually identical.
         var base64 = "PHNhbWxwOlJlc3BvbnNlLz4=";
 
-        var html = WebResponse.Generator(base64, "authelia", "https://jf.example.com", "OID");
+        var html = WebResponse.Generator(base64, "authelia", "https://jf.example.com", "OID", "n0nce");
 
         Assert.Contains("var data = \"" + base64 + "\";", html);
     }
@@ -48,7 +48,7 @@ public class WebResponseTests
         // A provider name that would break out of a single-quoted JS/URL literal if interpolated raw.
         var hostileProvider = "p';alert(1);//";
 
-        var html = WebResponse.Generator("ZGF0YQ==", hostileProvider, "https://jf.example.com", "SAML");
+        var html = WebResponse.Generator("ZGF0YQ==", hostileProvider, "https://jf.example.com", "SAML", "n0nce");
 
         // The provider is emitted once as a JSON-encoded constant and used through
         // encodeURIComponent in the URLs, never concatenated raw.
@@ -62,10 +62,34 @@ public class WebResponseTests
     {
         // The base URL derives from the request host, so it is treated as untrusted and emitted as
         // a JSON-encoded constant rather than interpolated into the script.
-        var html = WebResponse.Generator("ZGF0YQ==", "keycloak", "https://jf.example.com", "SAML");
+        var html = WebResponse.Generator("ZGF0YQ==", "keycloak", "https://jf.example.com", "SAML", "n0nce");
 
         Assert.Contains("const ssoBaseUrl = \"https://jf.example.com\";", html);
         // URLs are built from the constant, not a raw host string.
         Assert.Contains("ssoBaseUrl + '/web/index.html'", html);
+    }
+
+    [Fact]
+    public void Generator_EmitsNonceOnInlineScriptAndStyle()
+    {
+        var html = WebResponse.Generator("ZGF0YQ==", "keycloak", "https://jf.example.com", "OID", "r4nd0mNonce==");
+
+        // The per-response nonce authorizes the page's single inline script and style under the CSP.
+        Assert.Contains("<style nonce=\"r4nd0mNonce==\">", html);
+        Assert.Contains("<script nonce=\"r4nd0mNonce==\">", html);
+        // The placeholder must be fully substituted — no literal token may leak into the page.
+        Assert.DoesNotContain("{{NONCE}}", html);
+    }
+
+    [Fact]
+    public void Generator_UsesNoInlineStyleAttribute_SoStyleSrcNonceHolds()
+    {
+        // A nonce covers <style> elements but not inline style="" attributes; the iframe's positioning
+        // therefore lives in the nonce'd <style> block (#iframe-main), leaving no inline style behind.
+        var html = WebResponse.Generator("ZGF0YQ==", "keycloak", "https://jf.example.com", "OID", "n0nce");
+
+        Assert.DoesNotContain("style='", html);
+        Assert.DoesNotContain("style=\"", html);
+        Assert.Contains("#iframe-main", html);
     }
 }

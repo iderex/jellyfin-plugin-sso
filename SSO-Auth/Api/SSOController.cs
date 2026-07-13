@@ -241,7 +241,7 @@ public class SSOController : ControllerBase
             if (timedState.Valid)
             {
                 _logger.LogInformation("Is request linking: {IsLinking}", isLinking);
-                return HtmlAuthPage(WebResponse.Generator(data: state, provider: provider, baseUrl: GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), mode: "OID", isLinking: isLinking));
+                return HtmlAuthPage(nonce => WebResponse.Generator(data: state, provider: provider, baseUrl: GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), mode: "OID", nonce: nonce, isLinking: isLinking));
             }
             else
             {
@@ -716,12 +716,13 @@ public class SSOController : ControllerBase
 
             if (SamlLoginPolicy.IsLoginAllowed(samlResponse.GetCustomAttributes("Role"), config.Roles))
             {
-                return HtmlAuthPage(
+                return HtmlAuthPage(nonce =>
                     WebResponse.Generator(
                         data: Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(samlResponse.Xml)),
                         provider: provider,
                         baseUrl: GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride),
                         mode: "SAML",
+                        nonce: nonce,
                         isLinking: isLinking));
             }
 
@@ -1910,17 +1911,18 @@ public class SSOController : ControllerBase
 
     // Returns the rendered auth page as HTML with defensive response headers. The page carries the
     // one-time state token / signed assertion and completes the login from an inline script, so it
-    // must not be framed (clickjacking), MIME-sniffed, cached, or leak its URL via Referer. A
-    // Content-Security-Policy is intentionally NOT set here: the page relies on an inline script and
-    // style, so a safe CSP needs per-response nonces threaded into WebResponse.Generator — tracked
-    // separately (it needs a real-server check that the login page still runs).
-    private ContentResult HtmlAuthPage(string html)
+    // must not be framed (clickjacking), MIME-sniffed, cached, or leak its URL via Referer. A strict
+    // Content-Security-Policy locks it to a single nonce'd inline script and style and same-origin
+    // fetch/frame; the same per-response nonce is threaded into the rendered page via the delegate.
+    private ContentResult HtmlAuthPage(Func<string, string> render)
     {
+        var nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
+        Response.Headers["Content-Security-Policy"] = AuthPageCsp.Build(nonce);
         Response.Headers["X-Frame-Options"] = "DENY";
         Response.Headers["X-Content-Type-Options"] = "nosniff";
         Response.Headers["Referrer-Policy"] = "no-referrer";
         Response.Headers.CacheControl = "no-store";
-        return Content(html, MediaTypeNames.Text.Html);
+        return Content(render(nonce), MediaTypeNames.Text.Html);
     }
 }
 

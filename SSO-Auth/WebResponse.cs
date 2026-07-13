@@ -14,17 +14,23 @@ public static class WebResponse
     public static readonly string Base = @"<!DOCTYPE html>
 <html><head>
 <meta name='viewport' content='width=device-width, initial-scale=1'>
-<style>
+<style nonce=""{{NONCE}}"">
   body {
     background: #101010;
     color: #d1cfce;
     font-family: Noto Sans, Noto Sans HK, Noto Sans JP, Noto Sans KR, Noto Sans SC, Noto Sans TC, sans-serif;
   }
+  #iframe-main {
+    position: absolute;
+    width: 0;
+    height: 0;
+    border: 0;
+  }
 </style>
 </head><body>
 <p>Logging in...</p>
 <noscript>Please enable Javascript to complete the login</noscript>
-<script>
+<script nonce=""{{NONCE}}"">
 
 function isTv() {
     // This is going to be really difficult to get right
@@ -412,9 +418,10 @@ const sleep = (milliseconds) => {
     /// <param name="provider">The name of the provider to callback to.</param>
     /// <param name="baseUrl">The base URL of the Jellyfin installation.</param>
     /// <param name="mode">The mode of the function; SAML or OID.</param>
+    /// <param name="nonce">The per-response CSP nonce emitted on the inline script and style tags.</param>
     /// <param name="isLinking">Whether or not this request is to link accounts (Rather than authenticate).</param>
     /// <returns>A string with the HTML to serve to the client.</returns>
-    public static string Generator(string data, string provider, string baseUrl, string mode, bool isLinking = false)
+    public static string Generator(string data, string provider, string baseUrl, string mode, string nonce, bool isLinking = false)
     {
         System.ArgumentNullException.ThrowIfNull(baseUrl);
 
@@ -430,7 +437,7 @@ const sleep = (milliseconds) => {
         // the script context, then build every URL from these constants rather than interpolating
         // raw. punycodeBaseUrl derives from the request host, and provider from the route, so both
         // are treated as untrusted here (defense-in-depth); mode is a fixed literal.
-        return Base + @"
+        return Base.Replace("{{NONCE}}", nonce, System.StringComparison.Ordinal) + @"
 const ssoBaseUrl = " + JsonSerializer.Serialize(punycodeBaseUrl) + @";
 const ssoProvider = " + JsonSerializer.Serialize(provider) + @";
 const ssoMode = " + JsonSerializer.Serialize(mode) + @";
@@ -535,6 +542,6 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 
 // https://stackoverflow.com/a/25435165
-</script><iframe id='iframe-main' class='docs-texteventtarget-iframe' sandbox='allow-same-origin allow-forms allow-scripts' src='' style='position: absolute;width:0;height:0;border:0;'></iframe></body></html>";
+</script><iframe id='iframe-main' sandbox='allow-same-origin allow-forms allow-scripts' src=''></iframe></body></html>";
     }
 }
