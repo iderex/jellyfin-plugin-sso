@@ -170,7 +170,7 @@ public class SSOController : ControllerBase
         OidConfig config;
         try
         {
-            config = SSOPlugin.Instance.Configuration.OidConfigs[provider];
+            config = GetOidConfig(provider);
         }
         catch (KeyNotFoundException)
         {
@@ -279,7 +279,7 @@ public class SSOController : ControllerBase
         OidConfig config;
         try
         {
-            config = SSOPlugin.Instance.Configuration.OidConfigs[provider];
+            config = GetOidConfig(provider);
         }
         catch (KeyNotFoundException)
         {
@@ -351,6 +351,18 @@ public class SSOController : ControllerBase
 
         throw new ArgumentException(ProviderDoesNotExistMessage);
     }
+
+    // Reads a provider's config under the config lock, so an anonymous login-path index does not race an
+    // admin Add/Del mutating the live provider dictionary in place — a Dictionary read-during-write is
+    // undefined behaviour in .NET (throw, misread, or a spin on a corrupted chain during a resize) (#252).
+    // Throws KeyNotFoundException for an unknown provider, exactly as the direct index did, so the existing
+    // catch at each call site is unchanged. An uncontended lock is nanoseconds; it is only held long during
+    // a first-login/admin persist, which is exactly when a consistent read matters.
+    private static OidConfig GetOidConfig(string provider) =>
+        SSOPlugin.Instance.ReadConfiguration(configuration => configuration.OidConfigs[provider]);
+
+    private static SamlConfig GetSamlConfig(string provider) =>
+        SSOPlugin.Instance.ReadConfiguration(configuration => configuration.SamlConfigs[provider]);
 
     // Builds the OidcClient that both the challenge and the callback use. Pure mechanical assembly:
     // the redirect URI and the scope string are the only two inputs the endpoints derive differently,
@@ -603,7 +615,7 @@ public class SSOController : ControllerBase
         OidConfig config;
         try
         {
-            config = SSOPlugin.Instance.Configuration.OidConfigs[provider];
+            config = GetOidConfig(provider);
         }
         catch (KeyNotFoundException)
         {
@@ -674,7 +686,7 @@ public class SSOController : ControllerBase
         SamlConfig config;
         try
         {
-            config = SSOPlugin.Instance.Configuration.SamlConfigs[provider];
+            config = GetSamlConfig(provider);
         }
         catch (KeyNotFoundException)
         {
@@ -743,7 +755,7 @@ public class SSOController : ControllerBase
         SamlConfig config;
         try
         {
-            config = SSOPlugin.Instance.Configuration.SamlConfigs[provider];
+            config = GetSamlConfig(provider);
         }
         catch (KeyNotFoundException)
         {
@@ -862,7 +874,7 @@ public class SSOController : ControllerBase
         SamlConfig config;
         try
         {
-            config = SSOPlugin.Instance.Configuration.SamlConfigs[provider];
+            config = GetSamlConfig(provider);
         }
         catch (KeyNotFoundException)
         {
@@ -1374,7 +1386,7 @@ public class SSOController : ControllerBase
         SamlConfig config;
         try
         {
-            config = SSOPlugin.Instance.Configuration.SamlConfigs[provider];
+            config = GetSamlConfig(provider);
         }
         catch (KeyNotFoundException)
         {
@@ -1423,7 +1435,7 @@ public class SSOController : ControllerBase
         try
         {
             // Touch the indexer only to verify the provider exists; it throws if it does not.
-            _ = SSOPlugin.Instance.Configuration.OidConfigs[provider];
+            _ = GetOidConfig(provider);
         }
         catch (KeyNotFoundException)
         {
