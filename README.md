@@ -84,7 +84,7 @@ Configure your providers on the plugin's settings page (**Dashboard → Plugins 
 
 Broader documentation lives in the **[Wiki](https://github.com/iderex/jellyfin-plugin-sso/wiki)**:
 
-- [Installation](https://github.com/iderex/jellyfin-plugin-sso/wiki/Installation) · [Security Model](https://github.com/iderex/jellyfin-plugin-sso/wiki/Security-Model) · [Troubleshooting](https://github.com/iderex/jellyfin-plugin-sso/wiki/Troubleshooting)
+- [Installation](https://github.com/iderex/jellyfin-plugin-sso/wiki/Installation) · [Login Flow](https://github.com/iderex/jellyfin-plugin-sso/wiki/Login-Flow) · [Security Model](https://github.com/iderex/jellyfin-plugin-sso/wiki/Security-Model) · [Troubleshooting](https://github.com/iderex/jellyfin-plugin-sso/wiki/Troubleshooting)
 - Per-identity-provider setup: [Provider Guides](providers.md)
 
 ## Security
