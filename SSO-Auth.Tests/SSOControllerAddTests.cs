@@ -22,18 +22,21 @@ public class SSOControllerAddTests
     {
         var harness = new SsoControllerHarness();
 
-        harness.Controller.OidAdd("keycloak", new OidConfig());
+        harness.Controller.OidAdd("keycloak", new OidConfig { OidClientId = "client-1" });
 
-        var names = Assert.IsType<List<string>>(Assert.IsType<OkObjectResult>(harness.Controller.OidProviderNames()).Value);
-        Assert.Contains("keycloak", names);
+        var stored = SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["keycloak"].OidClientId);
+        Assert.Equal("client-1", stored);
     }
 
     [Fact]
-    public void OidAdd_MalformedBaseUrlOverride_Throws()
+    public void OidAdd_MalformedBaseUrlOverride_Throws_AndDoesNotPersist()
     {
         var harness = new SsoControllerHarness();
 
         Assert.Throws<ArgumentException>(() => harness.Controller.OidAdd("keycloak", new OidConfig { BaseUrlOverride = "not-a-url" }));
+
+        // Fail-closed: the reject runs before the write, so nothing was persisted.
+        Assert.False(SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs.ContainsKey("keycloak")));
     }
 
     [Fact]
@@ -54,18 +57,20 @@ public class SSOControllerAddTests
     {
         var harness = new SsoControllerHarness();
 
-        Assert.IsType<OkResult>(harness.Controller.SamlAdd("adfs", new SamlConfig()));
+        Assert.IsType<OkResult>(harness.Controller.SamlAdd("adfs", new SamlConfig { SamlClientId = "client-1" }));
 
-        var names = Assert.IsType<List<string>>(Assert.IsType<OkObjectResult>(harness.Controller.SamlProviderNames()).Value);
-        Assert.Contains("adfs", names);
+        var stored = SSOPlugin.Instance.ReadConfiguration(c => c.SamlConfigs["adfs"].SamlClientId);
+        Assert.Equal("client-1", stored);
     }
 
     [Fact]
-    public void SamlAdd_MalformedBaseUrlOverride_Throws()
+    public void SamlAdd_MalformedBaseUrlOverride_Throws_AndDoesNotPersist()
     {
         var harness = new SsoControllerHarness();
 
         Assert.Throws<ArgumentException>(() => harness.Controller.SamlAdd("adfs", new SamlConfig { BaseUrlOverride = "not-a-url" }));
+
+        Assert.False(SSOPlugin.Instance.ReadConfiguration(c => c.SamlConfigs.ContainsKey("adfs")));
     }
 
     [Fact]
