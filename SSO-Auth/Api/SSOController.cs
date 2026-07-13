@@ -1028,14 +1028,13 @@ public class SSOController : ControllerBase
         });
     }
 
-    // Applies a mutation to a provider's canonical-links map on the LIVE configuration, reassigning the
-    // map so a lazily-created (previously-null) one is persisted. Runs inside MutateConfiguration, so the
-    // whole read-modify-write is serialized and concurrent first-logins cannot lose each other's links.
+    // Applies a mutation to a provider's canonical-links map on the LIVE configuration. The map is
+    // self-healing (CanonicalLinks lazily creates and stores it), so mutating the returned map persists
+    // directly. Runs inside MutateConfiguration, so the read-modify-write is serialized and concurrent
+    // first-logins cannot lose each other's links.
     private static void MutateLinks(PluginConfiguration configuration, string mode, string provider, Action<SerializableDictionary<string, Guid>> mutate)
     {
-        var links = GetLinks(configuration, mode, provider);
-        mutate(links);
-        SetLinks(configuration, mode, provider, links);
+        mutate(GetLinks(configuration, mode, provider));
     }
 
     // The provider's canonical-links map; callers must hold the config lock (ReadConfiguration /
@@ -1048,23 +1047,6 @@ public class SSOController : ControllerBase
             "oid" => configuration.OidConfigs[provider].CanonicalLinks,
             _ => throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'"),
         };
-    }
-
-    // Reassigns a provider's canonical-links map, so a lazily-created (previously-null) map is
-    // persisted. Pairs with GetLinks; both must run under the config lock.
-    private static void SetLinks(PluginConfiguration configuration, string mode, string provider, SerializableDictionary<string, Guid> links)
-    {
-        switch (mode.ToLowerInvariant())
-        {
-            case "saml":
-                configuration.SamlConfigs[provider].CanonicalLinks = links;
-                break;
-            case "oid":
-                configuration.OidConfigs[provider].CanonicalLinks = links;
-                break;
-            default:
-                throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'");
-        }
     }
 
     private async Task<Guid> CreateCanonicalLinkAndUserIfNotExist(string mode, string provider, string canonicalKey, string username, bool allowExistingAccountLink)
@@ -1178,7 +1160,6 @@ public class SSOController : ControllerBase
             if (wroteLink)
             {
                 links[canonicalKey] = effectiveUserId;
-                SetLinks(configuration, mode, provider, links);
             }
 
             return (effectiveUserId, wroteLink);
