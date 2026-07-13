@@ -33,6 +33,13 @@ filever=$(grep -oP '(?<=<FileVersion>)[^<]+' "$csproj" | head -1 || true); need 
 controller=$(grep -oP 'Jellyfin\.Controller"\s+Version="\K[^"]+' "$csproj" | head -1 || true); need "$controller" "Jellyfin.Controller version"
 model=$(grep -oP 'Jellyfin\.Model"\s+Version="\K[^"]+' "$csproj" | head -1 || true); need "$model" "Jellyfin.Model version"
 
+# The Jellyfin packages take their version from the $(JellyfinVersion) property (#142, so the
+# abi-floor CI job can override it); resolve it to the property's default so the metadata checks below
+# compare real version numbers rather than the literal '$(JellyfinVersion)'.
+jellyfinversion=$(grep -oP '<JellyfinVersion[^>]*>\K[^<]+' "$csproj" | head -1 || true); need "$jellyfinversion" "csproj JellyfinVersion default"
+[[ "$controller" == '$(JellyfinVersion)' ]] && controller="$jellyfinversion"
+[[ "$model" == '$(JellyfinVersion)' ]] && model="$jellyfinversion"
+
 byframework=$(grep -oP 'framework:\s*"?\K[^"[:space:]]+' "$buildyaml" | head -1 || true); need "$byframework" "build.yaml framework"
 byversion=$(grep -oP '^version:\s*"?\K[^"[:space:]]+' "$buildyaml" | head -1 || true); need "$byversion" "build.yaml version"
 abi=$(grep -oP 'targetAbi:\s*"?\K[^"[:space:]]+' "$buildyaml" | head -1 || true); need "$abi" "build.yaml targetAbi"
