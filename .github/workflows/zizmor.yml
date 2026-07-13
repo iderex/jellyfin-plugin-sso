@@ -1,0 +1,54 @@
+# Static analysis of the GitHub Actions workflows themselves (zizmor). The
+# workflow YAML is release-critical attack surface — publish-nightly.yml runs on
+# every push to main with contents:write — so it is audited like any other code.
+#
+# Rule for future workflow changes: every new or edited workflow must pass this
+# gate at the pedantic persona before merge. Keep actions SHA-pinned, keep
+# checkout on persist-credentials:false, grant write permissions per job (never
+# workflow-level), and never restore a cache in a job that publishes a release.
+name: Workflow Security Analysis
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ "**" ]
+
+permissions: {}
+
+jobs:
+  zizmor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      security-events: write # upload the SARIF into the code-scanning tab
+      contents: read
+      actions: read
+    env:
+      ZIZMOR_VERSION: "1.26.1"
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      - name: Audit workflows (SARIF for code scanning)
+        # --format=sarif always exits 0; the gate step below enforces the failure.
+        run: uvx "zizmor@${ZIZMOR_VERSION}" --persona=pedantic --format=sarif . > results.sarif
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload SARIF
+        if: always() # publish findings even when the gate below fails the build
+        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
+        with:
+          sarif_file: results.sarif
+          category: zizmor
+
+      - name: Fail on findings
+        run: uvx "zizmor@${ZIZMOR_VERSION}" --persona=pedantic --format=plain .
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

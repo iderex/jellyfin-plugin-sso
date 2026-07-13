@@ -5,16 +5,17 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
-# The single build job also creates the GitHub release and updates the
-# manifest branch, so it needs write access to repository contents.
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
   build:
 
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # This job creates the GitHub release and updates the manifest branch, so it
+    # opts into write access explicitly rather than granting it workflow-wide.
+    permissions:
+      contents: write
 
     steps:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -26,8 +27,9 @@ jobs:
       uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
       with:
         dotnet-version: 9.0.x
-        cache: true
-        cache-dependency-path: '**/packages.lock.json'
+        # No NuGet cache here: this job publishes a release with contents:write,
+        # so a poisoned restore cache would reach the published artifact. The
+        # --locked-mode restore below re-downloads against the committed lockfile.
     - name: Restore dependencies
       # Match the CI build: --locked-mode rejects a drifted or tampered dependency graph.
       run: dotnet restore --locked-mode
