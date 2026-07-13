@@ -71,55 +71,6 @@ internal static class AvatarUrlValidator
         };
     }
 
-    private static bool IsBlockedIPv4(byte[] b)
-    {
-        // 0.0.0.0/8 (this network), 10.0.0.0/8, 100.64.0.0/10 (CGNAT), 169.254.0.0/16 (link-local),
-        // 172.16.0.0/12, 192.0.0.0/24 (IETF protocol assignments incl. the 192.0.0.192 cloud-metadata
-        // address), 192.0.2.0/24 / 198.51.100.0/24 / 203.0.113.0/24 (TEST-NET-1/2/3), 192.88.99.0/24
-        // (6to4 relay anycast), 192.168.0.0/16, 198.18.0.0/15 (benchmarking), and 224.0.0.0/3
-        // (multicast 224/4, reserved 240/4, broadcast).
-        return b[0] == 0
-            || b[0] == 10
-            || (b[0] == 100 && b[1] >= 64 && b[1] <= 127)
-            || (b[0] == 169 && b[1] == 254)
-            || (b[0] == 172 && b[1] >= 16 && b[1] <= 31)
-            || (b[0] == 192 && b[1] == 0 && b[2] == 0)
-            || (b[0] == 192 && b[1] == 0 && b[2] == 2)
-            || (b[0] == 192 && b[1] == 88 && b[2] == 99)
-            || (b[0] == 192 && b[1] == 168)
-            || (b[0] == 198 && (b[1] == 18 || b[1] == 19))
-            || (b[0] == 198 && b[1] == 51 && b[2] == 100)
-            || (b[0] == 203 && b[1] == 0 && b[2] == 113)
-            || b[0] >= 224;
-    }
-
-    private static bool IsBlockedIPv6(IPAddress address)
-    {
-        if (address.IsIPv4MappedToIPv6)
-        {
-            return IsBlockedAddress(address.MapToIPv4());
-        }
-
-        var bytes = address.GetAddressBytes();
-
-        // IPv4-in-IPv6 transition addresses (6to4, the NAT64 well-known prefix, and the deprecated
-        // IPv4-compatible form) embed an IPv4 address that can target an internal range - unwrap it and
-        // re-check, so e.g. [64:ff9b::7f00:1] cannot smuggle 127.0.0.1 past the filter.
-        if (TryExtractEmbeddedIPv4(bytes, out var embedded))
-        {
-            return IsBlockedAddress(embedded);
-        }
-
-        // fec0::/10 is the deprecated site-local range (RFC 3879); block it as defense-in-depth.
-        var siteLocal = bytes[0] == 0xfe && (bytes[1] & 0xc0) == 0xc0;
-
-        return address.IsIPv6LinkLocal
-            || address.IsIPv6UniqueLocal
-            || address.IsIPv6Multicast
-            || siteLocal
-            || IPAddress.IPv6Any.Equals(address);
-    }
-
     /// <summary>
     /// Extracts the IPv4 address embedded in an IPv4-in-IPv6 transition address (6to4 <c>2002::/16</c>, the
     /// NAT64 well-known prefix <c>64:ff9b::/96</c>, or the deprecated IPv4-compatible <c>::/96</c> form). Two
@@ -168,5 +119,54 @@ internal static class AvatarUrlValidator
         }
 
         return false;
+    }
+
+    private static bool IsBlockedIPv4(byte[] b)
+    {
+        // 0.0.0.0/8 (this network), 10.0.0.0/8, 100.64.0.0/10 (CGNAT), 169.254.0.0/16 (link-local),
+        // 172.16.0.0/12, 192.0.0.0/24 (IETF protocol assignments incl. the 192.0.0.192 cloud-metadata
+        // address), 192.0.2.0/24 / 198.51.100.0/24 / 203.0.113.0/24 (TEST-NET-1/2/3), 192.88.99.0/24
+        // (6to4 relay anycast), 192.168.0.0/16, 198.18.0.0/15 (benchmarking), and 224.0.0.0/3
+        // (multicast 224/4, reserved 240/4, broadcast).
+        return b[0] == 0
+            || b[0] == 10
+            || (b[0] == 100 && b[1] >= 64 && b[1] <= 127)
+            || (b[0] == 169 && b[1] == 254)
+            || (b[0] == 172 && b[1] >= 16 && b[1] <= 31)
+            || (b[0] == 192 && b[1] == 0 && b[2] == 0)
+            || (b[0] == 192 && b[1] == 0 && b[2] == 2)
+            || (b[0] == 192 && b[1] == 88 && b[2] == 99)
+            || (b[0] == 192 && b[1] == 168)
+            || (b[0] == 198 && (b[1] == 18 || b[1] == 19))
+            || (b[0] == 198 && b[1] == 51 && b[2] == 100)
+            || (b[0] == 203 && b[1] == 0 && b[2] == 113)
+            || b[0] >= 224;
+    }
+
+    private static bool IsBlockedIPv6(IPAddress address)
+    {
+        if (address.IsIPv4MappedToIPv6)
+        {
+            return IsBlockedAddress(address.MapToIPv4());
+        }
+
+        var bytes = address.GetAddressBytes();
+
+        // IPv4-in-IPv6 transition addresses (6to4, the NAT64 well-known prefix, and the deprecated
+        // IPv4-compatible form) embed an IPv4 address that can target an internal range - unwrap it and
+        // re-check, so e.g. [64:ff9b::7f00:1] cannot smuggle 127.0.0.1 past the filter.
+        if (TryExtractEmbeddedIPv4(bytes, out var embedded))
+        {
+            return IsBlockedAddress(embedded);
+        }
+
+        // fec0::/10 is the deprecated site-local range (RFC 3879); block it as defense-in-depth.
+        var siteLocal = bytes[0] == 0xfe && (bytes[1] & 0xc0) == 0xc0;
+
+        return address.IsIPv6LinkLocal
+            || address.IsIPv6UniqueLocal
+            || address.IsIPv6Multicast
+            || siteLocal
+            || IPAddress.IPv6Any.Equals(address);
     }
 }
