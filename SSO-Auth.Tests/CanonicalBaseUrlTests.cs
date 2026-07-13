@@ -89,4 +89,65 @@ public class CanonicalBaseUrlTests
     {
         SSOController.RejectInvalidBaseUrlOverride(raw);
     }
+
+    // Resolve (#242): the base-URL decision GetRequestBase used to make inline against the live Request.
+    // A valid override is authoritative and returned verbatim; otherwise the request-derived host fallback
+    // applies (default-port elision, scheme-override allowlist, path-base + trailing-slash handling).
+
+    [Fact]
+    public void Resolve_ValidOverride_IsAuthoritative_IgnoresRequestValues()
+    {
+        var result = CanonicalBaseUrl.Resolve("https://canonical.example.com/", "http", "spoofed.host", 8096, "/pathbase", "http", 1234);
+
+        Assert.Equal("https://canonical.example.com", result);
+    }
+
+    [Fact]
+    public void Resolve_MalformedNonBlankOverride_ThrowsFailClosed()
+    {
+        Assert.Throws<System.InvalidOperationException>(
+            () => CanonicalBaseUrl.Resolve("ftp://bad", "https", "host.example.com", 443, "", null, null));
+    }
+
+    [Theory]
+    [InlineData("http", 80, "http://host.example.com")] // default http port elided
+    [InlineData("https", 443, "https://host.example.com")] // default https port elided
+    [InlineData("https", 80, "https://host.example.com:80")] // non-default for the scheme kept
+    [InlineData("http", 8096, "http://host.example.com:8096")] // custom port kept
+    public void Resolve_BlankOverride_ElidesDefaultPortOnly(string scheme, int port, string expected)
+    {
+        var result = CanonicalBaseUrl.Resolve(null, scheme, "host.example.com", port, string.Empty, null, null);
+
+        Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData("http", "http://host.example.com")] // literal http honored
+    [InlineData("https", "https://host.example.com")] // literal https honored
+    [InlineData("ftp", "https://host.example.com")] // anything else falls back to the request scheme
+    [InlineData("HTTP", "https://host.example.com")] // case-sensitive: not honored
+    [InlineData("", "https://host.example.com")]
+    public void Resolve_SchemeOverride_OnlyLiteralHttpOrHttpsHonored(string schemeOverride, string expected)
+    {
+        // Request scheme is https, port 443 (elided) so only the scheme decision shows.
+        var result = CanonicalBaseUrl.Resolve(null, "https", "host.example.com", 443, string.Empty, schemeOverride, null);
+
+        Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public void Resolve_PortOverride_WinsOverRequestPort()
+    {
+        var result = CanonicalBaseUrl.Resolve(null, "https", "host.example.com", 443, string.Empty, null, 8443);
+
+        Assert.Equal("https://host.example.com:8443", result);
+    }
+
+    [Fact]
+    public void Resolve_PathBase_IsKept_AndTrailingSlashTrimmed()
+    {
+        var result = CanonicalBaseUrl.Resolve(null, "https", "host.example.com", 443, "/jellyfin", null, null);
+
+        Assert.Equal("https://host.example.com/jellyfin", result);
+    }
 }

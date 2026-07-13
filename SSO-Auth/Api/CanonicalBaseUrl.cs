@@ -61,4 +61,57 @@ internal static class CanonicalBaseUrl
     /// <returns><see langword="true"/> if the value is set but not a valid base URL.</returns>
     internal static bool IsInvalidOverride(string raw)
         => !string.IsNullOrWhiteSpace(raw) && !TryNormalize(raw, out _);
+
+    /// <summary>
+    /// Resolves the external base URL that every derived <c>redirect_uri</c> and SAML base is built on.
+    /// A configured <paramref name="baseUrlOverride"/> is authoritative (#139) — it removes the
+    /// dependency on the spoofable request <c>Host</c>. A malformed override is rejected at every admin
+    /// write path, so it should never reach here; if one does (a hand-edited or restored config), this
+    /// fails closed rather than silently reverting to the untrusted request host. Only a blank override
+    /// uses the request-derived fallback: the default port (80 on http, 443 on https) is elided, only a
+    /// literal <c>"http"</c>/<c>"https"</c> scheme override is honored (anything else falls back to the
+    /// request scheme), and the trailing slash is trimmed so the result concatenates cleanly with
+    /// <c>/sso/...</c>.
+    /// </summary>
+    /// <param name="baseUrlOverride">The configured canonical base URL, or blank to use the request.</param>
+    /// <param name="scheme">The request scheme.</param>
+    /// <param name="host">The request host (no port).</param>
+    /// <param name="port">The request port, or null.</param>
+    /// <param name="pathBase">The request path base.</param>
+    /// <param name="schemeOverride">The per-provider scheme override, or null.</param>
+    /// <param name="portOverride">The per-provider port override, or null.</param>
+    /// <returns>The external base URL, without a trailing slash.</returns>
+    internal static string Resolve(string baseUrlOverride, string scheme, string host, int? port, string pathBase, string schemeOverride, int? portOverride)
+    {
+        if (!string.IsNullOrWhiteSpace(baseUrlOverride))
+        {
+            if (TryNormalize(baseUrlOverride, out var canonical))
+            {
+                return canonical;
+            }
+
+            throw new InvalidOperationException("The configured Base URL override is not a valid absolute http(s) URL.");
+        }
+
+        var requestPort = portOverride ?? port ?? -1;
+
+        if ((requestPort == 80 && string.Equals(scheme, "http", StringComparison.OrdinalIgnoreCase))
+            || (requestPort == 443 && string.Equals(scheme, "https", StringComparison.OrdinalIgnoreCase)))
+        {
+            requestPort = -1;
+        }
+
+        if (!string.Equals(schemeOverride, "http", StringComparison.Ordinal) && !string.Equals(schemeOverride, "https", StringComparison.Ordinal))
+        {
+            schemeOverride = null;
+        }
+
+        return new UriBuilder
+        {
+            Scheme = schemeOverride ?? scheme,
+            Host = host,
+            Port = requestPort,
+            Path = pathBase,
+        }.ToString().TrimEnd('/');
+    }
 }

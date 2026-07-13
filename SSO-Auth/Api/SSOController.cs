@@ -1792,53 +1792,9 @@ public class SSOController : ControllerBase
         return buffer;
     }
 
-    private string GetRequestBase(string schemeOverride = null, int? portOverride = null, string baseUrlOverride = null)
-    {
-        // A configured canonical base URL is authoritative: it removes the dependency on the request
-        // Host (spoofable behind a proxy forwarding X-Forwarded-Host), so redirect_uri and the SAML base
-        // cannot be poisoned (#139). A malformed value is rejected at every admin write path (the config
-        // page via UpdateConfiguration, and OID/SAML Add via RejectInvalidBaseUrlOverride), so it should
-        // never reach here. If one does anyway (a hand-edited or restored config), fail closed rather than
-        // silently reverting to the spoofable request Host: only a blank override uses the host fallback.
-        if (!string.IsNullOrWhiteSpace(baseUrlOverride))
-        {
-            if (CanonicalBaseUrl.TryNormalize(baseUrlOverride, out var canonical))
-            {
-                return canonical;
-            }
-
-            throw new InvalidOperationException("The configured Base URL override is not a valid absolute http(s) URL.");
-        }
-
-        int requestPort;
-
-        if (portOverride != null)
-        {
-            requestPort = portOverride.Value;
-        }
-        else
-        {
-            requestPort = Request.Host.Port ?? -1;
-        }
-
-        if ((requestPort == 80 && string.Equals(Request.Scheme, "http", StringComparison.OrdinalIgnoreCase)) || (requestPort == 443 && string.Equals(Request.Scheme, "https", StringComparison.OrdinalIgnoreCase)))
-        {
-            requestPort = -1;
-        }
-
-        if (!string.Equals(schemeOverride, "http", StringComparison.Ordinal) && !string.Equals(schemeOverride, "https", StringComparison.Ordinal))
-        {
-            schemeOverride = null;
-        }
-
-        return new UriBuilder
-        {
-            Scheme = schemeOverride ?? Request.Scheme,
-            Host = Request.Host.Host,
-            Port = requestPort,
-            Path = Request.PathBase
-        }.ToString().TrimEnd('/');
-    }
+    // Thin wrapper feeding the live request values into the pure CanonicalBaseUrl.Resolve decision (#242).
+    private string GetRequestBase(string schemeOverride = null, int? portOverride = null, string baseUrlOverride = null) =>
+        CanonicalBaseUrl.Resolve(baseUrlOverride, Request.Scheme, Request.Host.Host, Request.Host.Port, Request.PathBase, schemeOverride, portOverride);
 
     private static ContentResult ReturnError(int code, string message)
     {
