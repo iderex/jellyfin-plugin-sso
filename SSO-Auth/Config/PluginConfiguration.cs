@@ -227,15 +227,11 @@ public class SamlConfig : ProviderConfigBase
     [System.Text.Json.Serialization.JsonIgnore]
     public SerializableDictionary<string, Guid> CanonicalLinks
     {
-        get
-        {
-            if (_canonicalLinks == null)
-            {
-                return new SerializableDictionary<string, Guid>();
-            }
-
-            return _canonicalLinks;
-        }
+        // Self-healing lazy init: the backing map is created and stored on first access, so a direct
+        // `CanonicalLinks[key] = id` persists into the stored map instead of a discarded throwaway.
+        // Every access runs under the config lock (ReadConfiguration/MutateConfiguration), so the
+        // assignment cannot race; an empty map serializes the same as the old throwaway did.
+        get => _canonicalLinks ??= new SerializableDictionary<string, Guid>();
         set => _canonicalLinks = value;
     }
 }
@@ -386,15 +382,11 @@ public class OidConfig : ProviderConfigBase
     [System.Text.Json.Serialization.JsonIgnore]
     public SerializableDictionary<string, Guid> CanonicalLinks
     {
-        get
-        {
-            if (_canonicalLinks == null)
-            {
-                return new SerializableDictionary<string, Guid>();
-            }
-
-            return _canonicalLinks;
-        }
+        // Self-healing lazy init: the backing map is created and stored on first access, so a direct
+        // `CanonicalLinks[key] = id` persists into the stored map instead of a discarded throwaway.
+        // Every access runs under the config lock (ReadConfiguration/MutateConfiguration), so the
+        // assignment cannot race; an empty map serializes the same as the old throwaway did.
+        get => _canonicalLinks ??= new SerializableDictionary<string, Guid>();
         set => _canonicalLinks = value;
     }
 
