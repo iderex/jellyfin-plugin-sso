@@ -38,7 +38,7 @@ internal sealed class SsoControllerHarness
 
     public PluginConfiguration Configuration { get; }
 
-    public SsoControllerHarness(Action<PluginConfiguration>? configure = null)
+    public SsoControllerHarness(Action<PluginConfiguration>? configure = null, IPAddress? clientIp = null)
     {
         Configuration = new PluginConfiguration();
         configure?.Invoke(Configuration);
@@ -68,6 +68,8 @@ internal sealed class SsoControllerHarness
         };
         Controller.ControllerContext.HttpContext.Request.Scheme = "https";
         Controller.ControllerContext.HttpContext.Request.Host = new HostString("jf.example.com");
-        Controller.ControllerContext.HttpContext.Connection.RemoteIpAddress = IPAddress.Loopback;
+        // The rate limiter is a process-static keyed on the client IP; a test that exercises throttling
+        // passes a dedicated address so its counter cannot collide with another test's.
+        Controller.ControllerContext.HttpContext.Connection.RemoteIpAddress = clientIp ?? IPAddress.Loopback;
     }
 }
