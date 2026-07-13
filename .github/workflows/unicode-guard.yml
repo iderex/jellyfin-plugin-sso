@@ -34,8 +34,12 @@ jobs:
           # (*UTF) enables PCRE2 UTF-8 so \x{...} matches codepoints, not raw bytes; -I skips
           # binary files (the tracked tree is UTF-8; a binary-marked file also shows as binary
           # in the PR diff, which defeats the visual-deception the attack relies on). Em dashes,
-          # accents, and other benign non-ASCII are not in the set.
-          pattern='(*UTF)[\x{202A}-\x{202E}\x{2066}-\x{2069}\x{200E}\x{200F}\x{061C}\x{200B}-\x{200D}]'
+          # accents, and other benign non-ASCII are not in the set. U+2060 (word joiner) is
+          # included as an invisible control with no legitimate use in source. U+FEFF (BOM) is
+          # deliberately NOT listed: a leading UTF-8 BOM is legitimate (SSO-Auth.sln carries one),
+          # so banning it outright would false-positive, and the bidi reordering attack does not
+          # rely on it.
+          pattern='(*UTF)[\x{202A}-\x{202E}\x{2066}-\x{2069}\x{200E}\x{200F}\x{061C}\x{200B}-\x{200D}\x{2060}]'
           # git grep: 0 = a match was found, 1 = clean, >=2 = scanner/tooling error. Capture the
           # code (the `|| rc=$?` keeps `set -e` from aborting on the clean exit-1) and FAIL CLOSED
           # on any error rather than mistaking a broken scanner for a clean tree.
