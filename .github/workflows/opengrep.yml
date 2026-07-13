@@ -50,7 +50,9 @@ jobs:
         run: |
           set -euo pipefail
           url="https://github.com/opengrep/opengrep/releases/download/${OPENGREP_VERSION}/opengrep_manylinux_x86"
-          curl -fSL --retry 3 --retry-delay 2 -o opengrep "$url"
+          # --proto '=https' --tlsv1.2: refuse any non-HTTPS transport, including
+          # on a redirect, so the download cannot be downgraded to plaintext.
+          curl -fSL --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 -o opengrep "$url"
           echo "${OPENGREP_SHA256}  opengrep" | sha256sum -c -
           chmod +x opengrep
 
