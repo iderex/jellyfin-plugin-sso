@@ -76,9 +76,11 @@ public class SSOController : ControllerBase
     // The expired-state sweep (Invalidate) is an O(n) scan; throttling it to at most once per this interval
     // stops an anonymous challenge flood from amplifying into CPU load (mirrors SamlRequestCache). This only
     // defers memory reclamation — IsCurrentFor/IsRedeemableBy reject an expired state independently, so a
-    // not-yet-swept entry never grants a login. Its atomic cursor (_lastStatePruneTicks) is a mutable field
-    // and so sits after the readonly static fields below (#246).
+    // not-yet-swept entry never grants a login (#246).
     private static readonly TimeSpan StatePruneInterval = TimeSpan.FromMinutes(1);
+
+    // Throttles that sweep to one run per StatePruneInterval; the gate owns the atomic cursor. See Invalidate.
+    private static readonly IntervalGate StatePruneGate = new(StatePruneInterval);
 
     // One-time-use tracking for consumed SAML assertion IDs (replay protection).
     private static readonly SamlReplayCache SamlReplays = new SamlReplayCache();
@@ -103,10 +105,6 @@ public class SSOController : ControllerBase
     // computed once since the assembly version does not change at runtime.
     private static readonly string UserAgentString =
         $"Jellyfin-Plugin-SSO-Auth +{System.Diagnostics.FileVersionInfo.GetVersionInfo(Assembly.GetExecutingAssembly().Location).FileVersion} (https://github.com/iderex/jellyfin-plugin-sso)";
-
-    // Atomic cursor for the throttled authorize-state sweep (#246), read/written via Interlocked (a long is
-    // not torn-read-safe). Mutable, so it sits after the readonly static fields to satisfy field ordering.
-    private static long _lastStatePruneTicks = DateTime.MinValue.Ticks;
 
     // Atomic cursor for throttling the capacity-full warning (#246, CWE-400): under a flood every refused
     // challenge would otherwise emit a warning, amplifying the flood into unbounded log volume. Warn at
@@ -1653,26 +1651,14 @@ public class SSOController : ControllerBase
     private static void Invalidate()
     {
         // Throttle the O(n) expired-state sweep to at most once per StatePruneInterval so an anonymous
-        // challenge flood does not amplify into CPU load; the CAS makes exactly one thread per interval
-        // run it (#246). The store keeps InvalidateExpired itself pure/unthrottled — the throttle lives
-        // here, at its sole call site.
+        // challenge flood does not amplify into CPU load; the gate lets exactly one thread per interval
+        // run it (#246). AuthStateStore.InvalidateExpired stays pure/unthrottled — the throttle lives here,
+        // at its sole call site. The same captured 'now' drives both the gate and the sweep.
         var now = DateTime.Now;
-        var last = Interlocked.Read(ref _lastStatePruneTicks);
-
-        // Skip only when a non-negative, sub-interval amount of time has passed. A backward wall-clock step
-        // (now.Ticks < last) does NOT skip — it prunes and resets the cursor — so a clock correction cannot
-        // stall the sweep and leave the capped store refusing fresh challenges (#246).
-        if (now.Ticks >= last && now.Ticks - last < StatePruneInterval.Ticks)
+        if (StatePruneGate.TryEnter(now))
         {
-            return;
+            AuthStateStore.InvalidateExpired(StateManager, now, StateLifetime);
         }
-
-        if (Interlocked.CompareExchange(ref _lastStatePruneTicks, now.Ticks, last) != last)
-        {
-            return;
-        }
-
-        AuthStateStore.InvalidateExpired(StateManager, now, StateLifetime);
     }
 
     // Consumes the SAML assertion's ID against the provider-scoped replay cache for one-time use.

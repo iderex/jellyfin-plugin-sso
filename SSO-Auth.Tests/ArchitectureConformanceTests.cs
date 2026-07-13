@@ -25,7 +25,7 @@ public class ArchitectureConformanceTests
     // implementation detail, never part of the plugin's public surface.
     private static readonly string[] HelperSuffixes =
     {
-        "Validator", "Cache", "Builder", "Mapper", "Policy", "Probe", "Store", "Revoker", "Extractor",
+        "Validator", "Cache", "Builder", "Mapper", "Policy", "Probe", "Store", "Revoker", "Extractor", "Gate",
     };
 
     // Every production type, compiler-generated ones excluded — the base sequence for structural rules
