@@ -61,7 +61,7 @@ jobs:
         popd
     - name: Publish output artifacts
       id: publish-assets
-      uses: softprops/action-gh-release@132dbbba49e22bd4837f09b46d32a8edaf6baa58
+      uses: softprops/action-gh-release@f6b913c3f95302d88e8ef7cb2859c2e7656aa01e
       with:
           # Mark the nightly as a prerelease so the manifest step's ignorePrereleases
           # filter keeps 0.0.0.9000 out of the production manifest.json every plugin-repo
