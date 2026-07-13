@@ -36,6 +36,8 @@ internal sealed class SsoControllerHarness
 
     public ISessionManager SessionManager { get; }
 
+    public IAuthorizationContext AuthContext { get; }
+
     public PluginConfiguration Configuration { get; }
 
     public SsoControllerHarness(Action<PluginConfiguration>? configure = null, IPAddress? clientIp = null)
@@ -52,13 +54,14 @@ internal sealed class SsoControllerHarness
 
         UserManager = Substitute.For<IUserManager>();
         SessionManager = Substitute.For<ISessionManager>();
+        AuthContext = Substitute.For<IAuthorizationContext>();
 
         Controller = new SSOController(
             Substitute.For<ILogger<SSOController>>(),
             Substitute.For<ILoggerFactory>(),
             SessionManager,
             UserManager,
-            Substitute.For<IAuthorizationContext>(),
+            AuthContext,
             Substitute.For<ICryptoProvider>(),
             Substitute.For<IProviderManager>(),
             Substitute.For<IHttpClientFactory>(),
