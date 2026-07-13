@@ -339,6 +339,20 @@ public class SSOController : ControllerBase
         throw new ArgumentException(ProviderDoesNotExistMessage);
     }
 
+    // Test-only reset of the process-wide OpenID caches this controller keeps as private statics: the
+    // in-flight authorize-state store and the PKCE-discovery cache. A test that drives the login flow
+    // mutates these, so without a reset the state leaks into a sibling test in the same non-parallel
+    // collection. The other static caches are deliberately not cleared here: the SAML replay/request
+    // caches key on random IDs and the rate limiter is isolated by per-test client IP, so they cannot
+    // bleed between tests. Internal and reachable only through InternalsVisibleTo; it is never wired to
+    // an endpoint or DI, so it adds no runtime or security surface. Callback/challenge coverage relies
+    // on it for isolation (#289).
+    internal static void ResetOidStateForTests()
+    {
+        StateManager.Clear();
+        PkceSupportCache.Clear();
+    }
+
     // Reads a provider's config under the config lock, so an anonymous login-path lookup does not race an
     // admin Add/Del mutating the live provider dictionary in place — a Dictionary read-during-write is
     // undefined behaviour in .NET (throw, misread, or a spin on a corrupted chain during a resize) (#252).

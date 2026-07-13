@@ -45,6 +45,10 @@ internal sealed class SsoControllerHarness
         IPAddress? clientIp = null,
         Func<HttpRequestMessage, HttpResponseMessage>? httpResponder = null)
     {
+        // The controller keeps process-wide OpenID caches as private statics; clear them so a prior test
+        // that exercised the login flow cannot leak in-flight state into this one (#289).
+        SSOController.ResetOidStateForTests();
+
         Configuration = new PluginConfiguration();
         configure?.Invoke(Configuration);
 
