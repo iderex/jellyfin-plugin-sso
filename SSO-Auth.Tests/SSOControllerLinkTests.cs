@@ -1,8 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
+using Duende.IdentityModel.OidcClient;
 using Jellyfin.Data;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
+using Jellyfin.Plugin.SSO_Auth;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using MediaBrowser.Controller.Net;
@@ -17,9 +20,11 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 /// In-process tests of the canonical-link endpoints via <see cref="SsoControllerHarness"/>. They cover
 /// the authorization guard (a non-admin editing another user's links is refused with 403) and, once the
 /// guard passes, the mode dispatch and its outcomes: an invalid mode is rejected; the add path rejects
-/// missing data and unknown providers fail-closed; and the delete path removes a caller-owned link,
-/// refuses a UID mismatch with 409, and returns 404 for an unknown canonical name. The authorization
-/// decision runs through the mocked <see cref="IAuthorizationContext"/>.
+/// missing data and unknown providers fail-closed and, given a redeemable OID state or a validly signed
+/// SAML response, creates the link (204); and the delete path removes a caller-owned link, refuses a UID
+/// mismatch with 409, and returns 404 for an unknown canonical name. The per-user link queries return the
+/// caller's links once authorized. The authorization decision runs through the mocked
+/// <see cref="IAuthorizationContext"/>.
 /// </summary>
 [Collection("SSOController")]
 public class SSOControllerLinkTests
@@ -153,6 +158,66 @@ public class SSOControllerLinkTests
         // The mismatched link is left untouched.
         var links = SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["keycloak"].CanonicalLinks);
         Assert.True(links.ContainsKey("sub-1"));
+    }
+
+    [Fact]
+    public async Task AddCanonicalLink_AuthorizedOidWithRedeemableState_LinksAndReturnsNoContent()
+    {
+        var harness = ForCaller(isAdmin: true, callerId: Target, configure: c => c.OidConfigs["keycloak"] = new OidConfig());
+        // The OID link path redeems an authorize state the redirect leg validated; seed a redeemable one.
+        SSOController.SeedOidStateForTests("state-1", new TimedAuthorizeState(new AuthorizeState { State = "state-1" }, DateTime.Now)
+        {
+            Provider = "keycloak",
+            Valid = true,
+            Subject = "sub-1",
+        });
+
+        var result = await harness.Controller.AddCanonicalLink("oid", "keycloak", Target, new AuthResponse { Data = "state-1" });
+
+        Assert.IsType<NoContentResult>(result);
+        var links = SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["keycloak"].CanonicalLinks);
+        Assert.Equal(Target, links["sub-1"]);
+    }
+
+    [Fact]
+    public async Task AddCanonicalLink_AuthorizedSamlWithSignedResponse_LinksAndReturnsNoContent()
+    {
+        var fixture = SamlTestFactory.Create(nameId: "alice");
+        var harness = ForCaller(isAdmin: true, callerId: Target, configure: c => c.SamlConfigs["adfs"] = new SamlConfig
+        {
+            SamlCertificate = fixture.CertificateBase64,
+            DoNotValidateAudience = true, // audience validation is covered separately
+        });
+
+        var result = await harness.Controller.AddCanonicalLink("saml", "adfs", Target, new AuthResponse { Data = fixture.EncodeResponse() });
+
+        Assert.IsType<NoContentResult>(result);
+        var links = SSOPlugin.Instance.ReadConfiguration(c => c.SamlConfigs["adfs"].CanonicalLinks);
+        Assert.Equal(Target, links["alice"]);
+    }
+
+    [Fact]
+    public async Task GetOidLinksByUser_AuthorizedAdmin_ReturnsTheUsersLinks()
+    {
+        var harness = ForCaller(isAdmin: true, callerId: Target, configure: c =>
+            c.OidConfigs["keycloak"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Target } });
+
+        var result = await harness.Controller.GetOidLinksByUser(Target);
+
+        var map = Assert.IsType<SerializableDictionary<string, IEnumerable<string>>>(result.Value);
+        Assert.Contains("sub-1", map["keycloak"]);
+    }
+
+    [Fact]
+    public async Task GetSamlLinksByUser_AuthorizedAdmin_ReturnsTheUsersLinks()
+    {
+        var harness = ForCaller(isAdmin: true, callerId: Target, configure: c =>
+            c.SamlConfigs["adfs"] = new SamlConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["nameid-1"] = Target } });
+
+        var result = await harness.Controller.GetSamlLinksByUser(Target);
+
+        var map = Assert.IsType<SerializableDictionary<string, IEnumerable<string>>>(result.Value);
+        Assert.Contains("nameid-1", map["adfs"]);
     }
 
     // Builds a harness whose mocked IAuthorizationContext resolves the request to the given caller. An
