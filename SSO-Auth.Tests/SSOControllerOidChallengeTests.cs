@@ -125,6 +125,31 @@ public class SSOControllerOidChallengeTests
         + "\"grant_types_supported\":[\"authorization_code\"],"
         + "\"code_challenge_methods_supported\":[\"S256\"]}";
 
+    [Fact]
+    public async Task OidChallenge_StartPath_RecordsNewPathAsServerState()
+    {
+        const string authority = "https://idp-newpath.example.com";
+        var harness = new SsoControllerHarness(
+            c => c.OidConfigs["kc"] = new OidConfig
+            {
+                Enabled = true,
+                OidEndpoint = authority,
+                OidClientId = "jf",
+                OidScopes = Array.Empty<string>(),
+                DisablePushedAuthorization = true,
+            },
+            httpResponder: request => request.RequestUri!.AbsoluteUri == authority + "/jwks"
+                ? Json("{\"keys\":[]}")
+                : Json(Discovery(authority)));
+        // A login that arrives on the descriptive `.../start/...` route must record NewPath as
+        // server-managed runtime state, so a later linking flow reuses the same redirect-path spelling.
+        harness.Controller.HttpContext.Request.Path = "/sso/OID/start/kc";
+
+        await harness.Controller.OidChallenge("kc");
+
+        Assert.True(SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["kc"].NewPath));
+    }
+
     private static HttpResponseMessage Json(string body) =>
         new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
 }

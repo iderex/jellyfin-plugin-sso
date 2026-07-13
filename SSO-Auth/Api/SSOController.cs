@@ -296,12 +296,7 @@ public class SSOController : ControllerBase
                 return ReturnError(StatusCodes.Status400BadRequest, "The identity provider's PKCE (S256) support could not be verified.");
             }
 
-            bool newPath = config.NewPath;
-            if (!isLinking)
-            {
-                newPath = Request.Path.Value.Contains("/start/", StringComparison.InvariantCultureIgnoreCase);
-                config.NewPath = newPath;
-            }
+            bool newPath = ResolveChallengeNewPath(config.NewPath, isLinking, value => config.NewPath = value);
 
             string redirectUri = GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride) + $"/sso/OID/{(newPath ? "redirect" : "r")}/" + provider;
 
@@ -373,6 +368,25 @@ public class SSOController : ControllerBase
 
     private static SamlConfig FindSamlConfig(string provider) =>
         SSOPlugin.Instance.ReadConfiguration(configuration => configuration.SamlConfigs.TryGetValue(provider, out var config) ? config : null);
+
+    // Resolves whether this challenge uses the "new", more descriptive redirect path, and records that
+    // as server-managed runtime state on the provider config. A non-linking challenge derives the
+    // spelling from the request path (a `.../start/...` route means the new path) and stores it through
+    // `record`, so a later linking flow — which cannot know which redirect path the identity provider
+    // has registered — reuses the last login's spelling. A linking challenge only reads the stored
+    // value and records nothing. `record` is passed because OidConfig and SamlConfig do not share a
+    // base type. (See ExpectedAcsUrls for the same reason this value is remembered across requests.)
+    private bool ResolveChallengeNewPath(bool currentNewPath, bool isLinking, Action<bool> record)
+    {
+        if (isLinking)
+        {
+            return currentNewPath;
+        }
+
+        var newPath = Request.Path.Value.Contains("/start/", StringComparison.InvariantCultureIgnoreCase);
+        record(newPath);
+        return newPath;
+    }
 
     // Builds the OidcClient that both the challenge and the callback use. Pure mechanical assembly:
     // the redirect URI and the scope string are the only two inputs the endpoints derive differently,
@@ -573,7 +587,7 @@ public class SSOController : ControllerBase
     /// <summary>
     /// Lists the SAML providers names only.
     /// </summary>
-    /// <returns>The list of OpenID configurations.</returns>
+    /// <returns>The list of SAML provider names.</returns>
     [HttpGet("SAML/GetNames")]
     public ActionResult SamlProviderNames()
     {
@@ -759,12 +773,7 @@ public class SSOController : ControllerBase
 
         if (config.Enabled)
         {
-            bool newPath = config.NewPath;
-            if (!isLinking)
-            {
-                newPath = Request.Path.Value.Contains("/start/", StringComparison.InvariantCultureIgnoreCase);
-                config.NewPath = newPath;
-            }
+            bool newPath = ResolveChallengeNewPath(config.NewPath, isLinking, value => config.NewPath = value);
 
             string redirectUri = GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride) + $"/sso/SAML/{(newPath ? "post" : "p")}/" + provider;
             string relayState = null;
@@ -1211,7 +1220,7 @@ public class SSOController : ControllerBase
     /// <param name="mode">The mode of the function; SAML or OID.</param>
     /// <param name="provider">The name of the provider from which the link should be removed.</param>
     /// <param name="jellyfinUserId">The user ID within jellyfin to unlink from the provider.</param>
-    /// <param name="canonicalName">The user ID within jellyfin to unlink.</param>
+    /// <param name="canonicalName">The provider-side canonical name (the identity's stable subject for OpenID, or the SAML NameID) whose link to the Jellyfin user should be removed.</param>
     /// <returns>Whether this API endpoint succeeded.</returns>
     [Authorize]
     [HttpDelete("{mode}/Link/{provider}/{jellyfinUserId}/{canonicalName}")]
@@ -1877,7 +1886,9 @@ public class AuthResponse
 }
 
 /// <summary>
-/// A manager for OpenID to manage the state of the clients.
+/// A time-stamped record of an in-flight OpenID authorize state: it ties the authorize-state token to
+/// the provider, the resolved identity (subject/username), and the login privileges, and is held until
+/// the callback redeems it or it expires.
 /// </summary>
 public class TimedAuthorizeState
 {
