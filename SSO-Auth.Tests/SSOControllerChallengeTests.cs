@@ -1,3 +1,5 @@
+using System;
+using System.Net;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.SSO_Auth;
 using Jellyfin.Plugin.SSO_Auth.Config;
@@ -7,27 +9,79 @@ using Xunit;
 namespace Jellyfin.Plugin.SSO_Auth.Tests;
 
 /// <summary>
-/// In-process tests of the enabled-provider SAML challenge, the Unregister guard, and the admin
-/// provider-list endpoints via <see cref="SsoControllerHarness"/>.
+/// In-process tests of the enabled-provider SAML challenge (login, linking, solicited-only, and the
+/// rate-limit guard), the Unregister guard, and the admin provider-list endpoints via
+/// <see cref="SsoControllerHarness"/>.
 /// </summary>
 [Collection("SSOController")]
 public class SSOControllerChallengeTests
 {
+    private static SamlConfig EnabledProvider() => new SamlConfig
+    {
+        Enabled = true,
+        SamlEndpoint = "https://idp.example.com/sso",
+        SamlClientId = "jellyfin-sp",
+    };
+
     [Fact]
     public void SamlChallenge_EnabledProvider_RedirectsToTheIdentityProvider()
     {
-        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig
-        {
-            Enabled = true,
-            SamlEndpoint = "https://idp.example.com/sso",
-            SamlClientId = "jellyfin-sp",
-        });
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = EnabledProvider());
 
         var result = Assert.IsType<RedirectResult>(harness.Controller.SamlChallenge("adfs"));
 
         Assert.StartsWith("https://idp.example.com/sso", result.Url);
         // The redirect carries the deflated+encoded AuthnRequest, so it must be a real SAML redirect.
         Assert.Contains("SAMLRequest=", result.Url);
+    }
+
+    [Fact]
+    public void SamlChallenge_LinkingFlow_CarriesTheLinkingRelayState()
+    {
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = EnabledProvider());
+
+        var result = Assert.IsType<RedirectResult>(harness.Controller.SamlChallenge("adfs", isLinking: true));
+
+        // The linking callback is told apart from a login by the RelayState the challenge sets.
+        Assert.Contains("SAMLRequest=", result.Url);
+        Assert.Contains("RelayState=linking", result.Url);
+    }
+
+    [Fact]
+    public void SamlChallenge_SolicitedOnly_StillRedirects()
+    {
+        var harness = new SsoControllerHarness(c =>
+        {
+            var config = EnabledProvider();
+            config.ValidateInResponseTo = true; // registers the request id for InResponseTo correlation (#156)
+            c.SamlConfigs["adfs"] = config;
+        });
+
+        var result = Assert.IsType<RedirectResult>(harness.Controller.SamlChallenge("adfs"));
+
+        Assert.Contains("SAMLRequest=", result.Url);
+    }
+
+    [Fact]
+    public void SamlChallenge_OverRateLimit_Returns429()
+    {
+        var harness = new SsoControllerHarness(
+            c =>
+            {
+                c.EnableRateLimit = true;
+                c.RateLimitMaxAttempts = 1;
+                c.RateLimitWindowSeconds = 60;
+            },
+            // A dedicated public address so the process-static limiter counter is this test's alone.
+            clientIp: IPAddress.Parse("8.8.4.4"));
+
+        // The first call passes the limiter and spends the single-attempt budget; the unknown provider
+        // then throws, but that is after the budget is spent.
+        Assert.Throws<ArgumentException>(() => harness.Controller.SamlChallenge("does-not-exist"));
+
+        // The second is over budget and is throttled with a 429 before the provider is even looked up.
+        var throttled = harness.Controller.SamlChallenge("does-not-exist");
+        Assert.Equal(429, Assert.IsType<ContentResult>(throttled).StatusCode);
     }
 
     [Fact]
