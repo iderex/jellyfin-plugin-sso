@@ -26,6 +26,7 @@ public class AuthPageCspTests
 
         Assert.StartsWith("default-src 'none';", csp);
         Assert.Contains("connect-src 'self'", csp);
+        Assert.Contains("img-src 'self' data:", csp);
         Assert.Contains("frame-src 'self'", csp);
         Assert.Contains("base-uri 'none'", csp);
         Assert.Contains("form-action 'none'", csp);
