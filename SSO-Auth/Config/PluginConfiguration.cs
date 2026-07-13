@@ -212,7 +212,12 @@ public class SamlConfig : ProviderConfigBase
     public int? PortOverride { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the new, more descriptive paths are to be used.
+    /// Gets or sets a value indicating whether the last non-linking login used the newer redirect path
+    /// spelling (the "/start/" form rather than the legacy short form). This is server-managed runtime
+    /// state, not an admin-facing setting: every non-linking challenge overwrites it from the incoming
+    /// request path so that a later linking flow — which cannot know which redirect path the identity
+    /// provider has registered — reuses the same spelling. It is persisted in the config XML for that
+    /// reason, not because it is user-configurable.
     /// </summary>
     public bool NewPath { get; set; }
 
@@ -367,7 +372,12 @@ public class OidConfig : ProviderConfigBase
     public int? PortOverride { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the new, more descriptive paths are to be used.
+    /// Gets or sets a value indicating whether the last non-linking login used the newer redirect path
+    /// spelling (the "/start/" form rather than the legacy short form). This is server-managed runtime
+    /// state, not an admin-facing setting: every non-linking challenge overwrites it from the incoming
+    /// request path so that a later linking flow — which cannot know which redirect path the identity
+    /// provider has registered — reuses the same spelling. It is persisted in the config XML for that
+    /// reason, not because it is user-configurable.
     /// </summary>
     public bool NewPath { get; set; }
 
@@ -443,7 +453,7 @@ public class OidConfig : ProviderConfigBase
 }
 
 /// <summary>
-/// The OpenID client ID.
+/// Maps a single provider role to the library folders granted to users who hold that role (RBAC folder access).
 /// </summary>
 public class FolderRoleMap
 {
