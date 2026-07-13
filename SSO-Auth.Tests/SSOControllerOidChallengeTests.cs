@@ -87,9 +87,23 @@ public class SSOControllerOidChallengeTests
                 OidScopes = Array.Empty<string>(),
                 DisablePushedAuthorization = true,
             },
-            httpResponder: request => request.RequestUri!.AbsoluteUri.Contains("jwks", StringComparison.Ordinal)
-                ? Json("{\"keys\":[]}")
-                : Json(Discovery(authority)));
+            httpResponder: request =>
+            {
+                var url = request.RequestUri!.AbsoluteUri;
+                if (url.Contains(".well-known/openid-configuration", StringComparison.Ordinal))
+                {
+                    return Json(Discovery(authority));
+                }
+
+                if (url.Contains("/jwks", StringComparison.Ordinal))
+                {
+                    return Json("{\"keys\":[]}");
+                }
+
+                // A challenge should only fetch discovery (and its JWKS); anything else is unexpected and
+                // fails the request so a regression that reaches, e.g., the token endpoint is caught.
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+            });
 
         var result = await harness.Controller.OidChallenge("kc");
 
