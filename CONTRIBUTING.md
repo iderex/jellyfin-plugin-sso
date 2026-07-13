@@ -147,9 +147,9 @@ Any code editor or IDE with .NET support will work out of the box with this prog
 
 **Building and testing.** CI runs these on every pull request and they must pass:
 
-```
-dotnet build --no-restore --warnaserror   # warnings are errors, exactly as in CI
-dotnet test                               # the xUnit project SSO-Auth.Tests must stay green
+```sh
+dotnet build --no-restore --warnaserror     # warnings are errors, exactly as in CI
+dotnet test --no-build --verbosity normal   # the xUnit project SSO-Auth.Tests must stay green
 npx prettier --check "**/*.{js,html,md,css,scss}"   # for any .js/.html/.md/.css change
 ```
 
