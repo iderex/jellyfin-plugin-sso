@@ -1917,7 +1917,7 @@ public class SSOController : ControllerBase
     private ContentResult HtmlAuthPage(Func<string, string> render)
     {
         var nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
-        Response.Headers["Content-Security-Policy"] = AuthPageCsp.Build(nonce);
+        Response.Headers.ContentSecurityPolicy = AuthPageCsp.Build(nonce);
         Response.Headers["X-Frame-Options"] = "DENY";
         Response.Headers["X-Content-Type-Options"] = "nosniff";
         Response.Headers["Referrer-Policy"] = "no-referrer";
