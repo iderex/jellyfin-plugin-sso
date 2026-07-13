@@ -62,7 +62,7 @@ jobs:
         # runs and blocks on findings. continue-on-error keeps the security gate
         # independent of the upload: a transient code-scanning upload failure must not
         # skip the "Fail on actionable findings" step below.
-        if: github.event_name == 'push' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]')
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]')
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
         with:
