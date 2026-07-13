@@ -78,7 +78,7 @@ internal sealed class SsoControllerHarness
             SessionManager,
             UserManager,
             AuthContext,
-            Substitute.For<ICryptoProvider>(),
+            new FakeCryptoProvider(),
             Substitute.For<IProviderManager>(),
             httpClientFactory,
             Substitute.For<IServerConfigurationManager>())
