@@ -6,7 +6,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 
 /// <summary>
 /// Validates the per-provider SAML signing certificate (#206). A non-blank but unloadable
-/// <c>SamlCertificate</c> makes the <see cref="Response"/> constructor throw on every callback
+/// <c>SamlCertificate</c> makes the <see cref="SamlResponse"/> constructor throw on every callback
 /// (<see cref="FormatException"/> on non-base64, <see cref="CryptographicException"/> on bytes that are
 /// not a certificate), which escaped as an unhandled HTTP 500. Rejecting an invalid certificate at every
 /// admin write path — and treating it as a parse failure at login — keeps that fail-closed and out of the

@@ -6,7 +6,7 @@ using Xunit;
 namespace Jellyfin.Plugin.SSO_Auth.Tests;
 
 /// <summary>
-/// Trust-boundary tests for <see cref="Response"/> — the SAML signature/validation core.
+/// Trust-boundary tests for <see cref="SamlResponse"/> — the SAML signature/validation core.
 /// These pin the CURRENT behavior of the upstream implementation so the P2 hardening
 /// changes (see docs/ROADMAP.md) are deliberate, reviewed flips rather than surprises.
 ///
@@ -16,8 +16,8 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 /// </summary>
 public class SamlResponseTests
 {
-    private static Response Load(SamlFixture fixture, string? certificateBase64 = null)
-        => new Response(certificateBase64 ?? fixture.CertificateBase64, fixture.EncodeResponse());
+    private static SamlResponse Load(SamlFixture fixture, string? certificateBase64 = null)
+        => new SamlResponse(certificateBase64 ?? fixture.CertificateBase64, fixture.EncodeResponse());
 
     [Fact]
     public void IsValid_ResponseScopeSignature_ReturnsTrue()
@@ -37,7 +37,7 @@ public class SamlResponseTests
     public void GetRecipient_And_GetInResponseTo_ReadFromSignedAssertion()
     {
         // Recipient and InResponseTo live inside the assertion, so they are covered even when only
-        // the assertion (not the whole Response) is signed — the #156 endpoint/solicited binding.
+        // the assertion (not the whole SamlResponse) is signed — the #156 endpoint/solicited binding.
         var fixture = SamlTestFactory.Create(
             scope: SamlTestFactory.SignatureScope.Assertion,
             recipient: "https://jellyfin.example/sso/SAML/post/idp",
@@ -80,7 +80,7 @@ public class SamlResponseTests
                 "<saml:Assertion><saml:Subject><saml:NameID>&x;</saml:NameID></saml:Subject></saml:Assertion>" +
             "</samlp:Response>";
         Assert.Throws<XmlException>(() =>
-            new Response(SamlFixture.ForeignCertificateBase64(), SamlFixture.Encode(withDoctype)));
+            new SamlResponse(SamlFixture.ForeignCertificateBase64(), SamlFixture.Encode(withDoctype)));
     }
 
     [Fact]
@@ -99,7 +99,7 @@ public class SamlResponseTests
                 "<saml:Assertion><saml:Subject><saml:NameID>&lol3;</saml:NameID></saml:Subject></saml:Assertion>" +
             "</samlp:Response>";
         Assert.Throws<XmlException>(() =>
-            new Response(SamlFixture.ForeignCertificateBase64(), SamlFixture.Encode(billionLaughs)));
+            new SamlResponse(SamlFixture.ForeignCertificateBase64(), SamlFixture.Encode(billionLaughs)));
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public class SamlResponseTests
                 "<saml:Assertion><saml:Subject><saml:NameID>&xxe;</saml:NameID></saml:Subject></saml:Assertion>" +
             "</samlp:Response>";
         Assert.Throws<XmlException>(() =>
-            new Response(SamlFixture.ForeignCertificateBase64(), SamlFixture.Encode(xxe)));
+            new SamlResponse(SamlFixture.ForeignCertificateBase64(), SamlFixture.Encode(xxe)));
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public class SamlResponseTests
             : "<!DOCTYPE samlp:Response [ <!ENTITY x \"y\"> ]>" + signedXml;
 
         Assert.Throws<XmlException>(() =>
-            new Response(fixture.CertificateBase64, SamlFixture.Encode(withDoctype)));
+            new SamlResponse(fixture.CertificateBase64, SamlFixture.Encode(withDoctype)));
     }
 
     [Fact]
@@ -144,7 +144,7 @@ public class SamlResponseTests
                     "<saml:Subject><saml:NameID>alice</saml:NameID></saml:Subject>" +
                 "</saml:Assertion>" +
             "</samlp:Response>";
-        var response = new Response(SamlFixture.ForeignCertificateBase64(), SamlFixture.Encode(unsigned));
+        var response = new SamlResponse(SamlFixture.ForeignCertificateBase64(), SamlFixture.Encode(unsigned));
         Assert.False(response.IsValid());
     }
 
@@ -212,7 +212,7 @@ public class SamlResponseTests
     public void IsValid_SignatureRelocatedOutsideSignedElement_ReturnsFalse()
     {
         // Sign the assertion, then move the enveloped signature out of the assertion up to the
-        // Response. The reference still names the assertion ID, but the signature no longer sits
+        // SamlResponse. The reference still names the assertion ID, but the signature no longer sits
         // inside the element it covers — a relocation attack, rejected by the envelopment check.
         var fixture = SamlTestFactory.Create(scope: SamlTestFactory.SignatureScope.Assertion);
         var doc = fixture.Document;
@@ -237,7 +237,7 @@ public class SamlResponseTests
     {
         // A spec-legal supporting assertion nested in saml:Advice (part of the signed content) is a
         // descendant, not a second top-level assertion, so the single-assertion invariant — scoped
-        // to the Response's direct-child assertions — must still accept the response.
+        // to the SamlResponse's direct-child assertions — must still accept the response.
         var fixture = SamlTestFactory.Create(scope: SamlTestFactory.SignatureScope.Assertion, includeAdviceAssertion: true);
         Assert.True(Load(fixture).IsValid());
     }
@@ -303,7 +303,7 @@ public class SamlResponseTests
             "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" ID=\"_r\" Version=\"2.0\">" +
                 "<saml:Assertion ID=\"_a\" Version=\"2.0\"><saml:Subject><saml:NameID>alice</saml:NameID></saml:Subject></saml:Assertion>" +
             "</samlp:Response>";
-        var response = new Response(SamlFixture.ForeignCertificateBase64(), SamlFixture.Encode(unsigned));
+        var response = new SamlResponse(SamlFixture.ForeignCertificateBase64(), SamlFixture.Encode(unsigned));
         Assert.Null(response.GetSignatureAlgorithm());
     }
 

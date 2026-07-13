@@ -23,7 +23,7 @@ namespace Jellyfin.Plugin.SSO_Auth;
 /// <summary>
 /// Represents a SAML response.
 /// </summary>
-public class Response
+internal sealed class SamlResponse
 {
     // The only positions an enveloped SAML signature may occupy: a direct child of the Response or
     // of the Assertion. Encodes the security-critical "no relocated signature" invariant, so it is a
@@ -36,11 +36,11 @@ public class Response
     private XmlNamespaceManager _xmlNameSpaceManager; // we need this one to run our XPath queries on the SAML XML
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="Response"/> class.
+    /// Initializes a new instance of the <see cref="SamlResponse"/> class.
     /// </summary>
     /// <param name="certificateStr">The certificate formatted as a Base64 string.</param>
     /// <param name="responseString">The SAML response formatted as a string.</param>
-    public Response(string certificateStr, string responseString)
+    public SamlResponse(string certificateStr, string responseString)
     {
         // Decode and load the certificate, then load the response — in that exact order, so the exception
         // sequence SamlResponseLoader.TryParse catches is unchanged: FormatException (bad certificate
@@ -461,7 +461,7 @@ public class Response
 /// <summary>
 /// Represents a SAML request.
 /// </summary>
-public class AuthRequest
+internal sealed class SamlAuthnRequest
 {
     private readonly string _id;
     private readonly string _issueInstant;
@@ -470,11 +470,11 @@ public class AuthRequest
     private readonly string _assertionConsumerServiceUrl;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="AuthRequest"/> class..
+    /// Initializes a new instance of the <see cref="SamlAuthnRequest"/> class..
     /// </summary>
     /// <param name="issuer">The issuer of the SAML request.</param>
     /// <param name="assertionConsumerServiceUrl">The SAML assertion URL.</param>
-    public AuthRequest(string issuer, string assertionConsumerServiceUrl)
+    public SamlAuthnRequest(string issuer, string assertionConsumerServiceUrl)
     {
         _id = "_" + Guid.NewGuid().ToString();
         _issueInstant = DateTime.Now.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture);

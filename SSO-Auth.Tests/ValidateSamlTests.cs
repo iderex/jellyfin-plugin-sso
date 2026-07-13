@@ -13,10 +13,10 @@ public class ValidateSamlTests
 {
     private const string Audience = "https://jellyfin.example.com/sso";
 
-    private static Response SignedResponseFor(string audience)
+    private static SamlResponse SignedResponseFor(string audience)
     {
         var fixture = SamlTestFactory.Create(audience: audience);
-        return new Response(fixture.CertificateBase64, fixture.EncodeResponse());
+        return new SamlResponse(fixture.CertificateBase64, fixture.EncodeResponse());
     }
 
     [Fact]

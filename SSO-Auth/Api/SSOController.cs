@@ -782,7 +782,7 @@ public class SSOController : ControllerBase
                 relayState = "linking";
             }
 
-            var request = new AuthRequest(
+            var request = new SamlAuthnRequest(
                 config.SamlClientId.Trim(),
                 redirectUri);
 
@@ -1679,7 +1679,7 @@ public class SSOController : ControllerBase
     // Returns false when the assertion was already used (or carries no ID — a missing ID stays empty,
     // so TryConsume fails closed). The key is scoped by provider so two IdPs emitting the same assertion
     // ID cannot block each other. Shared by SamlAuth (session mint) and SamlLink (account linking, #219).
-    private bool TryConsumeSamlReplay(Response samlResponse, string provider)
+    private bool TryConsumeSamlReplay(SamlResponse samlResponse, string provider)
     {
         var samlNow = DateTime.UtcNow;
         var replayRetention = SamlReplayCache.ComputeRetention(samlNow, samlResponse.GetNotOnOrAfter());
@@ -1692,7 +1692,7 @@ public class SSOController : ControllerBase
     // weak-algorithm remediation hint. This lets an operator tell a rejected SHA-1 signature - the
     // expected post-upgrade lockout of a legacy IdP - apart from a bad certificate, an expired
     // assertion, or an audience mismatch, all of which otherwise surface as the same opaque error.
-    private bool IsSamlResponseValid(Response samlResponse, SamlConfig config, string provider)
+    private bool IsSamlResponseValid(SamlResponse samlResponse, SamlConfig config, string provider)
     {
         if (!ValidateSaml(samlResponse, config))
         {
@@ -1740,7 +1740,7 @@ public class SSOController : ControllerBase
     // this SP unless explicitly opted out. Expected audience is the configured SamlAudience, falling
     // back to the SamlClientId (SP entity id). Both are trimmed so the comparison matches the trimmed
     // Issuer sent in the AuthnRequest, and an empty SamlAudience falls through to the client id.
-    internal static bool ValidateSaml(Response samlResponse, SamlConfig config)
+    internal static bool ValidateSaml(SamlResponse samlResponse, SamlConfig config)
     {
         if (config.DoNotValidateAudience)
         {
@@ -1863,118 +1863,4 @@ public class SSOController : ControllerBase
         Response.Headers.CacheControl = "no-store";
         return Content(render(nonce), MediaTypeNames.Text.Html);
     }
-}
-
-/// <summary>
-/// The data the client should pass back to the API.
-/// </summary>
-public class AuthResponse
-{
-    /// <summary>
-    /// Gets or sets the device ID of the client.
-    /// </summary>
-    public string DeviceID { get; set; }
-
-    /// <summary>
-    /// Gets or sets the device name of the client.
-    /// </summary>
-    public string DeviceName { get; set; }
-
-    /// <summary>
-    /// Gets or sets the app name of the client.
-    /// </summary>
-    public string AppName { get; set; }
-
-    /// <summary>
-    /// Gets or sets the app version of the client.
-    /// </summary>
-    public string AppVersion { get; set; }
-
-    /// <summary>
-    /// Gets or sets the auth data of the client (for authorizing the response).
-    /// </summary>
-    public string Data { get; set; }
-}
-
-/// <summary>
-/// A time-stamped record of an in-flight OpenID authorize state: it ties the authorize-state token to
-/// the provider, the resolved identity (subject/username), and the login privileges, and is held until
-/// the callback redeems it or it expires.
-/// </summary>
-public class TimedAuthorizeState
-{
-    /// <summary>
-    /// Initializes a new instance of the <see cref="TimedAuthorizeState"/> class.
-    /// </summary>
-    /// <param name="state">The AuthorizeState to time.</param>
-    /// <param name="created">When this state was created.</param>
-    public TimedAuthorizeState(AuthorizeState state, DateTime created)
-    {
-        State = state;
-        Created = created;
-    }
-
-    /// <summary>
-    /// Gets or sets the Authorization State of the client.
-    /// </summary>
-    public AuthorizeState State { get; set; }
-
-    /// <summary>
-    /// Gets or sets the provider that minted this state. A state may only be consumed on the same
-    /// provider's endpoints, so it cannot be replayed against another provider's login/role gate.
-    /// </summary>
-    public string Provider { get; set; }
-
-    /// <summary>
-    /// Gets or sets when this object was created to time it out.
-    /// </summary>
-    public DateTime Created { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether the user is valid.
-    /// </summary>
-    public bool Valid { get; set; }
-
-    /// <summary>
-    /// Gets or sets the user tied to the state.
-    /// </summary>
-    public string Username { get; set; }
-
-    /// <summary>
-    /// Gets or sets the stable subject identifier (OpenID "sub") that keys the account link (#155).
-    /// Unlike <see cref="Username"/> it does not change when the identity provider renames the user.
-    /// Null for SAML, whose NameID plays the same role directly.
-    /// </summary>
-    public string Subject { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether the user is an administrator.
-    /// </summary>
-    public bool Admin { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether the state is
-    /// tied to a linking flow (instead of a login flow).
-    /// </summary>
-    public bool IsLinking { get; set; }
-
-    /// <summary>
-    /// Gets or sets the folders the user is allowed access to.
-    /// </summary>
-    public List<string> Folders { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether the user is allowed to view live TV.
-    /// </summary>
-    public bool EnableLiveTv { get; set; }
-
-    /// <summary>
-    /// Gets or sets a value indicating whether the user is allowed to manage live TV.
-    /// </summary>
-    public bool EnableLiveTvManagement { get; set; }
-
-    /// <summary>
-    /// Gets or sets the user avatar url.
-    /// </summary>
-    public string AvatarURL { get; set; }
 }

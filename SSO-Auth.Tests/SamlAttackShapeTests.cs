@@ -22,7 +22,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 ///
 /// Every malicious shape must be REJECTED (or, for comment-truncation, must NOT be truncatable)
 /// and the honest baseline ACCEPTED — all against the real signature-validation path in
-/// <see cref="Response"/>, never a mock of the crypto. These are TESTS ONLY: they pin existing
+/// <see cref="SamlResponse"/>, never a mock of the crypto. These are TESTS ONLY: they pin existing
 /// fail-closed behavior; no production change is expected while that behavior holds. A shape that
 /// turns out to be ACCEPTED is a real defect to be filed as its own security finding, not papered
 /// over here.
@@ -32,8 +32,8 @@ public class SamlAttackShapeTests
     private const string SamlNs = "urn:oasis:names:tc:SAML:2.0:assertion";
     private const string DsNs = "http://www.w3.org/2000/09/xmldsig#";
 
-    private static Response Load(SamlFixture fixture, string? certificateBase64 = null)
-        => new Response(certificateBase64 ?? fixture.CertificateBase64, fixture.EncodeResponse());
+    private static SamlResponse Load(SamlFixture fixture, string? certificateBase64 = null)
+        => new SamlResponse(certificateBase64 ?? fixture.CertificateBase64, fixture.EncodeResponse());
 
     [Fact]
     public void IsValid_HonestBaseline_ReturnsTrue()
@@ -98,10 +98,10 @@ public class SamlAttackShapeTests
     [Fact]
     public void IsValid_UnsignedAssertionPrependedToResponseScopeSignature_ReturnsFalse()
     {
-        // The whole Response is signed; the attacker prepends an unsigned assertion carrying a
+        // The whole SamlResponse is signed; the attacker prepends an unsigned assertion carrying a
         // different identity as the FIRST assertion (the one every reader consumes as Assertion[1]).
         // Rejected twice over: the single-assertion invariant now counts two direct-child assertions,
-        // and prepending also perturbs the signed Response so the digest no longer matches.
+        // and prepending also perturbs the signed SamlResponse so the digest no longer matches.
         var fixture = SamlTestFactory.Create(nameId: "alice", scope: SamlTestFactory.SignatureScope.Response);
         var doc = fixture.Document;
         doc.DocumentElement!.PrependChild(BuildEvilAssertion(doc, "attacker"));
@@ -174,9 +174,9 @@ public class SamlAttackShapeTests
     public void IsValid_SignatureRelocatedIntoDecoyWrapper_ReturnsFalse()
     {
         // The enveloped signature is lifted out of the assertion it covers and re-parented under a
-        // decoy wrapper element hung off the Response. The reference still names the assertion ID, but
+        // decoy wrapper element hung off the SamlResponse. The reference still names the assertion ID, but
         // the position-bound signature selection only accepts a ds:Signature that is a direct child of
-        // the Response or the Assertion — a signature buried in a wrapper is not selected at all, so
+        // the SamlResponse or the Assertion — a signature buried in a wrapper is not selected at all, so
         // the response reads as unsigned and is rejected.
         var fixture = SamlTestFactory.Create(scope: SamlTestFactory.SignatureScope.Assertion);
         var doc = fixture.Document;
@@ -197,7 +197,7 @@ public class SamlAttackShapeTests
         // A decoy assertion carrying "attacker" is smuggled into the honest assertion's saml:Advice.
         // Because it is added AFTER signing it is not part of the signed content, yet saml:Advice is a
         // spec-legal container so the response must not be rejected merely for its presence — instead
-        // the readers, scoped to the Response's direct-child Assertion[1]/Subject, must ignore the
+        // the readers, scoped to the SamlResponse's direct-child Assertion[1]/Subject, must ignore the
         // nested decoy and continue to read the signed "alice". This pins assertion/advice confusion
         // resistance: the advice subject never shadows the real one.
         var fixture = SamlTestFactory.Create(nameId: "alice", scope: SamlTestFactory.SignatureScope.Response);
@@ -210,7 +210,7 @@ public class SamlAttackShapeTests
 
         var response = Load(fixture);
 
-        // Adding the (unsigned) advice perturbs the signed Response, so IsValid is false; the
+        // Adding the (unsigned) advice perturbs the signed SamlResponse, so IsValid is false; the
         // load-bearing assertion is that identity extraction never returns the advice's "attacker".
         Assert.False(response.IsValid());
         Assert.NotEqual("attacker", response.GetNameID());
