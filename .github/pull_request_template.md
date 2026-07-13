@@ -26,6 +26,10 @@ persistence, or the release pipeline.
 - [ ] No duplicated logic; new logic lives in a small, single-purpose,
       testable unit.
 - [ ] The change adds no more code than the problem requires.
+- [ ] The code is self-documenting (readable without comments; comments explain
+      why, not what) and matches the target architecture (#318).
+- [ ] Architecture-conformance tests pass, and any new structural property this
+      change establishes is locked in as a rule in `ArchitectureConformanceTests`.
 
 ## Verification
 
