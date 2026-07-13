@@ -5,9 +5,19 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
+    # Wait 7 days before proposing a new version so a release compromised between
+    # publish and adoption is caught before it enters a PR (recent supply-chain
+    # attacks were live for hours-to-days). Security updates are exempt — they are
+    # still proposed immediately.
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
+    # Same cooldown for action bumps — the tj-actions / Trivy-action incidents were
+    # exactly compromised-tag adoptions a delay would have caught.
+    cooldown:
+      default-days: 7
