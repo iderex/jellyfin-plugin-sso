@@ -1,0 +1,69 @@
+# Static analysis of the GitHub Actions workflows themselves (zizmor). The
+# workflow YAML is release-critical attack surface — publish-nightly.yml runs on
+# every push to main with contents:write — so it is audited like any other code.
+#
+# The gate runs zizmor's regular persona at --min-severity=low: it fails the
+# build on any actionable (low/medium/high/critical) security finding —
+# template-injection, cache-poisoning, dangerous-triggers, excessive-permissions,
+# unpinned-uses, etc. — and uploads that same set to the code-scanning tab. The
+# regular persona is the one zizmor documents for CI ("high-signal, low-noise,
+# actionable"). The pedantic persona is deliberately NOT used to gate: it adds
+# low-severity hygiene findings (undocumented permissions, missing concurrency,
+# pin-comment mismatches, unnamed jobs) that are stylistic, not security-blocking,
+# and some are context-blind (it would demand run-cancelling concurrency on the
+# release workflows, which must never be cancelled mid-publish). That backlog is
+# tracked as a code-quality task (#263), not gated here.
+#
+# Rule for future workflow changes: every new or edited workflow must pass this
+# gate before merge. Keep actions SHA-pinned, keep checkout on
+# persist-credentials:false, grant write permissions per job (never
+# workflow-level), and never restore a cache in a job that publishes a release.
+name: Workflow Security Analysis
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ "**" ]
+
+permissions: {}
+
+jobs:
+  zizmor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      security-events: write # upload the SARIF into the code-scanning tab
+      contents: read
+      actions: read
+    env:
+      ZIZMOR_VERSION: "1.26.1"
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      - name: Audit workflows (SARIF for code scanning)
+        # --no-build: install zizmor from its prebuilt wheel only, never executing a
+        # source-dist build script. --strict-collection: fail closed if any workflow
+        # fails to parse, so a malformed/tampered file cannot slip past the audit.
+        # --format=sarif always exits 0; the gate step below is what fails the build.
+        run: uvx --no-build "zizmor@${ZIZMOR_VERSION}" --strict-collection --min-severity=low --format=sarif . > results.sarif
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload SARIF
+        if: always() # publish findings even when the gate below fails the build
+        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
+        with:
+          sarif_file: results.sarif
+          category: zizmor
+
+      - name: Fail on actionable findings
+        run: uvx --no-build "zizmor@${ZIZMOR_VERSION}" --strict-collection --min-severity=low --format=plain .
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
