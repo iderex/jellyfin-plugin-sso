@@ -1,0 +1,61 @@
+# Opengrep (open-source Semgrep fork) rules that enforce this repo's greppable
+# security invariants as lint rules — one rule per invariant, added as each is
+# discovered (rule-per-regression). Deliberately narrow and low-false-positive:
+# these are `generic`-mode token patterns, NOT semantic C# analysis, so they do
+# not depend on the C# language parser (whose modern-C#/.NET 9 support is still
+# maturing) and cannot silently mis-parse a file into a false negative. Every
+# rule is verified to produce zero findings on the current clean tree; a rule
+# fires only when an invariant regresses.
+#
+# Run locally exactly as CI does:
+#   docker run --rm -v "$PWD:/src" opengrep/opengrep@sha256:<digest> \
+#     opengrep scan --config tools/opengrep/rules.yml --error /src
+rules:
+  # Invariant (release pipeline): publishing is triggered by a tag push only.
+  # Releases are immutable on GitHub — a manual `gh release` mutation permanently
+  # burns a tag and bypasses the /release-prep gate. The publish workflows must
+  # never create/edit/delete a release or its assets. Read-only verbs
+  # (view/list/download) are intentionally allowed.
+  - id: no-gh-release-mutation
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      Do not mutate GitHub releases with `gh release`
+      (create/edit/delete/upload/delete-asset). Publishing is triggered by a tag
+      push only; releases are immutable and a manual mutation burns the tag and
+      bypasses the release gate.
+    patterns:
+      - pattern-either:
+          - pattern: gh release create
+          - pattern: gh release edit
+          - pattern: gh release delete
+          - pattern: gh release upload
+          - pattern: gh release delete-asset
+    paths:
+      include:
+        - ".github/workflows/**"
+        - "**/*.sh"
+        - "**/*.ps1"
+        - "tools/**"
+      exclude:
+        # This rule file necessarily contains the banned strings as its own
+        # patterns — do not scan it (or its siblings) against itself.
+        - "tools/opengrep/**"
+
+  # Invariant (crypto / fail-closed): every security value (OAuth state, nonces,
+  # generated passwords, tokens) must come from a CSPRNG (RandomNumberGenerator).
+  # System.Random is a non-cryptographic PRNG and must never back a security
+  # value. The plugin creates randomness only via RandomNumberGenerator today;
+  # this rule blocks a regression to `new Random(...)`.
+  - id: no-insecure-random
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      Do not use System.Random for security values. Use
+      RandomNumberGenerator (a CSPRNG) for any token, nonce, state, or generated
+      secret.
+    patterns:
+      - pattern: new Random(...)
+    paths:
+      include:
+        - "SSO-Auth/**/*.cs"
