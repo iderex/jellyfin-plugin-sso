@@ -4,7 +4,9 @@
 >
 > ## ⛔ In-Development — do NOT install this on a production system
 >
-> This plugin is at the **In-Development** stage — the first rung of its maturity ladder (**In-Development → Alpha → Beta → Release Candidate → Full Release**; see the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap)). It exists **exclusively for developers to test** — nothing else. Under **no circumstances** should it be installed on a production system or put in front of a real Jellyfin instance with real user accounts: it is a login path under active reconstruction, and you must expect **breaking changes, incomplete features, and security gaps that are still being closed**. Wait for a **Full Release** before using it anywhere that matters.
+> **Development is currently stopped.** There is no active work on this plugin at the moment, and if it is picked up again at all, that will realistically be **weeks to months** away. Until then, expect no fixes, no new features, and no support.
+>
+> This plugin is at the **In-Development** stage — the first rung of its maturity ladder (**In-Development → Alpha → Beta → Release Candidate → Full Release**; see the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap)). It exists **exclusively for developers to test** — nothing else. Under **no circumstances** should it be installed on a production system or put in front of a real Jellyfin instance with real user accounts: it is a login path under reconstruction that was left mid-hardening, and you must expect **breaking changes, incomplete features, and security gaps that are still open**. Wait for a **Full Release** before using it anywhere that matters.
 
 <h1 align="center">Jellyfin SSO Plugin</h1>
 
@@ -27,13 +29,13 @@
 Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia, authentik, Entra ID, Google, and more — over <b>OpenID&nbsp;Connect</b> or <b>SAML&nbsp;2.0</b>, instead of a separate Jellyfin password.
 </p>
 
-> ### ⚡ Actively maintained revival
+> ### ⏸️ Revival — currently on hold
 >
-> This is a revival of [**9p4/jellyfin-plugin-sso**](https://github.com/9p4/jellyfin-plugin-sso), which its original author has since archived. It continues from the last upstream release (**4.0.0.x**, Jellyfin 10.11 / .NET 9) and is being taken forward **security-first**: an automated test suite has been added and the login path is being hardened step by step. Huge thanks to the original author and contributors for the foundation.
+> This is a revival of [**9p4/jellyfin-plugin-sso**](https://github.com/9p4/jellyfin-plugin-sso), which its original author has since archived. It continued from the last upstream release (**4.0.0.x**, Jellyfin 10.11 / .NET 9) and was being taken forward **security-first** — an automated test suite was added and the login path was hardened step by step — but that work is **currently stopped** (see the notice above). Huge thanks to the original author and contributors for the foundation.
 >
-> Its hardened sibling project, **`jellyfin-plugin-sso-V2`** (private), is the reference this repository draws on — a good deal still remains to be ported across from there, deliberately, one reviewed change at a time.
+> Its hardened sibling project, **`jellyfin-plugin-sso-V2`** (private), is the reference this repository draws on — a good deal still remains to be ported across from there, and that porting is on hold along with the rest of the work.
 >
-> **Status:** **In-Development** — the first stage of the maturity ladder. See the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap) for what each stage gates, and [Installing](#installing) — for now the reliable path is building from source; a packaged release will follow as the security-hardening pass advances the maturity stages.
+> **Status:** **In-Development**, paused — the first stage of the maturity ladder. See the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap) for what each stage gates, and [Installing](#installing) — for now the only path is building from source; a packaged release would only follow once the security-hardening pass resumes and advances the maturity stages.
 
 > ### 🤖 A note on AI and on contributions
 >
