@@ -47,8 +47,9 @@ internal sealed class SsoRateLimiter
     private long _lastPruneTicks = DateTime.MinValue.Ticks;
 
     // Bounded observability signal (#195). Every refusal increments the tally; RecordThrottledHit drains it
-    // into a single log line at most once per SignalInterval via _signalGate. A hit lost or double-counted
-    // around the drain is harmless for a best-effort operator signal (never a security decision).
+    // into a single log line at most once per SignalInterval via _signalGate. A racing increment is never
+    // lost — it lands in that drain or a later one (see RecordThrottledHit) — which is harmless timing slack
+    // for a best-effort operator signal (never a security decision).
     private long _throttledHits;
 
     /// <summary>

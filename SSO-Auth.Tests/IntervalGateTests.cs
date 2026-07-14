@@ -77,6 +77,23 @@ public class IntervalGateTests
     }
 
     [Fact]
+    public void TryEnter_StaleOlderSample_AdmitsAndReAnchors_TheDocumentedFailOpenResidual()
+    {
+        // A caller whose captured 'now' is older than the cursor (a thread descheduled between reading the
+        // clock and entering) is indistinguishable from a wall-clock correction, so it enters and re-anchors
+        // — one extra admission, with the next interval measured from the older time. This is the documented
+        // residual of the self-heal guard, bounded to fail-open noise (an extra sweep or log line); the
+        // dangerous direction, a stall, cannot occur because a backward re-anchor only shortens the wait.
+        var gate = new IntervalGate(Interval);
+        Assert.True(gate.TryEnter(At(12, 0)));
+
+        var stale = At(11, 59, 59);
+        Assert.True(gate.TryEnter(stale));                        // stale sample admits (the residual)
+        Assert.False(gate.TryEnter(At(12, 0, 58)));               // re-anchored to 11:59:59: still throttled
+        Assert.True(gate.TryEnter(stale + Interval));             // and open again one interval after the anchor
+    }
+
+    [Fact]
     public void TryEnter_AfterEntering_ReAnchorsToTheEntryTime()
     {
         var gate = new IntervalGate(Interval);
