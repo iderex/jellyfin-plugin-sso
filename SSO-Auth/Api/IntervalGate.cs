@@ -24,7 +24,7 @@ internal sealed class IntervalGate
         // A non-positive interval would silently disable the throttle (every call enters), turning the
         // gate into the flood amplifier it exists to prevent — e.g. via a field-ordering mistake that
         // passes default(TimeSpan). Fail loudly at construction instead.
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(interval.Ticks, nameof(interval));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(interval.Ticks);
         _intervalTicks = interval.Ticks;
     }
 

@@ -217,8 +217,8 @@ internal sealed class SsoRateLimiter
 
         // Only the gate's single winner per interval drains the tally; everyone else returns 0 (suppressed).
         // A racing increment between the gate entry and the drain is folded into the next interval's count,
-        // not lost outright. The gate self-heals a backward clock, so a correction cannot stall the signal;
-        // on the first refusal (cursor at MinValue) the onset signals at once.
+        // not lost outright. The gate self-heals a backward clock, so a correction cannot stall the signal,
+        // and on the first refusal (cursor at MinValue) the onset signals at once.
         return _signalGate.TryEnter(nowUtc) ? Interlocked.Exchange(ref _throttledHits, 0) : 0;
     }
 
