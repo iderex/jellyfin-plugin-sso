@@ -159,6 +159,56 @@ internal static class SamlTestFactory
         return new SamlFixture(certificate, document, responseId, assertionId);
     }
 
+    /// <summary>
+    /// Produces a Response-scope-signed fixture whose XML carries REAL inter-element line breaks and
+    /// indentation — the pretty-printed shape a conformant IdP serializes and signs over — instead of
+    /// the compact single line <see cref="Create"/> emits. The template uses LF line endings, so the
+    /// signed digest is computed over the EOL-normalized form the service provider reconstructs; the
+    /// interop test (#120) rewrites those line breaks to raw CRLF on the wire to exercise the reader's
+    /// XML 1.0 EOL normalization. Whitespace between elements is signature-covered (PreserveWhitespace),
+    /// so this shape is what actually pins the normalization property.
+    /// </summary>
+    /// <param name="notOnOrAfter">SubjectConfirmationData/@NotOnOrAfter; defaults to five minutes in the future.</param>
+    /// <returns>A fixture whose <see cref="SamlFixture.Document"/> serializes to the LF baseline.</returns>
+    internal static SamlFixture CreateIndented(DateTime? notOnOrAfter = null)
+    {
+        const string TimeFormat = "yyyy-MM-ddTHH:mm:ssZ";
+        var notOnOrAfterValue = (notOnOrAfter ?? DateTime.UtcNow.AddMinutes(5))
+            .ToUniversalTime().ToString(TimeFormat, CultureInfo.InvariantCulture);
+
+        using var rsa = RSA.Create(2048);
+        var request = new CertificateRequest("CN=Test SAML IdP", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(10));
+
+        var responseId = "_" + Guid.NewGuid().ToString("N");
+        var assertionId = "_" + Guid.NewGuid().ToString("N");
+
+        // LF line breaks and indentation between elements, exactly as a conformant IdP serializes before
+        // signing. Kept as LF here (the interop test converts them to raw CRLF for the on-the-wire bytes).
+        var xml =
+            "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" ID=\"" + responseId + "\" Version=\"2.0\">\n" +
+            "  <saml:Assertion ID=\"" + assertionId + "\" Version=\"2.0\">\n" +
+            "    <saml:Issuer>https://idp.example.com</saml:Issuer>\n" +
+            "    <saml:Subject>\n" +
+            "      <saml:NameID>alice</saml:NameID>\n" +
+            "      <saml:SubjectConfirmation Method=\"urn:oasis:names:tc:SAML:2.0:cm:bearer\">\n" +
+            "        <saml:SubjectConfirmationData NotOnOrAfter=\"" + notOnOrAfterValue + "\" />\n" +
+            "      </saml:SubjectConfirmation>\n" +
+            "    </saml:Subject>\n" +
+            "    <saml:AttributeStatement>\n" +
+            "      <saml:Attribute Name=\"Role\"><saml:AttributeValue>jellyfin-users</saml:AttributeValue></saml:Attribute>\n" +
+            "    </saml:AttributeStatement>\n" +
+            "  </saml:Assertion>\n" +
+            "</samlp:Response>";
+
+        var document = new XmlDocument { PreserveWhitespace = true };
+        document.LoadXml(xml);
+
+        SignElement(document, responseId, rsa, certificate, useSha1: false, useWithCommentsC14n: false, useInclusiveC14n: false);
+
+        return new SamlFixture(certificate, document, responseId, assertionId);
+    }
+
     private static void SignElement(XmlDocument document, string referenceId, RSA signingKey, X509Certificate2 certificate, bool useSha1, bool useWithCommentsC14n, bool useInclusiveC14n)
     {
         var signedXml = new SignedXml(document) { SigningKey = signingKey };
