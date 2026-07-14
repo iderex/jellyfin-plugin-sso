@@ -27,6 +27,14 @@ public class IntervalGateTests
         Assert.True(new IntervalGate(Interval).TryEnter(At(0, 0)));
     }
 
+    [Theory]
+    [InlineData(0L)]
+    [InlineData(-1L)]
+    public void Ctor_NonPositiveInterval_ThrowsInsteadOfSilentlyDisablingTheThrottle(long ticks)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new IntervalGate(TimeSpan.FromTicks(ticks)));
+    }
+
     [Fact]
     public void TryEnter_SecondCallWithinInterval_IsThrottled()
     {

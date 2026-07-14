@@ -19,7 +19,14 @@ internal sealed class IntervalGate
     // torn-read-safe). Starts at MinValue so the first call always sees a full interval and enters.
     private long _cursor = DateTime.MinValue.Ticks;
 
-    internal IntervalGate(TimeSpan interval) => _intervalTicks = interval.Ticks;
+    internal IntervalGate(TimeSpan interval)
+    {
+        // A non-positive interval would silently disable the throttle (every call enters), turning the
+        // gate into the flood amplifier it exists to prevent — e.g. via a field-ordering mistake that
+        // passes default(TimeSpan). Fail loudly at construction instead.
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(interval.Ticks, nameof(interval));
+        _intervalTicks = interval.Ticks;
+    }
 
     /// <summary>
     /// Reports whether the caller may run the throttled action now, entering the interval if so.
