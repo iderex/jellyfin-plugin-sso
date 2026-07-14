@@ -21,7 +21,11 @@ public class SSOControllerSamlPostTests
 
         var result = harness.Controller.SamlPost("adfs", formSamlResponse: "irrelevant");
 
-        Assert.Equal(400, Assert.IsType<ContentResult>(result).StatusCode);
+        // Shares the unknown-provider body now (the unique "No active providers found" wording is
+        // retired), so a disabled provider cannot be told apart from an unknown one (#318).
+        var content = Assert.IsType<ContentResult>(result);
+        Assert.Equal(400, content.StatusCode);
+        Assert.Equal("No matching provider found", content.Content);
     }
 
     [Fact]

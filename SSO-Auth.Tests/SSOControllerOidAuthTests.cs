@@ -34,25 +34,31 @@ public class SSOControllerOidAuthTests
     }
 
     [Fact]
-    public async Task OidAuth_DisabledProvider_ReturnsProblem()
+    public async Task OidAuth_DisabledProvider_RejectsAsUnknownProvider()
     {
         var harness = new SsoControllerHarness(c => c.OidConfigs["kc"] = new OidConfig { Enabled = false });
 
-        // The provider exists but is disabled, so the redeem guard short-circuits to a problem, not a session.
+        // A disabled provider is a client-caused rejection, not a server fault: a uniform 400 that is
+        // byte-identical to the unknown-provider case, so the two cannot be told apart (#318).
         var result = await harness.Controller.OidAuth("kc", new AuthResponse { Data = "state-token" });
 
-        Assert.Equal(500, Assert.IsType<ObjectResult>(result).StatusCode);
+        var content = Assert.IsType<ContentResult>(result);
+        Assert.Equal(400, content.StatusCode);
+        Assert.Equal("No matching provider found", content.Content);
     }
 
     [Fact]
-    public async Task OidAuth_UnknownState_ReturnsProblem()
+    public async Task OidAuth_UnknownState_RejectsAsInvalidState()
     {
         var harness = new SsoControllerHarness(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
 
-        // No state was seeded, so the token does not resolve and no session is minted.
+        // No state was seeded, so the token does not resolve — a client-caused 400, not a 500, and the
+        // same body an expired or replayed state gets, so a replay is indistinguishable from an expiry.
         var result = await harness.Controller.OidAuth("kc", new AuthResponse { Data = "no-such-state" });
 
-        Assert.Equal(500, Assert.IsType<ObjectResult>(result).StatusCode);
+        var content = Assert.IsType<ContentResult>(result);
+        Assert.Equal(400, content.StatusCode);
+        Assert.Equal("Invalid or expired state", content.Content);
     }
 
     [Fact]
@@ -78,9 +84,12 @@ public class SSOControllerOidAuthTests
         Assert.IsType<OkObjectResult>(result);
         await harness.UserManager.Received(1).CreateUserAsync("alice");
 
-        // The state is claimed atomically (TryRemove), so a replay of the same token no longer redeems.
+        // The state is claimed atomically (TryRemove), so a replay of the same token no longer redeems —
+        // it rejects as an invalid state (a client-caused 400), indistinguishable from an expiry.
         var replay = await harness.Controller.OidAuth("kc", new AuthResponse { Data = "state-token" });
-        Assert.Equal(500, Assert.IsType<ObjectResult>(replay).StatusCode);
+        var content = Assert.IsType<ContentResult>(replay);
+        Assert.Equal(400, content.StatusCode);
+        Assert.Equal("Invalid or expired state", content.Content);
     }
 
     // Seeds a valid, redeemable login state for provider "kc" bound to a new user "alice", and mocks the

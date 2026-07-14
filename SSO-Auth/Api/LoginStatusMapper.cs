@@ -16,6 +16,13 @@ internal static class LoginStatusMapper
     /// <summary>The uniform denial body for any rejected login — deliberately uninformative.</summary>
     internal const string PermissionDeniedMessage = "Error. Check permissions.";
 
+    /// <summary>
+    /// The body for an unresolved provider — one wording for both the unknown and the disabled case,
+    /// so the two cannot be told apart (no provider-enumeration oracle). Shared with the controller's
+    /// remaining direct provider-lookup rejections so the wording is defined once.
+    /// </summary>
+    internal const string NoMatchingProviderMessage = "No matching provider found";
+
     internal static ActionResult ToActionResult(LoginOutcome outcome) => outcome switch
     {
         LoginOutcome.Success success => new OkObjectResult(success.Session),
@@ -28,6 +35,9 @@ internal static class LoginStatusMapper
 
     private static ContentResult ToActionResult(PublicReason reason) => reason switch
     {
+        PublicReason.UnknownProvider => Emit(StatusCodes.Status400BadRequest, NoMatchingProviderMessage),
+        PublicReason.InvalidState => Emit(StatusCodes.Status400BadRequest, "Invalid or expired state"),
+        PublicReason.AccountLinkForbidden => Emit(StatusCodes.Status403Forbidden, "SSO login is not permitted for this account."),
         PublicReason.SsoResponseInvalid => Emit(StatusCodes.Status400BadRequest, "SSO response validation failed"),
         PublicReason.SamlResponseInvalid => Emit(StatusCodes.Status400BadRequest, "SAML response validation failed"),
         PublicReason.PkceNotSupported => Emit(StatusCodes.Status400BadRequest, "The identity provider does not advertise the required PKCE (S256) support."),

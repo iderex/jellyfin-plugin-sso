@@ -29,39 +29,54 @@ public class SSOControllerEndpointTests
     }
 
     [Fact]
-    public async Task OidChallenge_UnknownProvider_Throws()
+    public async Task OidChallenge_UnknownProvider_RejectsWithUniform400()
     {
+        // Unknown and disabled providers now share one in-process 400 (the answer no longer depends on
+        // host middleware mapping a thrown ArgumentException), so neither can be probed apart (#318).
         var harness = new SsoControllerHarness();
 
-        await Assert.ThrowsAsync<ArgumentException>(() => harness.Controller.OidChallenge("does-not-exist"));
+        var result = await harness.Controller.OidChallenge("does-not-exist");
+
+        AssertUnknownProvider(result);
     }
 
     [Fact]
-    public async Task OidAuth_UnknownProvider_ReturnsBadRequest()
+    public async Task OidAuth_UnknownProvider_RejectsWithUniform400()
     {
         var harness = new SsoControllerHarness();
 
         var result = await harness.Controller.OidAuth("does-not-exist", new AuthResponse { Data = "x" });
 
-        Assert.IsType<BadRequestObjectResult>(result);
+        AssertUnknownProvider(result);
     }
 
     [Fact]
-    public void SamlPost_UnknownProvider_ReturnsBadRequest()
+    public void SamlPost_UnknownProvider_RejectsWithUniform400()
     {
         var harness = new SsoControllerHarness();
 
         var result = harness.Controller.SamlPost("does-not-exist");
 
-        Assert.IsType<BadRequestObjectResult>(result);
+        AssertUnknownProvider(result);
     }
 
     [Fact]
-    public void SamlChallenge_UnknownProvider_Throws()
+    public void SamlChallenge_UnknownProvider_RejectsWithUniform400()
     {
         var harness = new SsoControllerHarness();
 
-        Assert.Throws<ArgumentException>(() => harness.Controller.SamlChallenge("does-not-exist"));
+        var result = harness.Controller.SamlChallenge("does-not-exist");
+
+        AssertUnknownProvider(result);
+    }
+
+    // The uniform unknown/disabled-provider rejection: a text/plain 400 with the one shared body, so a
+    // caller cannot distinguish an unknown provider from a disabled one on any endpoint (no oracle).
+    private static void AssertUnknownProvider(ActionResult result)
+    {
+        var content = Assert.IsType<ContentResult>(result);
+        Assert.Equal(400, content.StatusCode);
+        Assert.Equal("No matching provider found", content.Content);
     }
 
     [Fact]
@@ -100,13 +115,13 @@ public class SSOControllerEndpointTests
     }
 
     [Fact]
-    public void SamlChallenge_DisabledProvider_Throws()
+    public void SamlChallenge_DisabledProvider_RejectsAsUnknownProvider()
     {
-        // A configured-but-disabled provider skips the challenge block and hits the same throwing
-        // fallthrough as an unknown provider (SSOController.cs) — pin that so it stays fail-closed.
+        // A configured-but-disabled provider shares the unknown provider's uniform 400, so the two
+        // cannot be told apart (no enumeration oracle) — fail-closed either way.
         var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig { Enabled = false });
 
-        Assert.Throws<ArgumentException>(() => harness.Controller.SamlChallenge("adfs"));
+        AssertUnknownProvider(harness.Controller.SamlChallenge("adfs"));
     }
 
     [Fact]

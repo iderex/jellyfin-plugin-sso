@@ -22,13 +22,63 @@ public class SSOControllerSamlAuthTests
     private static readonly Guid UserId = Guid.Parse("88888888-8888-8888-8888-888888888888");
 
     [Fact]
-    public async Task SamlAuth_DisabledProvider_ReturnsProblem()
+    public async Task SamlAuth_DisabledProvider_RejectsAsUnknownProvider()
     {
         var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig { Enabled = false });
 
         var result = await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = "irrelevant" });
 
-        Assert.Equal(500, Assert.IsType<ObjectResult>(result).StatusCode);
+        // A disabled provider is a client-caused 400 byte-identical to the unknown-provider case, not a
+        // 500, so neither can be probed apart (#318).
+        var content = Assert.IsType<ContentResult>(result);
+        Assert.Equal(400, content.StatusCode);
+        Assert.Equal("No matching provider found", content.Content);
+    }
+
+    [Fact]
+    public async Task SamlAuth_ReplayedAssertion_RejectsAsInvalidWithoutDisclosingTheReplay()
+    {
+        var fixture = SamlTestFactory.Create(nameId: "alice");
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig
+        {
+            Enabled = true,
+            SamlCertificate = fixture.CertificateBase64,
+            DoNotValidateAudience = true,
+            EnableAuthorization = false,
+            AllowExistingAccountLink = false,
+        });
+        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        harness.UserManager.CreateUserAsync("alice").Returns(user);
+        harness.UserManager.GetUserById(UserId).Returns(user);
+        var payload = fixture.EncodeResponse();
+
+        Assert.IsType<OkObjectResult>(await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = payload }));
+
+        // The replay is refused by the one-time-use cache, now as a client-caused 400 in the uniform
+        // SAML body (never a 500) that does not disclose the replay cache to the attacker who replayed.
+        var replay = Assert.IsType<ContentResult>(await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = payload }));
+        Assert.Equal(400, replay.StatusCode);
+        Assert.Equal("SAML response validation failed", replay.Content);
+    }
+
+    [Fact]
+    public async Task SamlAuth_UnsolicitedResponse_RejectsInTheUniformBody()
+    {
+        // With ValidateInResponseTo on and no AuthnRequest issued, the response carries no correlated
+        // InResponseTo and is refused — a client-caused 400 in the uniform SAML body, not a 500, and it
+        // no longer discloses the InResponseTo correlation to the submitter.
+        var fixture = SamlTestFactory.Create(nameId: "alice");
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig
+        {
+            Enabled = true,
+            SamlCertificate = fixture.CertificateBase64,
+            DoNotValidateAudience = true,
+            ValidateInResponseTo = true,
+        });
+
+        var result = Assert.IsType<ContentResult>(await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = fixture.EncodeResponse() }));
+        Assert.Equal(400, result.StatusCode);
+        Assert.Equal("SAML response validation failed", result.Content);
     }
 
     [Fact]

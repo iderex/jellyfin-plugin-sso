@@ -8,6 +8,15 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 /// </summary>
 internal enum PublicReason
 {
+    /// <summary>Unknown OR disabled provider — deliberately indistinguishable, so neither can be probed (no enumeration oracle).</summary>
+    UnknownProvider,
+
+    /// <summary>Authorize state unknown, expired, minted for another provider, or already redeemed (replay) — one body for all.</summary>
+    InvalidState,
+
+    /// <summary>The account-link policy refused the login (name taken with adoption off, or an unresolved identity).</summary>
+    AccountLinkForbidden,
+
     /// <summary>OIDC callback validation failed (the RFC 9207 issuer mix-up check).</summary>
     SsoResponseInvalid,
 

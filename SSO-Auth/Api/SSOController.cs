@@ -40,10 +40,10 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 [Route("[controller]")]
 public class SSOController : ControllerBase
 {
-    // Client-facing messages for unresolved provider names; the uniform-rejection policy and its
-    // denial body live on LoginStatusMapper, where the messages are defined (#318).
-    private const string NoMatchingProviderMessage = "No matching provider found";
-    private const string ProviderDoesNotExistMessage = "Provider does not exist";
+    // The uniform-rejection policy and its bodies live on LoginStatusMapper; the direct provider-lookup
+    // rejections that stay in the controller reuse its NoMatchingProviderMessage so the wording is
+    // defined once (#318).
+    private const string NoMatchingProviderMessage = LoginStatusMapper.NoMatchingProviderMessage;
 
     // Display names for the audit log (the internal link-map mode tokens are the lowercase "oid"/"saml").
     private const string OpenIdProtocol = "OpenID";
@@ -233,60 +233,62 @@ public class SSOController : ControllerBase
         }
 
         StateStore.PruneExpired(DateTime.Now);
-        var config = FindOidConfig(provider) ?? throw new ArgumentException(ProviderDoesNotExistMessage);
-
-        if (config.Enabled)
+        var config = FindOidConfig(provider);
+        if (config is not { Enabled: true })
         {
-            // RFC 9700 §2.1.1: confirm the authorization server advertises PKCE (S256) before relying on
-            // it. OidcClient sends code_challenge unconditionally but never checks this, so a server that
-            // ignores PKCE would silently downgrade authorization-code-injection protection (#141). Fail
-            // closed when the provider is marked RequirePkce; otherwise emit an audit warning and proceed.
-            var pkceSupported = await ProviderAdvertisesPkceS256Async(config, provider).ConfigureAwait(false);
-            if (pkceSupported == false)
-            {
-                if (config.RequirePkce)
-                {
-                    _logger.LogWarning("OpenID login refused for provider {Provider}: RequirePkce is set but the authorization server does not advertise PKCE (S256).", provider?.ReplaceLineEndings(string.Empty));
-                    return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.PkceNotSupported));
-                }
-
-                SsoAudit.PkceNotAdvertised(_logger, provider);
-            }
-            else if (pkceSupported is null && config.RequirePkce)
-            {
-                _logger.LogWarning("OpenID login refused for provider {Provider}: RequirePkce is set but the discovery document could not be read to confirm PKCE (S256).", provider?.ReplaceLineEndings(string.Empty));
-                return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.PkceUnverifiable));
-            }
-
-            bool newPath = ResolveChallengeNewPath(config.NewPath, isLinking, value => config.NewPath = value);
-
-            string redirectUri = SsoUrlBuilder.OidRedirectUri(GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), newPath, provider);
-
-            var oidcClient = CreateOidcClient(config, redirectUri, string.Join(" ", config.OidScopes.Prepend("openid profile")));
-            var state = await oidcClient.PrepareLoginAsync().ConfigureAwait(false);
-
-            if (state.IsError)
-            {
-                return ReturnError(StatusCodes.Status400BadRequest, $"Error preparing login: {state.Error} - {state.ErrorDescription}");
-            }
-
-            // IsLinking tracks whether this is a linking request rather than a login. The state value
-            // is a fresh CSPRNG token, so a collision is effectively impossible; a refusal is almost
-            // always the capacity backstop under a flood, and the store throttles its warning signal.
-            if (!StateStore.TryAdd(state, provider, isLinking, DateTime.Now, out var shouldWarnCapacity))
-            {
-                if (shouldWarnCapacity)
-                {
-                    _logger.LogWarning("OpenID authorize state refused for provider {Provider}: a CSPRNG-token collision (effectively impossible) or the store is at capacity (warning throttled).", provider?.ReplaceLineEndings(string.Empty));
-                }
-
-                return ReturnError(StatusCodes.Status500InternalServerError, "Could not start login; please retry.");
-            }
-
-            return Redirect(state.StartUrl);
+            // Unknown and disabled providers share one rejection so neither can be probed apart (no
+            // enumeration oracle), and the answer no longer depends on host middleware mapping a thrown
+            // ArgumentException — the in-process 400 is fail-closed regardless of the deployment (#318).
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.UnknownProvider));
         }
 
-        throw new ArgumentException(ProviderDoesNotExistMessage);
+        // RFC 9700 §2.1.1: confirm the authorization server advertises PKCE (S256) before relying on
+        // it. OidcClient sends code_challenge unconditionally but never checks this, so a server that
+        // ignores PKCE would silently downgrade authorization-code-injection protection (#141). Fail
+        // closed when the provider is marked RequirePkce; otherwise emit an audit warning and proceed.
+        var pkceSupported = await ProviderAdvertisesPkceS256Async(config, provider).ConfigureAwait(false);
+        if (pkceSupported == false)
+        {
+            if (config.RequirePkce)
+            {
+                _logger.LogWarning("OpenID login refused for provider {Provider}: RequirePkce is set but the authorization server does not advertise PKCE (S256).", provider?.ReplaceLineEndings(string.Empty));
+                return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.PkceNotSupported));
+            }
+
+            SsoAudit.PkceNotAdvertised(_logger, provider);
+        }
+        else if (pkceSupported is null && config.RequirePkce)
+        {
+            _logger.LogWarning("OpenID login refused for provider {Provider}: RequirePkce is set but the discovery document could not be read to confirm PKCE (S256).", provider?.ReplaceLineEndings(string.Empty));
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.PkceUnverifiable));
+        }
+
+        bool newPath = ResolveChallengeNewPath(config.NewPath, isLinking, value => config.NewPath = value);
+
+        string redirectUri = SsoUrlBuilder.OidRedirectUri(GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), newPath, provider);
+
+        var oidcClient = CreateOidcClient(config, redirectUri, string.Join(" ", config.OidScopes.Prepend("openid profile")));
+        var state = await oidcClient.PrepareLoginAsync().ConfigureAwait(false);
+
+        if (state.IsError)
+        {
+            return ReturnError(StatusCodes.Status400BadRequest, $"Error preparing login: {state.Error} - {state.ErrorDescription}");
+        }
+
+        // IsLinking tracks whether this is a linking request rather than a login. The state value
+        // is a fresh CSPRNG token, so a collision is effectively impossible; a refusal is almost
+        // always the capacity backstop under a flood, and the store throttles its warning signal.
+        if (!StateStore.TryAdd(state, provider, isLinking, DateTime.Now, out var shouldWarnCapacity))
+        {
+            if (shouldWarnCapacity)
+            {
+                _logger.LogWarning("OpenID authorize state refused for provider {Provider}: a CSPRNG-token collision (effectively impossible) or the store is at capacity (warning throttled).", provider?.ReplaceLineEndings(string.Empty));
+            }
+
+            return ReturnError(StatusCodes.Status500InternalServerError, "Could not start login; please retry.");
+        }
+
+        return Redirect(state.StartUrl);
     }
 
     // Test-only reset of the process-wide OpenID caches this controller keeps as private statics: the
@@ -583,45 +585,49 @@ public class SSOController : ControllerBase
             return BadRequest("Missing data");
         }
 
+        // Unknown and disabled providers share one rejection so neither can be probed apart — this
+        // unifies the previously JSON unknown-provider body and the disabled provider's 500 into the
+        // one uniform 400, and a disabled provider does not consume the state (the guard precedes the
+        // redeem, as before).
         var config = FindOidConfig(provider);
-        if (config is null)
+        if (config is not { Enabled: true })
         {
-            return BadRequest(NoMatchingProviderMessage);
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.UnknownProvider));
         }
 
-        // One-time atomic claim — details on OidcStateStore.TryRedeem. A disabled provider does not
-        // consume the state: config.Enabled short-circuits before the redeem, same as before.
-        if (config.Enabled
-            && StateStore.TryRedeem(response.Data, provider, DateTime.Now) is { } redeemed)
+        // One-time atomic claim — details on OidcStateStore.TryRedeem. A miss (unknown, expired,
+        // provider-mismatched, or already-redeemed) is a client-caused rejection, not a server fault:
+        // one uniform body, so a replay is indistinguishable from an expiry and replay stays hidden.
+        if (StateStore.TryRedeem(response.Data, provider, DateTime.Now) is not { } redeemed)
         {
-            Guid userId;
-            try
-            {
-                userId = await CreateCanonicalLinkAndUserIfNotExist("oid", provider, redeemed.Subject, redeemed.Username, config.AllowExistingAccountLink).ConfigureAwait(false);
-            }
-            catch (AccountLinkForbiddenException)
-            {
-                return StatusCode(StatusCodes.Status403Forbidden, "SSO login is not permitted for this account.");
-            }
-
-            var authenticationResult = await Authenticate(new SessionParameters
-            {
-                UserId = userId,
-                IsAdmin = redeemed.Admin,
-                EnableAuthorization = config.EnableAuthorization,
-                EnableAllFolders = config.EnableAllFolders,
-                EnabledFolders = redeemed.Folders.ToArray(),
-                EnableLiveTv = redeemed.EnableLiveTv,
-                EnableLiveTvManagement = redeemed.EnableLiveTvManagement,
-                AuthResponse = response,
-                DefaultProvider = config.DefaultProvider?.Trim(),
-                AvatarUrl = redeemed.AvatarUrl,
-            }).ConfigureAwait(false);
-            SsoAudit.LoginSucceeded(_logger, OpenIdProtocol, provider, redeemed.Username, redeemed.Admin);
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Success(authenticationResult));
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.InvalidState));
         }
 
-        return Problem("Something went wrong");
+        Guid userId;
+        try
+        {
+            userId = await CreateCanonicalLinkAndUserIfNotExist("oid", provider, redeemed.Subject, redeemed.Username, config.AllowExistingAccountLink).ConfigureAwait(false);
+        }
+        catch (AccountLinkForbiddenException)
+        {
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.AccountLinkForbidden));
+        }
+
+        var authenticationResult = await Authenticate(new SessionParameters
+        {
+            UserId = userId,
+            IsAdmin = redeemed.Admin,
+            EnableAuthorization = config.EnableAuthorization,
+            EnableAllFolders = config.EnableAllFolders,
+            EnabledFolders = redeemed.Folders.ToArray(),
+            EnableLiveTv = redeemed.EnableLiveTv,
+            EnableLiveTvManagement = redeemed.EnableLiveTvManagement,
+            AuthResponse = response,
+            DefaultProvider = config.DefaultProvider?.Trim(),
+            AvatarUrl = redeemed.AvatarUrl,
+        }).ConfigureAwait(false);
+        SsoAudit.LoginSucceeded(_logger, OpenIdProtocol, provider, redeemed.Username, redeemed.Admin);
+        return LoginStatusMapper.ToActionResult(new LoginOutcome.Success(authenticationResult));
     }
 
     /// <summary>
@@ -646,10 +652,13 @@ public class SSOController : ControllerBase
             return throttled;
         }
 
+        // Unknown and disabled providers share one rejection so neither can be probed apart — this
+        // retires the unique "No active providers found" wording that distinguished the disabled case
+        // (a disabled provider now short-circuits before the relayState log line).
         var config = FindSamlConfig(provider);
-        if (config is null)
+        if (config is not { Enabled: true })
         {
-            return BadRequest(NoMatchingProviderMessage);
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.UnknownProvider));
         }
 
         bool isLinking = string.Equals(relayState, "linking", StringComparison.Ordinal);
@@ -660,41 +669,36 @@ public class SSOController : ControllerBase
             "SAML request has relayState of {RelayState}",
             relayState?.ReplaceLineEndings(string.Empty));
 
-        if (config.Enabled)
+        // Bind SAMLResponse via [FromForm] rather than reading Request.Form directly: a non-form
+        // content-type binds null (the form value provider is skipped, so Request.Form is never
+        // touched and cannot throw the InvalidOperationException that escaped as a 500, #206), and a
+        // null body is rejected the same way as any other malformed response — a clean 400.
+        if (!SamlResponseLoader.TryParse(config.SamlCertificate, formSamlResponse, out var samlResponse)
+            || !IsSamlResponseValid(samlResponse, config, provider))
         {
-            // Bind SAMLResponse via [FromForm] rather than reading Request.Form directly: a non-form
-            // content-type binds null (the form value provider is skipped, so Request.Form is never
-            // touched and cannot throw the InvalidOperationException that escaped as a 500, #206), and a
-            // null body is rejected the same way as any other malformed response — a clean 400.
-            if (!SamlResponseLoader.TryParse(config.SamlCertificate, formSamlResponse, out var samlResponse)
-                || !IsSamlResponseValid(samlResponse, config, provider))
-            {
-                // A malformed response (non-base64, malformed XML, prohibited DOCTYPE) fails TryLoad and
-                // is rejected the same way an invalid one is — a clean 4xx, never an unhandled 500 (#199).
-                return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
-            }
-
-            if (SamlLoginPolicy.IsLoginAllowed(samlResponse.GetCustomAttributes("Role"), config.Roles))
-            {
-                return HtmlAuthPage(nonce =>
-                    WebResponse.Generator(
-                        data: Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(samlResponse.Xml)),
-                        provider: provider,
-                        baseUrl: GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride),
-                        mode: "SAML",
-                        nonce: nonce,
-                        isLinking: isLinking));
-            }
-
-            _logger.LogWarning(
-                "SAML user: {UserId} has insufficient roles: {@Roles}. Expected any one of: {@ExpectedRoles}",
-                samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty),
-                samlResponse.GetCustomAttributes("Role").Select(r => r?.ReplaceLineEndings(string.Empty)),
-                config.Roles);
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
+            // A malformed response (non-base64, malformed XML, prohibited DOCTYPE) fails TryLoad and
+            // is rejected the same way an invalid one is — a clean 4xx, never an unhandled 500 (#199).
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
 
-        return ReturnError(StatusCodes.Status400BadRequest, "No active providers found");
+        if (SamlLoginPolicy.IsLoginAllowed(samlResponse.GetCustomAttributes("Role"), config.Roles))
+        {
+            return HtmlAuthPage(nonce =>
+                WebResponse.Generator(
+                    data: Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(samlResponse.Xml)),
+                    provider: provider,
+                    baseUrl: GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride),
+                    mode: "SAML",
+                    nonce: nonce,
+                    isLinking: isLinking));
+        }
+
+        _logger.LogWarning(
+            "SAML user: {UserId} has insufficient roles: {@Roles}. Expected any one of: {@ExpectedRoles}",
+            samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty),
+            samlResponse.GetCustomAttributes("Role").Select(r => r?.ReplaceLineEndings(string.Empty)),
+            config.Roles);
+        return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
     }
 
     /// <summary>
@@ -712,37 +716,38 @@ public class SSOController : ControllerBase
             return throttled;
         }
 
-        var config = FindSamlConfig(provider) ?? throw new ArgumentException(ProviderDoesNotExistMessage);
-
-        if (config.Enabled)
+        // Unknown and disabled providers share one rejection so neither can be probed apart, and the
+        // answer no longer depends on host middleware mapping a thrown ArgumentException (#318).
+        var config = FindSamlConfig(provider);
+        if (config is not { Enabled: true })
         {
-            bool newPath = ResolveChallengeNewPath(config.NewPath, isLinking, value => config.NewPath = value);
-
-            string redirectUri = SsoUrlBuilder.SamlAcsUrl(GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), newPath, provider);
-            string relayState = null;
-            if (isLinking)
-            {
-                relayState = "linking";
-            }
-
-            var request = new SamlAuthnRequest(
-                config.SamlClientId.Trim(),
-                redirectUri);
-
-            // Solicited-only mode (#156): remember the request ID so the callback can require the
-            // response's InResponseTo to match a request we actually issued. Scoped by provider so
-            // two providers' request IDs cannot satisfy each other's correlation. Only for login
-            // flows — the linking callback (SamlLink) does not consume InResponseTo, so registering a
-            // linking request would only leave an id to expire unused.
-            if (config.ValidateInResponseTo && !isLinking)
-            {
-                SamlRequests.Register(ProviderScopedKey.For(provider, request.Id), DateTime.UtcNow + SamlRequestLifetime, DateTime.UtcNow);
-            }
-
-            return Redirect(request.GetRedirectUrl(config.SamlEndpoint.Trim(), relayState));
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.UnknownProvider));
         }
 
-        throw new ArgumentException(ProviderDoesNotExistMessage);
+        bool newPath = ResolveChallengeNewPath(config.NewPath, isLinking, value => config.NewPath = value);
+
+        string redirectUri = SsoUrlBuilder.SamlAcsUrl(GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), newPath, provider);
+        string relayState = null;
+        if (isLinking)
+        {
+            relayState = "linking";
+        }
+
+        var request = new SamlAuthnRequest(
+            config.SamlClientId.Trim(),
+            redirectUri);
+
+        // Solicited-only mode (#156): remember the request ID so the callback can require the
+        // response's InResponseTo to match a request we actually issued. Scoped by provider so
+        // two providers' request IDs cannot satisfy each other's correlation. Only for login
+        // flows — the linking callback (SamlLink) does not consume InResponseTo, so registering a
+        // linking request would only leave an id to expire unused.
+        if (config.ValidateInResponseTo && !isLinking)
+        {
+            SamlRequests.Register(ProviderScopedKey.For(provider, request.Id), DateTime.UtcNow + SamlRequestLifetime, DateTime.UtcNow);
+        }
+
+        return Redirect(request.GetRedirectUrl(config.SamlEndpoint.Trim(), relayState));
     }
 
     /// <summary>
@@ -818,101 +823,102 @@ public class SSOController : ControllerBase
             return throttled;
         }
 
+        // Unknown and disabled providers share one rejection so neither can be probed apart — this
+        // unifies the previously JSON unknown-provider body and the disabled provider's 500.
         var config = FindSamlConfig(provider);
-        if (config is null)
+        if (config is not { Enabled: true })
         {
-            return BadRequest(NoMatchingProviderMessage);
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.UnknownProvider));
         }
 
-        if (config.Enabled)
+        if (!SamlResponseLoader.TryParse(config.SamlCertificate, response?.Data, out var samlResponse)
+            || !IsSamlResponseValid(samlResponse, config, provider))
         {
-            if (!SamlResponseLoader.TryParse(config.SamlCertificate, response?.Data, out var samlResponse)
-                || !IsSamlResponseValid(samlResponse, config, provider))
+            // Malformed input is rejected the same way an invalid response is — clean 4xx, not 500 (#199).
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
+        }
+
+        // Solicited-only correlation (#156, opt-in): consume the response's InResponseTo against
+        // an AuthnRequest this server issued. Enforced here (the session-minting endpoint), like
+        // the replay check, so the id is claimed once. An unsolicited (IdP-initiated) response
+        // carries no InResponseTo and is refused; a matching id is one-time-use. The rejection is a
+        // client-caused 400 in the uniform SAML body — never a 500, and the old body that disclosed
+        // the InResponseTo correlation to the submitter is gone (the warning log keeps the diagnosis).
+        if (config.ValidateInResponseTo)
+        {
+            var inResponseTo = samlResponse.GetInResponseTo();
+            var requestKey = ProviderScopedKey.For(provider, inResponseTo);
+            if (!SamlRequests.TryConsume(requestKey, DateTime.UtcNow))
             {
-                // Malformed input is rejected the same way an invalid response is — clean 4xx, not 500 (#199).
+                _logger.LogWarning("SAML login denied: the response was not solicited by this server (unknown, expired, or already-used InResponseTo).");
                 return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
             }
-
-            // Solicited-only correlation (#156, opt-in): consume the response's InResponseTo against
-            // an AuthnRequest this server issued. Enforced here (the session-minting endpoint), like
-            // the replay check, so the id is claimed once. An unsolicited (IdP-initiated) response
-            // carries no InResponseTo and is refused; a matching id is one-time-use.
-            if (config.ValidateInResponseTo)
-            {
-                var inResponseTo = samlResponse.GetInResponseTo();
-                var requestKey = ProviderScopedKey.For(provider, inResponseTo);
-                if (!SamlRequests.TryConsume(requestKey, DateTime.UtcNow))
-                {
-                    _logger.LogWarning("SAML login denied: the response was not solicited by this server (unknown, expired, or already-used InResponseTo).");
-                    return Problem("SAML response was not solicited by this server");
-                }
-            }
-
-            // Enforce the login allow-list here too, not only at the assertion-consumer page: a caller
-            // can POST an assertion straight to this session-minting endpoint and skip the page, so
-            // checking it only there would be fail-open.
-            if (!SamlLoginPolicy.IsLoginAllowed(samlResponse.GetCustomAttributes("Role"), config.Roles))
-            {
-                _logger.LogWarning(
-                    "SAML user: {UserId} has insufficient roles at the session-minting endpoint; login denied.",
-                    samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty));
-                return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
-            }
-
-            // Enforce one-time use so a captured assertion cannot be replayed to mint another session.
-            // Enforced only here (the session-minting endpoint), not at the SAML/post ACS which merely
-            // renders the intermediate page, so the two-step post-then-auth flow consumes the id once.
-            if (!TryConsumeSamlReplay(samlResponse, provider))
-            {
-                return Problem("SAML assertion has already been used");
-            }
-
-            // Derive the authorize-state privileges (admin, Live TV, Live TV management, folders) from
-            // the assertion's roles and the provider configuration. Login validity was already decided
-            // above by SamlLoginPolicy and the username is the assertion's NameID, so neither is derived
-            // here.
-            var derived = SamlAuthorizeStateBuilder.Build(samlResponse.GetCustomAttributes("Role"), config);
-
-            // Fail closed (#95): an assertion without a usable NameID carries no identity to log in —
-            // reject it as an invalid login instead of failing downstream on a null canonical name.
-            // Whitespace-only counts as unresolved (Jellyfin's username validation rejects it anyway).
-            var nameId = samlResponse.GetNameID();
-            if (string.IsNullOrWhiteSpace(nameId))
-            {
-                _logger.LogWarning("SAML login denied: the assertion resolved no NameID.");
-                return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
-            }
-
-            Guid userId;
-            try
-            {
-                // SAML keys the link directly on the NameID, which is already the stable subject
-                // identifier — key and account name are the same value (no migration path needed).
-                userId = await CreateCanonicalLinkAndUserIfNotExist("saml", provider, nameId, nameId, config.AllowExistingAccountLink).ConfigureAwait(false);
-            }
-            catch (AccountLinkForbiddenException)
-            {
-                return StatusCode(StatusCodes.Status403Forbidden, "SSO login is not permitted for this account.");
-            }
-
-            var authenticationResult = await Authenticate(new SessionParameters
-            {
-                UserId = userId,
-                IsAdmin = derived.Admin,
-                EnableAuthorization = config.EnableAuthorization,
-                EnableAllFolders = config.EnableAllFolders,
-                EnabledFolders = derived.Folders.ToArray(),
-                EnableLiveTv = derived.EnableLiveTv,
-                EnableLiveTvManagement = derived.EnableLiveTvManagement,
-                AuthResponse = response,
-                DefaultProvider = config.DefaultProvider?.Trim(),
-                AvatarUrl = null,
-            }).ConfigureAwait(false);
-            SsoAudit.LoginSucceeded(_logger, SamlProtocol, provider, nameId, derived.Admin);
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Success(authenticationResult));
         }
 
-        return Problem("Something went wrong");
+        // Enforce the login allow-list here too, not only at the assertion-consumer page: a caller
+        // can POST an assertion straight to this session-minting endpoint and skip the page, so
+        // checking it only there would be fail-open.
+        if (!SamlLoginPolicy.IsLoginAllowed(samlResponse.GetCustomAttributes("Role"), config.Roles))
+        {
+            _logger.LogWarning(
+                "SAML user: {UserId} has insufficient roles at the session-minting endpoint; login denied.",
+                samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty));
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
+        }
+
+        // Enforce one-time use so a captured assertion cannot be replayed to mint another session.
+        // Enforced only here (the session-minting endpoint), not at the SAML/post ACS which merely
+        // renders the intermediate page, so the two-step post-then-auth flow consumes the id once. A
+        // replay is a client-caused 400 in the uniform SAML body — it no longer discloses the replay
+        // cache to the attacker who replayed, and the log-side diagnosis is unchanged.
+        if (!TryConsumeSamlReplay(samlResponse, provider))
+        {
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
+        }
+
+        // Derive the authorize-state privileges (admin, Live TV, Live TV management, folders) from
+        // the assertion's roles and the provider configuration. Login validity was already decided
+        // above by SamlLoginPolicy and the username is the assertion's NameID, so neither is derived
+        // here.
+        var derived = SamlAuthorizeStateBuilder.Build(samlResponse.GetCustomAttributes("Role"), config);
+
+        // Fail closed (#95): an assertion without a usable NameID carries no identity to log in —
+        // reject it as an invalid login instead of failing downstream on a null canonical name.
+        // Whitespace-only counts as unresolved (Jellyfin's username validation rejects it anyway).
+        var nameId = samlResponse.GetNameID();
+        if (string.IsNullOrWhiteSpace(nameId))
+        {
+            _logger.LogWarning("SAML login denied: the assertion resolved no NameID.");
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
+        }
+
+        Guid userId;
+        try
+        {
+            // SAML keys the link directly on the NameID, which is already the stable subject
+            // identifier — key and account name are the same value (no migration path needed).
+            userId = await CreateCanonicalLinkAndUserIfNotExist("saml", provider, nameId, nameId, config.AllowExistingAccountLink).ConfigureAwait(false);
+        }
+        catch (AccountLinkForbiddenException)
+        {
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.AccountLinkForbidden));
+        }
+
+        var authenticationResult = await Authenticate(new SessionParameters
+        {
+            UserId = userId,
+            IsAdmin = derived.Admin,
+            EnableAuthorization = config.EnableAuthorization,
+            EnableAllFolders = config.EnableAllFolders,
+            EnabledFolders = derived.Folders.ToArray(),
+            EnableLiveTv = derived.EnableLiveTv,
+            EnableLiveTvManagement = derived.EnableLiveTvManagement,
+            AuthResponse = response,
+            DefaultProvider = config.DefaultProvider?.Trim(),
+            AvatarUrl = null,
+        }).ConfigureAwait(false);
+        SsoAudit.LoginSucceeded(_logger, SamlProtocol, provider, nameId, derived.Admin);
+        return LoginStatusMapper.ToActionResult(new LoginOutcome.Success(authenticationResult));
     }
 
     /// <summary>
@@ -1325,10 +1331,12 @@ public class SSOController : ControllerBase
 
         // Enforce one-time use here too (#219): without it, a captured, still-valid assertion could be
         // replayed to bind its NameID to the caller's account. The linking flow issues no AuthnRequest,
-        // so InResponseTo is not correlated here — the replay cache is the applicable one-time-use control.
+        // so InResponseTo is not correlated here — the replay cache is the applicable one-time-use
+        // control. A replay is a client-caused 400 in the uniform SAML body, never a 500, and no longer
+        // discloses the replay cache to the attacker who replayed.
         if (!TryConsumeSamlReplay(samlResponse, provider))
         {
-            return Problem("SAML assertion has already been used");
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
 
         string providerUserId = samlResponse.GetNameID();
@@ -1365,15 +1373,17 @@ public class SSOController : ControllerBase
         }
 
         // One-time atomic claim (see OidcStateStore.TryRedeem): consume the state so one verified
-        // identity cannot be linked repeatedly and cannot then be reused to mint a session.
-        if (StateStore.TryRedeem(response.Data, provider, DateTime.Now) is { } redeemed)
+        // identity cannot be linked repeatedly and cannot then be reused to mint a session. A miss
+        // (unknown, expired, provider-mismatched, or already-redeemed) is a client-caused 400 in the
+        // same uniform body as the login path, not a 500.
+        if (StateStore.TryRedeem(response.Data, provider, DateTime.Now) is not { } redeemed)
         {
-            // Manual linking keys on the stable subject (#155), matching the auto-login path, so a
-            // later provider-side rename does not orphan the link the user just created.
-            return CreateCanonicalLink("oid", provider, jellyfinUserId, redeemed.Subject);
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.InvalidState));
         }
 
-        return Problem("Something went wrong!");
+        // Manual linking keys on the stable subject (#155), matching the auto-login path, so a
+        // later provider-side rename does not orphan the link the user just created.
+        return CreateCanonicalLink("oid", provider, jellyfinUserId, redeemed.Subject);
     }
 
     private ActionResult CreateCanonicalLink(string mode, string provider, Guid jellyfinUserId, string providerUserId)
