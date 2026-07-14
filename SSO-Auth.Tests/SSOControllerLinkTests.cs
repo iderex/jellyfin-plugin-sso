@@ -221,7 +221,8 @@ public class SSOControllerLinkTests
 
         var rejected = await harness.Controller.AddCanonicalLink("saml", "adfs", Target, new AuthResponse { Data = fixture.EncodeResponse() });
 
-        Assert.IsType<BadRequestObjectResult>(rejected);
+        // Same body as the unknown-provider rejection, so the two cases cannot be probed apart.
+        Assert.Equal("No matching provider found", Assert.IsType<BadRequestObjectResult>(rejected).Value);
         Assert.False(SSOPlugin.Instance.ReadConfiguration(c => c.SamlConfigs["adfs"].CanonicalLinks.ContainsKey("alice")));
 
         // The assertion survived the rejection: re-enabling the provider lets the same response link.
