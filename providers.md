@@ -79,12 +79,14 @@ expiry). A few provider settings must therefore match, or login is refused (fail
   plugin versions (up to and including 4.0.0.4) are keyed on the username. A username is something the
   identity provider can reassign, so following such a link is name-based account matching, governed by
   the same `AllowExistingAccountLink` opt-in as adopting a same-named account. Because 4.0.0.4 keyed
-  **every** OpenID link on the username and predates the flag (it deserializes to `false`), the first
-  build with this change **refuses every OpenID login on a straight upgrade** — with the flag off the
-  legacy link is not followed, so a login whose name still matches its account is refused (HTTP 403)
-  and a login whose name is free gets a fresh, empty account. This is deliberate: with only a `sub` and
-  a mutable `preferred_username` to go on, the plugin cannot tell a returning user from an attacker who
-  set their `preferred_username` to a victim's name, so it fails closed. Plan the migration:
+  **every** OpenID link on the username and predates the flag (it deserializes to `false`), a straight
+  upgrade **breaks OpenID sign-in for your whole userbase** until you migrate — though not identically
+  for everyone: with the flag off the legacy link is not followed, so a user whose name still matches
+  their account is **refused** (HTTP 403), while a user whose name was freed by a rename silently lands
+  on a **fresh, empty account** instead of their own (a successful login, not a 403). Either way no
+  OpenID user reaches their existing account. This is deliberate: with only a `sub` and a mutable
+  `preferred_username` to go on, the plugin cannot tell a returning user from an attacker who set their
+  `preferred_username` to a victim's name, so it fails closed. Plan the migration:
 
   1. **Keep a break-glass admin that does _not_ depend on SSO.** SSO-provisioned accounts get a random
      password, so if your only admins sign in through OpenID they will be locked out by the 403 above
@@ -100,11 +102,20 @@ expiry). A few provider settings must therefore match, or login is refused (fail
      name claims that account **irreversibly** (an attacker who knows a victim's old username can take it,
      and the victim is then orphaned). Keep the window short and controlled, migrate your users in it,
      and turn the flag back off immediately.
-  4. **Users renamed on the Jellyfin side are a special case.** If an account was renamed after its
-     legacy link was created, it is not recoverable by the flag at all: the login lands on a fresh empty
-     account, and once that `sub`-keyed link exists the old entry is never consulted again. Recover such
-     a user by hand — as admin, delete the new empty account's link (`DeleteCanonicalLink`) and
-     `AddCanonicalLink` the original account to the user's current `sub`.
+  4. **Renamed accounts — know which case you have.** A legacy link is keyed on the username _as it
+     was when the link was created_, and enabling the flag matches on that recorded key, not on the
+     account's current display name. Which case you are in decides recovery:
+     - If the account was renamed **on the Jellyfin side** but the identity provider still sends the
+       **original** name, enabling `AllowExistingAccountLink` (step 3) _does_ migrate it — but only
+       through the very same first-login-wins takeover window step 3 describes (an attacker who knows
+       the original name can claim the account first). Treat it exactly like step 3: prefer per-account
+       admin linking, and keep any flag window short and controlled.
+     - It is genuinely **not** recoverable by the flag when the identity provider now sends a
+       **different** name than the legacy key (an IdP-side rename, so the recorded key is never
+       matched), or when the user has **already logged in** without the flag and now sits on a fresh
+       `sub`-keyed account (that link wins and the old entry is never consulted again). For those,
+       recover by hand — as admin, delete the fresh account's link (`DeleteCanonicalLink`) and
+       `AddCanonicalLink` the original account to the user's current `sub`.
 
   A server log line (`WARNING`) is emitted for every login that encounters a pending legacy link while
   the flag is off, naming the account — whether the login is **refused** (a live account still bears
