@@ -1,33 +1,27 @@
 # Code owners for jellyfin-plugin-sso
 #
-# Requests both maintainers' review on changes, with extra emphasis on the
-# security-critical paths (the SSO login path, crypto, config persistence, and
-# the release pipeline).
+# Auto-requests the maintainer team's review on every change, with extra
+# emphasis on the security-critical paths (the SSO login path, crypto, config
+# persistence, and the release pipeline). Because the PR author is never
+# requested on their own PR, an author-excluded subset of the team is asked to
+# review each change.
 #
-# Governance (two maintainers, equal Admin rights): every change to a protected
-# branch needs the OTHER maintainer's approval. GitHub forbids self-approval, so
-# with two code owners the "Require review from Code Owners" + one required
-# approval rule means a PR authored by one maintainer must be approved by the
-# other — genuine four-eyes, and neither can merge past the other. This holds
-# only while the ruleset's bypass list stays empty (the Admin role by itself
-# does not grant a bypass). A listed owner is enforced only once that account
-# has write access to the repository.
-#
-# Requiring TWO approvals is deliberately NOT used: with exactly two maintainers
-# it would deadlock every maintainer-authored PR (the author cannot approve, so
-# a second approval is unreachable). One required code-owner approval is correct.
+# Note: development and review here are AI-driven (see the README's note on AI);
+# the reviews on these accounts are AI-assisted, not independent human auditing.
+# The listed reviewers are the maintainer team's accounts; a maintainer oversees
+# and can intervene. Ownership is enforced only for accounts with write access.
 
 # Default owners for everything in the repo.
-*                        @iderex @TheRealStroopwafel
+*                        @iderex @TheRealStroopwafel @rekamer @shippingToken
 
 # SSO login path and crypto: SAML core, controller/API helpers, admin config.
-/SSO-Auth/Saml.cs        @iderex @TheRealStroopwafel
-/SSO-Auth/Api/           @iderex @TheRealStroopwafel
-/SSO-Auth/Config/        @iderex @TheRealStroopwafel
+/SSO-Auth/Saml.cs        @iderex @TheRealStroopwafel @rekamer @shippingToken
+/SSO-Auth/Api/           @iderex @TheRealStroopwafel @rekamer @shippingToken
+/SSO-Auth/Config/        @iderex @TheRealStroopwafel @rekamer @shippingToken
 
 # Release pipeline and CI.
-/.github/workflows/      @iderex @TheRealStroopwafel
-/build.yaml              @iderex @TheRealStroopwafel
+/.github/workflows/      @iderex @TheRealStroopwafel @rekamer @shippingToken
+/build.yaml              @iderex @TheRealStroopwafel @rekamer @shippingToken
 
 # Security policy.
-/SECURITY.md             @iderex @TheRealStroopwafel
+/SECURITY.md             @iderex @TheRealStroopwafel @rekamer @shippingToken
