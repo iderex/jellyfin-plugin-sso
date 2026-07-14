@@ -76,8 +76,8 @@ public class SSOControllerChallengeTests
             clientIp: IPAddress.Parse("8.8.4.4"));
 
         // The first call passes the limiter and spends the single-attempt budget; the unknown provider
-        // then throws, but that is after the budget is spent.
-        Assert.Throws<ArgumentException>(() => harness.Controller.SamlChallenge("does-not-exist"));
+        // then rejects with the uniform 400, but that is after the budget is spent.
+        Assert.Equal(400, Assert.IsType<ContentResult>(harness.Controller.SamlChallenge("does-not-exist")).StatusCode);
 
         // The second is over budget and is throttled with a 429 before the provider is even looked up.
         var throttled = harness.Controller.SamlChallenge("does-not-exist");

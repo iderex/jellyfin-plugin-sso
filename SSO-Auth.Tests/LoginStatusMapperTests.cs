@@ -21,6 +21,9 @@ public class LoginStatusMapperTests
         // may not be less accessible than the test method.
         var expected = new (PublicReason Reason, int Status, string Body)[]
         {
+            (PublicReason.UnknownProvider, 400, "No matching provider found"),
+            (PublicReason.InvalidState, 400, "Invalid or expired state"),
+            (PublicReason.AccountLinkForbidden, 403, "SSO login is not permitted for this account."),
             (PublicReason.SsoResponseInvalid, 400, "SSO response validation failed"),
             (PublicReason.SamlResponseInvalid, 400, "SAML response validation failed"),
             (PublicReason.PkceNotSupported, 400, "The identity provider does not advertise the required PKCE (S256) support."),

@@ -23,11 +23,15 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 public class SSOControllerOidChallengeTests
 {
     [Fact]
-    public async Task OidChallenge_DisabledProvider_Throws()
+    public async Task OidChallenge_DisabledProvider_RejectsAsUnknownProvider()
     {
         var harness = new SsoControllerHarness(c => c.OidConfigs["kc"] = new OidConfig { Enabled = false });
 
-        await Assert.ThrowsAsync<ArgumentException>(() => harness.Controller.OidChallenge("kc"));
+        // A disabled provider shares the unknown provider's uniform in-process 400, so the two cannot
+        // be told apart (no enumeration oracle) — fail-closed either way (#318).
+        var content = Assert.IsType<ContentResult>(await harness.Controller.OidChallenge("kc"));
+        Assert.Equal(400, content.StatusCode);
+        Assert.Equal("No matching provider found", content.Content);
     }
 
     [Fact]

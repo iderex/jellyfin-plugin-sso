@@ -60,6 +60,30 @@ rules:
       include:
         - "SSO-Auth/**/*.cs"
 
+  # Invariant (architecture, #318 login-outcome step): the controller never returns
+  # Problem()/ProblemDetails. A client-caused rejection is a LoginOutcome.Rejected/Denied
+  # mapped to a 4xx by LoginStatusMapper; Problem() produced a 500 for client-caused
+  # conditions (bad state, replay, disabled provider), which both leaks that a rejection
+  # is a "server error" to monitoring and, on the disabled-provider path, distinguished a
+  # disabled provider from an unknown one. Anything genuinely unexpected throws and becomes
+  # a real 500 — never a manually-authored one.
+  - id: no-controller-problem-result
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      Do not return Problem()/ProblemDetails from the SSO controllers. A
+      client-caused rejection is a LoginOutcome mapped to a 4xx by
+      LoginStatusMapper; only genuinely unexpected faults become a 500, by
+      throwing (#318).
+    patterns:
+      - pattern-either:
+          - pattern: Problem(...)
+          - pattern: new ProblemDetails
+          - pattern: ProblemDetails(...)
+    paths:
+      include:
+        - "SSO-Auth/**/*Controller.cs"
+
   # Invariant (architecture, #318 step 2b): once-per-interval throttling goes
   # through IntervalGate, whose guard/CAS semantics were adversarially reviewed
   # once and are pinned by tests (#331). Every hand-rolled predecessor seeded its
