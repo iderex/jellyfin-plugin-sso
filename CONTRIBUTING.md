@@ -157,7 +157,7 @@ npx prettier --check "**/*.{js,html,md,css,scss}"   # for any .js/.html/.md/.css
 
 **Branching and pull requests.** `main` is the released line and is PR-only. Branch every change — even a one-liner — off `main` for fixes and security work, or off the feature branch for features, using a short kebab-case name with a `fix/`, `harden/`, `feature/`, `chore/`, or `refactor/` prefix. Reference the issue your change addresses (`Closes #N`) and fill in the [pull request template](.github/pull_request_template.md).
 
-Before opening a pull request, please read the **[note on AI and on contributions](https://github.com/iderex/jellyfin-plugin-sso/blob/main/README.md#-a-note-on-ai-and-on-contributions)** in the README. This is a security-sensitive login path: every change is issue-driven, adversarially reviewed on the login path, and documented before it merges, and you are expected to understand and own every line you propose — a pull request that is unreviewed AI output will be turned away.
+Before opening a pull request, please read the **[note on AI](https://github.com/iderex/jellyfin-plugin-sso/blob/main/README.md#-a-note-on-ai--this-project-is-ai-driven)** in the README — development and review here are AI-driven. This is a security-sensitive login path: understand and own every line you propose, and be ready to explain what it does and why.
 
 ### Improving The Documentation
 
