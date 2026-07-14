@@ -104,3 +104,23 @@ rules:
         - "SSO-Auth/**/*.cs"
       exclude:
         - "SSO-Auth/Api/IntervalGate.cs"
+
+  # Invariant (architecture, #318 config boundary): every configuration access
+  # goes through ProviderConfigStore behind SSOPlugin's facade (ReadConfiguration
+  # / MutateConfiguration / UpdateConfiguration). Reaching into
+  # `SSOPlugin.Instance.Configuration` bypasses the config lock and the validated
+  # save pipeline — the exact door the store extraction closed. The plugin itself
+  # reads the property unqualified, so the clean tree has zero findings.
+  - id: no-config-store-bypass
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      Do not reach into SSOPlugin.Instance.Configuration. Read and write the
+      configuration through SSOPlugin.Instance.ReadConfiguration /
+      MutateConfiguration (the ProviderConfigStore facade), so every access
+      takes the config lock and every save runs the validated pipeline (#318).
+    patterns:
+      - pattern: SSOPlugin.Instance.Configuration
+    paths:
+      include:
+        - "SSO-Auth/**/*.cs"

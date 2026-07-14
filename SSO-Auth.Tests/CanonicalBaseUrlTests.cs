@@ -66,7 +66,7 @@ public class CanonicalBaseUrlTests
     }
 
     // The OID/SAML Add endpoints persist through MutateConfiguration (the live config object), which
-    // bypasses SSOPlugin.UpdateConfiguration's save-time validation, so they gate the incoming override
+    // bypasses ProviderConfigStore.Save's save-time validation, so they gate the incoming override
     // themselves via SSOController.RejectInvalidBaseUrlOverride. Pin that decision so the Add paths cannot
     // regress into persisting a malformed override that then silently falls back to the request Host.
 
