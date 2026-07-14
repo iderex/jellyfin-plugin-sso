@@ -91,21 +91,16 @@ internal sealed class CanonicalLinkService
                 mode,
                 provider?.ReplaceLineEndings(string.Empty));
         }
-        else if (legacyLink.HasValue)
-        {
-            // The legacy candidate only survives to here un-migrated when the flag is off (#354).
-            // After an upgrade from a username-keyed version this breadcrumb separates "migration
-            // pending — enable AllowExistingAccountLink" from an ordinary name-taken refusal. It is
-            // one line per refused attempt (not deduplicated: a working cross-request throttle would
-            // need process-wide state on this per-request service, which would leak across tests), so
-            // during the upgrade window it is a stream, not a single alert — enough to identify who
-            // still needs migrating, but scan it expecting volume.
-            _logger.LogWarning(
-                "SSO login for {Name} via {Mode}/{Provider}: a legacy username-keyed link exists but AllowExistingAccountLink is disabled for this provider; the link is not followed or migrated. Enable AllowExistingAccountLink (or link the account via the admin endpoints) to migrate it.",
-                username.ReplaceLineEndings(string.Empty),
-                mode,
-                provider?.ReplaceLineEndings(string.Empty));
-        }
+
+        // A legacy link that survives here un-migrated (flag off, #354) is not logged at this point:
+        // its terminal outcome decides the right message. It splits into a refusal (the name is still
+        // taken) or a fresh-account creation (the name was freed by a rename), and only the outcome
+        // branch below can label it accurately — the fresh-account case is a SUCCESSFUL login that
+        // silently orphans the original account, not a "refused" one, so a single pre-gate line would
+        // mislabel exactly the event an operator most needs to see. Each terminal branch emits one
+        // line (not deduplicated: a cross-request throttle would need process-wide state on this
+        // per-request service, which would leak across tests), so during an upgrade window it is a
+        // stream — enough to identify who still needs migrating, scanned expecting volume.
 
         // Adoption of a pre-existing unlinked account still matches on the display name.
         Guid? existingAccountUserId = _userManager.GetUserByName(username)?.Id;
@@ -131,6 +126,23 @@ internal sealed class CanonicalLinkService
 
             case AccountLinkAction.CreateNewAccount:
             {
+                if (legacyLink.HasValue)
+                {
+                    // The dangerous, previously-silent case (#354): a legacy username-keyed link exists,
+                    // the flag is off so it was not followed, AND no live account bears the name anymore
+                    // (the account was renamed on the Jellyfin side). We are about to provision a FRESH
+                    // account under this subject, leaving the original — the one the legacy key points at
+                    // — permanently orphaned. This warning is the single observable signal of that
+                    // irreversible outcome; recover by linking the original account to this subject via
+                    // the admin endpoints, or enable AllowExistingAccountLink before the next login. See
+                    // the upgrade runbook in providers.md.
+                    _logger.LogWarning(
+                        "SSO login for {Name} via {Mode}/{Provider}: a legacy username-keyed link exists but AllowExistingAccountLink is off and no live account bears the name, so a fresh account is being provisioned and the original account is now orphaned. Re-link it to this subject via the admin endpoints (or enable AllowExistingAccountLink before the next login).",
+                        username.ReplaceLineEndings(string.Empty),
+                        mode,
+                        provider?.ReplaceLineEndings(string.Empty));
+                }
+
                 _logger.LogInformation("SSO user {Name} doesn't exist, creating...", username.ReplaceLineEndings(string.Empty));
                 var user = await _userManager.CreateUserAsync(username).ConfigureAwait(false);
                 user.AuthenticationProviderId = typeof(SSOController).FullName;
@@ -145,11 +157,26 @@ internal sealed class CanonicalLinkService
             }
 
             case AccountLinkAction.RejectNameTaken:
-                _logger.LogWarning(
-                    "SSO login for {Name} via {Mode}/{Provider} refused: a pre-existing unlinked Jellyfin account exists and AllowExistingAccountLink is disabled for this provider.",
-                    username.ReplaceLineEndings(string.Empty),
-                    mode,
-                    provider?.ReplaceLineEndings(string.Empty));
+                if (legacyLink.HasValue)
+                {
+                    // Refused, but specifically because a legacy username-keyed link (#354) is pending
+                    // and a live account still bears the name — the migratable case, distinct from an
+                    // ordinary #95 name collision. One line, so the reject path is not double-logged.
+                    _logger.LogWarning(
+                        "SSO login for {Name} via {Mode}/{Provider} refused: a legacy username-keyed link is pending but AllowExistingAccountLink is off and a live account still bears the name. Enable AllowExistingAccountLink (a short controlled window) or link the account via the admin endpoints to migrate it.",
+                        username.ReplaceLineEndings(string.Empty),
+                        mode,
+                        provider?.ReplaceLineEndings(string.Empty));
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "SSO login for {Name} via {Mode}/{Provider} refused: a pre-existing unlinked Jellyfin account exists and AllowExistingAccountLink is disabled for this provider.",
+                        username.ReplaceLineEndings(string.Empty),
+                        mode,
+                        provider?.ReplaceLineEndings(string.Empty));
+                }
+
                 throw new AccountLinkForbiddenException();
 
             default:

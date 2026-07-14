@@ -156,12 +156,13 @@ public class CanonicalLinkServiceTests
         Assert.Equal(Existing, links["alice"]); // the legacy entry is untouched
         Assert.False(links.ContainsKey("attacker-sub"));
 
-        // The operator breadcrumb: after an upgrade from a username-keyed version, this warning is
-        // what separates "migration pending — enable AllowExistingAccountLink" from an ordinary
-        // name-taken refusal in a wall of 403s.
-        Assert.Contains(log.Entries, e =>
-            e.Level == Microsoft.Extensions.Logging.LogLevel.Warning
-            && e.Message.Contains("legacy username-keyed link exists", StringComparison.Ordinal));
+        // The operator breadcrumb, emitted at the terminal refusal (not pre-gate): it marks this 403
+        // as a migratable pending-legacy-link case, distinct from an ordinary name collision. Exactly
+        // one warning fires for the reject path (no pre-gate double-log).
+        var warnings = log.Entries.FindAll(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning);
+        Assert.Single(warnings);
+        Assert.Contains("legacy username-keyed link", warnings[0].Message, StringComparison.Ordinal);
+        Assert.Contains("refused", warnings[0].Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -170,7 +171,7 @@ public class CanonicalLinkServiceTests
         // With adoption off and no live account under the login's name (e.g. the linked user was
         // renamed), the ignored legacy entry must not resolve either: the login provisions a fresh
         // account and the foreign entry survives for its real owner to migrate later (#354).
-        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        var (service, cfg, users, log) = Build(c => c.OidConfigs["kc"] = new OidConfig
         {
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
         });
@@ -187,6 +188,14 @@ public class CanonicalLinkServiceTests
         var links = cfg.OidConfigs["kc"].CanonicalLinks;
         Assert.Equal(Existing, links["alice"]); // the legacy entry is untouched
         Assert.Equal(Other, links["attacker-sub"]); // the fresh account is linked under the login's own sub
+
+        // CR#1 on #358: this is a SUCCESSFUL login that silently orphans the original account, so it
+        // must emit its own accurate warning (not mislabeled "refused"). Exactly one warning, naming
+        // the orphaning.
+        var warnings = log.Entries.FindAll(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning);
+        Assert.Single(warnings);
+        Assert.Contains("orphaned", warnings[0].Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("refused", warnings[0].Message, StringComparison.Ordinal);
     }
 
     [Fact]

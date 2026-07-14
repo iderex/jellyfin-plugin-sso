@@ -106,8 +106,11 @@ expiry). A few provider settings must therefore match, or login is refused (fail
      a user by hand — as admin, delete the new empty account's link (`DeleteCanonicalLink`) and
      `AddCanonicalLink` the original account to the user's current `sub`.
 
-  A server log line (`WARNING`) names each pending legacy link on every refused login, so you can see
-  who still needs migrating. Note that the self-service linking page now lists OpenID links by their
+  A server log line (`WARNING`) is emitted for every login that encounters a pending legacy link while
+  the flag is off, naming the account — whether the login is **refused** (a live account still bears
+  the name) or lands on a **fresh account** (the name was freed by a rename, so the original is
+  orphaned; the warning is worded to flag that case explicitly, since no 403 accompanies it). Watch
+  for both so you can see who still needs migrating. Note that the self-service linking page now lists OpenID links by their
   `sub` value, which for many providers is an opaque identifier rather than a readable name. If you run
   the anonymous SSO endpoints with rate limiting available, enable it during the window to blunt an
   attacker probing names while the flag is on. This runbook is mirrored on the
