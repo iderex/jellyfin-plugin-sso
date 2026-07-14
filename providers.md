@@ -310,9 +310,11 @@ Ensure that the following configuration options are set:
 - Sign Documents on
 - Sign Assertions off
 - Client Signature Required off
-- Redirect URI: [https://myjellyfin.example.com/sso/SAML/start/PROVIDER_NAME](https://myjellyfin.example.com/sso/SAML/start/PROVIDER_NAME)
+- Redirect URI: [https://myjellyfin.example.com/sso/SAML/post/PROVIDER_NAME](https://myjellyfin.example.com/sso/SAML/post/PROVIDER_NAME)
 - Base URL: [https://myjellyfin.example.com](https://myjellyfin.example.com)
-- Master SAML processing URL: [https://myjellyfin.example.com/sso/SAML/start/PROVIDER_NAME](https://myjellyfin.example.com/sso/SAML/start/PROVIDER_NAME)
+- Master SAML processing URL: [https://myjellyfin.example.com/sso/SAML/post/PROVIDER_NAME](https://myjellyfin.example.com/sso/SAML/post/PROVIDER_NAME)
+
+These two URLs are the assertion consumer service endpoint Keycloak POSTs the SAML response to. The plugin accepts both the `sso/SAML/post/PROVIDER_NAME` spelling and the legacy `sso/SAML/p/PROVIDER_NAME` spelling; use either, consistently. (The challenge route `sso/SAML/start/PROVIDER_NAME` is only the URL a login starts from — it cannot process assertions.)
 
 Press the "Save" button at the bottom of the page.
 
