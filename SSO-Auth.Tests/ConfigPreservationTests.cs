@@ -1,6 +1,5 @@
 using System;
 using System.Xml.Serialization;
-using Jellyfin.Plugin.SSO_Auth;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Xunit;
 
@@ -8,7 +7,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 
 /// <summary>
 /// Tests for the server-managed-field handling (#157): canonical links are preserved across a save
-/// built from a stale client snapshot (<see cref="SSOPlugin.PreserveServerManagedFields"/>), are
+/// built from a stale client snapshot (<see cref="ServerManagedFields.Preserve(PluginConfiguration, PluginConfiguration)"/>), are
 /// withheld from JSON responses ([JsonIgnore]), and still round-trip through the config XML.
 /// </summary>
 public class ConfigPreservationTests
@@ -28,7 +27,7 @@ public class ConfigPreservationTests
         incoming.OidConfigs["idp"] = new OidConfig();
         incoming.SamlConfigs["saml"] = new SamlConfig();
 
-        SSOPlugin.PreserveServerManagedFields(incoming, live);
+        ServerManagedFields.Preserve(incoming, live);
 
         Assert.Equal(User, incoming.OidConfigs["idp"].CanonicalLinks["sub-1"]);
         Assert.Equal(User, incoming.SamlConfigs["saml"].CanonicalLinks["nameid-1"]);
@@ -41,7 +40,7 @@ public class ConfigPreservationTests
         var incoming = new PluginConfiguration();
         incoming.OidConfigs["fresh"] = new OidConfig();
 
-        SSOPlugin.PreserveServerManagedFields(incoming, live);
+        ServerManagedFields.Preserve(incoming, live);
 
         Assert.Empty(incoming.OidConfigs["fresh"].CanonicalLinks);
     }
@@ -54,7 +53,7 @@ public class ConfigPreservationTests
         live.OidConfigs["gone"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub"] = User } };
         var incoming = new PluginConfiguration();
 
-        SSOPlugin.PreserveServerManagedFields(incoming, live);
+        ServerManagedFields.Preserve(incoming, live);
 
         Assert.False(incoming.OidConfigs.ContainsKey("gone"));
     }
@@ -66,7 +65,7 @@ public class ConfigPreservationTests
         var live = new PluginConfiguration { OidConfigs = null, SamlConfigs = null };
 
         // Fail-safe: a malformed config with missing maps must not NRE the save path.
-        var exception = Record.Exception(() => SSOPlugin.PreserveServerManagedFields(incoming, live));
+        var exception = Record.Exception(() => ServerManagedFields.Preserve(incoming, live));
 
         Assert.Null(exception);
     }
@@ -138,7 +137,7 @@ public class ConfigPreservationTests
     public void Rotation_ThroughJsonThenPreserve_KeepsTheNewSecret()
     {
         // The realistic rotation path: a config PUT carrying a new secret is deserialized, then
-        // PreserveServerManagedFields runs against the live config — the new secret must win.
+        // ServerManagedFields.Preserve runs against the live config — the new secret must win.
         var live = new PluginConfiguration();
         live.OidConfigs["idp"] = new OidConfig { OidSecret = "old-secret" };
 
@@ -146,7 +145,7 @@ public class ConfigPreservationTests
         incoming.OidConfigs["idp"] = System.Text.Json.JsonSerializer.Deserialize<OidConfig>(
             "{\"OidSecret\":\"rotated-secret\"}")!;
 
-        SSOPlugin.PreserveServerManagedFields(incoming, live);
+        ServerManagedFields.Preserve(incoming, live);
 
         Assert.Equal("rotated-secret", incoming.OidConfigs["idp"].OidSecret);
     }
@@ -165,7 +164,7 @@ public class ConfigPreservationTests
         var incoming = new PluginConfiguration();
         incoming.OidConfigs["idp"] = new OidConfig { OidSecret = incomingSecret };
 
-        SSOPlugin.PreserveServerManagedFields(incoming, live);
+        ServerManagedFields.Preserve(incoming, live);
 
         Assert.Equal("live-secret", incoming.OidConfigs["idp"].OidSecret);
     }
@@ -179,7 +178,7 @@ public class ConfigPreservationTests
         var incoming = new PluginConfiguration();
         incoming.OidConfigs["fresh"] = new OidConfig { OidSecret = null };
 
-        SSOPlugin.PreserveServerManagedFields(incoming, live);
+        ServerManagedFields.Preserve(incoming, live);
 
         Assert.True(string.IsNullOrEmpty(incoming.OidConfigs["fresh"].OidSecret));
     }
@@ -190,7 +189,7 @@ public class ConfigPreservationTests
         var live = new OidConfig { OidEndpoint = "https://idp/.well-known", OidClientId = "cid", OidSecret = "live" };
         var incoming = new OidConfig { OidEndpoint = "https://idp/.well-known", OidClientId = "cid", OidSecret = "  " };
 
-        Assert.Equal("live", SSOPlugin.ResolveUpdatedSecret(incoming, live));
+        Assert.Equal("live", ServerManagedFields.ResolveUpdatedSecret(incoming, live));
     }
 
     [Fact]
@@ -199,7 +198,7 @@ public class ConfigPreservationTests
         var live = new OidConfig { OidEndpoint = "https://idp/.well-known", OidClientId = "cid", OidSecret = "live" };
         var incoming = new OidConfig { OidEndpoint = "https://idp/.well-known", OidClientId = "cid", OidSecret = "rotated" };
 
-        Assert.Equal("rotated", SSOPlugin.ResolveUpdatedSecret(incoming, live));
+        Assert.Equal("rotated", ServerManagedFields.ResolveUpdatedSecret(incoming, live));
     }
 
     [Theory]
@@ -213,7 +212,7 @@ public class ConfigPreservationTests
         var live = new OidConfig { OidEndpoint = "https://idp/.well-known", OidClientId = "cid", OidSecret = "live" };
         var incoming = new OidConfig { OidEndpoint = endpoint, OidClientId = clientId, OidSecret = null };
 
-        Assert.True(string.IsNullOrEmpty(SSOPlugin.ResolveUpdatedSecret(incoming, live)));
+        Assert.True(string.IsNullOrEmpty(ServerManagedFields.ResolveUpdatedSecret(incoming, live)));
     }
 
     // --- Base-URL override validation on save (#139) ---
@@ -227,7 +226,7 @@ public class ConfigPreservationTests
         incoming.SamlConfigs["saml"] = new SamlConfig { BaseUrlOverride = "https://sso.example.com/jellyfin" };
         incoming.SamlConfigs["saml-blank"] = new SamlConfig { BaseUrlOverride = "   " };
 
-        SSOPlugin.ValidateBaseUrlOverrides(incoming);
+        ProviderConfigValidator.Validate(incoming);
     }
 
     [Fact]
@@ -236,7 +235,7 @@ public class ConfigPreservationTests
         var incoming = new PluginConfiguration();
         incoming.OidConfigs["idp"] = new OidConfig { BaseUrlOverride = "not-a-url" };
 
-        var ex = Assert.Throws<ArgumentException>(() => SSOPlugin.ValidateBaseUrlOverrides(incoming));
+        var ex = Assert.Throws<ArgumentException>(() => ProviderConfigValidator.Validate(incoming));
         Assert.Contains("idp", ex.Message, StringComparison.Ordinal);
         Assert.Contains("OpenID", ex.Message, StringComparison.Ordinal);
     }
@@ -247,7 +246,7 @@ public class ConfigPreservationTests
         var incoming = new PluginConfiguration();
         incoming.SamlConfigs["saml"] = new SamlConfig { BaseUrlOverride = "ftp://example.com" };
 
-        var ex = Assert.Throws<ArgumentException>(() => SSOPlugin.ValidateBaseUrlOverrides(incoming));
+        var ex = Assert.Throws<ArgumentException>(() => ProviderConfigValidator.Validate(incoming));
         Assert.Contains("SAML", ex.Message, StringComparison.Ordinal);
     }
 
@@ -256,7 +255,7 @@ public class ConfigPreservationTests
     {
         var incoming = new PluginConfiguration { OidConfigs = null, SamlConfigs = null };
 
-        SSOPlugin.ValidateBaseUrlOverrides(incoming);
+        ProviderConfigValidator.Validate(incoming);
     }
 
     [Theory]
@@ -475,7 +474,7 @@ public class ConfigPreservationTests
         incoming.SamlConfigs["ok"] = new SamlConfig { SamlCertificate = SamlTestFactory.Create().CertificateBase64 };
         incoming.SamlConfigs["blank"] = new SamlConfig { SamlCertificate = null };
 
-        SSOPlugin.ValidateSamlCertificates(incoming);
+        ProviderConfigValidator.Validate(incoming);
     }
 
     [Fact]
@@ -484,13 +483,13 @@ public class ConfigPreservationTests
         var incoming = new PluginConfiguration();
         incoming.SamlConfigs["idp"] = new SamlConfig { SamlCertificate = "QUJD" }; // valid base64, not a cert
 
-        var ex = Assert.Throws<ArgumentException>(() => SSOPlugin.ValidateSamlCertificates(incoming));
+        var ex = Assert.Throws<ArgumentException>(() => ProviderConfigValidator.Validate(incoming));
         Assert.Contains("idp", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
     public void ValidateSamlCertificates_NullMap_DoesNotThrow()
     {
-        SSOPlugin.ValidateSamlCertificates(new PluginConfiguration { SamlConfigs = null });
+        ProviderConfigValidator.Validate(new PluginConfiguration { SamlConfigs = null });
     }
 }

@@ -182,7 +182,7 @@ public abstract class ProviderConfigBase
     // Server-managed (written by logins), not admin-edited: persisted in the config XML but withheld
     // from every JSON response (#157). This stops the account-link map leaking off the server, closes
     // the tear from serializing it while a login writes it, and blocks setting links via a config PUT.
-    // Its preservation on save is handled server-side in SSOPlugin.PreserveServerManagedFields.
+    // Its preservation on save is handled server-side in ServerManagedFields.Preserve.
     [XmlElement("CanonicalLinks")]
     [System.Text.Json.Serialization.JsonIgnore]
     public SerializableDictionary<string, Guid> CanonicalLinks
@@ -269,7 +269,7 @@ public class OidConfig : ProviderConfigBase
     // can be set and rotated), but serialized back out as null, so the plaintext client secret
     // never reaches the admin browser (HAR, proxy log, shared screen) on a config-page load and
     // cannot be read back via a config GET. It is still persisted to the config XML. On save, a
-    // blank incoming value re-injects the live secret (see SSOPlugin.PreserveServerManagedFields),
+    // blank incoming value re-injects the live secret (see ServerManagedFields.Preserve),
     // so leaving the field blank keeps the stored secret; a new value replaces it. A plain
     // [JsonIgnore] is wrong here — it is bidirectional and would also drop the value on save.
     [System.Text.Json.Serialization.JsonConverter(typeof(WriteOnlySecretConverter))]

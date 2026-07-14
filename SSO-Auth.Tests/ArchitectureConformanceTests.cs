@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using Jellyfin.Plugin.SSO_Auth;
+using Jellyfin.Plugin.SSO_Auth.Config;
+using MediaBrowser.Model.Plugins;
 using Microsoft.AspNetCore.Mvc;
 using Xunit;
 
@@ -122,6 +124,42 @@ public class ArchitectureConformanceTests
 
         Assert.True(offenders.Count == 0, "Raw dictionary state must live inside a *Store/*Cache/*Limiter type (or carry a documented exemption here): " + string.Join(", ", offenders));
     }
+
+    [Fact]
+    public void SSOPlugin_DeclaresNoConfigurationLogicBeyondTheStoreFacade()
+    {
+        // Locked in by the ProviderConfigStore extraction (#318): SSOPlugin is bootstrap + page
+        // manifests + a thin facade, and every configuration read/write/validation/preservation rule
+        // lives in Config/ (ProviderConfigStore, ProviderConfigValidator, ServerManagedFields). Any
+        // declared method or field whose signature mentions a configuration type must be one of the
+        // named facade members that delegate to the store. PersistBase is allow-listed by name: it is
+        // the private bridge handing base.UpdateConfiguration to the store, not config logic of its own.
+        // Compiler-generated members (the ctor's `() => Configuration` lambda, backing fields) are
+        // artifacts of the allowed wiring, not declared members — same exclusion as the keyed-state rule.
+        var facade = new[] { "ReadConfiguration", "MutateConfiguration", "UpdateConfiguration", "PersistBase" };
+        const BindingFlags declared = BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+
+        var offenders = typeof(SSOPlugin).GetMethods(declared)
+            .Where(m => !facade.Contains(m.Name) && !m.Name.Contains('<', StringComparison.Ordinal))
+            .Where(m => m.GetParameters().Select(p => p.ParameterType).Append(m.ReturnType).Any(MentionsConfiguration))
+            .Select(m => m.Name)
+            .Concat(typeof(SSOPlugin).GetFields(declared)
+                .Where(f => !f.Name.Contains('<', StringComparison.Ordinal))
+                .Where(f => MentionsConfiguration(f.FieldType))
+                .Select(f => f.Name))
+            .ToList();
+
+        Assert.True(offenders.Count == 0, "SSOPlugin members touching configuration types must stay limited to the delegating facade (config logic lives in Config/): " + string.Join(", ", offenders));
+    }
+
+    // A configuration type for the facade rule: the plugin configuration itself or any provider config
+    // (OidConfig/SamlConfig derive from ProviderConfigBase), including one buried in a generic
+    // (e.g. Func<PluginConfiguration, T>) or array signature.
+    private static bool MentionsConfiguration(Type t) =>
+        typeof(BasePluginConfiguration).IsAssignableFrom(t)
+        || typeof(ProviderConfigBase).IsAssignableFrom(t)
+        || (t.HasElementType && MentionsConfiguration(t.GetElementType()!))
+        || (t.IsGenericType && t.GetGenericArguments().Any(MentionsConfiguration));
 
     // Catches concrete dictionaries (they implement non-generic IDictionary) AND fields declared as the
     // generic IDictionary<,> interface, which does not inherit the non-generic one — otherwise an

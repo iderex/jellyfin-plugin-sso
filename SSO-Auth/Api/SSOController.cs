@@ -442,7 +442,7 @@ public class SSOController : ControllerBase
 
     // Rejects a malformed canonical base-URL override (#139) at the OID/SAML Add endpoints. These persist
     // through MutateConfiguration, which passes the live configuration object, so they bypass the
-    // config-page save-time validation in SSOPlugin.UpdateConfiguration (which only runs for a fresh
+    // config-page save-time validation in ProviderConfigStore.Save (which only runs for a fresh
     // incoming config). Without this, a malformed override set via the Add API would be persisted and then
     // silently fall back to the request Host at login. Throwing keeps it out of the store, so the
     // "rejected at every admin write path" invariant holds. Blank is valid (the feature is off).
@@ -456,7 +456,7 @@ public class SSOController : ControllerBase
 
     // Rejects a non-loadable SAML signing certificate at the SAML/Add endpoint (#206), which persists
     // through MutateConfiguration and so bypasses the config-page save-time validation in
-    // SSOPlugin.ValidateSamlCertificates. Without this, a garbage certificate set via the Add API would be
+    // ProviderConfigValidator.Validate. Without this, a garbage certificate set via the Add API would be
     // persisted and then throw a CryptographicException on every callback (an unhandled 500). Blank is
     // valid (a half-configured provider).
     internal static void RejectInvalidSamlCertificate(string certificateStr)
@@ -486,7 +486,7 @@ public class SSOController : ControllerBase
             if (config != null && configuration.OidConfigs.TryGetValue(provider, out var existing))
             {
                 config.CanonicalLinks = existing.CanonicalLinks;
-                config.OidSecret = SSOPlugin.ResolveUpdatedSecret(config, existing);
+                config.OidSecret = ServerManagedFields.ResolveUpdatedSecret(config, existing);
             }
 
             configuration.OidConfigs[provider] = config;
