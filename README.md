@@ -4,7 +4,7 @@
 >
 > ## 🟠 Semi-halted — do NOT install this on a production system
 >
-> **This project is semi-halted.** iderex, who revived it, currently isn't in a position to carry it forward, so **[TheRealStroopwafel](https://github.com/TheRealStroopwafel)** has taken it on and now continues it — at a slow, best-effort pace. Expect long gaps between changes, and no promise of support.
+> **This project is semi-halted.** iderex, who revived it, currently isn't in a position to carry it forward, so **[TheRealStroopwafel](https://github.com/TheRealStroopwafel)** has taken it on and now continues its development.
 >
 > This plugin is still at the **In-Development** stage — the first rung of its maturity ladder (**In-Development → Alpha → Beta → Release Candidate → Full Release**; see the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap)). It exists **exclusively for developers to test** — nothing else. Under **no circumstances** should it be installed on a production system or put in front of a real Jellyfin instance with real user accounts: it is a login path still under reconstruction, hardened slowly and with long pauses, and you must expect **breaking changes, incomplete features, and security gaps that are still open**. Wait for a **Full Release** before using it anywhere that matters.
 
@@ -37,18 +37,14 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 >
 > **Status:** **In-Development**, slow — the first stage of the maturity ladder. See the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap) for what each stage gates, and [Installing](#installing) — for now the only path is building from source; a packaged release would only follow once the security-hardening pass has advanced the maturity stages.
 
-> ### 🤖 A note on AI and on contributions
+> ### 🤖 A note on AI — this project is AI-driven
 >
-> We are non-native English speakers, so **[Claude](https://www.anthropic.com/claude)** (Anthropic) assists us in two ways: it **translates documentation and comments into English** — the README, the wiki, the in-repo guides, and code comments — and it **helps generate and analyse code** during development.
+> Be aware, if you rely on this: **development and code review here are heavily AI-driven** ([Claude](https://www.anthropic.com/claude), Anthropic). Across the maintainer accounts, the AI translates documentation into English and **generates, analyses, and reviews** the code; the pull-request discussion and the multi-pass reviews you see on these accounts are AI-assisted, not several independent people hand-checking each change. A maintainer oversees the process, sets direction, and can intervene at any point, and **holds responsibility for what ships** — but do **not** read the review activity here as independent human security auditing. Treat the assurance accordingly, especially while the project is pre-release.
 >
-> - **A human owns and reviews everything.** Claude never produces finished code, a complete pull request, or any other artifact that lands unexamined. Every AI-assisted change — translated text or code — is reviewed, understood, edited, and evaluated by a maintainer before it merges, and with two maintainers a change one of us authors is approved by the other; we hold responsibility for it. The AI proposes; the humans decide.
 > - **The AI is not in the product.** It plays **no role at runtime**, in authentication, or in processing your users' data.
+> - **Provided transparently**, in the spirit of the EU AI Act's transparency principles (Art. 50).
 >
-> The review discipline around this is modelled — as far as is practical for a volunteer project — on the change-control expected of **TÜV/BSI-certified software in critical sectors such as healthcare**: every change is issue-driven, adversarially reviewed on the login path, and documented before it merges. It is an approximation of that practice, not a certification.
->
-> Provided in the spirit of transparent AI use, in line with the EU AI Act's transparency principles (Art. 50).
->
-> **On code, please don't "vibe-code" it.** This is a security-sensitive login path. Contributions are expected from people who understand what they are changing — a pull request that is unreviewed AI output, submitted without the domain knowledge to judge it, will be turned away. Use whatever tools help you, but own and understand every line you propose. 🙂
+> **On code, please don't "vibe-code" it.** This is a security-sensitive login path. If you contribute, understand and own every line you propose, and be ready to explain what it does and why. 🙂
 
 ## Features
 
@@ -102,7 +98,7 @@ Found a vulnerability? Please report it **privately** via GitHub's ["Report a vu
 
 ## Contributing
 
-Issues and pull requests are welcome. The plugin targets **.NET 9** and **Jellyfin 10.11**. Build with `dotnet build` / `dotnet publish` and run the tests with `dotnet test`. CI builds and tests every change, and the login path additionally goes through a security review before merge. Please read the note on AI and contributions above.
+Issues and pull requests are welcome. The plugin targets **.NET 9** and **Jellyfin 10.11**. Build with `dotnet build` / `dotnet publish` and run the tests with `dotnet test`. CI builds and tests every change, and the login path goes through an AI-driven adversarial review (see the [note on AI](#-a-note-on-ai--this-project-is-ai-driven) above). See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow.
 
 ## Credits
 
