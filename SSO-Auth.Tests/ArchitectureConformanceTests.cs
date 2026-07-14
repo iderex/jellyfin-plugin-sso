@@ -25,7 +25,7 @@ public class ArchitectureConformanceTests
     // implementation detail, never part of the plugin's public surface.
     private static readonly string[] HelperSuffixes =
     {
-        "Validator", "Cache", "Builder", "Mapper", "Policy", "Probe", "Store", "Revoker", "Extractor", "Gate",
+        "Validator", "Cache", "Builder", "Mapper", "Policy", "Probe", "Store", "Revoker", "Extractor", "Gate", "State",
     };
 
     // Every production type, compiler-generated ones excluded — the base sequence for structural rules
@@ -95,6 +95,41 @@ public class ArchitectureConformanceTests
 
         Assert.True(outside.Count == 0, "All plugin types must live under the " + Root + " root namespace: " + string.Join(", ", outside));
     }
+
+    [Fact]
+    public void MutableKeyedState_LivesOnlyInsideStoreLikeTypes()
+    {
+        // Locked in by the OidcStateStore consolidation (#318): a raw dictionary holding runtime state
+        // outside a *Store/*Cache/*Limiter type is how the pre-consolidation controller accumulated its
+        // scattered cap/lifetime/sweep conventions. Two documented exemptions:
+        // - SSOController.PkceSupportCache: the PKCE-discovery cache still lives on the controller and
+        //   moves into its own probe type in a later #318 step; naming the exact field keeps anything
+        //   new from hiding behind the exemption.
+        // - ProviderConfigBase._canonicalLinks: the persisted account-link map — serialized plugin
+        //   configuration mutated only under the config lock, so a runtime store type would be the
+        //   wrong home; it is config state, not in-flight state.
+        var storeLike = new[] { "Store", "Cache", "Limiter" };
+        var exemptions = new[] { "SSOController.PkceSupportCache", "ProviderConfigBase._canonicalLinks" };
+
+        var offenders = PluginClasses
+            .Where(t => !storeLike.Any(s => SimpleName(t).EndsWith(s, StringComparison.Ordinal)))
+            .SelectMany(t => t.GetFields(BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+            .Where(f => !f.Name.Contains('<', StringComparison.Ordinal)) // compiler-generated backing fields
+            .Where(f => IsDictionaryLike(f.FieldType))
+            .Select(f => $"{SimpleName(f.DeclaringType!)}.{f.Name}") // DeclaringType is never null for a type's own fields
+            .Where(n => !exemptions.Contains(n))
+            .ToList();
+
+        Assert.True(offenders.Count == 0, "Raw dictionary state must live inside a *Store/*Cache/*Limiter type (or carry a documented exemption here): " + string.Join(", ", offenders));
+    }
+
+    // Catches concrete dictionaries (they implement non-generic IDictionary) AND fields declared as the
+    // generic IDictionary<,> interface, which does not inherit the non-generic one — otherwise an
+    // interface-typed field would slip past the mutable-keyed-state rule.
+    private static bool IsDictionaryLike(Type t) =>
+        typeof(System.Collections.IDictionary).IsAssignableFrom(t)
+        || (t.IsGenericType && t.GetGenericTypeDefinition() == typeof(IDictionary<,>))
+        || t.GetInterfaces().Any(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IDictionary<,>));
 
     // The reflection Name of a generic type carries a `1 arity suffix (e.g. "Cache`1"); strip it so suffix
     // matching sees the source name.

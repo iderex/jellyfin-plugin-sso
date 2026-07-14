@@ -50,11 +50,6 @@ public class SSOController : ControllerBase
     private const string OpenIdProtocol = "OpenID";
     private const string SamlProtocol = "SAML";
 
-    // An approximate ceiling on outstanding OpenID authorize states, so an anonymous challenge flood cannot
-    // grow the store without bound (mirrors SamlRequestCache); at the cap a fresh challenge is refused rather
-    // than evicting an in-flight state, and rate-limiting at the edge (#128) is the primary defense (#246).
-    private const int MaxStateEntries = 100_000;
-
     private readonly IUserManager _userManager;
     private readonly ISessionManager _sessionManager;
     private readonly IAuthorizationContext _authContext;
@@ -64,29 +59,9 @@ public class SSOController : ControllerBase
     private readonly IProviderManager _providerManager;
     private readonly IServerConfigurationManager _serverConfigurationManager;
     private readonly IHttpClientFactory _httpClientFactory;
-    // Concurrent requests add to, enumerate, and prune this map (OidChallenge / OidAuth /
-    // OidLink / Invalidate); a plain Dictionary corrupts or throws under that interleaving.
-    private static readonly ConcurrentDictionary<string, TimedAuthorizeState> StateManager = new ConcurrentDictionary<string, TimedAuthorizeState>();
-
-    // How long an in-flight OpenID authorize state may live before it is rejected/pruned. This now
-    // bounds the whole interactive leg (OidChallenge -> IdP login/MFA/consent -> callback -> mint),
-    // so it must accommodate a real user completing MFA, not just a fast round trip.
-    private static readonly TimeSpan StateLifetime = TimeSpan.FromMinutes(15);
-
-    // The expired-state sweep (Invalidate) is an O(n) scan; throttling it to at most once per this interval
-    // stops an anonymous challenge flood from amplifying into CPU load (mirrors SamlRequestCache). This only
-    // defers memory reclamation — IsCurrentFor/IsRedeemableBy reject an expired state independently, so a
-    // not-yet-swept entry never grants a login (#246).
-    private static readonly TimeSpan StatePruneInterval = TimeSpan.FromMinutes(1);
-
-    // Throttles that sweep to one run per StatePruneInterval; the gate owns the atomic cursor. See Invalidate.
-    private static readonly IntervalGate StatePruneGate = new(StatePruneInterval);
-
-    // Throttles the capacity-full warning (#246, CWE-400) to one line per StatePruneInterval: under a
-    // flood every refused challenge would otherwise emit a warning, amplifying the flood into unbounded
-    // log volume. The gate self-heals a backward wall-clock step (the hand-rolled predecessor stayed
-    // suppressed until the clock re-climbed past its cursor).
-    private static readonly IntervalGate CapWarnGate = new(StatePruneInterval);
+    // The in-flight OpenID authorize-state store (cap, lifetime, throttled sweep and capacity signal
+    // all live inside; see OidcStateStore). One process-wide instance, like the SAML caches below.
+    private static readonly OidcStateStore StateStore = new();
 
     // One-time-use tracking for consumed SAML assertion IDs (replay protection).
     private static readonly SamlReplayCache SamlReplays = new SamlReplayCache();
@@ -101,7 +76,7 @@ public class SSOController : ControllerBase
     private static readonly TimeSpan PkceSupportCacheTtl = TimeSpan.FromMinutes(15);
 
     // How long an issued SAML AuthnRequest ID stays valid for correlation — the interactive leg
-    // (challenge -> IdP login/MFA -> POST back -> mint), matching the OpenID StateLifetime.
+    // (challenge -> IdP login/MFA -> POST back -> mint), matching OidcStateStore.DefaultLifetime.
     private static readonly TimeSpan SamlRequestLifetime = TimeSpan.FromMinutes(15);
 
     // Opt-in per-client rate limiter over the anonymous SSO flow endpoints (#128).
@@ -178,18 +153,14 @@ public class SSOController : ControllerBase
                 return BadRequest("Missing state");
             }
 
-            if (!StateManager.TryGetValue(state, out var timedState)
-                || !AuthStateStore.IsCurrentFor(timedState, provider, DateTime.Now, StateLifetime))
+            if (StateStore.PeekCurrent(state, provider, DateTime.Now) is not { } pending)
             {
-                // Unknown, expired, or minted for a different provider — reject so a state issued
-                // for one provider cannot be validated on another's callback. (No removal: the value
-                // is an unguessable CSPRNG token, and expiry pruning is handled by the sweep.)
+                // Unknown, expired, or minted for a different provider — reject (details on PeekCurrent).
                 return BadRequest("Invalid or expired state");
             }
 
             var oidcClient = CreateCallbackOidcClient(config, provider);
-            var currentState = timedState.State;
-            var result = await oidcClient.ProcessResponseAsync(Request.QueryString.Value, currentState).ConfigureAwait(false);
+            var result = await oidcClient.ProcessResponseAsync(Request.QueryString.Value, pending.OidcState).ConfigureAwait(false);
 
             if (result.IsError)
             {
@@ -208,8 +179,8 @@ public class SSOController : ControllerBase
             }
 
             // Derive the authorize-state values (username, validity, admin, Live TV, folders, avatar)
-            // from the verified login's claims and the provider configuration, then apply them to the
-            // fresh authorize state (its derivation fields are still at their defaults at this point).
+            // from the verified login's claims and the provider configuration; Complete applies them
+            // to the stored pending state.
             var derived = OidcAuthorizeStateBuilder.Build(result.User.Claims, config);
 
             // Fail closed (#155): a valid OpenID login must resolve a stable subject to key the account
@@ -222,18 +193,11 @@ public class SSOController : ControllerBase
                 return ReturnError(StatusCodes.Status401Unauthorized, PermissionDeniedMessage);
             }
 
-            timedState.Username = derived.Username;
-            timedState.Subject = derived.Subject;
-            timedState.Valid = derived.Valid;
-            timedState.Admin = derived.Admin;
-            timedState.EnableLiveTv = derived.EnableLiveTv;
-            timedState.EnableLiveTvManagement = derived.EnableLiveTvManagement;
-            timedState.Folders = derived.Folders;
-            timedState.AvatarURL = derived.AvatarUrl;
+            pending.Complete(derived);
 
-            bool isLinking = timedState.IsLinking;
+            bool isLinking = pending.IsLinking;
 
-            if (timedState.Valid)
+            if (derived.Valid)
             {
                 _logger.LogInformation("Is request linking: {IsLinking}", isLinking);
                 return HtmlAuthPage(nonce => WebResponse.Generator(data: state, provider: provider, baseUrl: GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), mode: "OID", nonce: nonce, isLinking: isLinking));
@@ -242,7 +206,7 @@ public class SSOController : ControllerBase
             {
                 _logger.LogWarning(
                     "OpenID login denied for {Username}: no role matched the allow-list, or the login resolved no username. Claims: {@Claims}. Roles expected (any one of): {@ExpectedClaims}",
-                    timedState.Username?.ReplaceLineEndings(string.Empty),
+                    derived.Username?.ReplaceLineEndings(string.Empty),
                     result.User.Claims.Select(o => new { Type = o.Type?.ReplaceLineEndings(string.Empty), Value = o.Value?.ReplaceLineEndings(string.Empty) }),
                     config.Roles);
 
@@ -269,7 +233,7 @@ public class SSOController : ControllerBase
             return throttled;
         }
 
-        Invalidate();
+        StateStore.PruneExpired(DateTime.Now);
         var config = FindOidConfig(provider) ?? throw new ArgumentException(ProviderDoesNotExistMessage);
 
         if (config.Enabled)
@@ -308,14 +272,11 @@ public class SSOController : ControllerBase
             }
 
             // IsLinking tracks whether this is a linking request rather than a login. The state value
-            // is a fresh CSPRNG token, so a collision is effectively impossible; log if it ever occurs
-            // instead of silently proceeding to a callback that would then fail with "invalid state".
-            if (!AuthStateStore.TryAdd(StateManager, state.State, new TimedAuthorizeState(state, DateTime.Now) { IsLinking = isLinking, Provider = provider }, MaxStateEntries))
+            // is a fresh CSPRNG token, so a collision is effectively impossible; a refusal is almost
+            // always the capacity backstop under a flood, and the store throttles its warning signal.
+            if (!StateStore.TryAdd(state, provider, isLinking, DateTime.Now, out var shouldWarnCapacity))
             {
-                // The state value is a CSPRNG token, so a collision is effectively impossible; a refusal
-                // here is almost always the capacity backstop under a flood. The gate throttles the warning
-                // to at most once per interval so the flood cannot amplify into unbounded log volume (#246).
-                if (CapWarnGate.TryEnter(DateTime.Now))
+                if (shouldWarnCapacity)
                 {
                     _logger.LogWarning("OpenID authorize state refused for provider {Provider}: a CSPRNG-token collision (effectively impossible) or the store is at capacity (warning throttled).", provider?.ReplaceLineEndings(string.Empty));
                 }
@@ -339,7 +300,7 @@ public class SSOController : ControllerBase
     // on it for isolation (#289).
     internal static void ResetOidStateForTests()
     {
-        StateManager.Clear();
+        StateStore.Clear();
         PkceSupportCache.Clear();
     }
 
@@ -349,7 +310,7 @@ public class SSOController : ControllerBase
     // (internal, InternalsVisibleTo, no endpoint/DI) — never reachable in production.
     internal static void SeedOidStateForTests(string token, TimedAuthorizeState state)
     {
-        StateManager[token] = state;
+        StateStore.Seed(token, state);
     }
 
     // Reads a provider's config under the config lock, so an anonymous login-path lookup does not race an
@@ -598,16 +559,8 @@ public class SSOController : ControllerBase
     [HttpGet("OID/States")]
     public ActionResult OidStates()
     {
-        // Project to a non-secret summary. The raw store holds the authorize-state token and the
-        // PKCE code_verifier / nonce; those must never be serialized out, even to an admin.
-        var summary = StateManager.Values.Select(s => new
-        {
-            s.Provider,
-            s.Created,
-            s.Valid,
-            s.IsLinking,
-        });
-        return Ok(summary);
+        // Non-secret summaries only — the redaction rationale lives on OidcStateStore.Summaries.
+        return Ok(StateStore.Summaries());
     }
 
     /// <summary>
@@ -637,19 +590,15 @@ public class SSOController : ControllerBase
             return BadRequest(NoMatchingProviderMessage);
         }
 
-        // The store is keyed by the authorize-state token, which is exactly response.Data, so look it
-        // up directly (O(1), no full-store scan) and atomically claim it with TryRemove(KeyValuePair):
-        // only the request that wins the removal proceeds, so one state mints at most one session even
-        // under concurrent posts.
+        // One-time atomic claim — details on OidcStateStore.TryRedeem. A disabled provider does not
+        // consume the state: config.Enabled short-circuits before the redeem, same as before.
         if (config.Enabled
-            && StateManager.TryGetValue(response.Data, out var timedState)
-            && AuthStateStore.IsRedeemableBy(timedState, response.Data, provider, DateTime.Now, StateLifetime)
-            && StateManager.TryRemove(new KeyValuePair<string, TimedAuthorizeState>(response.Data, timedState)))
+            && StateStore.TryRedeem(response.Data, provider, DateTime.Now) is { } redeemed)
         {
             Guid userId;
             try
             {
-                userId = await CreateCanonicalLinkAndUserIfNotExist("oid", provider, timedState.Subject, timedState.Username, config.AllowExistingAccountLink).ConfigureAwait(false);
+                userId = await CreateCanonicalLinkAndUserIfNotExist("oid", provider, redeemed.Subject, redeemed.Username, config.AllowExistingAccountLink).ConfigureAwait(false);
             }
             catch (AccountLinkForbiddenException)
             {
@@ -659,17 +608,17 @@ public class SSOController : ControllerBase
             var authenticationResult = await Authenticate(new SessionParameters
             {
                 UserId = userId,
-                IsAdmin = timedState.Admin,
+                IsAdmin = redeemed.Admin,
                 EnableAuthorization = config.EnableAuthorization,
                 EnableAllFolders = config.EnableAllFolders,
-                EnabledFolders = timedState.Folders.ToArray(),
-                EnableLiveTv = timedState.EnableLiveTv,
-                EnableLiveTvManagement = timedState.EnableLiveTvManagement,
+                EnabledFolders = redeemed.Folders.ToArray(),
+                EnableLiveTv = redeemed.EnableLiveTv,
+                EnableLiveTvManagement = redeemed.EnableLiveTvManagement,
                 AuthResponse = response,
                 DefaultProvider = config.DefaultProvider?.Trim(),
-                AvatarUrl = timedState.AvatarURL,
+                AvatarUrl = redeemed.AvatarUrl,
             }).ConfigureAwait(false);
-            SsoAudit.LoginSucceeded(_logger, OpenIdProtocol, provider, timedState.Username, timedState.Admin);
+            SsoAudit.LoginSucceeded(_logger, OpenIdProtocol, provider, redeemed.Username, redeemed.Admin);
             return Ok(authenticationResult);
         }
 
@@ -1409,15 +1358,13 @@ public class SSOController : ControllerBase
             return BadRequest(NoMatchingProviderMessage);
         }
 
-        // Keyed O(1) lookup + atomic claim (see OidAuth): consume the state so one verified identity
-        // cannot be linked repeatedly and cannot then be reused to mint a session.
-        if (StateManager.TryGetValue(response.Data, out var timedState)
-            && AuthStateStore.IsRedeemableBy(timedState, response.Data, provider, DateTime.Now, StateLifetime)
-            && StateManager.TryRemove(new KeyValuePair<string, TimedAuthorizeState>(response.Data, timedState)))
+        // One-time atomic claim (see OidcStateStore.TryRedeem): consume the state so one verified
+        // identity cannot be linked repeatedly and cannot then be reused to mint a session.
+        if (StateStore.TryRedeem(response.Data, provider, DateTime.Now) is { } redeemed)
         {
             // Manual linking keys on the stable subject (#155), matching the auto-login path, so a
             // later provider-side rename does not orphan the link the user just created.
-            return CreateCanonicalLink("oid", provider, jellyfinUserId, timedState.Subject);
+            return CreateCanonicalLink("oid", provider, jellyfinUserId, redeemed.Subject);
         }
 
         return Problem("Something went wrong!");
@@ -1643,19 +1590,6 @@ public class SSOController : ControllerBase
         // reads the status, not this body). Retry-After carries the machine-readable delay.
         Response.Headers.RetryAfter = retryAfterSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
         return ReturnError(StatusCodes.Status429TooManyRequests, "Too many login attempts. Please wait a moment and try again.");
-    }
-
-    private static void Invalidate()
-    {
-        // Throttle the O(n) expired-state sweep to at most once per StatePruneInterval so an anonymous
-        // challenge flood does not amplify into CPU load; the gate lets exactly one thread per interval
-        // run it (#246). AuthStateStore.InvalidateExpired stays pure/unthrottled — the throttle lives here,
-        // at its sole call site. The same captured 'now' drives both the gate and the sweep.
-        var now = DateTime.Now;
-        if (StatePruneGate.TryEnter(now))
-        {
-            AuthStateStore.InvalidateExpired(StateManager, now, StateLifetime);
-        }
     }
 
     // Consumes the SAML assertion's ID against the provider-scoped replay cache for one-time use.
