@@ -58,6 +58,10 @@ public class SSOController : ControllerBase
     private readonly IProviderManager _providerManager;
     private readonly IServerConfigurationManager _serverConfigurationManager;
     private readonly IHttpClientFactory _httpClientFactory;
+
+    // The account-linking workflow (resolve/adopt/create, legacy re-key, revoke); the controller keeps
+    // the authz guards, the one-time-use replay/state consume, and the HTTP mapping (#318).
+    private readonly CanonicalLinkService _canonicalLinks;
     // The in-flight OpenID authorize-state store (cap, lifetime, throttled sweep and capacity signal
     // all live inside; see OidcStateStore). One process-wide instance, like the SAML caches below.
     private static readonly OidcStateStore StateStore = new();
@@ -118,6 +122,7 @@ public class SSOController : ControllerBase
         _providerManager = providerManager;
         _serverConfigurationManager = serverConfigurationManager;
         _httpClientFactory = httpClientFactory;
+        _canonicalLinks = new CanonicalLinkService(userManager, cryptoProvider, SSOPlugin.Instance.ConfigStore, logger);
         _logger.LogInformation("SSO Controller initialized");
     }
 
@@ -606,7 +611,7 @@ public class SSOController : ControllerBase
         Guid userId;
         try
         {
-            userId = await CreateCanonicalLinkAndUserIfNotExist("oid", provider, redeemed.Subject, redeemed.Username, config.AllowExistingAccountLink).ConfigureAwait(false);
+            userId = await _canonicalLinks.ResolveOrCreateAsync("oid", provider, redeemed.Subject, redeemed.Username, config.AllowExistingAccountLink).ConfigureAwait(false);
         }
         catch (AccountLinkForbiddenException)
         {
@@ -897,7 +902,7 @@ public class SSOController : ControllerBase
         {
             // SAML keys the link directly on the NameID, which is already the stable subject
             // identifier — key and account name are the same value (no migration path needed).
-            userId = await CreateCanonicalLinkAndUserIfNotExist("saml", provider, nameId, nameId, config.AllowExistingAccountLink).ConfigureAwait(false);
+            userId = await _canonicalLinks.ResolveOrCreateAsync("saml", provider, nameId, nameId, config.AllowExistingAccountLink).ConfigureAwait(false);
         }
         catch (AccountLinkForbiddenException)
         {
@@ -943,7 +948,7 @@ public class SSOController : ControllerBase
         // AllowExistingAccountLink enabled, the same-named account can be re-adopted on the next SSO login,
         // so a hard revoke there also needs the local account disabled or renamed; with the fail-closed
         // default (adoption off) the revoke is durable.
-        var revoked = RemoveCanonicalLinksForUser(user.Id);
+        var revoked = _canonicalLinks.RemoveUserEverywhere(user.Id);
 
         // Switch the account back to the requested auth provider and PERSIST it — the previous version set
         // this in memory only and never called UpdateUserAsync, so the switch was silently discarded.
@@ -953,28 +958,6 @@ public class SSOController : ControllerBase
         _logger.LogInformation("Unregistered SSO for user {UserId}: removed {Count} canonical link(s).", user.Id, revoked);
 
         return Ok();
-    }
-
-    // Removes every canonical link pointing at the given user across all SAML and OpenID providers, so an
-    // SSO login no longer resolves to the account. Runs under the config lock and returns the number of
-    // links removed.
-    private static int RemoveCanonicalLinksForUser(Guid userId)
-    {
-        return SSOPlugin.Instance.MutateConfiguration(configuration =>
-        {
-            int removed = 0;
-            foreach (var config in configuration.SamlConfigs.Values)
-            {
-                removed += CanonicalLinkRevoker.RemoveUser(config.CanonicalLinks, userId);
-            }
-
-            foreach (var config in configuration.OidConfigs.Values)
-            {
-                removed += CanonicalLinkRevoker.RemoveUser(config.CanonicalLinks, userId);
-            }
-
-            return removed;
-        });
     }
 
     // Applies a mutation to a provider's canonical-links map on the LIVE configuration. The map is
@@ -996,141 +979,6 @@ public class SSOController : ControllerBase
             "oid" => configuration.OidConfigs[provider].CanonicalLinks,
             _ => throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'"),
         };
-    }
-
-    private async Task<Guid> CreateCanonicalLinkAndUserIfNotExist(string mode, string provider, string canonicalKey, string username, bool allowExistingAccountLink)
-    {
-        // Defense in depth (#95, #155): a login that resolved no stable identity key (OpenID sub /
-        // SAML NameID) or no username must never create, adopt, or look up an account. Both callbacks
-        // reject such logins before calling here; this belt keeps the invariant if a caller forgets.
-        if (string.IsNullOrWhiteSpace(canonicalKey) || string.IsNullOrWhiteSpace(username))
-        {
-            throw new AccountLinkForbiddenException("The SSO login did not resolve an identity; refusing to create or link an account.");
-        }
-
-        // The link is keyed on the stable identity. A legacy OpenID link (#155) was keyed on the
-        // mutable username instead; when no subject-keyed link exists yet but a legacy one resolves,
-        // adopt and re-key it — the one login that migrates reuses the exact decision the old
-        // name-keyed lookup would have made, then locks it to the subject so a later provider-side
-        // rename cannot detach it. Only OpenID differs key from name; SAML passes key == name.
-        // Both candidates are read in ONE pass under the config lock: with separate reads, a
-        // concurrent login's migration could commit between them, so this login would see the subject
-        // key before the re-key and the legacy key after it, resolve neither, and bounce a legitimate
-        // user off the adoption gate with a spurious 403. A link whose target user was deleted counts
-        // as absent (dangling links are dead, not identities).
-        var (subjectLink, legacyLink) = SSOPlugin.Instance.ReadConfiguration(configuration =>
-        {
-            var links = GetLinks(configuration, mode, provider);
-            Guid? bySubject = links.TryGetValue(canonicalKey, out var s) && _userManager.GetUserById(s) != null
-                ? s : null;
-            Guid? byName = bySubject is null
-                && !string.Equals(canonicalKey, username, StringComparison.Ordinal)
-                && links.TryGetValue(username, out var n) && _userManager.GetUserById(n) != null
-                ? n : (Guid?)null;
-            return (bySubject, byName);
-        });
-
-        var (linkedUserId, migrateLegacy) = AccountLinkResolver.ResolveCanonicalLink(subjectLink, legacyLink);
-        if (migrateLegacy)
-        {
-            MigrateCanonicalLinkKey(mode, provider, username, canonicalKey);
-            _logger.LogInformation(
-                "Migrated {Mode}/{Provider} canonical link from the legacy username key to the stable subject key.",
-                mode,
-                provider?.ReplaceLineEndings(string.Empty));
-        }
-
-        // Adoption of a pre-existing unlinked account still matches on the display name.
-        Guid? existingAccountUserId = _userManager.GetUserByName(username)?.Id;
-
-        var decision = AccountLinkResolver.Resolve(linkedUserId, existingAccountUserId, allowExistingAccountLink);
-        switch (decision.Action)
-        {
-            case AccountLinkAction.UseExistingLink:
-                return decision.UserId;
-
-            case AccountLinkAction.AdoptExistingAccount:
-            {
-                // Atomic check-then-link (#133): if a concurrent first-login already linked this
-                // identity, that winner is used and no second write or duplicate audit occurs.
-                var (adoptedUserId, wrote) = LinkCanonicalIfAbsent(mode, provider, canonicalKey, decision.UserId);
-                if (wrote)
-                {
-                    SsoAudit.AccountAdopted(_logger, string.Equals(mode, "oid", StringComparison.Ordinal) ? OpenIdProtocol : SamlProtocol, provider, username);
-                }
-
-                return adoptedUserId;
-            }
-
-            case AccountLinkAction.CreateNewAccount:
-            {
-                _logger.LogInformation("SSO user {Name} doesn't exist, creating...", username.ReplaceLineEndings(string.Empty));
-                var user = await _userManager.CreateUserAsync(username).ConfigureAwait(false);
-                user.AuthenticationProviderId = GetType().FullName;
-                // https://jonathancrozier.com/blog/how-to-generate-a-cryptographically-secure-random-string-in-dot-net-with-c-sharp
-                user.Password = _cryptoProvider.CreatePasswordHash(Convert.ToBase64String(RandomNumberGenerator.GetBytes(64))).ToString();
-
-                // Atomic check-then-link (#133): if a concurrent first-login for the same identity
-                // linked meanwhile, use its account — this freshly created user is left unlinked rather
-                // than overwriting the winner's link (a rare, benign orphan, not a duplicate login).
-                var (effectiveUserId, _) = LinkCanonicalIfAbsent(mode, provider, canonicalKey, user.Id);
-                return effectiveUserId;
-            }
-
-            case AccountLinkAction.RejectNameTaken:
-                _logger.LogWarning(
-                    "SSO login for {Name} via {Mode}/{Provider} refused: a pre-existing unlinked Jellyfin account exists and AllowExistingAccountLink is disabled for this provider.",
-                    username.ReplaceLineEndings(string.Empty),
-                    mode,
-                    provider?.ReplaceLineEndings(string.Empty));
-                throw new AccountLinkForbiddenException();
-
-            default:
-                throw new InvalidOperationException($"Unhandled account-link action: {decision.Action}");
-        }
-    }
-
-    // Atomically links canonicalKey to candidateUserId unless a live link already exists for it (#133).
-    // The existence check and the write are ONE MutateConfiguration read-modify-write, so two concurrent
-    // first-logins for the same identity cannot both write or both adopt: the loser observes the
-    // winner's link and reports WroteLink=false (so the caller does not re-emit the adoption audit).
-    // The link write goes straight into the config (no discarded ActionResult), so a failure to persist
-    // propagates rather than falling through as a successful adoption.
-    private (Guid EffectiveUserId, bool WroteLink) LinkCanonicalIfAbsent(string mode, string provider, string canonicalKey, Guid candidateUserId)
-    {
-        return SSOPlugin.Instance.MutateConfiguration(configuration =>
-        {
-            var links = GetLinks(configuration, mode, provider);
-            Guid? existing = links.TryGetValue(canonicalKey, out var current) && _userManager.GetUserById(current) != null
-                ? current
-                : (Guid?)null;
-
-            var (effectiveUserId, wroteLink) = AccountLinkResolver.ResolveLinkWrite(existing, candidateUserId);
-            if (wroteLink)
-            {
-                links[canonicalKey] = effectiveUserId;
-            }
-
-            return (effectiveUserId, wroteLink);
-        });
-    }
-
-    // Re-keys a canonical link from oldKey to newKey inside the config lock (#155 legacy migration).
-    // Idempotent under concurrency: if oldKey is already gone (a concurrent login migrated first) the
-    // move is a no-op, and a LIVE newKey entry is never overwritten — only a dangling one (its target
-    // user deleted), which would otherwise block the hand-off on every subsequent login.
-    private void MigrateCanonicalLinkKey(string mode, string provider, string oldKey, string newKey)
-    {
-        SSOPlugin.Instance.MutateConfiguration(configuration =>
-            MutateLinks(configuration, mode, provider, links =>
-            {
-                if (links.TryGetValue(oldKey, out var userId)
-                    && (!links.TryGetValue(newKey, out var existing) || _userManager.GetUserById(existing) == null))
-                {
-                    links.Remove(oldKey);
-                    links[newKey] = userId;
-                }
-            }));
     }
 
     /// <summary>

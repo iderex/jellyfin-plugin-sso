@@ -27,7 +27,7 @@ public class ArchitectureConformanceTests
     // implementation detail, never part of the plugin's public surface.
     private static readonly string[] HelperSuffixes =
     {
-        "Validator", "Cache", "Builder", "Mapper", "Policy", "Probe", "Store", "Revoker", "Extractor", "Gate", "State",
+        "Validator", "Cache", "Builder", "Mapper", "Policy", "Probe", "Store", "Revoker", "Extractor", "Gate", "State", "Resolver",
     };
 
     // Every production type, compiler-generated ones excluded — the base sequence for structural rules
@@ -68,6 +68,22 @@ public class ArchitectureConformanceTests
             .ToList();
 
         Assert.True(open.Count == 0, "These helper types must be sealed or static (a pure helper is a leaf, not an inheritance base): " + string.Join(", ", open));
+    }
+
+    [Fact]
+    public void FlowServices_AreInternalAndSealed()
+    {
+        // The flow tier (#318): a *Service is a stateful collaborator (holds IUserManager, the config
+        // store, …) that orchestrates pure helpers — distinct from the leaf *Helper suffixes above, so
+        // it gets its own rule rather than joining HelperSuffixes. It is still internal-by-default and a
+        // sealed leaf, never an inheritance base or part of the public surface.
+        var stray = PluginClasses
+            .Where(t => SimpleName(t).EndsWith("Service", StringComparison.Ordinal))
+            .Where(t => t.IsPublic || t.IsNestedPublic || t.IsNestedFamily || t.IsNestedFamORAssem || !t.IsSealed)
+            .Select(t => t.FullName)
+            .ToList();
+
+        Assert.True(stray.Count == 0, "Flow services (*Service) must be internal and sealed collaborators: " + string.Join(", ", stray));
     }
 
     [Fact]
