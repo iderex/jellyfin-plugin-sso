@@ -473,6 +473,21 @@ public class SSOController : ControllerBase
         }
     }
 
+    // Rejects a provider name containing URI-reserved characters when it would register a NEW provider
+    // (#336): the name is appended raw to the callback URLs handed to the identity provider
+    // (SsoUrlBuilder), so '%' breaks route decoding, '/' dead-ends the IdP redirect on a path no route
+    // matches, and the other RFC 3986 delimiters invite proxy/IdP misinterpretation. Updating an
+    // EXISTING name stays allowed: its URL bytes are already registered at the IdP, and blocking the
+    // update would strand the deployment behind a rename (encoding the built URLs instead is pinned
+    // off by SsoUrlBuilderTests).
+    internal static void RejectInvalidNewProviderName(string provider, bool providerExists)
+    {
+        if (!providerExists && ProviderNameValidator.IsInvalid(provider))
+        {
+            throw new ArgumentException("A new provider name must not contain any of % : / ? # [ ] @ ! $ & ' ( ) * + , ; = because the name becomes part of the callback URL registered with the identity provider.");
+        }
+    }
+
     /// <summary>
     /// Adds an OpenID auth configuration. Requires administrator privileges. If the provider already exists, it will be removed and readded.
     /// </summary>
@@ -485,11 +500,16 @@ public class SSOController : ControllerBase
         RejectInvalidBaseUrlOverride(config?.BaseUrlOverride);
         SSOPlugin.Instance.MutateConfiguration(configuration =>
         {
+            // The name guard needs the under-lock existence check (#336) and runs before any mutation,
+            // so a throw leaves the live configuration untouched and nothing is persisted.
+            var providerExists = configuration.OidConfigs.TryGetValue(provider, out var existing);
+            RejectInvalidNewProviderName(provider, providerExists);
+
             // Re-inject the server-managed fields this API cannot carry: CanonicalLinks is
             // [JsonIgnore] so the posted config never has them (#157), and the write-only secret
             // follows the same blank-means-keep rule as the config-page save (#189), centralized in
             // ResolveUpdatedSecret so both paths agree on rotation and identity-change behavior.
-            if (config != null && configuration.OidConfigs.TryGetValue(provider, out var existing))
+            if (config != null && providerExists)
             {
                 config.CanonicalLinks = existing.CanonicalLinks;
                 config.OidSecret = ServerManagedFields.ResolveUpdatedSecret(config, existing);
@@ -769,10 +789,15 @@ public class SSOController : ControllerBase
         RejectInvalidSamlCertificate(newConfig?.SamlCertificate);
         SSOPlugin.Instance.MutateConfiguration(configuration =>
         {
+            // The name guard needs the under-lock existence check (#336) and runs before any mutation,
+            // so a throw leaves the live configuration untouched and nothing is persisted.
+            var providerExists = configuration.SamlConfigs.TryGetValue(provider, out var existing);
+            RejectInvalidNewProviderName(provider, providerExists);
+
             // Preserve the server-managed canonical links (#157), as OidAdd does: the posted config
             // never carries them ([JsonIgnore]), so re-inject the live map before the wholesale
             // replace so an API save cannot wipe existing account links.
-            if (newConfig != null && configuration.SamlConfigs.TryGetValue(provider, out var existing))
+            if (newConfig != null && providerExists)
             {
                 newConfig.CanonicalLinks = existing.CanonicalLinks;
             }

@@ -369,13 +369,14 @@ const ssoConfigurationPage = {
             resolve();
           },
           // Rejection handler attached directly to the save call, so it reports only a genuine save
-          // failure (e.g. the server rejecting a malformed Base URL Override, #139) and not an error
-          // thrown by the post-save UI work above. This replaces the prior silent no-op.
+          // failure and not an error thrown by the post-save UI work above. The server can refuse a
+          // save for more than one reason (a malformed Base URL Override, #139; a provider name with
+          // URI-reserved characters, #336), so the message names both checks instead of blaming one.
           function () {
             Dashboard.alert({
               title: "Save failed",
               message:
-                "Could not save the provider. Check that the Base URL Override is a full URL such as https://jellyfin.example.com, or leave it blank.",
+                "Could not save the provider. Check that the provider name contains no URI-reserved characters such as / ? # % or \\, and that the Base URL Override is a full URL such as https://jellyfin.example.com (or blank).",
             });
             reject(new Error("Provider save failed"));
           },

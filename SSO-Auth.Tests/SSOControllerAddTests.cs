@@ -9,8 +9,9 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 
 /// <summary>
 /// In-process tests of the provider-add endpoints via <see cref="SsoControllerHarness"/>: a valid
-/// config is stored, a malformed base-URL override is rejected fail-closed, and a re-save preserves
-/// the server-managed canonical links (#157) that the API body never carries.
+/// config is stored, a malformed base-URL override is rejected fail-closed, a re-save preserves
+/// the server-managed canonical links (#157) that the API body never carries, and a NEW provider
+/// name containing URI-reserved characters is rejected while an existing one stays updatable (#336).
 /// </summary>
 [Collection("SSOController")]
 public class SSOControllerAddTests
@@ -83,5 +84,52 @@ public class SSOControllerAddTests
 
         var links = SSOPlugin.Instance.ReadConfiguration(c => c.SamlConfigs["adfs"].CanonicalLinks);
         Assert.Equal(User, links["nameid-1"]);
+    }
+
+    // --- Provider-name validation at registration (#336) ---
+
+    [Fact]
+    public void OidAdd_NewProviderWithReservedName_Throws_AndDoesNotPersist()
+    {
+        var harness = new SsoControllerHarness();
+
+        Assert.Throws<ArgumentException>(() => harness.Controller.OidAdd("my/realm", new OidConfig()));
+
+        // Fail-closed: the guard runs inside the mutation before any write, so nothing was persisted.
+        Assert.False(SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs.ContainsKey("my/realm")));
+    }
+
+    [Fact]
+    public void OidAdd_ExistingProviderWithReservedName_StillUpdates()
+    {
+        // An already-configured reserved-character name is exempt (#336): its callback-URL bytes are
+        // registered at the IdP, so the update path must keep working for existing deployments.
+        var harness = new SsoControllerHarness(c => c.OidConfigs["kc=prod"] = new OidConfig());
+
+        harness.Controller.OidAdd("kc=prod", new OidConfig { OidClientId = "client-2" });
+
+        var stored = SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["kc=prod"].OidClientId);
+        Assert.Equal("client-2", stored);
+    }
+
+    [Fact]
+    public void SamlAdd_NewProviderWithReservedName_Throws_AndDoesNotPersist()
+    {
+        var harness = new SsoControllerHarness();
+
+        Assert.Throws<ArgumentException>(() => harness.Controller.SamlAdd("prov%1", new SamlConfig()));
+
+        Assert.False(SSOPlugin.Instance.ReadConfiguration(c => c.SamlConfigs.ContainsKey("prov%1")));
+    }
+
+    [Fact]
+    public void SamlAdd_ExistingProviderWithReservedName_StillUpdates()
+    {
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs (legacy)"] = new SamlConfig());
+
+        Assert.IsType<OkResult>(harness.Controller.SamlAdd("adfs (legacy)", new SamlConfig { SamlClientId = "client-2" }));
+
+        var stored = SSOPlugin.Instance.ReadConfiguration(c => c.SamlConfigs["adfs (legacy)"].SamlClientId);
+        Assert.Equal("client-2", stored);
     }
 }
