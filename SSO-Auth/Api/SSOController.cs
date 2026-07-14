@@ -1308,8 +1308,11 @@ public class SSOController : ControllerBase
     [Produces(MediaTypeNames.Application.Json)]
     private ActionResult SamlLink(string provider, Guid jellyfinUserId, AuthResponse response)
     {
+        // A disabled provider must neither create a link nor consume the assertion's one-time-use ID
+        // (#343): an administrator disabling a provider takes effect immediately for linking, and the
+        // unknown and disabled cases share one response so neither can be probed apart.
         var config = FindSamlConfig(provider);
-        if (config is null)
+        if (config is not { Enabled: true })
         {
             return BadRequest(NoMatchingProviderMessage);
         }
@@ -1353,7 +1356,11 @@ public class SSOController : ControllerBase
             return BadRequest("Missing data");
         }
 
-        if (FindOidConfig(provider) is null)
+        // A disabled provider must neither create a link nor consume the state (#343), mirroring
+        // OidAuth's short-circuit order: an administrator disabling a provider takes effect for
+        // in-flight linking states immediately, not after their 15-minute lifetime. The unknown and
+        // disabled cases share one response, so neither can be probed apart (no enumeration oracle).
+        if (FindOidConfig(provider) is not { Enabled: true })
         {
             return BadRequest(NoMatchingProviderMessage);
         }
