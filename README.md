@@ -37,13 +37,6 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 >
 > **Status:** **In-Development**, slow — the first stage of the maturity ladder. See the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap) for what each stage gates, and [Installing](#installing) — for now the only path is building from source; a packaged release would only follow once the security-hardening pass has advanced the maturity stages.
 
-> ### 🤖 A note on AI — this project is AI-driven
->
-> Be aware, if you rely on this: **development and code review here are heavily AI-driven** ([Claude](https://www.anthropic.com/claude), Anthropic). Across the maintainer accounts, the AI translates documentation into English and **generates, analyses, and reviews** the code; the pull-request discussion and the multi-pass reviews you see on these accounts are AI-assisted, not several independent people hand-checking each change. A maintainer oversees the process, sets direction, and can intervene at any point, and **holds responsibility for what ships** — but do **not** read the review activity here as independent human security auditing. Treat the assurance accordingly, especially while the project is pre-release.
->
-> - **The AI is not in the product.** It plays **no role at runtime**, in authentication, or in processing your users' data.
-> - **Provided transparently**, in the spirit of the EU AI Act's transparency principles (Art. 50).
->
 > **On code, please don't "vibe-code" it.** This is a security-sensitive login path. If you contribute, understand and own every line you propose, and be ready to explain what it does and why. 🙂
 
 ## Features
@@ -98,7 +91,7 @@ Found a vulnerability? Please report it **privately** via GitHub's ["Report a vu
 
 ## Contributing
 
-Issues and pull requests are welcome. The plugin targets **.NET 9** and **Jellyfin 10.11**. Build with `dotnet build` / `dotnet publish` and run the tests with `dotnet test`. CI builds and tests every change, and the login path goes through an AI-driven adversarial review (see the [note on AI](#-a-note-on-ai--this-project-is-ai-driven) above). See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow.
+Issues and pull requests are welcome. The plugin targets **.NET 9** and **Jellyfin 10.11**. Build with `dotnet build` / `dotnet publish` and run the tests with `dotnet test`. CI builds and tests every change, and the login path goes through an adversarial review. See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow.
 
 ## Credits
 
