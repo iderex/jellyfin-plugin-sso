@@ -82,7 +82,6 @@ public class SSOControllerOidAuthTests
         });
 
         Assert.IsType<OkObjectResult>(result);
-        await harness.UserManager.Received(1).CreateUserAsync("alice");
 
         // The state is claimed atomically (TryRemove), so a replay of the same token no longer redeems —
         // it rejects as an invalid state (a client-caused 400), indistinguishable from an expiry.
@@ -90,6 +89,9 @@ public class SSOControllerOidAuthTests
         var content = Assert.IsType<ContentResult>(replay);
         Assert.Equal(400, content.StatusCode);
         Assert.Equal("Invalid or expired state", content.Content);
+
+        // The replay minted nothing: the account was provisioned exactly once, by the first redemption.
+        await harness.UserManager.Received(1).CreateUserAsync("alice");
     }
 
     // Seeds a valid, redeemable login state for provider "kc" bound to a new user "alice", and mocks the

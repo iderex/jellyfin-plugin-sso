@@ -79,6 +79,7 @@ rules:
       - pattern-either:
           - pattern: Problem(...)
           - pattern: new ProblemDetails
+          - pattern: ProblemDetails(...)
     paths:
       include:
         - "SSO-Auth/**/*Controller.cs"
