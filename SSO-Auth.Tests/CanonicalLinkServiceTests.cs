@@ -190,6 +190,49 @@ public class CanonicalLinkServiceTests
     }
 
     [Fact]
+    public async Task ResolveOrCreateAsync_FlagOnRenamedLegacyOwner_HandsOutTheRecordedAccount()
+    {
+        // Characterization of the flag-ON residual (#361, surfaced on #358): the legacy arm resolves
+        // the RECORDED name key even when no live account bears that name anymore (the owner was
+        // renamed), a strict superset of same-name adoption — so during an enable-the-flag migration
+        // window, a login presenting a foreign sub and the pre-rename name is handed the account and
+        // re-keys it. This pins the current behavior empirically; the #361 fix will flip it.
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["oldname"] = Existing },
+        });
+        users.GetUserById(Existing).Returns(UserNamed("newname", Existing));
+        users.GetUserByName("oldname").Returns((User?)null); // renamed: no live account bears the key
+
+        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "attacker-sub", "oldname", allowExistingAccountLink: true);
+
+        Assert.Equal(Existing, resolved);
+        var links = cfg.OidConfigs["kc"].CanonicalLinks;
+        Assert.Equal(Existing, links["attacker-sub"]); // re-keyed to the presented sub
+        Assert.False(links.ContainsKey("oldname"));
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_SubFallbackShape_NeverEngagesTheLegacyArm()
+    {
+        // The opaque-sub / sub-fallback provider shape (e.g. Google without preferred_username):
+        // the username IS the sub, so canonicalKey == username, the inequality guard keeps the
+        // legacy arm structurally dormant, and the link resolves subject-keyed with no migration —
+        // independent of AllowExistingAccountLink, proving no name trust is involved.
+        var (service, cfg, users, log) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["opaque-sub-123"] = Existing },
+        });
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+
+        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "opaque-sub-123", "opaque-sub-123", allowExistingAccountLink: false);
+
+        Assert.Equal(Existing, resolved);
+        Assert.Equal(Existing, cfg.OidConfigs["kc"].CanonicalLinks["opaque-sub-123"]); // untouched, not re-keyed
+        Assert.DoesNotContain(log.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning);
+    }
+
+    [Fact]
     public void RemoveUserEverywhere_RemovesTheUsersLinksAcrossAllProviders_AndCountsThem()
     {
         var (service, cfg, _, _) = Build(c =>
