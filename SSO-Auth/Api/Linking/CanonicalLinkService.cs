@@ -138,12 +138,12 @@ internal sealed class CanonicalLinkService
                     // the upgrade runbook in providers.md.
                     _logger.LogWarning(
                         "SSO login for {Name} via {Mode}/{Provider}: a legacy username-keyed link exists but AllowExistingAccountLink is off and no live account bears the name, so a fresh account is being provisioned and the original account is now orphaned. Re-link it to this subject via the admin endpoints (or enable AllowExistingAccountLink before the next login).",
-                        username.ReplaceLineEndings(string.Empty),
+                        username?.ReplaceLineEndings(string.Empty),
                         mode,
                         provider?.ReplaceLineEndings(string.Empty));
                 }
 
-                _logger.LogInformation("SSO user {Name} doesn't exist, creating...", username.ReplaceLineEndings(string.Empty));
+                _logger.LogInformation("SSO user {Name} doesn't exist, creating...", username?.ReplaceLineEndings(string.Empty));
                 var user = await _userManager.CreateUserAsync(username).ConfigureAwait(false);
                 user.AuthenticationProviderId = typeof(SSOController).FullName;
                 // https://jonathancrozier.com/blog/how-to-generate-a-cryptographically-secure-random-string-in-dot-net-with-c-sharp
@@ -164,7 +164,7 @@ internal sealed class CanonicalLinkService
                     // ordinary #95 name collision. One line, so the reject path is not double-logged.
                     _logger.LogWarning(
                         "SSO login for {Name} via {Mode}/{Provider} refused: a legacy username-keyed link is pending but AllowExistingAccountLink is off and a live account still bears the name. Enable AllowExistingAccountLink (a short controlled window) or link the account via the admin endpoints to migrate it.",
-                        username.ReplaceLineEndings(string.Empty),
+                        username?.ReplaceLineEndings(string.Empty),
                         mode,
                         provider?.ReplaceLineEndings(string.Empty));
                 }
@@ -172,7 +172,7 @@ internal sealed class CanonicalLinkService
                 {
                     _logger.LogWarning(
                         "SSO login for {Name} via {Mode}/{Provider} refused: a pre-existing unlinked Jellyfin account exists and AllowExistingAccountLink is disabled for this provider.",
-                        username.ReplaceLineEndings(string.Empty),
+                        username?.ReplaceLineEndings(string.Empty),
                         mode,
                         provider?.ReplaceLineEndings(string.Empty));
                 }
