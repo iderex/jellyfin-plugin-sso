@@ -484,7 +484,7 @@ public class SSOController : ControllerBase
     {
         if (!providerExists && ProviderNameValidator.IsInvalid(provider))
         {
-            throw new ArgumentException("A new provider name must not contain any of % : / ? # [ ] @ ! $ & ' ( ) * + , ; = because the name becomes part of the callback URL registered with the identity provider.");
+            throw new ArgumentException("A new provider name must not contain a backslash or any of % : / ? # [ ] @ ! $ & ' ( ) * + , ; = because the name becomes part of the callback URL registered with the identity provider.");
         }
     }
 

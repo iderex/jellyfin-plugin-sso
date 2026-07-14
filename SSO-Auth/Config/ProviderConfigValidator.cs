@@ -59,7 +59,7 @@ internal static class ProviderConfigValidator
         if (isNew && ProviderNameValidator.IsInvalid(provider))
         {
             throw new ArgumentException(
-                $"{protocol} provider '{provider?.ReplaceLineEndings(string.Empty)}' has a name with URI-reserved characters; the name becomes part of the callback URL registered with the identity provider, so a new name must not contain any of % : / ? # [ ] @ ! $ & ' ( ) * + , ; =.");
+                $"{protocol} provider '{provider?.ReplaceLineEndings(string.Empty)}' has a name with URI-reserved characters or a backslash; the name becomes part of the callback URL registered with the identity provider, so a new name must not contain a backslash or any of % : / ? # [ ] @ ! $ & ' ( ) * + , ; =.");
         }
     }
 
