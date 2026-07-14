@@ -147,6 +147,9 @@ public class ArchitectureConformanceTests
                 .Where(f => !f.Name.Contains('<', StringComparison.Ordinal))
                 .Where(f => MentionsConfiguration(f.FieldType))
                 .Select(f => f.Name))
+            .Concat(typeof(SSOPlugin).GetConstructors(declared)
+                .Where(c => c.GetParameters().Select(p => p.ParameterType).Any(MentionsConfiguration))
+                .Select(c => ".ctor"))
             .ToList();
 
         Assert.True(offenders.Count == 0, "SSOPlugin members touching configuration types must stay limited to the delegating facade (config logic lives in Config/): " + string.Join(", ", offenders));
