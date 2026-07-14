@@ -226,7 +226,7 @@ public class ConfigPreservationTests
         incoming.SamlConfigs["saml"] = new SamlConfig { BaseUrlOverride = "https://sso.example.com/jellyfin" };
         incoming.SamlConfigs["saml-blank"] = new SamlConfig { BaseUrlOverride = "   " };
 
-        ProviderConfigValidator.Validate(incoming);
+        ProviderConfigValidator.Validate(incoming, new PluginConfiguration());
     }
 
     [Fact]
@@ -235,7 +235,7 @@ public class ConfigPreservationTests
         var incoming = new PluginConfiguration();
         incoming.OidConfigs["idp"] = new OidConfig { BaseUrlOverride = "not-a-url" };
 
-        var ex = Assert.Throws<ArgumentException>(() => ProviderConfigValidator.Validate(incoming));
+        var ex = Assert.Throws<ArgumentException>(() => ProviderConfigValidator.Validate(incoming, new PluginConfiguration()));
         Assert.Contains("idp", ex.Message, StringComparison.Ordinal);
         Assert.Contains("OpenID", ex.Message, StringComparison.Ordinal);
     }
@@ -246,7 +246,7 @@ public class ConfigPreservationTests
         var incoming = new PluginConfiguration();
         incoming.SamlConfigs["saml"] = new SamlConfig { BaseUrlOverride = "ftp://example.com" };
 
-        var ex = Assert.Throws<ArgumentException>(() => ProviderConfigValidator.Validate(incoming));
+        var ex = Assert.Throws<ArgumentException>(() => ProviderConfigValidator.Validate(incoming, new PluginConfiguration()));
         Assert.Contains("SAML", ex.Message, StringComparison.Ordinal);
     }
 
@@ -255,7 +255,67 @@ public class ConfigPreservationTests
     {
         var incoming = new PluginConfiguration { OidConfigs = null, SamlConfigs = null };
 
-        ProviderConfigValidator.Validate(incoming);
+        ProviderConfigValidator.Validate(incoming, new PluginConfiguration());
+    }
+
+    // --- Provider-name validation on save (#336) ---
+
+    [Fact]
+    public void ValidateProviderNames_NewOidNameWithReservedCharacter_ThrowsNamingProviderAndProtocol()
+    {
+        var incoming = new PluginConfiguration();
+        incoming.OidConfigs["my/realm"] = new OidConfig();
+
+        var ex = Assert.Throws<ArgumentException>(() => ProviderConfigValidator.Validate(incoming, new PluginConfiguration()));
+        Assert.Contains("my/realm", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("OpenID", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ValidateProviderNames_NewSamlNameWithPercent_Throws()
+    {
+        var incoming = new PluginConfiguration();
+        incoming.SamlConfigs["prov%1"] = new SamlConfig();
+
+        var ex = Assert.Throws<ArgumentException>(() => ProviderConfigValidator.Validate(incoming, new PluginConfiguration()));
+        Assert.Contains("SAML", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ValidateProviderNames_ExistingReservedNames_AreExemptOnBothProtocols()
+    {
+        // A reserved-character name already in the live config keeps saving: its callback-URL bytes
+        // are what the identity provider has registered, so rejecting it would block every subsequent
+        // config save of a working deployment behind a rename.
+        var live = new PluginConfiguration();
+        live.OidConfigs["kc=prod"] = new OidConfig();
+        live.SamlConfigs["adfs (legacy)"] = new SamlConfig();
+        var incoming = new PluginConfiguration();
+        incoming.OidConfigs["kc=prod"] = new OidConfig();
+        incoming.SamlConfigs["adfs (legacy)"] = new SamlConfig();
+
+        ProviderConfigValidator.Validate(incoming, live);
+    }
+
+    [Fact]
+    public void ValidateProviderNames_SpacesAndNonAscii_StayAccepted()
+    {
+        // They survive the URL round-trip today (appended raw, pinned in SsoUrlBuilderTests), so only
+        // URI-reserved characters gate registration — rejecting more would strand working names.
+        var incoming = new PluginConfiguration();
+        incoming.OidConfigs["my provider"] = new OidConfig();
+        incoming.SamlConfigs["käse"] = new SamlConfig();
+
+        ProviderConfigValidator.Validate(incoming, new PluginConfiguration());
+    }
+
+    [Fact]
+    public void ValidateProviderNames_NullLiveConfig_TreatsEveryNameAsNew()
+    {
+        var incoming = new PluginConfiguration();
+        incoming.OidConfigs["my/realm"] = new OidConfig();
+
+        Assert.Throws<ArgumentException>(() => ProviderConfigValidator.Validate(incoming, null!));
     }
 
     [Theory]
@@ -474,7 +534,7 @@ public class ConfigPreservationTests
         incoming.SamlConfigs["ok"] = new SamlConfig { SamlCertificate = SamlTestFactory.Create().CertificateBase64 };
         incoming.SamlConfigs["blank"] = new SamlConfig { SamlCertificate = null };
 
-        ProviderConfigValidator.Validate(incoming);
+        ProviderConfigValidator.Validate(incoming, new PluginConfiguration());
     }
 
     [Fact]
@@ -483,13 +543,13 @@ public class ConfigPreservationTests
         var incoming = new PluginConfiguration();
         incoming.SamlConfigs["idp"] = new SamlConfig { SamlCertificate = "QUJD" }; // valid base64, not a cert
 
-        var ex = Assert.Throws<ArgumentException>(() => ProviderConfigValidator.Validate(incoming));
+        var ex = Assert.Throws<ArgumentException>(() => ProviderConfigValidator.Validate(incoming, new PluginConfiguration()));
         Assert.Contains("idp", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
     public void ValidateSamlCertificates_NullMap_DoesNotThrow()
     {
-        ProviderConfigValidator.Validate(new PluginConfiguration { SamlConfigs = null });
+        ProviderConfigValidator.Validate(new PluginConfiguration { SamlConfigs = null }, new PluginConfiguration());
     }
 }

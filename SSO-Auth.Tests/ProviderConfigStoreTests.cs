@@ -93,6 +93,36 @@ public class ProviderConfigStoreTests
     }
 
     [Fact]
+    public void Save_FreshConfigWithNewReservedName_Throws_AndPersistsNothing()
+    {
+        // The registration gate (#336): a name absent from the live config is validated before
+        // anything is persisted.
+        var (store, _, persisted) = CreateStore();
+        var incoming = new PluginConfiguration();
+        incoming.OidConfigs["my/realm"] = new OidConfig();
+
+        Assert.Throws<ArgumentException>(() => store.Save(incoming));
+
+        Assert.Empty(persisted);
+    }
+
+    [Fact]
+    public void Save_FreshConfigWithExistingReservedName_IsExempt_AndPersists()
+    {
+        // The store hands its live config to the validator, so a reserved-character name that is
+        // already configured keeps saving — its callback-URL bytes are what the IdP has registered,
+        // and blocking the save would strand the deployment behind a rename (#336).
+        var (store, live, persisted) = CreateStore();
+        live.OidConfigs["kc=prod"] = new OidConfig();
+        var incoming = new PluginConfiguration();
+        incoming.OidConfigs["kc=prod"] = new OidConfig();
+
+        store.Save(incoming);
+
+        Assert.Same(incoming, Assert.Single(persisted));
+    }
+
+    [Fact]
     public void Save_TheLiveObject_SkipsTheFreshConfigPipeline()
     {
         // Writes that reuse the live object (Mutate, login-path link writes) are intentionally never

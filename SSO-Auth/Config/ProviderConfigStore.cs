@@ -116,14 +116,15 @@ internal sealed class ProviderConfigStore
             if (configuration is PluginConfiguration incoming && !ReferenceEquals(incoming, _live()))
             {
                 // Reject the save fail-closed before anything is persisted if a base-URL override is
-                // malformed (#139) or a SAML signing certificate is not loadable (#206), so a bad value
-                // can never reach the login path. This validates the config-page save (a fresh incoming
-                // config); the OID/SAML Add endpoints write through Mutate (the live object, so this
-                // branch is skipped) and validate their own incoming provider at the controller via
-                // RejectInvalidBaseUrlOverride. Login-path writes (canonical links) also reuse the live
-                // object and are intentionally not revalidated here, so a slow/bad override can never
-                // throw on the login path.
-                ProviderConfigValidator.Validate(incoming);
+                // malformed (#139), a SAML signing certificate is not loadable (#206), or a NEWLY
+                // registered provider name contains URI-reserved characters (#336 — the live config is
+                // passed so names it already holds stay saveable). This validates the config-page save
+                // (a fresh incoming config); the OID/SAML Add endpoints write through Mutate (the live
+                // object, so this branch is skipped) and validate their own incoming provider at the
+                // controller via the Reject* guards. Login-path writes (canonical links) also reuse the
+                // live object and are intentionally not revalidated here, so a slow/bad override can
+                // never throw on the login path.
+                ProviderConfigValidator.Validate(incoming, _live());
 
                 ServerManagedFields.Preserve(incoming, _live());
 
