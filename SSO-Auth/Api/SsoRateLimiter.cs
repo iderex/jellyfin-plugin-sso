@@ -216,9 +216,10 @@ internal sealed class SsoRateLimiter
         Interlocked.Increment(ref _throttledHits);
 
         // Only the gate's single winner per interval drains the tally; everyone else returns 0 (suppressed).
-        // A racing increment between the gate entry and the drain is folded into the next interval's count,
-        // not lost outright. The gate self-heals a backward clock, so a correction cannot stall the signal,
-        // and on the first refusal (cursor at MinValue) the onset signals at once.
+        // An increment racing with the winner's drain lands either in that drain's returned count or in the
+        // tally for a later drain — never erased, since increment and exchange on one location are serialized
+        // atomic operations (pinned by the conservation test). The gate self-heals a backward clock, so a
+        // correction cannot stall the signal; the first refusal (cursor at MinValue) signals the onset at once.
         return _signalGate.TryEnter(nowUtc) ? Interlocked.Exchange(ref _throttledHits, 0) : 0;
     }
 
