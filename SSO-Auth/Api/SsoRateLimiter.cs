@@ -39,15 +39,18 @@ internal sealed class SsoRateLimiter
     // key" path never touches it.
     private readonly object _capLock = new object();
 
+    // Throttles the #195 observability signal to one drain per SignalInterval; the gate owns the atomic
+    // cursor. The tally (_throttledHits) it drains stays a mutable field below — see RecordThrottledHit.
+    private readonly IntervalGate _signalGate = new(SignalInterval);
+
     // Last sweep time as ticks, read/written atomically (DateTime is not torn-read-safe).
     private long _lastPruneTicks = DateTime.MinValue.Ticks;
 
-    // Bounded observability signal (#195). Every refusal increments the tally; a signal drains it into
-    // a single log line at most once per SignalInterval. Interlocked keeps both atomic; a hit lost or
-    // double-counted around the drain is harmless for a best-effort operator signal (never a security
-    // decision). Last signal time as ticks, read/written atomically like _lastPruneTicks.
+    // Bounded observability signal (#195). Every refusal increments the tally; RecordThrottledHit drains it
+    // into a single log line at most once per SignalInterval via _signalGate. A racing increment is never
+    // lost — it lands in that drain or a later one (see RecordThrottledHit) — which is harmless timing slack
+    // for a best-effort operator signal (never a security decision).
     private long _throttledHits;
-    private long _lastSignalTicks = DateTime.MinValue.Ticks;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SsoRateLimiter"/> class.
@@ -213,25 +216,12 @@ internal sealed class SsoRateLimiter
     {
         Interlocked.Increment(ref _throttledHits);
 
-        var last = Interlocked.Read(ref _lastSignalTicks);
-
-        // Suppress only when a non-negative, sub-interval amount of time has passed since the last
-        // signal (mirrors the #246 warning throttle). A backward wall-clock step does NOT suppress —
-        // it signals and resets the cursor — so a clock correction cannot stall the signal. On the
-        // first refusal (cursor at MinValue) the elapsed span is huge, so the onset signals at once.
-        if (nowUtc.Ticks >= last && nowUtc.Ticks - last < SignalInterval.Ticks)
-        {
-            return 0;
-        }
-
-        // Only the CAS winner drains the tally; losers fall back to suppressed. A racing increment
-        // between the CAS and the Exchange is folded into the next interval's count, not lost outright.
-        if (Interlocked.CompareExchange(ref _lastSignalTicks, nowUtc.Ticks, last) != last)
-        {
-            return 0;
-        }
-
-        return Interlocked.Exchange(ref _throttledHits, 0);
+        // Only the gate's single winner per interval drains the tally; everyone else returns 0 (suppressed).
+        // An increment racing with the winner's drain lands either in that drain's returned count or in the
+        // tally for a later drain — never erased, since increment and exchange on one location are serialized
+        // atomic operations (pinned by the conservation test). The gate self-heals a backward clock, so a
+        // correction cannot stall the signal; the first refusal (cursor at MinValue) signals the onset at once.
+        return _signalGate.TryEnter(nowUtc) ? Interlocked.Exchange(ref _throttledHits, 0) : 0;
     }
 
     // Drops counters whose window has long passed, at most once per PruneInterval. Enumerating a

@@ -1,5 +1,7 @@
 using System;
 using System.Net;
+using System.Threading;
+using System.Threading.Tasks;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Xunit;
 
@@ -182,6 +184,43 @@ public class SsoRateLimiterTests
         Assert.Equal(0, limiter.RecordThrottledHit(Now.AddSeconds(1)));
 
         Assert.Equal(2, limiter.RecordThrottledHit(Now.AddMinutes(-5)));
+    }
+
+    [Fact]
+    public async Task RecordThrottledHit_ConcurrentHitsAndDrains_ConserveEveryHit()
+    {
+        // Conservation: every refusal lands in exactly one drain's returned count — an increment racing
+        // with the winner's Exchange is included either in that drain or in a later one, never erased
+        // (Interlocked increment and exchange on the same location are serialized atomic operations).
+        // Advancing per-thread clocks force frequent gate wins, maximizing drain/increment races.
+        var limiter = new SsoRateLimiter();
+        var baseTime = Now;
+        long drained = 0;
+        const int Threads = 8;
+        const int HitsPerThread = 5_000;
+        var token = TestContext.Current.CancellationToken;
+
+        var tasks = new Task[Threads];
+        for (var t = 0; t < Threads; t++)
+        {
+            var offset = t * HitsPerThread;
+            tasks[t] = Task.Run(
+                () =>
+                {
+                    for (var i = 0; i < HitsPerThread; i++)
+                    {
+                        var drainedNow = limiter.RecordThrottledHit(baseTime.AddMinutes(offset + i));
+                        Interlocked.Add(ref drained, drainedNow);
+                    }
+                },
+                token);
+        }
+
+        await Task.WhenAll(tasks);
+
+        // One final far-future refusal wins the gate uncontended and drains the residue (plus itself).
+        drained += limiter.RecordThrottledHit(baseTime.AddYears(1));
+        Assert.Equal((Threads * HitsPerThread) + 1, drained);
     }
 
     [Fact]
