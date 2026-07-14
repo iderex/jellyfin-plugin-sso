@@ -76,7 +76,7 @@ public class SSOController : ControllerBase
     private static readonly TimeSpan PkceSupportCacheTtl = TimeSpan.FromMinutes(15);
 
     // How long an issued SAML AuthnRequest ID stays valid for correlation — the interactive leg
-    // (challenge -> IdP login/MFA -> POST back -> mint), matching the OpenID StateLifetime.
+    // (challenge -> IdP login/MFA -> POST back -> mint), matching OidcStateStore.DefaultLifetime.
     private static readonly TimeSpan SamlRequestLifetime = TimeSpan.FromMinutes(15);
 
     // Opt-in per-client rate limiter over the anonymous SSO flow endpoints (#128).

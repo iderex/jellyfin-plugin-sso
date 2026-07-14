@@ -376,6 +376,38 @@ public class OidcStateStoreTests
         Assert.True(rejected > 0);
     }
 
+    [Fact]
+    public void PendingStateComplete_CopiesEveryDerivedFieldOntoTheStoredState()
+    {
+        // Pins the relocated pending-to-ready promotion field-for-field: a redeem after Complete must
+        // see exactly the role-gate result (the in-place copy is today's behavior; the atomic variant
+        // swap is the follow-up).
+        var store = Store();
+        store.Seed("tok", Entry("p", "tok", false, Now));
+        var pending = store.PeekCurrent("tok", "p", Now);
+        Assert.NotNull(pending);
+
+        pending.Complete(new OidcAuthorizeStateBuilder.OidcAuthorizeState(
+            Username: "alice",
+            Subject: "sub-1",
+            Valid: true,
+            Admin: true,
+            EnableLiveTv: true,
+            EnableLiveTvManagement: true,
+            Folders: new List<string> { "movies" },
+            AvatarUrl: "https://idp.example.com/a.png"));
+
+        var redeemed = store.TryRedeem("tok", "p", Now);
+        Assert.NotNull(redeemed);
+        Assert.Equal("alice", redeemed.Username);
+        Assert.Equal("sub-1", redeemed.Subject);
+        Assert.True(redeemed.Admin);
+        Assert.True(redeemed.EnableLiveTv);
+        Assert.True(redeemed.EnableLiveTvManagement);
+        Assert.Equal(new[] { "movies" }, redeemed.Folders);
+        Assert.Equal("https://idp.example.com/a.png", redeemed.AvatarUrl);
+    }
+
     // --- The production defaults and the non-secret projection ---
 
     [Fact]
