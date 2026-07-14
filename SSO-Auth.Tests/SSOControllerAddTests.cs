@@ -132,4 +132,32 @@ public class SSOControllerAddTests
         var stored = SSOPlugin.Instance.ReadConfiguration(c => c.SamlConfigs["adfs (legacy)"].SamlClientId);
         Assert.Equal("client-2", stored);
     }
+
+    [Fact]
+    public void OidAdd_CaseVariantOfExistingReservedName_IsTreatedAsNew_AndRejected()
+    {
+        // The grandfather exemption is keyed on the ordinal, case-sensitive dictionary the login lookup
+        // also uses, so a case variant of an existing name is a genuinely different runtime provider,
+        // not the exempt one — it must be rejected, not silently accepted as "already configured".
+        var harness = new SsoControllerHarness(c => c.OidConfigs["kc=prod"] = new OidConfig());
+
+        Assert.Throws<ArgumentException>(() => harness.Controller.OidAdd("KC=prod", new OidConfig()));
+
+        Assert.False(SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs.ContainsKey("KC=prod")));
+    }
+
+    [Fact]
+    public void OidAdd_ReAddingADeletedGrandfatheredReservedName_IsRejected()
+    {
+        // The exemption is by LIVE config, so it is a one-way door: once a grandfathered reserved-name
+        // provider is removed, the name is "new" again and cannot be re-added through the API. Pins the
+        // documented recovery boundary (README: recover by editing config.xml on disk).
+        var harness = new SsoControllerHarness(c => c.OidConfigs["kc=prod"] = new OidConfig());
+
+        harness.Controller.OidDel("kc=prod");
+        Assert.False(SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs.ContainsKey("kc=prod")));
+
+        Assert.Throws<ArgumentException>(() => harness.Controller.OidAdd("kc=prod", new OidConfig()));
+        Assert.False(SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs.ContainsKey("kc=prod")));
+    }
 }

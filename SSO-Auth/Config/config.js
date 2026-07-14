@@ -291,14 +291,30 @@ const ssoConfigurationPage = {
         ApiClient.updatePluginConfiguration(
           ssoConfigurationPage.pluginUniqueId,
           config,
-        ).then(function (result) {
-          Dashboard.processPluginConfigurationUpdateResult(result);
-          ssoConfigurationPage.loadConfiguration(page);
+        ).then(
+          function (result) {
+            Dashboard.processPluginConfigurationUpdateResult(result);
+            ssoConfigurationPage.loadConfiguration(page);
 
-          Dashboard.alert("Provider removed");
+            Dashboard.alert("Provider removed");
 
-          resolve();
-        });
+            resolve();
+          },
+          // Report a genuine save failure rather than swallowing it. The delete
+          // re-posts the whole configuration, so the server can now reject it for
+          // a reason unrelated to this delete — e.g. a different provider whose
+          // reserved-character name became "new" because it was removed from the
+          // live config in the meantime (#336). Without this the PUT would reject
+          // silently and the provider would appear undeleted with no explanation.
+          function () {
+            Dashboard.alert({
+              title: "Delete failed",
+              message:
+                "Could not remove the provider. The saved configuration was rejected by the server; reload the page and try again.",
+            });
+            resolve();
+          },
+        );
       });
     });
   },

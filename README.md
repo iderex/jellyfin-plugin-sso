@@ -69,7 +69,7 @@ A packaged release installable from a plugin repository will be published once t
 
 Configure your providers on the plugin's settings page (**Dashboard → Plugins → SSO-Auth**) and via the admin API. The [Provider Guides](providers.md) walk through setup for common identity providers.
 
-Provider names become part of the callback URL you register with your identity provider (`.../sso/OID/redirect/PROVIDER_NAME`), so a newly added name must not contain `%` or URI-reserved characters (`: / ? # [ ] @ ! $ & ' ( ) * + , ; =`) — registration rejects such names. Names that are already configured keep working unchanged.
+Provider names become part of the callback URL you register with your identity provider (`.../sso/OID/redirect/PROVIDER_NAME`), so a newly added name must not contain `%`, a backslash, or URI-reserved characters (`: / ? # [ ] @ ! $ & ' ( ) * + , ; =`) — registration rejects such names. Names that are already configured keep working unchanged; note that this exemption is by live configuration, so once you **delete** a provider whose name uses one of these characters you cannot re-add it through the UI or API (nor restore it from a full-config backup) — recover by editing `config.xml` on disk.
 
 > **Scripting the admin API?** The provider-management endpoints use Jellyfin's `RequiresElevation` policy — pass your admin API key in the header (`-H 'Authorization: MediaBrowser Token="YOUR_KEY"'`) rather than as a `?api_key=` query parameter, which would leak the secret into proxy logs, the process list, and shell history.
 
