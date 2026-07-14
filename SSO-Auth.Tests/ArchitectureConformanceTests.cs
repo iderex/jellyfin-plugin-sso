@@ -115,13 +115,21 @@ public class ArchitectureConformanceTests
             .Where(t => !storeLike.Any(s => SimpleName(t).EndsWith(s, StringComparison.Ordinal)))
             .SelectMany(t => t.GetFields(BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
             .Where(f => !f.Name.Contains('<', StringComparison.Ordinal)) // compiler-generated backing fields
-            .Where(f => typeof(System.Collections.IDictionary).IsAssignableFrom(f.FieldType))
+            .Where(f => IsDictionaryLike(f.FieldType))
             .Select(f => $"{SimpleName(f.DeclaringType!)}.{f.Name}") // DeclaringType is never null for a type's own fields
             .Where(n => !exemptions.Contains(n))
             .ToList();
 
         Assert.True(offenders.Count == 0, "Raw dictionary state must live inside a *Store/*Cache/*Limiter type (or carry a documented exemption here): " + string.Join(", ", offenders));
     }
+
+    // Catches concrete dictionaries (they implement non-generic IDictionary) AND fields declared as the
+    // generic IDictionary<,> interface, which does not inherit the non-generic one — otherwise an
+    // interface-typed field would slip past the mutable-keyed-state rule.
+    private static bool IsDictionaryLike(Type t) =>
+        typeof(System.Collections.IDictionary).IsAssignableFrom(t)
+        || (t.IsGenericType && t.GetGenericTypeDefinition() == typeof(IDictionary<,>))
+        || t.GetInterfaces().Any(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IDictionary<,>));
 
     // The reflection Name of a generic type carries a `1 arity suffix (e.g. "Cache`1"); strip it so suffix
     // matching sees the source name.

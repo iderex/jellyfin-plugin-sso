@@ -377,6 +377,33 @@ public class OidcStateStoreTests
     }
 
     [Fact]
+    public void PendingStateComplete_SecondCompletion_OverwritesTheFirst_TheDocumentedResidual()
+    {
+        // Characterizes today's in-place promotion: a second completion overwrites the first
+        // (last-writer-wins), exactly as the pre-consolidation inline copy behaved. Reaching a second
+        // completion in production requires the IdP to accept a reused authorization code (the token
+        // exchange fails on replay for conforming IdPs), so the window is theoretical; making the
+        // promotion an atomic single-winner swap is #341, and this pin documents what it will change.
+        var store = Store();
+        store.Seed("tok", Entry("p", "tok", false, Now));
+        var pending = store.PeekCurrent("tok", "p", Now);
+        Assert.NotNull(pending);
+
+        pending.Complete(new OidcAuthorizeStateBuilder.OidcAuthorizeState(
+            Username: "alice", Subject: "sub-1", Valid: true, Admin: false,
+            EnableLiveTv: false, EnableLiveTvManagement: false, Folders: new List<string>(), AvatarUrl: null));
+        pending.Complete(new OidcAuthorizeStateBuilder.OidcAuthorizeState(
+            Username: "bob", Subject: "sub-2", Valid: true, Admin: true,
+            EnableLiveTv: true, EnableLiveTvManagement: true, Folders: new List<string> { "all" }, AvatarUrl: null));
+
+        var redeemed = store.TryRedeem("tok", "p", Now);
+        Assert.NotNull(redeemed);
+        Assert.Equal("bob", redeemed.Username);
+        Assert.Equal("sub-2", redeemed.Subject);
+        Assert.True(redeemed.Admin);
+    }
+
+    [Fact]
     public void PendingStateComplete_CopiesEveryDerivedFieldOntoTheStoredState()
     {
         // Pins the relocated pending-to-ready promotion field-for-field: a redeem after Complete must
