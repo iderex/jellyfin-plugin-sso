@@ -451,10 +451,10 @@ $RECYCLE.BIN/
 .vscode
 
 ##
-## Claude Code / AI agent tooling
+## Local developer tooling
 ##
-# Local agent tooling (hooks, commands, subagents, settings), transcripts and
-# state, plus the agent operating manual. Maintained locally, not published.
+# Local tooling (hooks, commands, editor/automation settings), transcripts and
+# state, plus the local operating manual. Maintained locally, not published.
 .claude/
 CLAUDE.md
 AGENTS.md
