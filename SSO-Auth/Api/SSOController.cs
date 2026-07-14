@@ -297,7 +297,7 @@ public class SSOController : ControllerBase
 
             bool newPath = ResolveChallengeNewPath(config.NewPath, isLinking, value => config.NewPath = value);
 
-            string redirectUri = GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride) + $"/sso/OID/{(newPath ? "redirect" : "r")}/" + provider;
+            string redirectUri = SsoUrlBuilder.OidRedirectUri(GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), newPath, provider);
 
             var oidcClient = CreateOidcClient(config, redirectUri, string.Join(" ", config.OidScopes.Prepend("openid profile")));
             var state = await oidcClient.PrepareLoginAsync().ConfigureAwait(false);
@@ -475,7 +475,7 @@ public class SSOController : ControllerBase
     private OidcClient CreateCallbackOidcClient(OidConfig config, string provider)
     {
         var scopes = config.OidScopes == null ? new string[2] : config.OidScopes;
-        var redirectUri = GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride) + $"/sso/OID/{OidcCallbackPath.RedirectSegment(Request.Path.Value)}/" + provider;
+        var redirectUri = SsoUrlBuilder.OidCallbackRedirectUri(GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), Request.Path.Value, provider);
         return CreateOidcClient(config, redirectUri, string.Join(" ", scopes.Prepend("openid profile")));
     }
 
@@ -770,7 +770,7 @@ public class SSOController : ControllerBase
         {
             bool newPath = ResolveChallengeNewPath(config.NewPath, isLinking, value => config.NewPath = value);
 
-            string redirectUri = GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride) + $"/sso/SAML/{(newPath ? "post" : "p")}/" + provider;
+            string redirectUri = SsoUrlBuilder.SamlAcsUrl(GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), newPath, provider);
             string relayState = null;
             if (isLinking)
             {
@@ -1713,11 +1713,8 @@ public class SSOController : ControllerBase
     // Jellyfin's Known/Trusted Proxies (or set BaseUrlOverride) so the Host cannot be spoofed, or an
     // attacker controlling the Host can make the expected URL match a captured assertion's Recipient
     // (defense-in-depth, not a hard guarantee).
-    private string[] ExpectedAcsUrls(SamlConfig config, string provider)
-    {
-        var baseUrl = GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride) + "/sso/SAML/";
-        return new[] { baseUrl + "post/" + provider, baseUrl + "p/" + provider };
-    }
+    private string[] ExpectedAcsUrls(SamlConfig config, string provider) =>
+        SsoUrlBuilder.SamlExpectedAcsUrls(GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), provider);
 
     // Validates a SAML response: signature + time bounds always, plus AudienceRestriction binding to
     // this SP unless explicitly opted out. Expected audience is the configured SamlAudience, falling
