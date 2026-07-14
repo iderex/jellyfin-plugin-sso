@@ -24,20 +24,21 @@ public class CanonicalLinkServiceTests
 
     private static User UserNamed(string name, Guid id) => new User(name, "SSO-Auth", "Default") { Id = id };
 
-    private static (CanonicalLinkService Service, PluginConfiguration Config, IUserManager Users) Build(Action<PluginConfiguration>? seed = null)
+    private static (CanonicalLinkService Service, PluginConfiguration Config, IUserManager Users, CapturingLogger Log) Build(Action<PluginConfiguration>? seed = null)
     {
         var cfg = new PluginConfiguration();
         seed?.Invoke(cfg);
         var store = new ProviderConfigStore(() => cfg, _ => { }, new CapturingLogger());
         var users = Substitute.For<IUserManager>();
-        var service = new CanonicalLinkService(users, new FakeCryptoProvider(), store, new CapturingLogger());
-        return (service, cfg, users);
+        var log = new CapturingLogger();
+        var service = new CanonicalLinkService(users, new FakeCryptoProvider(), store, log);
+        return (service, cfg, users, log);
     }
 
     [Fact]
     public async Task ResolveOrCreateAsync_LiveSubjectLink_ReusesItWithoutCreating()
     {
-        var (service, _, users) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
         {
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
         });
@@ -52,7 +53,7 @@ public class CanonicalLinkServiceTests
     [Fact]
     public async Task ResolveOrCreateAsync_NoLinkNoAccount_CreatesAndLinksOnTheSubjectKey()
     {
-        var (service, cfg, users) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
         var created = UserNamed("alice", Other);
         users.GetUserByName("alice").Returns((User?)null);
         users.CreateUserAsync("alice").Returns(created);
@@ -68,7 +69,7 @@ public class CanonicalLinkServiceTests
     [Fact]
     public async Task ResolveOrCreateAsync_ExistingAccountAndAdoptionAllowed_AdoptsAndLinks()
     {
-        var (service, cfg, users) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
         users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
         users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
 
@@ -85,7 +86,7 @@ public class CanonicalLinkServiceTests
         // The account-takeover guard (#95): a login whose name matches a pre-existing unlinked account,
         // with adoption off, must be refused — not silently take the account over. No controller test
         // reached this path before the extraction; this pins it directly.
-        var (service, cfg, users) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
         users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
@@ -104,7 +105,7 @@ public class CanonicalLinkServiceTests
     {
         // Fail-closed belt (#95/#155): a blank identity key or username must never create, adopt, or
         // look up an account, even if a caller forgets its own guard.
-        var (service, _, users) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+        var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
             service.ResolveOrCreateAsync("oid", "kc", canonicalKey, username, allowExistingAccountLink: true));
@@ -113,18 +114,19 @@ public class CanonicalLinkServiceTests
     }
 
     [Fact]
-    public async Task ResolveOrCreateAsync_LegacyNameKeyedOidLink_MigratesToTheSubjectKey()
+    public async Task ResolveOrCreateAsync_LegacyNameKeyedOidLink_WithAdoptionAllowed_MigratesToTheSubjectKey()
     {
         // #155: an OpenID login with only a legacy username-keyed link adopts and re-keys it to the
-        // stable subject, so a later provider-side rename cannot detach it.
-        var (service, cfg, users) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        // stable subject, so a later provider-side rename cannot detach it. The legacy key is the
+        // mutable username, so this name-based hand-off requires AllowExistingAccountLink (#354).
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
         {
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
         });
         users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
         users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
 
-        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: false);
+        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true);
 
         Assert.Equal(Existing, resolved);
         var links = cfg.OidConfigs["kc"].CanonicalLinks;
@@ -133,9 +135,64 @@ public class CanonicalLinkServiceTests
     }
 
     [Fact]
+    public async Task ResolveOrCreateAsync_LegacyLinkButAdoptionDisabled_RefusesAndMigratesNothing()
+    {
+        // The account-takeover characterization (#354, CWE-287): preferred_username is chosen at the
+        // identity provider, so a login with a foreign sub and a victim's name as preferred_username
+        // must NOT be handed the account the legacy name-keyed entry points at while adoption is off.
+        // The entry stays untouched: no migration, no link under the attacker's sub.
+        var (service, cfg, users, log) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
+        });
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
+
+        await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
+            service.ResolveOrCreateAsync("oid", "kc", "attacker-sub", "alice", allowExistingAccountLink: false));
+
+        await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
+        var links = cfg.OidConfigs["kc"].CanonicalLinks;
+        Assert.Equal(Existing, links["alice"]); // the legacy entry is untouched
+        Assert.False(links.ContainsKey("attacker-sub"));
+
+        // The operator breadcrumb: after an upgrade from a username-keyed version, this warning is
+        // what separates "migration pending — enable AllowExistingAccountLink" from an ordinary
+        // name-taken refusal in a wall of 403s.
+        Assert.Contains(log.Entries, e =>
+            e.Level == Microsoft.Extensions.Logging.LogLevel.Warning
+            && e.Message.Contains("legacy username-keyed link exists", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_LegacyLinkAdoptionDisabledAndNameFree_CreatesNewInsteadOfFollowingIt()
+    {
+        // With adoption off and no live account under the login's name (e.g. the linked user was
+        // renamed), the ignored legacy entry must not resolve either: the login provisions a fresh
+        // account and the foreign entry survives for its real owner to migrate later (#354).
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
+        });
+        users.GetUserById(Existing).Returns(UserNamed("renamed-alice", Existing));
+        users.GetUserByName("alice").Returns((User?)null);
+        var created = UserNamed("alice", Other);
+        users.CreateUserAsync("alice").Returns(created);
+        users.GetUserById(Other).Returns(created);
+
+        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "attacker-sub", "alice", allowExistingAccountLink: false);
+
+        Assert.Equal(Other, resolved);
+        await users.Received(1).CreateUserAsync("alice");
+        var links = cfg.OidConfigs["kc"].CanonicalLinks;
+        Assert.Equal(Existing, links["alice"]); // the legacy entry is untouched
+        Assert.Equal(Other, links["attacker-sub"]); // the fresh account is linked under the login's own sub
+    }
+
+    [Fact]
     public void RemoveUserEverywhere_RemovesTheUsersLinksAcrossAllProviders_AndCountsThem()
     {
-        var (service, cfg, _) = Build(c =>
+        var (service, cfg, _, _) = Build(c =>
         {
             c.OidConfigs["kc"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing, ["sub-2"] = Other } };
             c.SamlConfigs["adfs"] = new SamlConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing } };

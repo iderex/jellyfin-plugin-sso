@@ -92,22 +92,30 @@ internal static class AccountLinkResolver
     /// The user id linked under the legacy username key, if that link exists and its user still exists.
     /// Pass <c>null</c> when the subject and username are identical (there is nothing to migrate).
     /// </param>
+    /// <param name="allowExistingAccountLink">
+    /// Whether the provider permits matching an account by its mutable name. The legacy key IS the
+    /// mutable username, so following it hands the login an account selected by a name the identity
+    /// provider controls — the exact trust this flag governs for same-named account adoption (#354,
+    /// CWE-287). With the flag off the legacy link is ignored and the login falls through to the
+    /// name-adoption gate, which fails closed.
+    /// </param>
     /// <returns>
     /// The linked user id (or null when neither link resolves), and whether the legacy link must be
     /// re-keyed to the subject. Migration is requested only when there is no subject-keyed link yet but
-    /// a legacy one resolves — a one-time, idempotent hand-off: once re-keyed, later logins hit the
-    /// subject key directly and never consult the name again.
+    /// a legacy one resolves and name-based matching is permitted — a one-time, idempotent hand-off:
+    /// once re-keyed, later logins hit the subject key directly and never consult the name again.
     /// </returns>
     internal static (Guid? LinkedUserId, bool MigrateLegacy) ResolveCanonicalLink(
         Guid? subjectKeyedUserId,
-        Guid? legacyNameKeyedUserId)
+        Guid? legacyNameKeyedUserId,
+        bool allowExistingAccountLink)
     {
         if (subjectKeyedUserId.HasValue)
         {
             return (subjectKeyedUserId.Value, false);
         }
 
-        if (legacyNameKeyedUserId.HasValue)
+        if (legacyNameKeyedUserId.HasValue && allowExistingAccountLink)
         {
             return (legacyNameKeyedUserId.Value, true);
         }

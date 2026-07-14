@@ -59,9 +59,12 @@ internal sealed class CanonicalLinkService
 
         // The link is keyed on the stable identity. A legacy OpenID link (#155) was keyed on the
         // mutable username instead; when no subject-keyed link exists yet but a legacy one resolves,
-        // adopt and re-key it — the one login that migrates reuses the exact decision the old
-        // name-keyed lookup would have made, then locks it to the subject so a later provider-side
-        // rename cannot detach it. Only OpenID differs key from name; SAML passes key == name.
+        // adopt and re-key it, locking it to the subject so a later provider-side rename cannot
+        // detach it. Because the legacy key is a name the identity provider controls, following it is
+        // name-based account matching, so it honors AllowExistingAccountLink exactly like same-named
+        // adoption below (#354): with the flag off, a login whose preferred_username points at another
+        // user's entry is refused by the adoption gate instead of being handed that account.
+        // Only OpenID differs key from name; SAML passes key == name.
         // Both candidates are read in ONE pass under the config lock: with separate reads, a
         // concurrent login's migration could commit between them, so this login would see the subject
         // key before the re-key and the legacy key after it, resolve neither, and bounce a legitimate
@@ -79,12 +82,24 @@ internal sealed class CanonicalLinkService
             return (bySubject, byName);
         });
 
-        var (linkedUserId, migrateLegacy) = AccountLinkResolver.ResolveCanonicalLink(subjectLink, legacyLink);
+        var (linkedUserId, migrateLegacy) = AccountLinkResolver.ResolveCanonicalLink(subjectLink, legacyLink, allowExistingAccountLink);
         if (migrateLegacy)
         {
             MigrateCanonicalLinkKey(mode, provider, username, canonicalKey);
             _logger.LogInformation(
                 "Migrated {Mode}/{Provider} canonical link from the legacy username key to the stable subject key.",
+                mode,
+                provider?.ReplaceLineEndings(string.Empty));
+        }
+        else if (legacyLink.HasValue)
+        {
+            // The legacy candidate only survives to here un-migrated when the flag is off (#354).
+            // After an upgrade from a username-keyed version this line is the one breadcrumb that
+            // separates "migration pending — enable AllowExistingAccountLink" from an ordinary
+            // name-taken refusal, so post-upgrade mass-403 triage is one glance, not guesswork.
+            _logger.LogWarning(
+                "SSO login for {Name} via {Mode}/{Provider}: a legacy username-keyed link exists but AllowExistingAccountLink is disabled for this provider; the link is not followed or migrated. Enable AllowExistingAccountLink (or link the account via the admin endpoints) to migrate it.",
+                username.ReplaceLineEndings(string.Empty),
                 mode,
                 provider?.ReplaceLineEndings(string.Empty));
         }

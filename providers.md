@@ -75,12 +75,20 @@ expiry). A few provider settings must therefore match, or login is refused (fail
   that mints a _different_ `sub` for the same user on every login (a misconfigured pairwise-subject
   setup) will work exactly once and then be refused — fix the IdP configuration; there is nothing
   safe to anchor the identity to otherwise.
-- **Upgrading from a username-keyed version:** links created by older plugin versions migrate to
-  `sub` automatically on each user's next login. The migration matches on the _current_ username, so
-  a user renamed at the IdP before upgrading cannot be matched to their old link (they get a fresh
-  account — the same outcome a rename already had before). Note that the self-service linking page
-  now lists OpenID links by their `sub` value, which for many providers is an opaque identifier
-  rather than a readable name.
+- **Upgrading from a username-keyed version:** links created by older plugin versions are keyed on
+  the username — and a username is something the identity provider can reassign, so following one is
+  name-based account matching, governed by the same `AllowExistingAccountLink` opt-in as adopting a
+  same-named account. **With the flag enabled**, each user's next login migrates their link to `sub`
+  automatically (matching on the _current_ username; a user renamed at the IdP before upgrading gets
+  a fresh account — the same outcome a rename already had before). **With the flag disabled (the
+  default), legacy links are not followed:** a login whose name matches an existing account is
+  refused (HTTP 403, with a server log line naming the pending legacy link), and a login whose name
+  is free gets a fresh account instead of the old one. So after upgrading, enable
+  `AllowExistingAccountLink` for the provider — temporarily, if you prefer — **before** affected
+  users log in again, or link their accounts explicitly via the admin API; once a user has logged in
+  without it, their fresh `sub`-keyed link wins and the old entry is never migrated. Note that the
+  self-service linking page now lists OpenID links by their `sub` value, which for many providers is
+  an opaque identifier rather than a readable name.
 
 ## Canonical base URL (recommended hardening)
 
