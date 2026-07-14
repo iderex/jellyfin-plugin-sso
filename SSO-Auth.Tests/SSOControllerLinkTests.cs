@@ -163,7 +163,7 @@ public class SSOControllerLinkTests
     [Fact]
     public async Task AddCanonicalLink_AuthorizedOidWithRedeemableState_LinksAndReturnsNoContent()
     {
-        var harness = ForCaller(isAdmin: true, callerId: Target, configure: c => c.OidConfigs["keycloak"] = new OidConfig());
+        var harness = ForCaller(isAdmin: true, callerId: Target, configure: c => c.OidConfigs["keycloak"] = new OidConfig { Enabled = true });
         // The OID link path redeems an authorize state the redirect leg validated; seed a redeemable one.
         SSOController.SeedOidStateForTests("state-1", new TimedAuthorizeState(new AuthorizeState { State = "state-1" }, DateTime.Now)
         {
@@ -180,11 +180,64 @@ public class SSOControllerLinkTests
     }
 
     [Fact]
+    public async Task AddCanonicalLink_OidDisabledProvider_RejectsWithoutConsumingTheState()
+    {
+        // #343: a state validated shortly before an administrator disables the provider must not stay
+        // usable to create a link, and the disabled provider must not burn the state either — the
+        // rejection mirrors OidAuth's short-circuit order and shares the unknown-provider response, so
+        // the two cases cannot be probed apart.
+        var harness = ForCaller(isAdmin: true, callerId: Target, configure: c => c.OidConfigs["keycloak"] = new OidConfig { Enabled = false });
+        SSOController.SeedOidStateForTests("state-1", new TimedAuthorizeState(new AuthorizeState { State = "state-1" }, DateTime.Now)
+        {
+            Provider = "keycloak",
+            Valid = true,
+            Subject = "sub-1",
+        });
+
+        var rejected = await harness.Controller.AddCanonicalLink("oid", "keycloak", Target, new AuthResponse { Data = "state-1" });
+
+        // Same body as the unknown-provider rejection, so the two cases cannot be probed apart.
+        Assert.Equal("No matching provider found", Assert.IsType<BadRequestObjectResult>(rejected).Value);
+        Assert.False(SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["keycloak"].CanonicalLinks.ContainsKey("sub-1")));
+
+        // The state survived the rejection: re-enabling the provider lets the same token link.
+        SSOPlugin.Instance.MutateConfiguration(c => c.OidConfigs["keycloak"].Enabled = true);
+        var accepted = await harness.Controller.AddCanonicalLink("oid", "keycloak", Target, new AuthResponse { Data = "state-1" });
+        Assert.IsType<NoContentResult>(accepted);
+    }
+
+    [Fact]
+    public async Task AddCanonicalLink_SamlDisabledProvider_RejectsWithoutConsumingTheAssertion()
+    {
+        // #343, SAML twin: the disabled check runs before the replay cache, so the assertion's
+        // one-time-use ID is not burned by a rejected attempt against a disabled provider.
+        var fixture = SamlTestFactory.Create(nameId: "alice");
+        var harness = ForCaller(isAdmin: true, callerId: Target, configure: c => c.SamlConfigs["adfs"] = new SamlConfig
+        {
+            Enabled = false,
+            SamlCertificate = fixture.CertificateBase64,
+            DoNotValidateAudience = true,
+        });
+
+        var rejected = await harness.Controller.AddCanonicalLink("saml", "adfs", Target, new AuthResponse { Data = fixture.EncodeResponse() });
+
+        // Same body as the unknown-provider rejection, so the two cases cannot be probed apart.
+        Assert.Equal("No matching provider found", Assert.IsType<BadRequestObjectResult>(rejected).Value);
+        Assert.False(SSOPlugin.Instance.ReadConfiguration(c => c.SamlConfigs["adfs"].CanonicalLinks.ContainsKey("alice")));
+
+        // The assertion survived the rejection: re-enabling the provider lets the same response link.
+        SSOPlugin.Instance.MutateConfiguration(c => c.SamlConfigs["adfs"].Enabled = true);
+        var accepted = await harness.Controller.AddCanonicalLink("saml", "adfs", Target, new AuthResponse { Data = fixture.EncodeResponse() });
+        Assert.IsType<NoContentResult>(accepted);
+    }
+
+    [Fact]
     public async Task AddCanonicalLink_AuthorizedSamlWithSignedResponse_LinksAndReturnsNoContent()
     {
         var fixture = SamlTestFactory.Create(nameId: "alice");
         var harness = ForCaller(isAdmin: true, callerId: Target, configure: c => c.SamlConfigs["adfs"] = new SamlConfig
         {
+            Enabled = true,
             SamlCertificate = fixture.CertificateBase64,
             DoNotValidateAudience = true, // audience validation is covered separately
         });
