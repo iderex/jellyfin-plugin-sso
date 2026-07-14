@@ -1,29 +1,33 @@
 # Code owners for jellyfin-plugin-sso
 #
-# Auto-requests the maintainer's review on changes, with extra emphasis on the
+# Requests both maintainers' review on changes, with extra emphasis on the
 # security-critical paths (the SSO login path, crypto, config persistence, and
 # the release pipeline).
 #
-# Note: this only requests review; it is not a hard merge gate. GitHub can
-# require approvals, but a PR author cannot approve their own PR, so with a solo
-# maintainer as the only Code Owner a required-approval count (or "require
-# review from Code Owners") would deadlock every maintainer-authored PR — it is
-# therefore intentionally left off in the ruleset. The maintainer sign-off is
-# instead a process gate: every PR gets a mandatory consolidated `iderex`
-# review before merge that documents the review findings and their resolution
-# (a Comment-event review on iderex-authored PRs, an approval on others).
+# Governance (two maintainers, equal Admin rights): every change to a protected
+# branch needs the OTHER maintainer's approval. GitHub forbids self-approval, so
+# with two code owners the "Require review from Code Owners" + one required
+# approval rule means a PR authored by one maintainer must be approved by the
+# other — genuine four-eyes, and neither can merge past the other. This holds
+# only while the ruleset's bypass list stays empty (the Admin role by itself
+# does not grant a bypass). A listed owner is enforced only once that account
+# has write access to the repository.
+#
+# Requiring TWO approvals is deliberately NOT used: with exactly two maintainers
+# it would deadlock every maintainer-authored PR (the author cannot approve, so
+# a second approval is unreachable). One required code-owner approval is correct.
 
-# Default owner for everything in the repo.
-*                        @iderex
+# Default owners for everything in the repo.
+*                        @iderex @TheRealStroopwafel
 
 # SSO login path and crypto: SAML core, controller/API helpers, admin config.
-/SSO-Auth/Saml.cs        @iderex
-/SSO-Auth/Api/           @iderex
-/SSO-Auth/Config/        @iderex
+/SSO-Auth/Saml.cs        @iderex @TheRealStroopwafel
+/SSO-Auth/Api/           @iderex @TheRealStroopwafel
+/SSO-Auth/Config/        @iderex @TheRealStroopwafel
 
 # Release pipeline and CI.
-/.github/workflows/      @iderex
-/build.yaml              @iderex
+/.github/workflows/      @iderex @TheRealStroopwafel
+/build.yaml              @iderex @TheRealStroopwafel
 
 # Security policy.
-/SECURITY.md             @iderex
+/SECURITY.md             @iderex @TheRealStroopwafel
