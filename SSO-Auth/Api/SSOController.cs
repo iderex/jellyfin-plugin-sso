@@ -40,11 +40,10 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 [Route("[controller]")]
 public class SSOController : ControllerBase
 {
-    // Client-facing error messages: unresolved provider names, and the generic denial for any
-    // rejected login (deliberately uniform so the response does not reveal why it was rejected).
+    // Client-facing messages for unresolved provider names; the uniform-rejection policy and its
+    // denial body live on LoginStatusMapper, where the messages are defined (#318).
     private const string NoMatchingProviderMessage = "No matching provider found";
     private const string ProviderDoesNotExistMessage = "Provider does not exist";
-    private const string PermissionDeniedMessage = "Error. Check permissions.";
 
     // Display names for the audit log (the internal link-map mode tokens are the lowercase "oid"/"saml").
     private const string OpenIdProtocol = "OpenID";
@@ -175,7 +174,7 @@ public class SSOController : ControllerBase
                 && OidcResponseIssuer.IsMismatch(Request.Query["iss"], result.IdentityToken))
             {
                 _logger.LogWarning("OpenID login denied for provider {Provider}: the authorization-response issuer did not match the id_token issuer (RFC 9207 mix-up check).", provider?.ReplaceLineEndings(string.Empty));
-                return ReturnError(StatusCodes.Status400BadRequest, "SSO response validation failed");
+                return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SsoResponseInvalid));
             }
 
             // Derive the authorize-state values (username, validity, admin, Live TV, folders, avatar)
@@ -190,7 +189,7 @@ public class SSOController : ControllerBase
             if (derived.Valid && string.IsNullOrWhiteSpace(derived.Subject))
             {
                 _logger.LogWarning("OpenID login denied for provider {Provider}: the id_token carried no 'sub' claim to key the account link on.", provider?.ReplaceLineEndings(string.Empty));
-                return ReturnError(StatusCodes.Status401Unauthorized, PermissionDeniedMessage);
+                return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
             }
 
             pending.Complete(derived);
@@ -210,7 +209,7 @@ public class SSOController : ControllerBase
                     result.User.Claims.Select(o => new { Type = o.Type?.ReplaceLineEndings(string.Empty), Value = o.Value?.ReplaceLineEndings(string.Empty) }),
                     config.Roles);
 
-                return ReturnError(StatusCodes.Status401Unauthorized, PermissionDeniedMessage);
+                return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
             }
         }
 
@@ -248,7 +247,7 @@ public class SSOController : ControllerBase
                 if (config.RequirePkce)
                 {
                     _logger.LogWarning("OpenID login refused for provider {Provider}: RequirePkce is set but the authorization server does not advertise PKCE (S256).", provider?.ReplaceLineEndings(string.Empty));
-                    return ReturnError(StatusCodes.Status400BadRequest, "The identity provider does not advertise the required PKCE (S256) support.");
+                    return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.PkceNotSupported));
                 }
 
                 SsoAudit.PkceNotAdvertised(_logger, provider);
@@ -256,7 +255,7 @@ public class SSOController : ControllerBase
             else if (pkceSupported is null && config.RequirePkce)
             {
                 _logger.LogWarning("OpenID login refused for provider {Provider}: RequirePkce is set but the discovery document could not be read to confirm PKCE (S256).", provider?.ReplaceLineEndings(string.Empty));
-                return ReturnError(StatusCodes.Status400BadRequest, "The identity provider's PKCE (S256) support could not be verified.");
+                return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.PkceUnverifiable));
             }
 
             bool newPath = ResolveChallengeNewPath(config.NewPath, isLinking, value => config.NewPath = value);
@@ -619,7 +618,7 @@ public class SSOController : ControllerBase
                 AvatarUrl = redeemed.AvatarUrl,
             }).ConfigureAwait(false);
             SsoAudit.LoginSucceeded(_logger, OpenIdProtocol, provider, redeemed.Username, redeemed.Admin);
-            return Ok(authenticationResult);
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Success(authenticationResult));
         }
 
         return Problem("Something went wrong");
@@ -672,7 +671,7 @@ public class SSOController : ControllerBase
             {
                 // A malformed response (non-base64, malformed XML, prohibited DOCTYPE) fails TryLoad and
                 // is rejected the same way an invalid one is — a clean 4xx, never an unhandled 500 (#199).
-                return ReturnError(StatusCodes.Status400BadRequest, "SAML response validation failed");
+                return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
             }
 
             if (SamlLoginPolicy.IsLoginAllowed(samlResponse.GetCustomAttributes("Role"), config.Roles))
@@ -692,7 +691,7 @@ public class SSOController : ControllerBase
                 samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty),
                 samlResponse.GetCustomAttributes("Role").Select(r => r?.ReplaceLineEndings(string.Empty)),
                 config.Roles);
-            return ReturnError(StatusCodes.Status401Unauthorized, PermissionDeniedMessage);
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
         }
 
         return ReturnError(StatusCodes.Status400BadRequest, "No active providers found");
@@ -831,7 +830,7 @@ public class SSOController : ControllerBase
                 || !IsSamlResponseValid(samlResponse, config, provider))
             {
                 // Malformed input is rejected the same way an invalid response is — clean 4xx, not 500 (#199).
-                return ReturnError(StatusCodes.Status400BadRequest, "SAML response validation failed");
+                return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
             }
 
             // Solicited-only correlation (#156, opt-in): consume the response's InResponseTo against
@@ -857,7 +856,7 @@ public class SSOController : ControllerBase
                 _logger.LogWarning(
                     "SAML user: {UserId} has insufficient roles at the session-minting endpoint; login denied.",
                     samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty));
-                return ReturnError(StatusCodes.Status401Unauthorized, PermissionDeniedMessage);
+                return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
             }
 
             // Enforce one-time use so a captured assertion cannot be replayed to mint another session.
@@ -881,7 +880,7 @@ public class SSOController : ControllerBase
             if (string.IsNullOrWhiteSpace(nameId))
             {
                 _logger.LogWarning("SAML login denied: the assertion resolved no NameID.");
-                return ReturnError(StatusCodes.Status401Unauthorized, PermissionDeniedMessage);
+                return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
             }
 
             Guid userId;
@@ -910,7 +909,7 @@ public class SSOController : ControllerBase
                 AvatarUrl = null,
             }).ConfigureAwait(false);
             SsoAudit.LoginSucceeded(_logger, SamlProtocol, provider, nameId, derived.Admin);
-            return Ok(authenticationResult);
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Success(authenticationResult));
         }
 
         return Problem("Something went wrong");
@@ -1321,7 +1320,7 @@ public class SSOController : ControllerBase
             || !IsSamlResponseValid(samlResponse, config, provider))
         {
             // Malformed input is rejected the same way an invalid response is — clean 4xx, not 500 (#199).
-            return ReturnError(StatusCodes.Status400BadRequest, "SAML response validation failed");
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
 
         // Enforce one-time use here too (#219): without it, a captured, still-valid assertion could be
