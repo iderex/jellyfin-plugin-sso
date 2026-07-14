@@ -43,8 +43,10 @@ internal sealed class SsoRateLimiter
     // cursor. The tally (_throttledHits) it drains stays a mutable field below — see RecordThrottledHit.
     private readonly IntervalGate _signalGate = new(SignalInterval);
 
-    // Last sweep time as ticks, read/written atomically (DateTime is not torn-read-safe).
-    private long _lastPruneTicks = DateTime.MinValue.Ticks;
+    // Throttles the stale-counter sweep to one run per PruneInterval; the gate owns the atomic cursor
+    // and self-heals a backward wall-clock step (the hand-rolled predecessor stalled until the clock
+    // re-passed its cursor). See PruneStale.
+    private readonly IntervalGate _pruneGate = new(PruneInterval);
 
     // Bounded observability signal (#195). Every refusal increments the tally; RecordThrottledHit drains it
     // into a single log line at most once per SignalInterval via _signalGate. A racing increment is never
@@ -230,14 +232,7 @@ internal sealed class SsoRateLimiter
     // loses that thread's tally to a fresh window — harmless for a best-effort limiter.
     private void PruneStale(TimeSpan window, DateTime nowUtc)
     {
-        var last = Interlocked.Read(ref _lastPruneTicks);
-        if (nowUtc.Ticks - last < PruneInterval.Ticks)
-        {
-            return;
-        }
-
-        // Only one thread should run the sweep per interval; the winner of the CAS does it.
-        if (Interlocked.CompareExchange(ref _lastPruneTicks, nowUtc.Ticks, last) != last)
+        if (!_pruneGate.TryEnter(nowUtc))
         {
             return;
         }

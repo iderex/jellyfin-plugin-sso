@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Concurrent;
-using System.Threading;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api;
 
@@ -29,8 +28,10 @@ internal sealed class SamlRequestCache
 
     private readonly ConcurrentDictionary<string, DateTime> _outstanding = new(StringComparer.Ordinal);
 
-    // Last sweep time as ticks, read/written atomically (DateTime is not torn-read-safe).
-    private long _lastPruneTicks = DateTime.MinValue.Ticks;
+    // Throttles the sweep to one run per PruneInterval; the gate owns the atomic cursor and self-heals
+    // a backward wall-clock step (the hand-rolled predecessor stalled until the clock re-passed its
+    // cursor). See PruneExpired.
+    private readonly IntervalGate _pruneGate = new(PruneInterval);
 
     /// <summary>
     /// Records an issued request ID as outstanding until <paramref name="expiryUtc"/>. A blank ID is
@@ -86,14 +87,7 @@ internal sealed class SamlRequestCache
     // registration cap, not by eviction here.
     private void PruneExpired(DateTime nowUtc)
     {
-        var last = Interlocked.Read(ref _lastPruneTicks);
-        if (nowUtc.Ticks - last < PruneInterval.Ticks)
-        {
-            return;
-        }
-
-        // Only one thread should run the sweep per interval; the winner of the CAS does it.
-        if (Interlocked.CompareExchange(ref _lastPruneTicks, nowUtc.Ticks, last) != last)
+        if (!_pruneGate.TryEnter(nowUtc))
         {
             return;
         }

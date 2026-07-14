@@ -59,3 +59,24 @@ rules:
     paths:
       include:
         - "SSO-Auth/**/*.cs"
+
+  # Invariant (architecture, #318 step 2b): once-per-interval throttling goes
+  # through IntervalGate, whose guard/CAS semantics were adversarially reviewed
+  # once and are pinned by tests (#331). Every hand-rolled predecessor seeded its
+  # tick cursor with `DateTime.MinValue.Ticks`; that idiom reappearing outside
+  # IntervalGate means someone is re-rolling a throttle cursor, re-introducing
+  # the subtle backward-clock and CAS races the primitive was extracted to end.
+  - id: no-inline-interval-throttle-cursor
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      Do not hand-roll a once-per-interval throttle cursor. Use IntervalGate;
+      its suppression guard, single-CAS-winner, and backward-clock semantics are
+      reviewed and pinned by tests (#318, #331).
+    patterns:
+      - pattern: = DateTime.MinValue.Ticks
+    paths:
+      include:
+        - "SSO-Auth/**/*.cs"
+      exclude:
+        - "SSO-Auth/Api/IntervalGate.cs"
