@@ -393,7 +393,7 @@ const ssoConfigurationPage = {
             Dashboard.alert({
               title: "Save failed",
               message:
-                "Could not save the provider. Check that the provider name contains no control characters or URI-reserved characters such as / ? # % or \\, and that the Base URL Override is a full URL such as https://jellyfin.example.com (or blank).",
+                "Could not save the provider. Check that the provider name has no control characters, no backslash, and none of the URI-reserved characters such as / ? # %, and that the Base URL Override is a full URL such as https://jellyfin.example.com (or blank).",
             });
             reject(new Error("Provider save failed"));
           },
