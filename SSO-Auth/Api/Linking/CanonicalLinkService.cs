@@ -322,7 +322,7 @@ internal sealed class CanonicalLinkService
             // is skipped rather than dereferenced — same fail-closed treatment TryGetLinks gives it,
             // so the read side cannot NRE into a 500 on a state the write side can produce.
             var providerList = string.Equals(mode, "saml", StringComparison.Ordinal)
-                ? (IEnumerable<KeyValuePair<string, SerializableDictionary<string, Guid>>>)configuration.SamlConfigs.Where(p => p.Value?.CanonicalLinks != null).Select(p => new KeyValuePair<string, SerializableDictionary<string, Guid>>(p.Key, p.Value.CanonicalLinks))
+                ? configuration.SamlConfigs.Where(p => p.Value?.CanonicalLinks != null).Select(p => new KeyValuePair<string, SerializableDictionary<string, Guid>>(p.Key, p.Value.CanonicalLinks))
                 : configuration.OidConfigs.Where(p => p.Value?.CanonicalLinks != null).Select(p => new KeyValuePair<string, SerializableDictionary<string, Guid>>(p.Key, p.Value.CanonicalLinks));
 
             var mappings = new SerializableDictionary<string, IEnumerable<string>>();
