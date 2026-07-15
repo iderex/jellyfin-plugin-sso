@@ -54,6 +54,39 @@ public class SSOControllerAddTests
     }
 
     [Fact]
+    public void OidAdd_ReSaveWithBlankSecret_UnchangedIdentity_KeepsStoredSecret()
+    {
+        // #189 blank-means-keep at the OidAdd door: a re-save carrying a blank secret (as the write-only
+        // API body does) but the same provider identity keeps the stored secret. Pins the SECRET half of
+        // ServerManagedFields.Preserve at the endpoint — the links half is covered above, but the
+        // zero-occurrence conformance rule (#383) no longer guarantees the Preserve CALL routes the
+        // secret, so a future links-only substitute must fail here rather than silently wipe #189.
+        var harness = new SsoControllerHarness(c => c.OidConfigs["keycloak"] =
+            new OidConfig { OidSecret = "stored-secret", OidEndpoint = "https://idp.example/", OidClientId = "client-1" });
+
+        harness.Controller.OidAdd("keycloak", new OidConfig { OidSecret = string.Empty, OidEndpoint = "https://idp.example/", OidClientId = "client-1" });
+
+        var secret = SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["keycloak"].OidSecret);
+        Assert.Equal("stored-secret", secret);
+    }
+
+    [Fact]
+    public void OidAdd_ReSaveWithBlankSecret_ChangedEndpoint_DropsStoredSecret()
+    {
+        // The #189 exfil guard: a blank secret with a CHANGED endpoint must NOT carry the stored secret
+        // over (it stays blank, failing login closed), so a write-only secret cannot be pulled toward a
+        // different token endpoint. Also pinned at the endpoint now that the conformance rule is
+        // presence-agnostic.
+        var harness = new SsoControllerHarness(c => c.OidConfigs["keycloak"] =
+            new OidConfig { OidSecret = "stored-secret", OidEndpoint = "https://idp.example/", OidClientId = "client-1" });
+
+        harness.Controller.OidAdd("keycloak", new OidConfig { OidSecret = string.Empty, OidEndpoint = "https://attacker.example/", OidClientId = "client-1" });
+
+        var secret = SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["keycloak"].OidSecret);
+        Assert.True(string.IsNullOrEmpty(secret)); // stored secret dropped, not carried to the new endpoint
+    }
+
+    [Fact]
     public void SamlAdd_ValidConfig_StoresTheProvider_ReturnsOk()
     {
         var harness = new SsoControllerHarness();

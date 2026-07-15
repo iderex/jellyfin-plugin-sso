@@ -19,10 +19,11 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 /// as each migration step lands a new structural property, add the rule that locks it in here so it
 /// cannot regress. Most rules are type-level (reflection over the production assembly); call-level
 /// invariants otherwise stay guarded by CodeQL/CodeRabbit and the pinning tests. The one call-level
-/// property locked in here is a source scan — the controller touches no provider link map except the
-/// server-managed re-injection (<see cref="Controller_TouchesProviderLinkMapsOnlyForServerManagedReinjection"/>) —
-/// because the #372 extraction makes "all link-map access flows through CanonicalLinkService" a boundary
-/// worth failing CI on, not just review.
+/// property locked in here is a source scan — the controller touches no provider link map at all
+/// (<see cref="Controller_NeverTouchesProviderLinkMaps"/>) — because the #372 extraction makes "all
+/// link-map access flows through CanonicalLinkService" a boundary worth failing CI on, not just review;
+/// #383 retired the last two server-managed re-injection sites into ServerManagedFields.Preserve, so the
+/// scan is now a plain zero-occurrence invariant.
 /// </summary>
 public class ArchitectureConformanceTests
 {
