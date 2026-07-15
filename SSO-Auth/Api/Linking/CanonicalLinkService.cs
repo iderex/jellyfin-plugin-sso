@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.SSO_Auth.Config;
@@ -7,6 +9,41 @@ using MediaBrowser.Model.Cryptography;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api;
+
+/// <summary>
+/// The outcome of a manual link-creation request. Closed by convention (the controller's mapper throws
+/// on an unhandled arm), so a new outcome forces a new mapping rather than a silent fall-through.
+/// </summary>
+internal enum CanonicalLinkWriteResult
+{
+    /// <summary>The link was created.</summary>
+    Created,
+
+    /// <summary>The SSO identity did not resolve a usable key; nothing was written.</summary>
+    EmptyKey,
+
+    /// <summary>No provider of that mode/name exists; nothing was written.</summary>
+    UnknownProvider,
+}
+
+/// <summary>
+/// The outcome of a manual unlink request. Closed by convention (the controller's mapper throws on an
+/// unhandled arm).
+/// </summary>
+internal enum CanonicalLinkRemoveResult
+{
+    /// <summary>The link was removed.</summary>
+    Removed,
+
+    /// <summary>No link is registered for that canonical name.</summary>
+    NotFound,
+
+    /// <summary>A link exists but is registered to a different Jellyfin user; nothing was removed.</summary>
+    Mismatch,
+
+    /// <summary>No provider of that mode/name exists; nothing was removed.</summary>
+    UnknownProvider,
+}
 
 /// <summary>
 /// The account-linking workflow behind the SSO login and admin endpoints: it resolves an SSO identity
@@ -72,7 +109,15 @@ internal sealed class CanonicalLinkService
         // as absent (dangling links are dead, not identities).
         var (subjectLink, legacyLink) = _configStore.Read(configuration =>
         {
-            var links = LinksFor(configuration, mode, provider);
+            // The login callbacks resolve the provider before calling, so it is normally present. If it
+            // was deleted in the race between that lookup and here, fail CLOSED: refuse rather than fall
+            // through to the adoption gate, whose create/adopt arms would otherwise mint a session for a
+            // provider that no longer exists (a missing provider must never default the login to valid).
+            if (!TryGetLinks(configuration, mode, provider, out var links))
+            {
+                throw new AccountLinkForbiddenException("The SSO provider is no longer configured; refusing to resolve or create an account.");
+            }
+
             Guid? bySubject = links.TryGetValue(canonicalKey, out var s) && _userManager.GetUserById(s) != null
                 ? s : null;
             Guid? byName = bySubject is null
@@ -185,6 +230,115 @@ internal sealed class CanonicalLinkService
     }
 
     /// <summary>
+    /// Creates a manual canonical link (admin/self linking) from a provider-side identity to a Jellyfin
+    /// user, under the config lock. HTTP-free: the controller maps the returned result to a response.
+    /// </summary>
+    /// <param name="mode">The protocol mode token, "oid" or "saml".</param>
+    /// <param name="provider">The provider the link belongs to.</param>
+    /// <param name="providerUserId">The provider-side identity key (OpenID sub / SAML NameID).</param>
+    /// <param name="jellyfinUserId">The Jellyfin user to link the identity to.</param>
+    /// <returns>The write outcome.</returns>
+    internal CanonicalLinkWriteResult TryCreateLink(string mode, string provider, string providerUserId, Guid jellyfinUserId)
+    {
+        // Fail closed (#95), linking-side choke point: an SSO identity that did not resolve must not
+        // create a link — an empty or whitespace key would persist a dead link no login can ever redeem.
+        // Checked BEFORE the provider lookup so the two refusals keep their distinct response bodies
+        // ("did not resolve an identity" vs "no matching provider"); reordering is observable.
+        if (string.IsNullOrWhiteSpace(providerUserId))
+        {
+            return CanonicalLinkWriteResult.EmptyKey;
+        }
+
+        return _configStore.Mutate(configuration =>
+        {
+            if (!TryGetLinks(configuration, mode, provider, out var links))
+            {
+                return CanonicalLinkWriteResult.UnknownProvider;
+            }
+
+            links[providerUserId] = jellyfinUserId;
+            return CanonicalLinkWriteResult.Created;
+        });
+    }
+
+    /// <summary>
+    /// Removes a manual canonical link, but only when it is registered to the given Jellyfin user, under
+    /// the config lock. HTTP-free: the controller maps the returned result to a response. The find,
+    /// ownership check, and removal are one read-modify-write so they cannot interleave with a concurrent
+    /// write to the same map.
+    /// </summary>
+    /// <param name="mode">The protocol mode token, "oid" or "saml".</param>
+    /// <param name="provider">The provider the link belongs to.</param>
+    /// <param name="canonicalName">The provider-side identity key whose link is removed.</param>
+    /// <param name="jellyfinUserId">The Jellyfin user the link must belong to.</param>
+    /// <returns>The remove outcome.</returns>
+    internal CanonicalLinkRemoveResult TryRemoveLink(string mode, string provider, string canonicalName, Guid jellyfinUserId)
+    {
+        // Kept as ONE Mutate (find, ownership check, and remove cannot interleave). A no-result outcome
+        // still persists the unchanged config. For NotFound / Mismatch that already matched the old
+        // controller code (its mutate callback ran to completion and persisted a no-op); for
+        // UnknownProvider it is a deliberate small delta — the old code threw KeyNotFoundException out of
+        // the callback before the persist, so the unknown-provider DELETE did not write, whereas this
+        // returns UnknownProvider normally and Mutate<T> then persists. The config content and the HTTP
+        // response are byte-identical either way, it is admin-gated, and it adds no new capability (the
+        // valid-provider + bogus-name DELETE already forced the same no-op write). A read-probe-then-
+        // mutate would avoid the write but reintroduce the resolve/act race this deliberately excludes.
+        return _configStore.Mutate(configuration =>
+        {
+            if (!TryGetLinks(configuration, mode, provider, out var links))
+            {
+                return CanonicalLinkRemoveResult.UnknownProvider;
+            }
+
+            if (!links.TryGetValue(canonicalName, out var linkedId))
+            {
+                return CanonicalLinkRemoveResult.NotFound;
+            }
+
+            if (linkedId != jellyfinUserId)
+            {
+                return CanonicalLinkRemoveResult.Mismatch;
+            }
+
+            links.Remove(canonicalName);
+            return CanonicalLinkRemoveResult.Removed;
+        });
+    }
+
+    /// <summary>
+    /// Projects, for one protocol, a provider -> [canonical keys linked to this user] map, materialized
+    /// under the config lock. Each provider's matches are realized with <c>ToList</c> (#157/F-10) so the
+    /// result is a detached snapshot that cannot tear against a concurrent login writing a link during
+    /// JSON serialization.
+    /// </summary>
+    /// <param name="mode">The protocol mode token, "oid" or "saml".</param>
+    /// <param name="jellyfinUserId">The Jellyfin user whose links are listed.</param>
+    /// <returns>A provider -> link-key-list map.</returns>
+    internal SerializableDictionary<string, IEnumerable<string>> LinksByUser(string mode, Guid jellyfinUserId)
+    {
+        return _configStore.Read(configuration =>
+        {
+            // A provider stored with a null config object (reachable today via #350's null-body add)
+            // is skipped rather than dereferenced — same fail-closed treatment TryGetLinks gives it,
+            // so the read side cannot NRE into a 500 on a state the write side can produce.
+            var providerList = string.Equals(mode, "saml", StringComparison.Ordinal)
+                ? configuration.SamlConfigs.Where(p => p.Value?.CanonicalLinks != null).Select(p => new KeyValuePair<string, SerializableDictionary<string, Guid>>(p.Key, p.Value.CanonicalLinks))
+                : configuration.OidConfigs.Where(p => p.Value?.CanonicalLinks != null).Select(p => new KeyValuePair<string, SerializableDictionary<string, Guid>>(p.Key, p.Value.CanonicalLinks));
+
+            var mappings = new SerializableDictionary<string, IEnumerable<string>>();
+            foreach (var provider in providerList)
+            {
+                mappings[provider.Key] = provider.Value
+                    .Where(link => link.Value == jellyfinUserId)
+                    .Select(link => link.Key)
+                    .ToList();
+            }
+
+            return mappings;
+        });
+    }
+
+    /// <summary>
     /// Removes every canonical link pointing at the given user across all SAML and OpenID providers, so
     /// an SSO login no longer resolves to the account. Runs under the config lock and returns the number
     /// of links removed.
@@ -196,14 +350,23 @@ internal sealed class CanonicalLinkService
         return _configStore.Mutate(configuration =>
         {
             int removed = 0;
+
+            // Skip a provider stored with a null config object (reachable via #350); it holds no links to
+            // revoke, and dereferencing it would NRE into a 500 — the same fail-closed skip TryGetLinks uses.
             foreach (var config in configuration.SamlConfigs.Values)
             {
-                removed += CanonicalLinkRevoker.RemoveUser(config.CanonicalLinks, userId);
+                if (config?.CanonicalLinks is { } links)
+                {
+                    removed += CanonicalLinkRevoker.RemoveUser(links, userId);
+                }
             }
 
             foreach (var config in configuration.OidConfigs.Values)
             {
-                removed += CanonicalLinkRevoker.RemoveUser(config.CanonicalLinks, userId);
+                if (config?.CanonicalLinks is { } links)
+                {
+                    removed += CanonicalLinkRevoker.RemoveUser(links, userId);
+                }
             }
 
             return removed;
@@ -220,7 +383,14 @@ internal sealed class CanonicalLinkService
     {
         return _configStore.Mutate(configuration =>
         {
-            var links = LinksFor(configuration, mode, provider);
+            // The login path resolved the provider before reaching here. If it was deleted in the race
+            // since, fail CLOSED: refuse rather than return a session with no link written. A freshly
+            // created user may be left orphaned, the same benign outcome as the #133 race loser.
+            if (!TryGetLinks(configuration, mode, provider, out var links))
+            {
+                throw new AccountLinkForbiddenException("The SSO provider is no longer configured; refusing to link an account.");
+            }
+
             Guid? existing = links.TryGetValue(canonicalKey, out var current) && _userManager.GetUserById(current) != null
                 ? current
                 : (Guid?)null;
@@ -243,7 +413,18 @@ internal sealed class CanonicalLinkService
     {
         _configStore.Mutate(configuration =>
         {
-            var links = LinksFor(configuration, mode, provider);
+            // Migration is a SECOND transaction after the candidate-resolving read. If the provider was
+            // deleted in that window, fail CLOSED: throw rather than no-op, because the caller still
+            // holds the legacy user id from the pre-deletion snapshot and would otherwise return
+            // UseExistingLink, minting a session for a provider that no longer exists (#373).
+            if (!TryGetLinks(configuration, mode, provider, out var links))
+            {
+                throw new AccountLinkForbiddenException("The SSO provider is no longer configured; refusing to migrate the account link.");
+            }
+
+            // A no-op here (unlike the throwing miss above) is the GOOD idempotent case: the provider
+            // still exists but oldKey was already re-keyed by a concurrent login, or newKey is live. The
+            // never-overwrite-a-live-newKey rule is on the method summary.
             if (links.TryGetValue(oldKey, out var userId)
                 && (!links.TryGetValue(newKey, out var existing) || _userManager.GetUserById(existing) == null))
             {
@@ -253,18 +434,37 @@ internal sealed class CanonicalLinkService
         });
     }
 
-    // The provider's canonical-links map; callers must hold the config lock (Read / Mutate) while
-    // touching it. The map is self-healing (CanonicalLinks lazily creates and stores it), so mutating
-    // the returned map persists directly. The provider is always present on the paths that reach here
-    // (the login callbacks resolved it first); a guarded accessor for the reachable-unknown-provider
-    // admin paths, finishing the #241 KeyNotFoundException removal, lands with those endpoints.
-    private static SerializableDictionary<string, Guid> LinksFor(PluginConfiguration configuration, string mode, string provider)
+    // The provider's canonical-links map via TryGetValue rather than the throwing indexer, so an unknown
+    // provider on the reachable admin link/unlink paths is a false return the caller maps to
+    // UnknownProvider — finishing the #241 removal of KeyNotFoundException-as-control-flow. Returns true
+    // and a non-null map only when the provider exists AND has a config object; a missing provider — or a
+    // null-valued entry (reachable today via the null-body add, #350) — returns false, so the caller fails
+    // closed (UnknownProvider on admin paths, a reject on login paths) instead of dereferencing null. The
+    // map is self-healing (CanonicalLinks lazily creates and stores it), so mutating the returned map
+    // persists directly; callers must hold the config lock (Read / Mutate) while touching it. An
+    // unrecognized mode is not an unknown provider but a caller contract violation, so it throws — note the
+    // DELETE route forwards mode unvalidated (unlike the AddCanonicalLink dispatch), so that throw is
+    // reachable there; #369 tracks parsing mode once at the HTTP boundary into an internal enum.
+    private static bool TryGetLinks(PluginConfiguration configuration, string mode, string provider, out SerializableDictionary<string, Guid> links)
     {
-        return mode.ToLowerInvariant() switch
+        switch (mode.ToLowerInvariant())
         {
-            "saml" => configuration.SamlConfigs[provider].CanonicalLinks,
-            "oid" => configuration.OidConfigs[provider].CanonicalLinks,
-            _ => throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'"),
-        };
+            case "saml":
+            {
+                var ok = configuration.SamlConfigs.TryGetValue(provider, out var config);
+                links = config?.CanonicalLinks;
+                return ok && links != null;
+            }
+
+            case "oid":
+            {
+                var ok = configuration.OidConfigs.TryGetValue(provider, out var config);
+                links = config?.CanonicalLinks;
+                return ok && links != null;
+            }
+
+            default:
+                throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'");
+        }
     }
 }

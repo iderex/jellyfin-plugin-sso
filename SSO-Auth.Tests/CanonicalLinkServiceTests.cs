@@ -242,6 +242,276 @@ public class CanonicalLinkServiceTests
     }
 
     [Fact]
+    public async Task ResolveOrCreateAsync_ProviderDeletedMidLogin_FailsClosedWithoutCreating()
+    {
+        // TOCTOU (#373 review): the controller resolves the provider, then this runs. If an admin
+        // deletes the provider in that window, the links map is absent — the login must fail CLOSED
+        // (refuse), never fall through to the adoption gate whose create/adopt arms would mint a
+        // session for a provider that no longer exists.
+        var (service, _, users, _) = Build(); // no provider configured
+        users.GetUserByName("alice").Returns((User?)null); // name is free -> the create arm would fire
+
+        await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
+            service.ResolveOrCreateAsync("oid", "deleted-provider", "sub-1", "alice", allowExistingAccountLink: true));
+
+        await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_ProviderDeletedBetweenReadAndMigrate_FailsClosed()
+    {
+        // The legacy-migration path runs a second transaction (the re-key) after the read that resolved
+        // the candidate. If the provider is deleted in that window, migration must fail CLOSED too, not
+        // no-op and let the already-resolved legacy user through UseExistingLink for a gone provider
+        // (#373). Simulated deterministically: drop the provider right before the migrate transaction.
+        var cfg = new PluginConfiguration();
+        cfg.OidConfigs["kc"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing } };
+        var users = Substitute.For<IUserManager>();
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
+
+        // The first store access is the candidate-resolving Read; the second is the migrate Mutate.
+        // Removing the provider on the second access reproduces an admin delete racing the login.
+        var access = 0;
+        var store = new ProviderConfigStore(
+            () =>
+            {
+                if (++access == 2)
+                {
+                    cfg.OidConfigs.Remove("kc");
+                }
+
+                return cfg;
+            },
+            _ => { },
+            new CapturingLogger());
+        var service = new CanonicalLinkService(users, new FakeCryptoProvider(), store, new CapturingLogger());
+
+        var ex = await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
+            service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true));
+
+        // Pin the MIGRATE guard specifically, not just any fail-closed throw: the three login-path guards
+        // carry distinct messages, so if the provider were dropped during the wrong transaction the test
+        // would silently cover a different guard. This asserts the migrate transaction is the one that
+        // refused.
+        Assert.Contains("refusing to migrate the account link", ex.Message, StringComparison.Ordinal);
+    }
+
+    // --- Admin surface: TryCreateLink / TryRemoveLink / LinksByUser (#372, finishing #241) ---
+
+    [Fact]
+    public void TryCreateLink_KnownProvider_WritesTheLinkAndReturnsCreated()
+    {
+        var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+
+        var result = service.TryCreateLink("oid", "kc", "sub-1", Existing);
+
+        Assert.Equal(CanonicalLinkWriteResult.Created, result);
+        Assert.Equal(Existing, cfg.OidConfigs["kc"].CanonicalLinks["sub-1"]);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void TryCreateLink_EmptyKey_ReturnsEmptyKey_WithoutWriting(string providerUserId)
+    {
+        var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+
+        var result = service.TryCreateLink("oid", "kc", providerUserId, Existing);
+
+        Assert.Equal(CanonicalLinkWriteResult.EmptyKey, result);
+        Assert.Empty(cfg.OidConfigs["kc"].CanonicalLinks);
+    }
+
+    [Fact]
+    public void TryCreateLink_UnknownProvider_ReturnsUnknownProvider()
+    {
+        var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+
+        var result = service.TryCreateLink("oid", "does-not-exist", "sub-1", Existing);
+
+        Assert.Equal(CanonicalLinkWriteResult.UnknownProvider, result);
+    }
+
+    [Fact]
+    public void TryCreateLink_EmptyKeyAndUnknownProvider_ReturnsEmptyKey_NotUnknownProvider()
+    {
+        // The two refusals map to DIFFERENT response bodies, so the order is observable: an unresolved
+        // identity is reported as EmptyKey even when the provider is also unknown (the empty-key guard
+        // runs first). Locks the check ordering the controller's distinct 400 bodies depend on.
+        var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+
+        var result = service.TryCreateLink("oid", "does-not-exist", "   ", Existing);
+
+        Assert.Equal(CanonicalLinkWriteResult.EmptyKey, result);
+    }
+
+    [Fact]
+    public void TryCreateLink_ExistingKey_RebindsItToTheNewUser()
+    {
+        // Deliberate admin capability (pinned so the last-writer-wins semantics are not changed by
+        // accident): re-linking an already-linked provider identity to a different Jellyfin user
+        // silently overwrites the prior binding — an admin correcting a mis-link, not a defect.
+        var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+
+        var result = service.TryCreateLink("oid", "kc", "sub-1", Other);
+
+        Assert.Equal(CanonicalLinkWriteResult.Created, result);
+        Assert.Equal(Other, cfg.OidConfigs["kc"].CanonicalLinks["sub-1"]); // rebound to the new user
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_NullConfigProvider_FailsClosedWithoutCreating()
+    {
+        // The login-path companion to the admin null-config guards: a provider stored as a null config
+        // object (reachable via #350) must REJECT the login (fail closed), never fall through to the
+        // adoption gate whose create/adopt arms would mint a session for an unusable provider.
+        var (service, _, users, _) = Build(c => c.OidConfigs["broken"] = null);
+        users.GetUserByName("alice").Returns((User?)null); // name is free -> the create arm would fire if it fell through
+
+        await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
+            service.ResolveOrCreateAsync("oid", "broken", "sub-1", "alice", allowExistingAccountLink: true));
+
+        await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
+    }
+
+    [Fact]
+    public void TryRemoveLink_NullConfigProvider_FailsClosedAsUnknownProvider()
+    {
+        // A provider stored with a null config object (reachable via #350's null-body add) must be read
+        // as absent, not dereferenced into a 500 — same fail-closed treatment as a missing provider.
+        var (service, _, _, _) = Build(c => c.OidConfigs["broken"] = null);
+
+        var result = service.TryRemoveLink("oid", "broken", "sub-1", Existing);
+
+        Assert.Equal(CanonicalLinkRemoveResult.UnknownProvider, result);
+    }
+
+    [Fact]
+    public void LinksByUser_SkipsNullConfigProviders_WithoutThrowing()
+    {
+        // The read-side companion to the guard above: a null-valued provider entry is skipped, so listing
+        // a user's links cannot NRE into a 500 on the #350 state.
+        var (service, _, _, _) = Build(c =>
+        {
+            c.OidConfigs["kc"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing } };
+            c.OidConfigs["broken"] = null;
+        });
+
+        var oid = service.LinksByUser("oid", Existing);
+
+        Assert.Equal(new[] { "sub-1" }, oid["kc"]);
+        Assert.DoesNotContain("broken", oid.Keys); // the null-config provider is skipped, not thrown on
+    }
+
+    [Fact]
+    public void TryRemoveLink_OwnLink_RemovesItAndReturnsRemoved()
+    {
+        var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+
+        var result = service.TryRemoveLink("oid", "kc", "sub-1", Existing);
+
+        Assert.Equal(CanonicalLinkRemoveResult.Removed, result);
+        Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("sub-1"));
+    }
+
+    [Fact]
+    public void TryRemoveLink_SamlOwnLink_RemovesItAndReturnsRemoved()
+    {
+        // The SAML branch of the admin surface (mode "saml") was covered only indirectly; pin it
+        // directly, since TryGetLinks dispatches saml vs oid to different config dictionaries.
+        var (service, cfg, _, _) = Build(c => c.SamlConfigs["adfs"] = new SamlConfig
+        {
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
+        });
+
+        var result = service.TryRemoveLink("saml", "adfs", "alice", Existing);
+
+        Assert.Equal(CanonicalLinkRemoveResult.Removed, result);
+        Assert.False(cfg.SamlConfigs["adfs"].CanonicalLinks.ContainsKey("alice"));
+    }
+
+    [Fact]
+    public void TryRemoveLink_UnknownCanonicalName_ReturnsNotFound()
+    {
+        var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+
+        var result = service.TryRemoveLink("oid", "kc", "does-not-exist", Existing);
+
+        Assert.Equal(CanonicalLinkRemoveResult.NotFound, result);
+    }
+
+    [Fact]
+    public void TryRemoveLink_LinkedToDifferentUser_ReturnsMismatch_WithoutRemoving()
+    {
+        var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+
+        var result = service.TryRemoveLink("oid", "kc", "sub-1", Other);
+
+        Assert.Equal(CanonicalLinkRemoveResult.Mismatch, result);
+        Assert.Equal(Existing, cfg.OidConfigs["kc"].CanonicalLinks["sub-1"]); // untouched
+    }
+
+    [Fact]
+    public void TryRemoveLink_UnknownProvider_ReturnsUnknownProvider()
+    {
+        var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+
+        var result = service.TryRemoveLink("oid", "does-not-exist", "sub-1", Existing);
+
+        Assert.Equal(CanonicalLinkRemoveResult.UnknownProvider, result);
+    }
+
+    [Fact]
+    public void LinksByUser_ReturnsOnlyTheUsersKeys_PerProvider_AsADetachedSnapshot()
+    {
+        var (service, cfg, _, _) = Build(c =>
+        {
+            c.OidConfigs["kc"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing, ["sub-2"] = Other } };
+            c.OidConfigs["authelia"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-3"] = Existing } };
+            c.SamlConfigs["adfs"] = new SamlConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing } };
+        });
+
+        var oid = service.LinksByUser("oid", Existing);
+
+        Assert.Equal(new[] { "sub-1" }, oid["kc"]); // the other user's sub-2 is excluded
+        Assert.Equal(new[] { "sub-3" }, oid["authelia"]);
+        Assert.DoesNotContain("adfs", oid.Keys); // SAML provider is not in the OID projection
+
+        // The projection is materialized (ToList, #157/F-10), not a deferred query over the live map:
+        // a subsequent write to the source must not appear in the already-returned result, or a JSON
+        // serialization could enumerate the live dictionary and tear against a concurrent login.
+        cfg.OidConfigs["kc"].CanonicalLinks["sub-9"] = Existing;
+        Assert.Equal(new[] { "sub-1" }, oid["kc"]);
+    }
+
+    [Fact]
+    public void LinksByUser_Saml_ReturnsTheUsersKeys_AndExcludesOidProviders()
+    {
+        // The SAML projection (mode "saml") reads the SAML config dictionary, and must not fold in OID
+        // providers — the mirror of the OID test above, pinning the saml branch directly.
+        var (service, _, _, _) = Build(c =>
+        {
+            c.SamlConfigs["adfs"] = new SamlConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing, ["bob"] = Other } };
+            c.OidConfigs["kc"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing } };
+        });
+
+        var saml = service.LinksByUser("saml", Existing);
+
+        Assert.Equal(new[] { "alice" }, saml["adfs"]); // the other user's "bob" is excluded
+        Assert.DoesNotContain("kc", saml.Keys); // OID provider is not in the SAML projection
+    }
+
+    [Fact]
     public void RemoveUserEverywhere_RemovesTheUsersLinksAcrossAllProviders_AndCountsThem()
     {
         var (service, cfg, _, _) = Build(c =>

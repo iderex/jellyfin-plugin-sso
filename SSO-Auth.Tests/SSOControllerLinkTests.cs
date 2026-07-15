@@ -84,6 +84,21 @@ public class SSOControllerLinkTests
     }
 
     [Fact]
+    public async Task DeleteCanonicalLink_AuthorizedButUnknownProvider_ReturnsBadRequest()
+    {
+        // Delete does no provider pre-check (unlike the link endpoints' #343 disabled-provider guard),
+        // so an unknown provider is the live path through the service's UnknownProvider result. It must
+        // map to the same BadRequest(NoMatchingProviderMessage) the old KeyNotFoundException catch did.
+        var harness = ForCaller(isAdmin: true, callerId: Target);
+
+        var result = await harness.Controller.DeleteCanonicalLink("oid", "does-not-exist", Target, "sub-1");
+
+        // Assert the body, not just the type: the UnknownProvider result must keep the exact message the
+        // old KeyNotFoundException catch returned, so the mapping is not silently changed.
+        Assert.Equal("No matching provider found", Assert.IsType<BadRequestObjectResult>(result).Value);
+    }
+
+    [Fact]
     public async Task GetSamlLinksByUser_NonAdminQueryingAnotherUser_Returns403()
     {
         var harness = ForCaller(isAdmin: false, callerId: Other);
