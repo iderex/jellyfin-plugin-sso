@@ -35,9 +35,9 @@ internal sealed class SessionMinter
     /// Applies the resolved login's permissions/avatar/default-provider to the user and mints a session.
     /// </summary>
     /// <param name="parameters">The resolved user, granted privileges, and client identity.</param>
-    /// <param name="remoteEndPoint">The normalized client IP for the activity log (the controller reads it from <c>HttpContext</c>, #177).</param>
+    /// <param name="remoteEndPointResolver">Resolves the normalized client IP for the activity log (the controller reads it from <c>HttpContext</c>, #177). Invoked at the original point below — after avatar/persistence, and not at all on the fail-closed path — to preserve evaluation order.</param>
     /// <returns>The authenticated session result.</returns>
-    internal async Task<AuthenticationResult> MintAsync(SessionParameters parameters, string remoteEndPoint)
+    internal async Task<AuthenticationResult> MintAsync(SessionParameters parameters, Func<string> remoteEndPointResolver)
     {
         User user = _userManager.GetUserById(parameters.UserId);
         if (user is null)
@@ -83,7 +83,7 @@ internal sealed class SessionMinter
         // server's "Known proxies" setting governs it) and normalizes it the same way (IPv4-mapped IPv6
         // collapsed to IPv4), so the SSO entry's source address matches a password entry's for the same
         // client byte-for-byte.
-        authRequest.RemoteEndPoint = remoteEndPoint;
+        authRequest.RemoteEndPoint = remoteEndPointResolver();
         _logger.LogInformation("Auth request created...");
         if (!string.IsNullOrEmpty(parameters.DefaultProvider))
         {

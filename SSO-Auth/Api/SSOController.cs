@@ -1180,11 +1180,13 @@ public class SSOController : ControllerBase
         _ => throw new InvalidOperationException($"Unhandled canonical-link write result: {result}"),
     };
 
-    // The HTTP boundary for session minting: resolve the client's normalized remote IP from HttpContext
-    // (#177 — Jellyfin's own GetNormalizedRemoteIP, so the plugin adds no proxy-trust logic of its own)
-    // and hand it, with the resolved parameters, to the SessionMinter flow.
+    // The HTTP boundary for session minting: hand the resolved parameters and a resolver for the client's
+    // normalized remote IP (#177 — Jellyfin's own GetNormalizedRemoteIP, so the plugin adds no proxy-trust
+    // logic of its own) to the SessionMinter flow. The resolver is passed rather than the value so the
+    // flow evaluates it at the exact original point (after avatar/persistence, and NOT at all on the
+    // fail-closed deleted-user path) — the pre-extraction Authenticate read it inline there.
     private Task<AuthenticationResult> Authenticate(SessionParameters parameters) =>
-        _sessionMinter.MintAsync(parameters, HttpContext.GetNormalizedRemoteIP().ToString());
+        _sessionMinter.MintAsync(parameters, () => HttpContext.GetNormalizedRemoteIP().ToString());
 
     // Applies the opt-in per-client rate limit (#128) on an anonymous flow endpoint: null when the
     // request may proceed, else a 429 carrying Retry-After. Reads the settings under the config

@@ -1,5 +1,6 @@
 using System;
 using System.Threading.Tasks;
+using Jellyfin.Data;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.SSO_Auth.Api;
@@ -64,7 +65,7 @@ public class SessionMinterTests
         var (minter, users, sessions) = Build();
         users.GetUserById(UserId).Returns((User?)null);
 
-        await Assert.ThrowsAsync<AuthenticationException>(() => minter.MintAsync(Params(), "203.0.113.7"));
+        await Assert.ThrowsAsync<AuthenticationException>(() => minter.MintAsync(Params(), () => "203.0.113.7"));
 
         await sessions.DidNotReceive().AuthenticateDirect(Arg.Any<AuthenticationRequest>());
     }
@@ -80,7 +81,7 @@ public class SessionMinterTests
         AuthenticationRequest? captured = null;
         sessions.AuthenticateDirect(Arg.Do<AuthenticationRequest>(r => captured = r)).Returns(new AuthenticationResult());
 
-        await minter.MintAsync(Params(), "203.0.113.7");
+        await minter.MintAsync(Params(), () => "203.0.113.7");
 
         Assert.NotNull(captured);
         Assert.Equal("203.0.113.7", captured!.RemoteEndPoint);
@@ -96,17 +97,21 @@ public class SessionMinterTests
         // enabled-folder list as a preference.
         var (minter, users, sessions) = Build();
         var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        // Seed the OPPOSITE state so the assertions prove the grant flipped, not just that a fresh user
+        // happens to match: start with all-folders granted and no admin.
+        user.SetPermission(PermissionKind.EnableAllFolders, true);
         users.GetUserById(UserId).Returns(user);
         sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
 
         await minter.MintAsync(
             Params(enableAuthorization: true, isAdmin: true, enableAllFolders: false, enabledFolders: new[] { "lib-1" }, enableLiveTv: true, enableLiveTvManagement: true),
-            "203.0.113.7");
+            () => "203.0.113.7");
 
         Assert.Contains(user.Permissions, perm => perm.Kind == PermissionKind.IsAdministrator && perm.Value);
-        Assert.DoesNotContain(user.Permissions, perm => perm.Kind == PermissionKind.EnableAllFolders && perm.Value);
+        Assert.DoesNotContain(user.Permissions, perm => perm.Kind == PermissionKind.EnableAllFolders && perm.Value); // flipped from the seeded true
         Assert.Contains(user.Permissions, perm => perm.Kind == PermissionKind.EnableLiveTvAccess && perm.Value);
         Assert.Contains(user.Permissions, perm => perm.Kind == PermissionKind.EnableLiveTvManagement && perm.Value);
+        Assert.Contains(user.Preferences, pref => pref.Kind == PreferenceKind.EnabledFolders); // restricted-folder list written
     }
 
     [Fact]
@@ -116,27 +121,31 @@ public class SessionMinterTests
         // preference write is skipped (that path is only for the restricted case above).
         var (minter, users, sessions) = Build();
         var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        user.SetPermission(PermissionKind.EnableAllFolders, false); // seed a restriction, so the grant must flip to true
         users.GetUserById(UserId).Returns(user);
         sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
 
-        await minter.MintAsync(Params(enableAuthorization: true, enableAllFolders: true), "203.0.113.7");
+        await minter.MintAsync(Params(enableAuthorization: true, enableAllFolders: true), () => "203.0.113.7");
 
-        Assert.Contains(user.Permissions, perm => perm.Kind == PermissionKind.EnableAllFolders && perm.Value);
+        Assert.Contains(user.Permissions, perm => perm.Kind == PermissionKind.EnableAllFolders && perm.Value); // flipped from the seeded restriction
     }
 
     [Fact]
     public async Task MintAsync_NoAuthorization_LeavesPermissionsUntouched()
     {
-        // With the master switch off, no SSO-driven grant is applied — the account keeps whatever it had
-        // (here, a fresh account with no admin grant). Pins that EnableAuthorization gates the whole block.
+        // With the master switch off, the whole permission block is skipped, so an EXISTING grant is left
+        // untouched. Seed admin=true and pass isAdmin=false: if the block wrongly ran it would set admin
+        // to false; a correct skip leaves the seeded admin intact. This pins that EnableAuthorization
+        // gates the block AND that it never touches pre-existing permissions when off.
         var (minter, users, sessions) = Build();
         var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        user.SetPermission(PermissionKind.IsAdministrator, true);
         users.GetUserById(UserId).Returns(user);
         sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
 
-        await minter.MintAsync(Params(enableAuthorization: false, isAdmin: true), "203.0.113.7");
+        await minter.MintAsync(Params(enableAuthorization: false, isAdmin: false), () => "203.0.113.7");
 
-        Assert.DoesNotContain(user.Permissions, perm => perm.Kind == PermissionKind.IsAdministrator && perm.Value); // isAdmin ignored while off
+        Assert.Contains(user.Permissions, perm => perm.Kind == PermissionKind.IsAdministrator && perm.Value); // seeded admin left untouched
     }
 
     [Fact]
@@ -152,7 +161,7 @@ public class SessionMinterTests
         users.GetUserById(UserId).Returns(user);
         sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
 
-        await minter.MintAsync(Params(defaultProvider: "SSO-Auth"), "203.0.113.7");
+        await minter.MintAsync(Params(defaultProvider: "SSO-Auth"), () => "203.0.113.7");
 
         Assert.Equal("SSO-Auth", user.AuthenticationProviderId);
         await users.Received(2).UpdateUserAsync(user);
