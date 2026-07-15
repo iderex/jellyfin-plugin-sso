@@ -241,6 +241,120 @@ public class CanonicalLinkServiceTests
         Assert.DoesNotContain(log.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning);
     }
 
+    // --- Admin surface: TryCreateLink / TryRemoveLink / LinksByUser (#372, finishing #241) ---
+
+    [Fact]
+    public void TryCreateLink_KnownProvider_WritesTheLinkAndReturnsCreated()
+    {
+        var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+
+        var result = service.TryCreateLink("oid", "kc", "sub-1", Existing);
+
+        Assert.Equal(CanonicalLinkWriteResult.Created, result);
+        Assert.Equal(Existing, cfg.OidConfigs["kc"].CanonicalLinks["sub-1"]);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void TryCreateLink_EmptyKey_ReturnsEmptyKey_WithoutWriting(string providerUserId)
+    {
+        var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+
+        var result = service.TryCreateLink("oid", "kc", providerUserId, Existing);
+
+        Assert.Equal(CanonicalLinkWriteResult.EmptyKey, result);
+        Assert.Empty(cfg.OidConfigs["kc"].CanonicalLinks);
+    }
+
+    [Fact]
+    public void TryCreateLink_UnknownProvider_ReturnsUnknownProvider()
+    {
+        var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+
+        var result = service.TryCreateLink("oid", "does-not-exist", "sub-1", Existing);
+
+        Assert.Equal(CanonicalLinkWriteResult.UnknownProvider, result);
+    }
+
+    [Fact]
+    public void TryCreateLink_EmptyKeyAndUnknownProvider_ReturnsEmptyKey_NotUnknownProvider()
+    {
+        // The two refusals map to DIFFERENT response bodies, so the order is observable: an unresolved
+        // identity is reported as EmptyKey even when the provider is also unknown (the empty-key guard
+        // runs first). Locks the check ordering the controller's distinct 400 bodies depend on.
+        var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+
+        var result = service.TryCreateLink("oid", "does-not-exist", "   ", Existing);
+
+        Assert.Equal(CanonicalLinkWriteResult.EmptyKey, result);
+    }
+
+    [Fact]
+    public void TryRemoveLink_OwnLink_RemovesItAndReturnsRemoved()
+    {
+        var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+
+        var result = service.TryRemoveLink("oid", "kc", "sub-1", Existing);
+
+        Assert.Equal(CanonicalLinkRemoveResult.Removed, result);
+        Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("sub-1"));
+    }
+
+    [Fact]
+    public void TryRemoveLink_UnknownCanonicalName_ReturnsNotFound()
+    {
+        var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+
+        var result = service.TryRemoveLink("oid", "kc", "does-not-exist", Existing);
+
+        Assert.Equal(CanonicalLinkRemoveResult.NotFound, result);
+    }
+
+    [Fact]
+    public void TryRemoveLink_LinkedToDifferentUser_ReturnsMismatch_WithoutRemoving()
+    {
+        var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+
+        var result = service.TryRemoveLink("oid", "kc", "sub-1", Other);
+
+        Assert.Equal(CanonicalLinkRemoveResult.Mismatch, result);
+        Assert.Equal(Existing, cfg.OidConfigs["kc"].CanonicalLinks["sub-1"]); // untouched
+    }
+
+    [Fact]
+    public void TryRemoveLink_UnknownProvider_ReturnsUnknownProvider()
+    {
+        var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+
+        var result = service.TryRemoveLink("oid", "does-not-exist", "sub-1", Existing);
+
+        Assert.Equal(CanonicalLinkRemoveResult.UnknownProvider, result);
+    }
+
+    [Fact]
+    public void LinksByUser_ReturnsOnlyTheUsersKeys_PerProvider()
+    {
+        var (service, _, _, _) = Build(c =>
+        {
+            c.OidConfigs["kc"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing, ["sub-2"] = Other } };
+            c.OidConfigs["authelia"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-3"] = Existing } };
+            c.SamlConfigs["adfs"] = new SamlConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing } };
+        });
+
+        var oid = service.LinksByUser("oid", Existing);
+
+        Assert.Equal(new[] { "sub-1" }, oid["kc"]); // the other user's sub-2 is excluded
+        Assert.Equal(new[] { "sub-3" }, oid["authelia"]);
+        Assert.DoesNotContain("adfs", oid.Keys); // SAML provider is not in the OID projection
+    }
+
     [Fact]
     public void RemoveUserEverywhere_RemovesTheUsersLinksAcrossAllProviders_AndCountsThem()
     {

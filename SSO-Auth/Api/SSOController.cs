@@ -985,27 +985,6 @@ public class SSOController : ControllerBase
         return Ok();
     }
 
-    // Applies a mutation to a provider's canonical-links map on the LIVE configuration. The map is
-    // self-healing (CanonicalLinks lazily creates and stores it), so mutating the returned map persists
-    // directly. Runs inside MutateConfiguration, so the read-modify-write is serialized and concurrent
-    // first-logins cannot lose each other's links.
-    private static void MutateLinks(PluginConfiguration configuration, string mode, string provider, Action<SerializableDictionary<string, Guid>> mutate)
-    {
-        mutate(GetLinks(configuration, mode, provider));
-    }
-
-    // The provider's canonical-links map; callers must hold the config lock (ReadConfiguration /
-    // MutateConfiguration) while touching it.
-    private static SerializableDictionary<string, Guid> GetLinks(PluginConfiguration configuration, string mode, string provider)
-    {
-        return mode.ToLowerInvariant() switch
-        {
-            "saml" => configuration.SamlConfigs[provider].CanonicalLinks,
-            "oid" => configuration.OidConfigs[provider].CanonicalLinks,
-            _ => throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'"),
-        };
-    }
-
     /// <summary>
     /// Create a canonical link for a given user. Must be performed by the user being changed, or admin.
     /// </summary>
@@ -1055,43 +1034,14 @@ public class SSOController : ControllerBase
             return StatusCode(StatusCodes.Status403Forbidden, "Current user is not allowed to unlink SSO providers for user ID.");
         }
 
-        var mismatch = false;
-        var found = false;
-        try
+        return _canonicalLinks.TryRemoveLink(mode, provider, canonicalName, jellyfinUserId) switch
         {
-            SSOPlugin.Instance.MutateConfiguration(configuration => MutateLinks(configuration, mode, provider, links =>
-            {
-                if (!links.TryGetValue(canonicalName, out var linkedId))
-                {
-                    return;
-                }
-
-                found = true;
-                if (linkedId != jellyfinUserId)
-                {
-                    mismatch = true;
-                    return;
-                }
-
-                links.Remove(canonicalName);
-            }));
-        }
-        catch (KeyNotFoundException)
-        {
-            return BadRequest(NoMatchingProviderMessage);
-        }
-
-        if (!found)
-        {
-            return NotFound("No SSO link is registered for that canonical name.");
-        }
-
-        if (mismatch)
-        {
-            return StatusCode(StatusCodes.Status409Conflict, "jellyfin UID does not match id registered to that canonical name.");
-        }
-
-        return Ok();
+            CanonicalLinkRemoveResult.Removed => Ok(),
+            CanonicalLinkRemoveResult.NotFound => NotFound("No SSO link is registered for that canonical name."),
+            CanonicalLinkRemoveResult.Mismatch => StatusCode(StatusCodes.Status409Conflict, "jellyfin UID does not match id registered to that canonical name."),
+            CanonicalLinkRemoveResult.UnknownProvider => BadRequest(NoMatchingProviderMessage),
+            _ => throw new InvalidOperationException($"Unhandled canonical-link remove result: {mode}/{provider}"),
+        };
     }
 
     /// <summary>
@@ -1109,7 +1059,7 @@ public class SSOController : ControllerBase
             return StatusCode(StatusCodes.Status403Forbidden, "Non-admin is not allowed to query other user's mappings.");
         }
 
-        return BuildLinksByUser("saml", jellyfinUserId);
+        return _canonicalLinks.LinksByUser("saml", jellyfinUserId);
     }
 
     /// <summary>
@@ -1127,32 +1077,7 @@ public class SSOController : ControllerBase
             return StatusCode(StatusCodes.Status403Forbidden, "Non-admin is not allowed to query other user's mappings.");
         }
 
-        return BuildLinksByUser("oid", jellyfinUserId);
-    }
-
-    // Builds the provider -> [link keys for this user] map under the config lock, materializing each
-    // provider's matches with ToList (#157/F-10). The previous version assigned a deferred LINQ query
-    // that enumerated the live CanonicalLinks during JSON serialization — outside any lock — which
-    // could tear against a concurrent login writing a link ("collection modified during enumeration").
-    private static SerializableDictionary<string, IEnumerable<string>> BuildLinksByUser(string mode, Guid jellyfinUserId)
-    {
-        return SSOPlugin.Instance.ReadConfiguration(configuration =>
-        {
-            var providerList = string.Equals(mode, "saml", StringComparison.Ordinal)
-                ? (IEnumerable<KeyValuePair<string, SerializableDictionary<string, Guid>>>)configuration.SamlConfigs.Select(p => new KeyValuePair<string, SerializableDictionary<string, Guid>>(p.Key, p.Value.CanonicalLinks))
-                : configuration.OidConfigs.Select(p => new KeyValuePair<string, SerializableDictionary<string, Guid>>(p.Key, p.Value.CanonicalLinks));
-
-            var mappings = new SerializableDictionary<string, IEnumerable<string>>();
-            foreach (var provider in providerList)
-            {
-                mappings[provider.Key] = provider.Value
-                    .Where(link => link.Value == jellyfinUserId)
-                    .Select(link => link.Key)
-                    .ToList();
-            }
-
-            return mappings;
-        });
+        return _canonicalLinks.LinksByUser("oid", jellyfinUserId);
     }
 
     // A shallow copy of a provider map, taken under the config lock so the admin list endpoints
@@ -1214,7 +1139,7 @@ public class SSOController : ControllerBase
 
         string providerUserId = samlResponse.GetNameID();
 
-        return CreateCanonicalLink("saml", provider, jellyfinUserId, providerUserId);
+        return MapWrite(_canonicalLinks.TryCreateLink("saml", provider, providerUserId, jellyfinUserId));
     }
 
     /// <summary>
@@ -1256,31 +1181,19 @@ public class SSOController : ControllerBase
 
         // Manual linking keys on the stable subject (#155), matching the auto-login path, so a
         // later provider-side rename does not orphan the link the user just created.
-        return CreateCanonicalLink("oid", provider, jellyfinUserId, redeemed.Subject);
+        return MapWrite(_canonicalLinks.TryCreateLink("oid", provider, redeemed.Subject, jellyfinUserId));
     }
 
-    private ActionResult CreateCanonicalLink(string mode, string provider, Guid jellyfinUserId, string providerUserId)
+    // The HTTP boundary for a manual link creation: maps the service's closed write result to a response.
+    // The empty-key and unknown-provider refusals keep distinct bodies (the service checks the empty key
+    // first), and an unhandled result throws rather than silently returning a wrong status.
+    private ActionResult MapWrite(CanonicalLinkWriteResult result) => result switch
     {
-        // Fail closed (#95), linking-side choke point: an SSO identity that did not resolve must not
-        // create a link — a null key would throw inside the config mutation (500), and an empty or
-        // whitespace key would persist a dead link no login can ever redeem.
-        if (string.IsNullOrWhiteSpace(providerUserId))
-        {
-            return BadRequest("The SSO login did not resolve an identity.");
-        }
-
-        try
-        {
-            SSOPlugin.Instance.MutateConfiguration(configuration =>
-                MutateLinks(configuration, mode, provider, links => links[providerUserId] = jellyfinUserId));
-        }
-        catch (KeyNotFoundException)
-        {
-            return BadRequest(NoMatchingProviderMessage);
-        }
-
-        return NoContent();
-    }
+        CanonicalLinkWriteResult.Created => NoContent(),
+        CanonicalLinkWriteResult.EmptyKey => BadRequest("The SSO login did not resolve an identity."),
+        CanonicalLinkWriteResult.UnknownProvider => BadRequest(NoMatchingProviderMessage),
+        _ => throw new InvalidOperationException($"Unhandled canonical-link write result: {result}"),
+    };
 
     /// <summary>
     /// Mints a Jellyfin session for a resolved SSO login: applies the granted permissions and the
