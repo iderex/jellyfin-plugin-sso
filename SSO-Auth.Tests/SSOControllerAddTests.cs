@@ -9,9 +9,10 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 
 /// <summary>
 /// In-process tests of the provider-add endpoints via <see cref="SsoControllerHarness"/>: a valid
-/// config is stored, a malformed base-URL override is rejected fail-closed, a re-save preserves
-/// the server-managed canonical links (#157) that the API body never carries, and a NEW provider
-/// name containing URI-reserved characters is rejected while an existing one stays updatable (#336).
+/// config is stored, a malformed base-URL override is rejected fail-closed, a re-save preserves the
+/// server-managed canonical links (#157) and the write-only OpenID secret (#189 — kept when the provider
+/// identity is unchanged, dropped when the endpoint changes) that the API body never carries, and a NEW
+/// provider name containing URI-reserved characters is rejected while an existing one stays updatable (#336).
 /// </summary>
 [Collection("SSOController")]
 public class SSOControllerAddTests
@@ -51,6 +52,43 @@ public class SSOControllerAddTests
 
         var links = SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["keycloak"].CanonicalLinks);
         Assert.Equal(User, links["sub-1"]);
+    }
+
+    [Fact]
+    public void OidAdd_ReSaveWithBlankSecret_UnchangedIdentity_KeepsStoredSecret()
+    {
+        // #189 blank-means-keep at the OidAdd door: a re-save carrying a blank secret (as the write-only
+        // API body does) but the same provider identity keeps the stored secret. Pins the SECRET half of
+        // ServerManagedFields.Preserve at the endpoint — the links half is covered above, but the
+        // zero-occurrence conformance rule (#383) no longer guarantees the Preserve CALL routes the
+        // secret, so a future links-only substitute must fail here rather than silently wipe #189.
+        var harness = new SsoControllerHarness(c => c.OidConfigs["keycloak"] =
+            new OidConfig { OidSecret = "stored-secret", OidEndpoint = "https://idp.example/", OidClientId = "client-1" });
+
+        harness.Controller.OidAdd("keycloak", new OidConfig { OidSecret = string.Empty, OidEndpoint = "https://idp.example/", OidClientId = "client-1" });
+
+        var secret = SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["keycloak"].OidSecret);
+        Assert.Equal("stored-secret", secret);
+    }
+
+    [Fact]
+    public void OidAdd_ReSaveWithBlankSecret_ChangedEndpoint_DropsStoredSecret()
+    {
+        // The #189 exfil guard: a blank secret with a CHANGED endpoint must NOT carry the stored secret
+        // over (it stays blank, failing login closed), so a write-only secret cannot be pulled toward a
+        // different token endpoint. Also pinned at the endpoint now that the conformance rule is
+        // presence-agnostic.
+        var harness = new SsoControllerHarness(c => c.OidConfigs["keycloak"] =
+            new OidConfig { OidSecret = "stored-secret", OidEndpoint = "https://idp.example/", OidClientId = "client-1" });
+
+        harness.Controller.OidAdd("keycloak", new OidConfig { OidSecret = string.Empty, OidEndpoint = "https://attacker.example/", OidClientId = "client-1" });
+
+        var stored = SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["keycloak"]);
+        // The identity genuinely changed (so the drop is via the ResolveUpdatedSecret identity-change
+        // branch, not the unchanged branch), and the stored secret was dropped, not carried to it — this
+        // arm guards against an always-keep regression (Test 1 covers the links-only/never-keep case).
+        Assert.Equal("https://attacker.example/", stored.OidEndpoint);
+        Assert.True(string.IsNullOrEmpty(stored.OidSecret));
     }
 
     [Fact]

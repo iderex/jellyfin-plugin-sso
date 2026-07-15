@@ -19,10 +19,12 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 /// as each migration step lands a new structural property, add the rule that locks it in here so it
 /// cannot regress. Most rules are type-level (reflection over the production assembly); call-level
 /// invariants otherwise stay guarded by CodeQL/CodeRabbit and the pinning tests. The one call-level
-/// property locked in here is a source scan — the controller touches no provider link map except the
-/// server-managed re-injection (<see cref="Controller_TouchesProviderLinkMapsOnlyForServerManagedReinjection"/>) —
-/// because the #372 extraction makes "all link-map access flows through CanonicalLinkService" a boundary
-/// worth failing CI on, not just review.
+/// property locked in here is a source scan — the CONTROLLER touches no provider link map directly
+/// (<see cref="Controller_NeverTouchesProviderLinkMaps"/>) — because the #372 extraction confines
+/// link-map access to CanonicalLinkService (the login/admin workflow) and ServerManagedFields.Preserve
+/// (the #157 server-managed re-injection the config tier owns), a boundary worth failing CI on, not just
+/// review; #383 retired the controller's last two inline re-injection sites into that shared Preserve, so
+/// the scan is now a plain zero-occurrence invariant on the controller.
 /// </summary>
 public class ArchitectureConformanceTests
 {
@@ -148,49 +150,26 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
-    public void Controller_TouchesProviderLinkMapsOnlyForServerManagedReinjection()
+    public void Controller_NeverTouchesProviderLinkMaps()
     {
-        // Locked in by the link/unlink admin-surface extraction (#372): every read/write of a provider's
-        // CanonicalLinks map now flows through CanonicalLinkService under the config lock. This is a
-        // call-level property, so it is a source scan rather than a reflection rule (the one exception to
-        // the "call-level invariants stay with CodeQL/CodeRabbit" note in the class summary). The only
-        // permitted controller touches are the two server-managed-field re-injection statements on the
-        // provider add/update endpoints (#157), a Config-tier concern that stays with provider CRUD, not
-        // link workflow. The exemption is matched as the WHOLE trimmed statement (not a substring), so an
-        // aliasing line like `var map = existing.CanonicalLinks;` followed by a mutation cannot launder
-        // itself past the scan, and the count is pinned so removing or adding a re-injection site forces a
-        // conscious rule update. #383 will retire these two lines into ServerManagedFields.Preserve, after
-        // which this rule tightens to zero occurrences and drops the exemption entirely.
-        var allowedReinjection = new[]
-        {
-            "config.CanonicalLinks = existing.CanonicalLinks;",
-            "newConfig.CanonicalLinks = existing.CanonicalLinks;",
-        };
+        // Locked in by the link/unlink admin-surface extraction (#372) and completed by #383: the two
+        // legitimate homes for provider-CanonicalLinks access are CanonicalLinkService (the login/admin
+        // link workflow, under the config lock) and ServerManagedFields.Preserve (the #157 re-injection
+        // the config tier owns) — and the controller's two former inline re-injection statements now route
+        // through that shared Preserve, so the CONTROLLER has ZERO direct CanonicalLinks access and the
+        // earlier re-injection exemption is retired. This is a call-level property, so it is a source scan
+        // rather than a reflection rule (the one exception to the "call-level invariants stay with
+        // CodeQL/CodeRabbit" note in the class summary); a missing source file fails the test loudly.
         var controllerSource = File.ReadAllLines(Path.Combine(RepoRoot(), "SSO-Auth", "Api", "SSOController.cs"));
         var linkMapLines = controllerSource
             .Select((line, index) => (Text: line.Trim(), Number: index + 1))
             .Where(l => l.Text.Contains(".CanonicalLinks", StringComparison.Ordinal))
-            .ToList();
-        var offending = linkMapLines
-            .Where(l => !allowedReinjection.Contains(l.Text, StringComparer.Ordinal))
             .Select(l => $"line {l.Number}: {l.Text}")
             .ToList();
 
         Assert.True(
-            offending.Count == 0,
-            "SSOController must not access a provider CanonicalLinks map except the two server-managed re-injection statements; route link-map access through CanonicalLinkService. Found: " + string.Join(" | ", offending));
-
-        // Assert each permitted statement exists EXACTLY ONCE, not just that two matching lines exist:
-        // otherwise two copies of the OID re-injection would pass while the SAML one was silently dropped,
-        // no longer preserving SAML canonical links. A removed site should tighten this rule (see #383); a
-        // duplicate needs a conscious update.
-        foreach (var expected in allowedReinjection)
-        {
-            var occurrences = linkMapLines.Count(l => string.Equals(l.Text, expected, StringComparison.Ordinal));
-            Assert.True(
-                occurrences == 1,
-                $"Expected exactly one server-managed re-injection statement '{expected}' in SSOController; found {occurrences}.");
-        }
+            linkMapLines.Count == 0,
+            "SSOController must not access a provider CanonicalLinks map directly; route link-map access through CanonicalLinkService and server-managed re-injection through ServerManagedFields.Preserve. Found: " + string.Join(" | ", linkMapLines));
     }
 
     [Fact]

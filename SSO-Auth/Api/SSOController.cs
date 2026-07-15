@@ -503,14 +503,12 @@ public class SSOController : ControllerBase
             var providerExists = configuration.OidConfigs.TryGetValue(provider, out var existing);
             RejectInvalidNewProviderName(provider, providerExists);
 
-            // Re-inject the server-managed fields this API cannot carry: CanonicalLinks is
-            // [JsonIgnore] so the posted config never has them (#157), and the write-only secret
-            // follows the same blank-means-keep rule as the config-page save (#189), centralized in
-            // ResolveUpdatedSecret so both paths agree on rotation and identity-change behavior.
+            // Re-inject the server-managed fields this API cannot carry — CanonicalLinks ([JsonIgnore],
+            // #157) and the write-only secret's blank-means-keep rule (#189) — through the one shared
+            // ServerManagedFields.Preserve the config-page save also uses, so every write path agrees.
             if (config != null && providerExists)
             {
-                config.CanonicalLinks = existing.CanonicalLinks;
-                config.OidSecret = ServerManagedFields.ResolveUpdatedSecret(config, existing);
+                ServerManagedFields.Preserve(config, existing);
             }
 
             configuration.OidConfigs[provider] = config;
@@ -792,12 +790,12 @@ public class SSOController : ControllerBase
             var providerExists = configuration.SamlConfigs.TryGetValue(provider, out var existing);
             RejectInvalidNewProviderName(provider, providerExists);
 
-            // Preserve the server-managed canonical links (#157), as OidAdd does: the posted config
-            // never carries them ([JsonIgnore]), so re-inject the live map before the wholesale
-            // replace so an API save cannot wipe existing account links.
+            // Preserve the server-managed canonical links (#157), as OidAdd does, through the shared
+            // ServerManagedFields.Preserve: the posted config never carries them ([JsonIgnore]), so
+            // re-inject the live map before the wholesale replace so an API save cannot wipe links.
             if (newConfig != null && providerExists)
             {
-                newConfig.CanonicalLinks = existing.CanonicalLinks;
+                ServerManagedFields.Preserve(newConfig, existing);
             }
 
             configuration.SamlConfigs[provider] = newConfig;
