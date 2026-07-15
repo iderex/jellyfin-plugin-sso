@@ -1,25 +1,33 @@
+using System.Diagnostics;
 using System.Net.Http;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api;
 
 /// <summary>
-/// Creates the plugin's outbound HTTP clients from the shared <see cref="IHttpClientFactory"/> with the
-/// plugin's User-Agent applied, so every server-to-provider call (OpenID discovery, the PKCE-support
-/// probe) is identifiable and configured in one place. The SSRF-guarded avatar fetch uses its own
-/// hardened handler and does not go through here.
+/// The one home for the plugin's outbound HTTP policy: the User-Agent value and the factory-client
+/// creation it is applied to, so every server-to-provider call (OpenID discovery, the PKCE-support
+/// probe) is identifiable and configured in one place. The SSRF-guarded avatar fetch builds its own
+/// hardened handler and does not go through <see cref="CreateClient"/>, but consumes
+/// <see cref="UserAgent"/> so the identity stays single-sourced. Enforced by the opengrep rule
+/// no-raw-outbound-httpclient.
 /// </summary>
 internal static class SsoHttp
 {
     /// <summary>
-    /// Returns a pooled <see cref="HttpClient"/> from the factory with the plugin User-Agent set.
+    /// The plugin's outbound User-Agent: product token, assembly file version, and project URL.
+    /// </summary>
+    internal static readonly string UserAgent =
+        $"Jellyfin-Plugin-SSO-Auth +{FileVersionInfo.GetVersionInfo(typeof(SsoHttp).Assembly.Location).FileVersion} (https://github.com/iderex/jellyfin-plugin-sso)";
+
+    /// <summary>
+    /// Returns a factory client (over the factory's pooled handler stack) with <see cref="UserAgent"/> applied.
     /// </summary>
     /// <param name="factory">The shared HTTP client factory.</param>
-    /// <param name="userAgent">The plugin User-Agent header value.</param>
-    /// <returns>A client with the User-Agent applied.</returns>
-    internal static HttpClient CreateClient(IHttpClientFactory factory, string userAgent)
+    /// <returns>A client with the plugin User-Agent applied.</returns>
+    internal static HttpClient CreateClient(IHttpClientFactory factory)
     {
         var client = factory.CreateClient();
-        client.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
+        client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
         return client;
     }
 }
