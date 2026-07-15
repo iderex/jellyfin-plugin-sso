@@ -153,22 +153,35 @@ public class ArchitectureConformanceTests
         // Locked in by the link/unlink admin-surface extraction (#372): every read/write of a provider's
         // CanonicalLinks map now flows through CanonicalLinkService under the config lock. This is a
         // call-level property, so it is a source scan rather than a reflection rule (the one exception to
-        // the "call-level invariants stay with CodeQL/CodeRabbit" note in the class summary). The single
-        // permitted controller touch is server-managed-field re-injection on the provider add/update
-        // endpoints (#157): `config.CanonicalLinks = existing.CanonicalLinks`, a Config-tier concern that
-        // stays with provider CRUD, not link workflow. Any other `.CanonicalLinks` occurrence in the
-        // controller means link-map access leaked back out of the service.
+        // the "call-level invariants stay with CodeQL/CodeRabbit" note in the class summary). The only
+        // permitted controller touches are the two server-managed-field re-injection statements on the
+        // provider add/update endpoints (#157), a Config-tier concern that stays with provider CRUD, not
+        // link workflow. The exemption is matched as the WHOLE trimmed statement (not a substring), so an
+        // aliasing line like `var map = existing.CanonicalLinks;` followed by a mutation cannot launder
+        // itself past the scan, and the count is pinned so removing or adding a re-injection site forces a
+        // conscious rule update. #383 will retire these two lines into ServerManagedFields.Preserve, after
+        // which this rule tightens to zero occurrences and drops the exemption entirely.
+        var allowedReinjection = new[]
+        {
+            "config.CanonicalLinks = existing.CanonicalLinks;",
+            "newConfig.CanonicalLinks = existing.CanonicalLinks;",
+        };
         var controllerSource = File.ReadAllLines(Path.Combine(RepoRoot(), "SSO-Auth", "Api", "SSOController.cs"));
-        var offending = controllerSource
-            .Select((line, index) => (Text: line, Number: index + 1))
+        var linkMapLines = controllerSource
+            .Select((line, index) => (Text: line.Trim(), Number: index + 1))
             .Where(l => l.Text.Contains(".CanonicalLinks", StringComparison.Ordinal))
-            .Where(l => !l.Text.Contains("= existing.CanonicalLinks", StringComparison.Ordinal))
-            .Select(l => $"line {l.Number}: {l.Text.Trim()}")
+            .ToList();
+        var offending = linkMapLines
+            .Where(l => !allowedReinjection.Contains(l.Text, StringComparer.Ordinal))
+            .Select(l => $"line {l.Number}: {l.Text}")
             .ToList();
 
         Assert.True(
             offending.Count == 0,
-            "SSOController must not access a provider CanonicalLinks map except the server-managed re-injection (= existing.CanonicalLinks); route link-map access through CanonicalLinkService. Found: " + string.Join(" | ", offending));
+            "SSOController must not access a provider CanonicalLinks map except the two server-managed re-injection statements; route link-map access through CanonicalLinkService. Found: " + string.Join(" | ", offending));
+        Assert.True(
+            linkMapLines.Count == 2,
+            $"Expected exactly the two server-managed re-injection sites in SSOController; found {linkMapLines.Count}. A removed site should tighten this rule; a new one needs a conscious exemption update.");
     }
 
     [Fact]
@@ -229,7 +242,7 @@ public class ArchitectureConformanceTests
 
     private static bool IsCompilerGenerated(Type t) =>
         t.Name.Contains('<', StringComparison.Ordinal)
-        || t.GetCustomAttribute<System.Runtime.CompilerServices.CompilerGeneratedAttribute>() is not null;
+        || t.GetCustomAttribute<CompilerGeneratedAttribute>() is not null;
 
     // The repository root, derived from this test file's compile-time path (<root>/SSO-Auth.Tests/<file>).
     // CallerFilePath is baked in at build, and CI builds on the same checkout it tests, so the source tree

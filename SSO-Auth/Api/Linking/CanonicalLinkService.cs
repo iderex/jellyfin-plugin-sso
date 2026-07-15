@@ -318,9 +318,12 @@ internal sealed class CanonicalLinkService
     {
         return _configStore.Read(configuration =>
         {
+            // A provider stored with a null config object (reachable today via #350's null-body add)
+            // is skipped rather than dereferenced — same fail-closed treatment TryGetLinks gives it,
+            // so the read side cannot NRE into a 500 on a state the write side can produce.
             var providerList = string.Equals(mode, "saml", StringComparison.Ordinal)
-                ? (IEnumerable<KeyValuePair<string, SerializableDictionary<string, Guid>>>)configuration.SamlConfigs.Select(p => new KeyValuePair<string, SerializableDictionary<string, Guid>>(p.Key, p.Value.CanonicalLinks))
-                : configuration.OidConfigs.Select(p => new KeyValuePair<string, SerializableDictionary<string, Guid>>(p.Key, p.Value.CanonicalLinks));
+                ? (IEnumerable<KeyValuePair<string, SerializableDictionary<string, Guid>>>)configuration.SamlConfigs.Where(p => p.Value?.CanonicalLinks != null).Select(p => new KeyValuePair<string, SerializableDictionary<string, Guid>>(p.Key, p.Value.CanonicalLinks))
+                : configuration.OidConfigs.Where(p => p.Value?.CanonicalLinks != null).Select(p => new KeyValuePair<string, SerializableDictionary<string, Guid>>(p.Key, p.Value.CanonicalLinks));
 
             var mappings = new SerializableDictionary<string, IEnumerable<string>>();
             foreach (var provider in providerList)
@@ -347,14 +350,23 @@ internal sealed class CanonicalLinkService
         return _configStore.Mutate(configuration =>
         {
             int removed = 0;
+
+            // Skip a provider stored with a null config object (reachable via #350); it holds no links to
+            // revoke, and dereferencing it would NRE into a 500 — the same fail-closed skip TryGetLinks uses.
             foreach (var config in configuration.SamlConfigs.Values)
             {
-                removed += CanonicalLinkRevoker.RemoveUser(config.CanonicalLinks, userId);
+                if (config?.CanonicalLinks is { } links)
+                {
+                    removed += CanonicalLinkRevoker.RemoveUser(links, userId);
+                }
             }
 
             foreach (var config in configuration.OidConfigs.Values)
             {
-                removed += CanonicalLinkRevoker.RemoveUser(config.CanonicalLinks, userId);
+                if (config?.CanonicalLinks is { } links)
+                {
+                    removed += CanonicalLinkRevoker.RemoveUser(links, userId);
+                }
             }
 
             return removed;
@@ -410,10 +422,9 @@ internal sealed class CanonicalLinkService
                 throw new AccountLinkForbiddenException("The SSO provider is no longer configured; refusing to migrate the account link.");
             }
 
-            // A no-op here is the GOOD idempotent case (the provider still exists): oldKey is already
-            // gone because a concurrent login migrated first, or newKey is live. Never overwrite a live
-            // newKey — only a dangling one (its target user deleted), which would otherwise block the
-            // hand-off on every subsequent login.
+            // A no-op here (unlike the throwing miss above) is the GOOD idempotent case: the provider
+            // still exists but oldKey was already re-keyed by a concurrent login, or newKey is live. The
+            // never-overwrite-a-live-newKey rule is on the method summary.
             if (links.TryGetValue(oldKey, out var userId)
                 && (!links.TryGetValue(newKey, out var existing) || _userManager.GetUserById(existing) == null))
             {
@@ -427,13 +438,13 @@ internal sealed class CanonicalLinkService
     // provider on the reachable admin link/unlink paths is a false return the caller maps to
     // UnknownProvider — finishing the #241 removal of KeyNotFoundException-as-control-flow. Returns true
     // and a non-null map only when the provider exists AND has a config object; a missing provider — or a
-    // null-valued entry from deserialization — returns false, so the caller fails closed (UnknownProvider
-    // on admin paths, a reject on login paths) instead of dereferencing null. The map is self-healing
-    // (CanonicalLinks lazily creates and stores it), so mutating the returned map persists directly;
-    // callers must hold the config lock (Read / Mutate) while touching it. An unrecognized mode is not an
-    // unknown provider but a caller contract violation, so it throws — note the DELETE route forwards mode
-    // unvalidated (unlike the AddCanonicalLink dispatch), so that throw is reachable there; the #318 mode
-    // normalization step is tracked to validate mode once at the HTTP boundary.
+    // null-valued entry (reachable today via the null-body add, #350) — returns false, so the caller fails
+    // closed (UnknownProvider on admin paths, a reject on login paths) instead of dereferencing null. The
+    // map is self-healing (CanonicalLinks lazily creates and stores it), so mutating the returned map
+    // persists directly; callers must hold the config lock (Read / Mutate) while touching it. An
+    // unrecognized mode is not an unknown provider but a caller contract violation, so it throws — note the
+    // DELETE route forwards mode unvalidated (unlike the AddCanonicalLink dispatch), so that throw is
+    // reachable there; #369 tracks parsing mode once at the HTTP boundary into an internal enum.
     private static bool TryGetLinks(PluginConfiguration configuration, string mode, string provider, out SerializableDictionary<string, Guid> links)
     {
         switch (mode.ToLowerInvariant())

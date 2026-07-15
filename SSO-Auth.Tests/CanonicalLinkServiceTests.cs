@@ -347,6 +347,52 @@ public class CanonicalLinkServiceTests
     }
 
     [Fact]
+    public void TryCreateLink_ExistingKey_RebindsItToTheNewUser()
+    {
+        // Deliberate admin capability (pinned so the last-writer-wins semantics are not changed by
+        // accident): re-linking an already-linked provider identity to a different Jellyfin user
+        // silently overwrites the prior binding — an admin correcting a mis-link, not a defect.
+        var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+
+        var result = service.TryCreateLink("oid", "kc", "sub-1", Other);
+
+        Assert.Equal(CanonicalLinkWriteResult.Created, result);
+        Assert.Equal(Other, cfg.OidConfigs["kc"].CanonicalLinks["sub-1"]); // rebound to the new user
+    }
+
+    [Fact]
+    public void TryRemoveLink_NullConfigProvider_FailsClosedAsUnknownProvider()
+    {
+        // A provider stored with a null config object (reachable via #350's null-body add) must be read
+        // as absent, not dereferenced into a 500 — same fail-closed treatment as a missing provider.
+        var (service, _, _, _) = Build(c => c.OidConfigs["broken"] = null);
+
+        var result = service.TryRemoveLink("oid", "broken", "sub-1", Existing);
+
+        Assert.Equal(CanonicalLinkRemoveResult.UnknownProvider, result);
+    }
+
+    [Fact]
+    public void LinksByUser_SkipsNullConfigProviders_WithoutThrowing()
+    {
+        // The read-side companion to the guard above: a null-valued provider entry is skipped, so listing
+        // a user's links cannot NRE into a 500 on the #350 state.
+        var (service, _, _, _) = Build(c =>
+        {
+            c.OidConfigs["kc"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing } };
+            c.OidConfigs["broken"] = null;
+        });
+
+        var oid = service.LinksByUser("oid", Existing);
+
+        Assert.Equal(new[] { "sub-1" }, oid["kc"]);
+        Assert.DoesNotContain("broken", oid.Keys); // the null-config provider is skipped, not thrown on
+    }
+
+    [Fact]
     public void TryRemoveLink_OwnLink_RemovesItAndReturnsRemoved()
     {
         var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
