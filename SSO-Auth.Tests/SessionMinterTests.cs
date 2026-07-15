@@ -1,5 +1,4 @@
 using System;
-using System.Linq;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
@@ -104,10 +103,10 @@ public class SessionMinterTests
             Params(enableAuthorization: true, isAdmin: true, enableAllFolders: false, enabledFolders: new[] { "lib-1" }, enableLiveTv: true, enableLiveTvManagement: true),
             "203.0.113.7");
 
-        Assert.True(user.Permissions.Any(perm => perm.Kind == PermissionKind.IsAdministrator && perm.Value));
-        Assert.False(user.Permissions.Any(perm => perm.Kind == PermissionKind.EnableAllFolders && perm.Value));
-        Assert.True(user.Permissions.Any(perm => perm.Kind == PermissionKind.EnableLiveTvAccess && perm.Value));
-        Assert.True(user.Permissions.Any(perm => perm.Kind == PermissionKind.EnableLiveTvManagement && perm.Value));
+        Assert.Contains(user.Permissions, perm => perm.Kind == PermissionKind.IsAdministrator && perm.Value);
+        Assert.DoesNotContain(user.Permissions, perm => perm.Kind == PermissionKind.EnableAllFolders && perm.Value);
+        Assert.Contains(user.Permissions, perm => perm.Kind == PermissionKind.EnableLiveTvAccess && perm.Value);
+        Assert.Contains(user.Permissions, perm => perm.Kind == PermissionKind.EnableLiveTvManagement && perm.Value);
     }
 
     [Fact]
@@ -122,7 +121,7 @@ public class SessionMinterTests
 
         await minter.MintAsync(Params(enableAuthorization: true, enableAllFolders: true), "203.0.113.7");
 
-        Assert.True(user.Permissions.Any(perm => perm.Kind == PermissionKind.EnableAllFolders && perm.Value));
+        Assert.Contains(user.Permissions, perm => perm.Kind == PermissionKind.EnableAllFolders && perm.Value);
     }
 
     [Fact]
@@ -137,7 +136,7 @@ public class SessionMinterTests
 
         await minter.MintAsync(Params(enableAuthorization: false, isAdmin: true), "203.0.113.7");
 
-        Assert.False(user.Permissions.Any(perm => perm.Kind == PermissionKind.IsAdministrator && perm.Value)); // isAdmin ignored while off
+        Assert.DoesNotContain(user.Permissions, perm => perm.Kind == PermissionKind.IsAdministrator && perm.Value); // isAdmin ignored while off
     }
 
     [Fact]
