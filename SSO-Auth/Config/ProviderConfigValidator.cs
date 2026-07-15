@@ -48,8 +48,8 @@ internal static class ProviderConfigValidator
         }
     }
 
-    // A NEW provider name containing URI-reserved characters would be persisted and then break the
-    // callback round-trip at login (#336): the name is appended raw to the redirect_uri/ACS URL
+    // A NEW provider name containing URI-reserved or control characters would be persisted and then break
+    // the callback round-trip at login (#336, #360): the name is appended raw to the redirect_uri/ACS URL
     // (SsoUrlBuilder) and matched back by route. Only a name absent from the live configuration is
     // rejected — an existing name, whose URL bytes the identity provider already has registered, must
     // keep saving unchanged or the deployment would be stranded behind a rename. Same inline
@@ -59,7 +59,7 @@ internal static class ProviderConfigValidator
         if (isNew && ProviderNameValidator.IsInvalid(provider))
         {
             throw new ArgumentException(
-                $"{protocol} provider '{provider?.ReplaceLineEndings(string.Empty)}' has a name with URI-reserved characters or a backslash; the name becomes part of the callback URL registered with the identity provider, so a new name must not contain a backslash or any of % : / ? # [ ] @ ! $ & ' ( ) * + , ; =.");
+                $"{protocol} provider '{provider?.ReplaceLineEndings(string.Empty)}' has a name with control characters, URI-reserved characters, or a backslash; the name becomes part of the callback URL registered with the identity provider, so a new name must not contain control characters, a backslash, or any of % : / ? # [ ] @ ! $ & ' ( ) * + , ; =.");
         }
     }
 

@@ -473,10 +473,11 @@ public class SSOController : ControllerBase
         }
     }
 
-    // Rejects a provider name containing URI-reserved characters when it would register a NEW provider
-    // (#336): the name is appended raw to the callback URLs handed to the identity provider
+    // Rejects a provider name containing URI-reserved or control characters when it would register a NEW
+    // provider (#336, #360): the name is appended raw to the callback URLs handed to the identity provider
     // (SsoUrlBuilder), so '%' breaks route decoding, '/' dead-ends the IdP redirect on a path no route
-    // matches, and the other RFC 3986 delimiters invite proxy/IdP misinterpretation. Updating an
+    // matches, control characters do not round-trip at all, and the other RFC 3986 delimiters invite
+    // proxy/IdP misinterpretation. Updating an
     // EXISTING name stays allowed: its URL bytes are already registered at the IdP, and blocking the
     // update would strand the deployment behind a rename (encoding the built URLs instead is pinned
     // off by SsoUrlBuilderTests).
@@ -484,7 +485,7 @@ public class SSOController : ControllerBase
     {
         if (!providerExists && ProviderNameValidator.IsInvalid(provider))
         {
-            throw new ArgumentException("A new provider name must not contain a backslash or any of % : / ? # [ ] @ ! $ & ' ( ) * + , ; = because the name becomes part of the callback URL registered with the identity provider.");
+            throw new ArgumentException("A new provider name must not contain control characters, a backslash, or any of % : / ? # [ ] @ ! $ & ' ( ) * + , ; = because the name becomes part of the callback URL registered with the identity provider.");
         }
     }
 
