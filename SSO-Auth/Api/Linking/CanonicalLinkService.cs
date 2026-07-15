@@ -59,9 +59,12 @@ internal sealed class CanonicalLinkService
 
         // The link is keyed on the stable identity. A legacy OpenID link (#155) was keyed on the
         // mutable username instead; when no subject-keyed link exists yet but a legacy one resolves,
-        // adopt and re-key it — the one login that migrates reuses the exact decision the old
-        // name-keyed lookup would have made, then locks it to the subject so a later provider-side
-        // rename cannot detach it. Only OpenID differs key from name; SAML passes key == name.
+        // adopt and re-key it, locking it to the subject so a later provider-side rename cannot
+        // detach it. Because the legacy key is a name the identity provider controls, following it is
+        // name-based account matching, so it honors AllowExistingAccountLink exactly like same-named
+        // adoption below (#354): with the flag off, a login whose preferred_username points at another
+        // user's entry is refused by the adoption gate instead of being handed that account.
+        // Only OpenID differs key from name; SAML passes key == name.
         // Both candidates are read in ONE pass under the config lock: with separate reads, a
         // concurrent login's migration could commit between them, so this login would see the subject
         // key before the re-key and the legacy key after it, resolve neither, and bounce a legitimate
@@ -79,7 +82,7 @@ internal sealed class CanonicalLinkService
             return (bySubject, byName);
         });
 
-        var (linkedUserId, migrateLegacy) = AccountLinkResolver.ResolveCanonicalLink(subjectLink, legacyLink);
+        var (linkedUserId, migrateLegacy) = AccountLinkResolver.ResolveCanonicalLink(subjectLink, legacyLink, allowExistingAccountLink);
         if (migrateLegacy)
         {
             MigrateCanonicalLinkKey(mode, provider, username, canonicalKey);
@@ -88,6 +91,16 @@ internal sealed class CanonicalLinkService
                 mode,
                 provider?.ReplaceLineEndings(string.Empty));
         }
+
+        // A legacy link that survives here un-migrated (flag off, #354) is not logged at this point:
+        // its terminal outcome decides the right message. It splits into a refusal (the name is still
+        // taken) or a fresh-account creation (the name was freed by a rename), and only the outcome
+        // branch below can label it accurately — the fresh-account case is a SUCCESSFUL login that
+        // silently orphans the original account, not a "refused" one, so a single pre-gate line would
+        // mislabel exactly the event an operator most needs to see. Each terminal branch emits one
+        // line (not deduplicated: a cross-request throttle would need process-wide state on this
+        // per-request service, which would leak across tests), so during an upgrade window it is a
+        // stream — enough to identify who still needs migrating, scanned expecting volume.
 
         // Adoption of a pre-existing unlinked account still matches on the display name.
         Guid? existingAccountUserId = _userManager.GetUserByName(username)?.Id;
@@ -113,7 +126,24 @@ internal sealed class CanonicalLinkService
 
             case AccountLinkAction.CreateNewAccount:
             {
-                _logger.LogInformation("SSO user {Name} doesn't exist, creating...", username.ReplaceLineEndings(string.Empty));
+                if (legacyLink.HasValue)
+                {
+                    // The dangerous, previously-silent case (#354): a legacy username-keyed link exists,
+                    // the flag is off so it was not followed, AND no live account bears the name anymore
+                    // (the account was renamed on the Jellyfin side). We are about to provision a FRESH
+                    // account under this subject, leaving the original — the one the legacy key points at
+                    // — permanently orphaned. This warning is the single observable signal of that
+                    // irreversible outcome; recover by linking the original account to this subject via
+                    // the admin endpoints, or enable AllowExistingAccountLink before the next login. See
+                    // the upgrade runbook in providers.md.
+                    _logger.LogWarning(
+                        "SSO login for {Name} via {Mode}/{Provider}: a legacy username-keyed link exists but AllowExistingAccountLink is off and no live account bears the name, so a fresh account is being provisioned and the original account is now orphaned. Re-link it to this subject via the admin endpoints (or enable AllowExistingAccountLink before the next login).",
+                        username?.ReplaceLineEndings(string.Empty),
+                        mode,
+                        provider?.ReplaceLineEndings(string.Empty));
+                }
+
+                _logger.LogInformation("SSO user {Name} doesn't exist, creating...", username?.ReplaceLineEndings(string.Empty));
                 var user = await _userManager.CreateUserAsync(username).ConfigureAwait(false);
                 user.AuthenticationProviderId = typeof(SSOController).FullName;
                 // https://jonathancrozier.com/blog/how-to-generate-a-cryptographically-secure-random-string-in-dot-net-with-c-sharp
@@ -127,11 +157,26 @@ internal sealed class CanonicalLinkService
             }
 
             case AccountLinkAction.RejectNameTaken:
-                _logger.LogWarning(
-                    "SSO login for {Name} via {Mode}/{Provider} refused: a pre-existing unlinked Jellyfin account exists and AllowExistingAccountLink is disabled for this provider.",
-                    username.ReplaceLineEndings(string.Empty),
-                    mode,
-                    provider?.ReplaceLineEndings(string.Empty));
+                if (legacyLink.HasValue)
+                {
+                    // Refused, but specifically because a legacy username-keyed link (#354) is pending
+                    // and a live account still bears the name — the migratable case, distinct from an
+                    // ordinary #95 name collision. One line, so the reject path is not double-logged.
+                    _logger.LogWarning(
+                        "SSO login for {Name} via {Mode}/{Provider} refused: a legacy username-keyed link is pending but AllowExistingAccountLink is off and a live account still bears the name. Enable AllowExistingAccountLink (a short controlled window) or link the account via the admin endpoints to migrate it.",
+                        username?.ReplaceLineEndings(string.Empty),
+                        mode,
+                        provider?.ReplaceLineEndings(string.Empty));
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "SSO login for {Name} via {Mode}/{Provider} refused: a pre-existing unlinked Jellyfin account exists and AllowExistingAccountLink is disabled for this provider.",
+                        username?.ReplaceLineEndings(string.Empty),
+                        mode,
+                        provider?.ReplaceLineEndings(string.Empty));
+                }
+
                 throw new AccountLinkForbiddenException();
 
             default:

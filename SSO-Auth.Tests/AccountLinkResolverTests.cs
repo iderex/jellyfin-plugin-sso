@@ -50,42 +50,60 @@ public class AccountLinkResolverTests
         Assert.Equal(Guid.Empty, decision.UserId);
     }
 
-    // --- ResolveCanonicalLink: subject-keyed lookup with one-time legacy-name migration (#155) ---
+    // --- ResolveCanonicalLink: subject-keyed lookup with one-time legacy-name migration (#155),
+    // gated behind AllowExistingAccountLink because the legacy key is the mutable username (#354) ---
 
     private static readonly Guid Subject = Guid.Parse("33333333-3333-3333-3333-333333333333");
     private static readonly Guid Legacy = Guid.Parse("44444444-4444-4444-4444-444444444444");
 
-    [Fact]
-    public void ResolveCanonicalLink_SubjectKeyed_IsUsed_WithoutMigration()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ResolveCanonicalLink_SubjectKeyed_IsUsed_WithoutMigration(bool allow)
     {
-        var (linkedUserId, migrate) = AccountLinkResolver.ResolveCanonicalLink(Subject, legacyNameKeyedUserId: null);
+        var (linkedUserId, migrate) = AccountLinkResolver.ResolveCanonicalLink(Subject, legacyNameKeyedUserId: null, allow);
         Assert.Equal(Subject, linkedUserId);
         Assert.False(migrate);
     }
 
-    [Fact]
-    public void ResolveCanonicalLink_SubjectKeyed_WinsOverLegacy_NoMigration()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ResolveCanonicalLink_SubjectKeyed_WinsOverLegacy_NoMigration(bool allow)
     {
         // Once a subject-keyed link exists, the legacy name-keyed one is never consulted or migrated.
-        var (linkedUserId, migrate) = AccountLinkResolver.ResolveCanonicalLink(Subject, Legacy);
+        var (linkedUserId, migrate) = AccountLinkResolver.ResolveCanonicalLink(Subject, Legacy, allow);
         Assert.Equal(Subject, linkedUserId);
         Assert.False(migrate);
     }
 
     [Fact]
-    public void ResolveCanonicalLink_OnlyLegacy_IsAdopted_AndMigrated()
+    public void ResolveCanonicalLink_OnlyLegacy_WithOptIn_IsAdopted_AndMigrated()
     {
-        // No subject-keyed link yet, but a legacy name-keyed one resolves: adopt it and signal the
-        // one-time re-key to the subject.
-        var (linkedUserId, migrate) = AccountLinkResolver.ResolveCanonicalLink(subjectKeyedUserId: null, Legacy);
+        // No subject-keyed link yet, but a legacy name-keyed one resolves and the provider permits
+        // name-based matching: adopt it and signal the one-time re-key to the subject.
+        var (linkedUserId, migrate) = AccountLinkResolver.ResolveCanonicalLink(subjectKeyedUserId: null, Legacy, allowExistingAccountLink: true);
         Assert.Equal(Legacy, linkedUserId);
         Assert.True(migrate);
     }
 
     [Fact]
-    public void ResolveCanonicalLink_NeitherLink_ResolvesNothing()
+    public void ResolveCanonicalLink_OnlyLegacy_WithoutOptIn_IsIgnored()
     {
-        var (linkedUserId, migrate) = AccountLinkResolver.ResolveCanonicalLink(null, null);
+        // The security-critical case (#354): the legacy key is the mutable preferred_username, so with
+        // AllowExistingAccountLink off a login must NOT be handed the account that key points at, and
+        // nothing may be migrated. The login falls through to Resolve(), whose adoption gate fails closed.
+        var (linkedUserId, migrate) = AccountLinkResolver.ResolveCanonicalLink(subjectKeyedUserId: null, Legacy, allowExistingAccountLink: false);
+        Assert.Null(linkedUserId);
+        Assert.False(migrate);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ResolveCanonicalLink_NeitherLink_ResolvesNothing(bool allow)
+    {
+        var (linkedUserId, migrate) = AccountLinkResolver.ResolveCanonicalLink(null, null, allow);
         Assert.Null(linkedUserId);
         Assert.False(migrate);
     }

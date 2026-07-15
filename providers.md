@@ -75,12 +75,57 @@ expiry). A few provider settings must therefore match, or login is refused (fail
   that mints a _different_ `sub` for the same user on every login (a misconfigured pairwise-subject
   setup) will work exactly once and then be refused — fix the IdP configuration; there is nothing
   safe to anchor the identity to otherwise.
-- **Upgrading from a username-keyed version:** links created by older plugin versions migrate to
-  `sub` automatically on each user's next login. The migration matches on the _current_ username, so
-  a user renamed at the IdP before upgrading cannot be matched to their old link (they get a fresh
-  account — the same outcome a rename already had before). Note that the self-service linking page
-  now lists OpenID links by their `sub` value, which for many providers is an opaque identifier
-  rather than a readable name.
+- **Upgrading from a username-keyed version — read this before you upgrade.** Links created by older
+  plugin versions (up to and including 4.0.0.4) are keyed on the username. A username is something the
+  identity provider can reassign, so following such a link is name-based account matching, governed by
+  the same `AllowExistingAccountLink` opt-in as adopting a same-named account. Because 4.0.0.4 keyed
+  **every** OpenID link on the username and predates the flag (it deserializes to `false`), a straight
+  upgrade **breaks OpenID sign-in for your whole userbase** until you migrate — though not identically
+  for everyone: with the flag off the legacy link is not followed, so a user whose name still matches
+  their account is **refused** (HTTP 403), while a user whose name was freed by a rename silently lands
+  on a **fresh, empty account** instead of their own (a successful login, not a 403). Either way no
+  OpenID user reaches their existing account. This is deliberate: with only a `sub` and a mutable
+  `preferred_username` to go on, the plugin cannot tell a returning user from an attacker who set their
+  `preferred_username` to a victim's name, so it fails closed. Plan the migration:
+
+  1. **Keep a break-glass admin that does _not_ depend on SSO.** SSO-provisioned accounts get a random
+     password, so if your only admins sign in through OpenID they will be locked out by the 403 above
+     with no way back in-band. **Before upgrading**, make sure at least one Jellyfin administrator has a
+     normal password login (Dashboard → Users), or you will be left editing config on disk (next point).
+  2. **Fully locked out?** Stop Jellyfin, open the plugin's `config.xml` in its data directory, set
+     `<AllowExistingAccountLink>true</AllowExistingAccountLink>` inside the affected provider's config
+     block, restart, and complete the migration below; then set it back to `false`.
+  3. **Migrate.** The safest route is to link each account explicitly via the admin API
+     (`AddCanonicalLink`) — it needs no name trust. If instead you enable `AllowExistingAccountLink` to
+     let logins self-migrate, treat it as a **maintenance window, not a standing setting**: while it is
+     on, that provider is back to trusting `preferred_username`, so whoever logs in first with a given
+     name claims that account **irreversibly** (an attacker who knows a victim's old username can take it,
+     and the victim is then orphaned). Keep the window short and controlled, migrate your users in it,
+     and turn the flag back off immediately.
+  4. **Renamed accounts — know which case you have.** A legacy link is keyed on the username _as it
+     was when the link was created_, and enabling the flag matches on that recorded key, not on the
+     account's current display name. Which case you are in decides recovery:
+     - If the account was renamed **on the Jellyfin side** but the identity provider still sends the
+       **original** name, enabling `AllowExistingAccountLink` (step 3) _does_ migrate it — but only
+       through the very same first-login-wins takeover window step 3 describes (an attacker who knows
+       the original name can claim the account first). Treat it exactly like step 3: prefer per-account
+       admin linking, and keep any flag window short and controlled.
+     - It is genuinely **not** recoverable by the flag when the identity provider now sends a
+       **different** name than the legacy key (an IdP-side rename, so the recorded key is never
+       matched), or when the user has **already logged in** without the flag and now sits on a fresh
+       `sub`-keyed account (that link wins and the old entry is never consulted again). For those,
+       recover by hand — as admin, delete the fresh account's link (`DeleteCanonicalLink`) and
+       `AddCanonicalLink` the original account to the user's current `sub`.
+
+  A server log line (`WARNING`) is emitted for every login that encounters a pending legacy link while
+  the flag is off, naming the account — whether the login is **refused** (a live account still bears
+  the name) or lands on a **fresh account** (the name was freed by a rename, so the original is
+  orphaned; the warning is worded to flag that case explicitly, since no 403 accompanies it). Watch
+  for both so you can see who still needs migrating. Note that the self-service linking page now lists OpenID links by their
+  `sub` value, which for many providers is an opaque identifier rather than a readable name. If you run
+  the anonymous SSO endpoints with rate limiting available, enable it during the window to blunt an
+  attacker probing names while the flag is on. This runbook is mirrored on the
+  [Security Model](https://github.com/iderex/jellyfin-plugin-sso/wiki/Security-Model) wiki page.
 
 ## Canonical base URL (recommended hardening)
 
