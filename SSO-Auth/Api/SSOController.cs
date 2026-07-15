@@ -5,7 +5,6 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Mime;
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
@@ -83,11 +82,6 @@ public class SSOController : ControllerBase
     // Opt-in per-client rate limiter over the anonymous SSO flow endpoints (#128).
     private static readonly SsoRateLimiter RateLimiter = new SsoRateLimiter();
 
-    // Single canonical User-Agent for the plugin's outbound HTTP (discovery, avatar fetch),
-    // computed once since the assembly version does not change at runtime.
-    private static readonly string UserAgentString =
-        $"Jellyfin-Plugin-SSO-Auth +{System.Diagnostics.FileVersionInfo.GetVersionInfo(Assembly.GetExecutingAssembly().Location).FileVersion} (https://github.com/iderex/jellyfin-plugin-sso)";
-
     /// <summary>
     /// Initializes a new instance of the <see cref="SSOController"/> class.
     /// </summary>
@@ -119,7 +113,7 @@ public class SSOController : ControllerBase
         _loggerFactory = loggerFactory;
         _httpClientFactory = httpClientFactory;
         _canonicalLinks = new CanonicalLinkService(userManager, cryptoProvider, SSOPlugin.Instance.ConfigStore, logger);
-        _avatarService = new AvatarService(userManager, providerManager, serverConfigurationManager, logger, UserAgentString);
+        _avatarService = new AvatarService(userManager, providerManager, serverConfigurationManager, logger, SsoHttp.UserAgent);
         _logger.LogInformation("SSO Controller initialized");
     }
 
@@ -363,12 +357,7 @@ public class SSOController : ControllerBase
             DisablePushedAuthorization = config.DisablePushedAuthorization,
             LoggerFactory = _loggerFactory,
             LoadProfile = !config.DoNotLoadProfile,
-            HttpClientFactory = o =>
-            {
-                var client = _httpClientFactory.CreateClient();
-                client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgentString);
-                return client;
-            }
+            HttpClientFactory = o => SsoHttp.CreateClient(_httpClientFactory)
         };
         var oidEndpointUri = new Uri(config.OidEndpoint?.Trim());
         options.Policy.Discovery.AdditionalEndpointBaseAddresses.Add(oidEndpointUri.GetLeftPart(UriPartial.Authority));
@@ -413,9 +402,8 @@ public class SSOController : ControllerBase
 
         try
         {
-            using var client = _httpClientFactory.CreateClient();
+            using var client = SsoHttp.CreateClient(_httpClientFactory);
             client.Timeout = TimeSpan.FromSeconds(10);
-            client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgentString);
             var json = await client.GetStringAsync(discoveryUrl).ConfigureAwait(false);
             var supported = PkceDiscovery.SupportsS256(json);
             PkceSupportCache[discoveryUrl] = (supported, DateTime.UtcNow);
