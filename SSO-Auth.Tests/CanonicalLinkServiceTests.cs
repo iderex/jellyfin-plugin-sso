@@ -287,8 +287,14 @@ public class CanonicalLinkServiceTests
             new CapturingLogger());
         var service = new CanonicalLinkService(users, new FakeCryptoProvider(), store, new CapturingLogger());
 
-        await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
+        var ex = await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
             service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true));
+
+        // Pin the MIGRATE guard specifically, not just any fail-closed throw: the three login-path guards
+        // carry distinct messages, so if the provider were dropped during the wrong transaction the test
+        // would silently cover a different guard. This asserts the migrate transaction is the one that
+        // refused.
+        Assert.Contains("refusing to migrate the account link", ex.Message, StringComparison.Ordinal);
     }
 
     // --- Admin surface: TryCreateLink / TryRemoveLink / LinksByUser (#372, finishing #241) ---
@@ -355,6 +361,22 @@ public class CanonicalLinkServiceTests
     }
 
     [Fact]
+    public void TryRemoveLink_SamlOwnLink_RemovesItAndReturnsRemoved()
+    {
+        // The SAML branch of the admin surface (mode "saml") was covered only indirectly; pin it
+        // directly, since TryGetLinks dispatches saml vs oid to different config dictionaries.
+        var (service, cfg, _, _) = Build(c => c.SamlConfigs["adfs"] = new SamlConfig
+        {
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
+        });
+
+        var result = service.TryRemoveLink("saml", "adfs", "alice", Existing);
+
+        Assert.Equal(CanonicalLinkRemoveResult.Removed, result);
+        Assert.False(cfg.SamlConfigs["adfs"].CanonicalLinks.ContainsKey("alice"));
+    }
+
+    [Fact]
     public void TryRemoveLink_UnknownCanonicalName_ReturnsNotFound()
     {
         var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
@@ -409,6 +431,23 @@ public class CanonicalLinkServiceTests
         // serialization could enumerate the live dictionary and tear against a concurrent login.
         cfg.OidConfigs["kc"].CanonicalLinks["sub-9"] = Existing;
         Assert.Equal(new[] { "sub-1" }, oid["kc"]);
+    }
+
+    [Fact]
+    public void LinksByUser_Saml_ReturnsTheUsersKeys_AndExcludesOidProviders()
+    {
+        // The SAML projection (mode "saml") reads the SAML config dictionary, and must not fold in OID
+        // providers — the mirror of the OID test above, pinning the saml branch directly.
+        var (service, _, _, _) = Build(c =>
+        {
+            c.SamlConfigs["adfs"] = new SamlConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing, ["bob"] = Other } };
+            c.OidConfigs["kc"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing } };
+        });
+
+        var saml = service.LinksByUser("saml", Existing);
+
+        Assert.Equal(new[] { "alice" }, saml["adfs"]); // the other user's "bob" is excluded
+        Assert.DoesNotContain("kc", saml.Keys); // OID provider is not in the SAML projection
     }
 
     [Fact]

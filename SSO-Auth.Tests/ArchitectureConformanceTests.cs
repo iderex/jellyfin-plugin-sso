@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using Jellyfin.Plugin.SSO_Auth;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using MediaBrowser.Model.Plugins;
@@ -15,8 +17,12 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 /// part of the ordinary test suite, so every PR is checked — a change that drifts from the agreed
 /// structure fails CI. The rules encode structural invariants that hold today and are part of the target;
 /// as each migration step lands a new structural property, add the rule that locks it in here so it
-/// cannot regress. Rules are type-level (reflection over the production assembly); call-level invariants
-/// stay guarded by CodeQL/CodeRabbit and the pinning tests.
+/// cannot regress. Most rules are type-level (reflection over the production assembly); call-level
+/// invariants otherwise stay guarded by CodeQL/CodeRabbit and the pinning tests. The one call-level
+/// property locked in here is a source scan — the controller touches no provider link map except the
+/// server-managed re-injection (<see cref="Controller_TouchesProviderLinkMapsOnlyForServerManagedReinjection"/>) —
+/// because the #372 extraction makes "all link-map access flows through CanonicalLinkService" a boundary
+/// worth failing CI on, not just review.
 /// </summary>
 public class ArchitectureConformanceTests
 {
@@ -142,6 +148,30 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void Controller_TouchesProviderLinkMapsOnlyForServerManagedReinjection()
+    {
+        // Locked in by the link/unlink admin-surface extraction (#372): every read/write of a provider's
+        // CanonicalLinks map now flows through CanonicalLinkService under the config lock. This is a
+        // call-level property, so it is a source scan rather than a reflection rule (the one exception to
+        // the "call-level invariants stay with CodeQL/CodeRabbit" note in the class summary). The single
+        // permitted controller touch is server-managed-field re-injection on the provider add/update
+        // endpoints (#157): `config.CanonicalLinks = existing.CanonicalLinks`, a Config-tier concern that
+        // stays with provider CRUD, not link workflow. Any other `.CanonicalLinks` occurrence in the
+        // controller means link-map access leaked back out of the service.
+        var controllerSource = File.ReadAllLines(Path.Combine(RepoRoot(), "SSO-Auth", "Api", "SSOController.cs"));
+        var offending = controllerSource
+            .Select((line, index) => (Text: line, Number: index + 1))
+            .Where(l => l.Text.Contains(".CanonicalLinks", StringComparison.Ordinal))
+            .Where(l => !l.Text.Contains("= existing.CanonicalLinks", StringComparison.Ordinal))
+            .Select(l => $"line {l.Number}: {l.Text.Trim()}")
+            .ToList();
+
+        Assert.True(
+            offending.Count == 0,
+            "SSOController must not access a provider CanonicalLinks map except the server-managed re-injection (= existing.CanonicalLinks); route link-map access through CanonicalLinkService. Found: " + string.Join(" | ", offending));
+    }
+
+    [Fact]
     public void SSOPlugin_DeclaresNoConfigurationLogicBeyondTheStoreFacade()
     {
         // Locked in by the ProviderConfigStore extraction (#318): SSOPlugin is bootstrap + page
@@ -200,4 +230,10 @@ public class ArchitectureConformanceTests
     private static bool IsCompilerGenerated(Type t) =>
         t.Name.Contains('<', StringComparison.Ordinal)
         || t.GetCustomAttribute<System.Runtime.CompilerServices.CompilerGeneratedAttribute>() is not null;
+
+    // The repository root, derived from this test file's compile-time path (<root>/SSO-Auth.Tests/<file>).
+    // CallerFilePath is baked in at build, and CI builds on the same checkout it tests, so the source tree
+    // is present for the source-scan rule above.
+    private static string RepoRoot([CallerFilePath] string thisFilePath = "") =>
+        Directory.GetParent(Path.GetDirectoryName(thisFilePath)!)!.FullName;
 }

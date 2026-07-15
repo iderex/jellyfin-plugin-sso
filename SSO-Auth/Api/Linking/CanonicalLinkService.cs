@@ -275,9 +275,13 @@ internal sealed class CanonicalLinkService
     internal CanonicalLinkRemoveResult TryRemoveLink(string mode, string provider, string canonicalName, Guid jellyfinUserId)
     {
         // Kept as ONE Mutate (find, ownership check, and remove cannot interleave). A no-result outcome
-        // (UnknownProvider / NotFound / Mismatch) still persists the unchanged config, the uniform
-        // Mutate behavior every no-op write already has (RemoveUserEverywhere of zero, the
-        // LinkCanonicalIfAbsent race loser); the response is identical either way. A read-probe-then-
+        // still persists the unchanged config. For NotFound / Mismatch that already matched the old
+        // controller code (its mutate callback ran to completion and persisted a no-op); for
+        // UnknownProvider it is a deliberate small delta — the old code threw KeyNotFoundException out of
+        // the callback before the persist, so the unknown-provider DELETE did not write, whereas this
+        // returns UnknownProvider normally and Mutate<T> then persists. The config content and the HTTP
+        // response are byte-identical either way, it is admin-gated, and it adds no new capability (the
+        // valid-provider + bogus-name DELETE already forced the same no-op write). A read-probe-then-
         // mutate would avoid the write but reintroduce the resolve/act race this deliberately excludes.
         return _configStore.Mutate(configuration =>
         {
@@ -422,10 +426,14 @@ internal sealed class CanonicalLinkService
     // The provider's canonical-links map via TryGetValue rather than the throwing indexer, so an unknown
     // provider on the reachable admin link/unlink paths is a false return the caller maps to
     // UnknownProvider — finishing the #241 removal of KeyNotFoundException-as-control-flow. Returns true
-    // and the map when the provider exists; false with a null map when it does not. The map is
-    // self-healing (CanonicalLinks lazily creates and stores it), so mutating the returned map persists
-    // directly; callers must hold the config lock (Read / Mutate) while touching it. An invalid mode is a
-    // programming error (the endpoints dispatch on it) rather than an unknown provider, so it throws.
+    // and a non-null map only when the provider exists AND has a config object; a missing provider — or a
+    // null-valued entry from deserialization — returns false, so the caller fails closed (UnknownProvider
+    // on admin paths, a reject on login paths) instead of dereferencing null. The map is self-healing
+    // (CanonicalLinks lazily creates and stores it), so mutating the returned map persists directly;
+    // callers must hold the config lock (Read / Mutate) while touching it. An unrecognized mode is not an
+    // unknown provider but a caller contract violation, so it throws — note the DELETE route forwards mode
+    // unvalidated (unlike the AddCanonicalLink dispatch), so that throw is reachable there; the #318 mode
+    // normalization step is tracked to validate mode once at the HTTP boundary.
     private static bool TryGetLinks(PluginConfiguration configuration, string mode, string provider, out SerializableDictionary<string, Guid> links)
     {
         switch (mode.ToLowerInvariant())
@@ -434,14 +442,14 @@ internal sealed class CanonicalLinkService
             {
                 var ok = configuration.SamlConfigs.TryGetValue(provider, out var config);
                 links = config?.CanonicalLinks;
-                return ok;
+                return ok && links != null;
             }
 
             case "oid":
             {
                 var ok = configuration.OidConfigs.TryGetValue(provider, out var config);
                 links = config?.CanonicalLinks;
-                return ok;
+                return ok && links != null;
             }
 
             default:

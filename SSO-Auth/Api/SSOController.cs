@@ -1034,13 +1034,14 @@ public class SSOController : ControllerBase
             return StatusCode(StatusCodes.Status403Forbidden, "Current user is not allowed to unlink SSO providers for user ID.");
         }
 
-        return _canonicalLinks.TryRemoveLink(mode, provider, canonicalName, jellyfinUserId) switch
+        var removeResult = _canonicalLinks.TryRemoveLink(mode, provider, canonicalName, jellyfinUserId);
+        return removeResult switch
         {
             CanonicalLinkRemoveResult.Removed => Ok(),
             CanonicalLinkRemoveResult.NotFound => NotFound("No SSO link is registered for that canonical name."),
             CanonicalLinkRemoveResult.Mismatch => StatusCode(StatusCodes.Status409Conflict, "jellyfin UID does not match id registered to that canonical name."),
             CanonicalLinkRemoveResult.UnknownProvider => BadRequest(NoMatchingProviderMessage),
-            _ => throw new InvalidOperationException($"Unhandled canonical-link remove result: {mode}/{provider}"),
+            _ => throw new InvalidOperationException($"Unhandled canonical-link remove result: {removeResult}"),
         };
     }
 
