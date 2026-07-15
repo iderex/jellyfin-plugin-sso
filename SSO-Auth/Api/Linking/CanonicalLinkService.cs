@@ -397,10 +397,20 @@ internal sealed class CanonicalLinkService
     {
         _configStore.Mutate(configuration =>
         {
-            // An unknown provider here is a no-op (impossible in practice: the login path resolved the
-            // provider before migrating) — the correct fail-closed choice rather than a throw.
-            if (TryGetLinks(configuration, mode, provider, out var links)
-                && links.TryGetValue(oldKey, out var userId)
+            // Migration is a SECOND transaction after the candidate-resolving read. If the provider was
+            // deleted in that window, fail CLOSED: throw rather than no-op, because the caller still
+            // holds the legacy user id from the pre-deletion snapshot and would otherwise return
+            // UseExistingLink, minting a session for a provider that no longer exists (#373).
+            if (!TryGetLinks(configuration, mode, provider, out var links))
+            {
+                throw new AccountLinkForbiddenException("The SSO provider is no longer configured; refusing to migrate the account link.");
+            }
+
+            // A no-op here is the GOOD idempotent case (the provider still exists): oldKey is already
+            // gone because a concurrent login migrated first, or newKey is live. Never overwrite a live
+            // newKey — only a dangling one (its target user deleted), which would otherwise block the
+            // hand-off on every subsequent login.
+            if (links.TryGetValue(oldKey, out var userId)
                 && (!links.TryGetValue(newKey, out var existing) || _userManager.GetUserById(existing) == null))
             {
                 links.Remove(oldKey);

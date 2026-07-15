@@ -257,6 +257,40 @@ public class CanonicalLinkServiceTests
         await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
     }
 
+    [Fact]
+    public async Task ResolveOrCreateAsync_ProviderDeletedBetweenReadAndMigrate_FailsClosed()
+    {
+        // The legacy-migration path runs a second transaction (the re-key) after the read that resolved
+        // the candidate. If the provider is deleted in that window, migration must fail CLOSED too, not
+        // no-op and let the already-resolved legacy user through UseExistingLink for a gone provider
+        // (#373). Simulated deterministically: drop the provider right before the migrate transaction.
+        var cfg = new PluginConfiguration();
+        cfg.OidConfigs["kc"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing } };
+        var users = Substitute.For<IUserManager>();
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
+
+        // The first store access is the candidate-resolving Read; the second is the migrate Mutate.
+        // Removing the provider on the second access reproduces an admin delete racing the login.
+        var access = 0;
+        var store = new ProviderConfigStore(
+            () =>
+            {
+                if (++access == 2)
+                {
+                    cfg.OidConfigs.Remove("kc");
+                }
+
+                return cfg;
+            },
+            _ => { },
+            new CapturingLogger());
+        var service = new CanonicalLinkService(users, new FakeCryptoProvider(), store, new CapturingLogger());
+
+        await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
+            service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true));
+    }
+
     // --- Admin surface: TryCreateLink / TryRemoveLink / LinksByUser (#372, finishing #241) ---
 
     [Fact]
