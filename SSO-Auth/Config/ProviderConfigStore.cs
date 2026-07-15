@@ -117,8 +117,8 @@ internal sealed class ProviderConfigStore
             {
                 // Reject the save fail-closed before anything is persisted if a base-URL override is
                 // malformed (#139), a SAML signing certificate is not loadable (#206), or a NEWLY
-                // registered provider name contains URI-reserved characters (#336 — the live config is
-                // passed so names it already holds stay saveable). This validates the config-page save
+                // registered provider name contains control, URI-reserved, or backslash characters
+                // (#336/#360 — the live config is passed so names it already holds stay saveable). This validates the config-page save
                 // (a fresh incoming config); the OID/SAML Add endpoints write through Mutate (the live
                 // object, so this branch is skipped) and validate their own incoming provider at the
                 // controller via the Reject* guards. Login-path writes (canonical links) also reuse the

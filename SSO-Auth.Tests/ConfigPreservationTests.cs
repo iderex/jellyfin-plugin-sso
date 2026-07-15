@@ -300,8 +300,9 @@ public class ConfigPreservationTests
     [Fact]
     public void ValidateProviderNames_SpacesAndNonAscii_StayAccepted()
     {
-        // They survive the URL round-trip today (appended raw, pinned in SsoUrlBuilderTests), so only
-        // URI-reserved characters gate registration — rejecting more would strand working names.
+        // They survive the URL round-trip today (appended raw, pinned in SsoUrlBuilderTests), so the
+        // registration gate rejects only what breaks the round-trip (control characters, the backslash,
+        // and the URI-reserved set, #336/#360) — rejecting more would strand working names.
         var incoming = new PluginConfiguration();
         incoming.OidConfigs["my provider"] = new OidConfig();
         incoming.SamlConfigs["käse"] = new SamlConfig();

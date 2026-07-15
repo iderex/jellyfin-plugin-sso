@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Jellyfin.Plugin.SSO_Auth.Api;
 
 namespace Jellyfin.Plugin.SSO_Auth.Config;
@@ -15,8 +16,9 @@ internal static class ProviderConfigValidator
 {
     // Throws if any provider's canonical base-URL override (#139) is set but not a valid absolute
     // http/https base URL, any SAML provider's signing certificate (#206) is set but not a loadable
-    // X.509 certificate, or any NEWLY registered provider name (#336) contains URI-reserved
-    // characters — rejecting the save fail-closed before anything is persisted. A blank override or
+    // X.509 certificate, or any NEWLY registered provider name (#336/#360) contains control characters,
+    // URI-reserved characters, or a backslash — rejecting the save fail-closed before anything is
+    // persisted. A blank override or
     // certificate is valid (the override feature is off; a half-configured provider), and a name
     // already present in the live configuration is exempt from the name rule (see
     // ValidateProviderName). Only the admin config-page save path validates the whole config; the Add
@@ -48,18 +50,23 @@ internal static class ProviderConfigValidator
         }
     }
 
-    // A NEW provider name containing URI-reserved characters would be persisted and then break the
-    // callback round-trip at login (#336): the name is appended raw to the redirect_uri/ACS URL
+    // A NEW provider name containing URI-reserved or control characters would be persisted and then break
+    // the callback round-trip at login (#336, #360): the name is appended raw to the redirect_uri/ACS URL
     // (SsoUrlBuilder) and matched back by route. Only a name absent from the live configuration is
     // rejected — an existing name, whose URL bytes the identity provider already has registered, must
-    // keep saving unchanged or the deployment would be stranded behind a rename. Same inline
-    // line-ending strip as below.
+    // keep saving unchanged or the deployment would be stranded behind a rename. The echoed name gets a
+    // full control strip (stronger than the line-ending strip below — see the inline comment).
     internal static void ValidateProviderName(string protocol, string provider, bool isNew)
     {
         if (isNew && ProviderNameValidator.IsInvalid(provider))
         {
+            // Rejected names can now carry arbitrary control characters (#360), so line-ending stripping
+            // alone would let e.g. ESC survive into the exception text and any log that captures it —
+            // strip ALL controls inline here, then the two non-control line separators (U+2028/U+2029)
+            // that ReplaceLineEndings covers and char.IsControl does not.
+            var echoName = string.Concat((provider ?? string.Empty).Where(c => !char.IsControl(c))).ReplaceLineEndings(string.Empty);
             throw new ArgumentException(
-                $"{protocol} provider '{provider?.ReplaceLineEndings(string.Empty)}' has a name with URI-reserved characters or a backslash; the name becomes part of the callback URL registered with the identity provider, so a new name must not contain a backslash or any of % : / ? # [ ] @ ! $ & ' ( ) * + , ; =.");
+                $"{protocol} provider '{echoName}' has a name with control characters, URI-reserved characters, or a backslash; the name becomes part of the callback URL registered with the identity provider, so a new name must not contain control characters, a backslash, or any of % : / ? # [ ] @ ! $ & ' ( ) * + , ; =.");
         }
     }
 
