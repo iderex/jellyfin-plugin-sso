@@ -148,49 +148,25 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
-    public void Controller_TouchesProviderLinkMapsOnlyForServerManagedReinjection()
+    public void Controller_NeverTouchesProviderLinkMaps()
     {
-        // Locked in by the link/unlink admin-surface extraction (#372): every read/write of a provider's
-        // CanonicalLinks map now flows through CanonicalLinkService under the config lock. This is a
-        // call-level property, so it is a source scan rather than a reflection rule (the one exception to
-        // the "call-level invariants stay with CodeQL/CodeRabbit" note in the class summary). The only
-        // permitted controller touches are the two server-managed-field re-injection statements on the
-        // provider add/update endpoints (#157), a Config-tier concern that stays with provider CRUD, not
-        // link workflow. The exemption is matched as the WHOLE trimmed statement (not a substring), so an
-        // aliasing line like `var map = existing.CanonicalLinks;` followed by a mutation cannot launder
-        // itself past the scan, and the count is pinned so removing or adding a re-injection site forces a
-        // conscious rule update. #383 will retire these two lines into ServerManagedFields.Preserve, after
-        // which this rule tightens to zero occurrences and drops the exemption entirely.
-        var allowedReinjection = new[]
-        {
-            "config.CanonicalLinks = existing.CanonicalLinks;",
-            "newConfig.CanonicalLinks = existing.CanonicalLinks;",
-        };
+        // Locked in by the link/unlink admin-surface extraction (#372) and completed by #383: every read
+        // or write of a provider's CanonicalLinks map flows through CanonicalLinkService under the config
+        // lock, and the two former server-managed re-injection statements now route through the shared
+        // ServerManagedFields.Preserve — so the controller has ZERO direct CanonicalLinks access, and the
+        // earlier re-injection exemption is retired. This is a call-level property, so it is a source scan
+        // rather than a reflection rule (the one exception to the "call-level invariants stay with
+        // CodeQL/CodeRabbit" note in the class summary); a missing source file fails the test loudly.
         var controllerSource = File.ReadAllLines(Path.Combine(RepoRoot(), "SSO-Auth", "Api", "SSOController.cs"));
         var linkMapLines = controllerSource
             .Select((line, index) => (Text: line.Trim(), Number: index + 1))
             .Where(l => l.Text.Contains(".CanonicalLinks", StringComparison.Ordinal))
-            .ToList();
-        var offending = linkMapLines
-            .Where(l => !allowedReinjection.Contains(l.Text, StringComparer.Ordinal))
             .Select(l => $"line {l.Number}: {l.Text}")
             .ToList();
 
         Assert.True(
-            offending.Count == 0,
-            "SSOController must not access a provider CanonicalLinks map except the two server-managed re-injection statements; route link-map access through CanonicalLinkService. Found: " + string.Join(" | ", offending));
-
-        // Assert each permitted statement exists EXACTLY ONCE, not just that two matching lines exist:
-        // otherwise two copies of the OID re-injection would pass while the SAML one was silently dropped,
-        // no longer preserving SAML canonical links. A removed site should tighten this rule (see #383); a
-        // duplicate needs a conscious update.
-        foreach (var expected in allowedReinjection)
-        {
-            var occurrences = linkMapLines.Count(l => string.Equals(l.Text, expected, StringComparison.Ordinal));
-            Assert.True(
-                occurrences == 1,
-                $"Expected exactly one server-managed re-injection statement '{expected}' in SSOController; found {occurrences}.");
-        }
+            linkMapLines.Count == 0,
+            "SSOController must not access a provider CanonicalLinks map directly; route link-map access through CanonicalLinkService and server-managed re-injection through ServerManagedFields.Preserve. Found: " + string.Join(" | ", linkMapLines));
     }
 
     [Fact]
