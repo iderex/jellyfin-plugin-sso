@@ -18,10 +18,13 @@ public class SsoHttpTests
         using var pooled = new HttpClient();
         var factory = Substitute.For<IHttpClientFactory>();
         factory.CreateClient().Returns(pooled);
+        const string userAgent = "Jellyfin-Plugin-SSO-Auth +1.2.3 (https://example.test)";
 
-        var client = SsoHttp.CreateClient(factory, "Jellyfin-Plugin-SSO-Auth +1.2.3 (https://example.test)");
+        var client = SsoHttp.CreateClient(factory, userAgent);
 
         Assert.Same(pooled, client); // the factory's client is used, not a fresh one
-        Assert.Contains("Jellyfin-Plugin-SSO-Auth", client.DefaultRequestHeaders.UserAgent.ToString());
+        // The whole User-Agent must round-trip, not just the product token — a wrong version or URL
+        // would slip past a substring check.
+        Assert.Equal(userAgent, client.DefaultRequestHeaders.UserAgent.ToString());
     }
 }
