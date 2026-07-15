@@ -363,12 +363,7 @@ public class SSOController : ControllerBase
             DisablePushedAuthorization = config.DisablePushedAuthorization,
             LoggerFactory = _loggerFactory,
             LoadProfile = !config.DoNotLoadProfile,
-            HttpClientFactory = o =>
-            {
-                var client = _httpClientFactory.CreateClient();
-                client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgentString);
-                return client;
-            }
+            HttpClientFactory = o => SsoHttp.CreateClient(_httpClientFactory, UserAgentString)
         };
         var oidEndpointUri = new Uri(config.OidEndpoint?.Trim());
         options.Policy.Discovery.AdditionalEndpointBaseAddresses.Add(oidEndpointUri.GetLeftPart(UriPartial.Authority));
@@ -413,9 +408,8 @@ public class SSOController : ControllerBase
 
         try
         {
-            using var client = _httpClientFactory.CreateClient();
+            using var client = SsoHttp.CreateClient(_httpClientFactory, UserAgentString);
             client.Timeout = TimeSpan.FromSeconds(10);
-            client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgentString);
             var json = await client.GetStringAsync(discoveryUrl).ConfigureAwait(false);
             var supported = PkceDiscovery.SupportsS256(json);
             PkceSupportCache[discoveryUrl] = (supported, DateTime.UtcNow);
