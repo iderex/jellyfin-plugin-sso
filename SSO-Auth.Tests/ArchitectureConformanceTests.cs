@@ -19,11 +19,12 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 /// as each migration step lands a new structural property, add the rule that locks it in here so it
 /// cannot regress. Most rules are type-level (reflection over the production assembly); call-level
 /// invariants otherwise stay guarded by CodeQL/CodeRabbit and the pinning tests. The one call-level
-/// property locked in here is a source scan — the controller touches no provider link map at all
-/// (<see cref="Controller_NeverTouchesProviderLinkMaps"/>) — because the #372 extraction makes "all
-/// link-map access flows through CanonicalLinkService" a boundary worth failing CI on, not just review;
-/// #383 retired the last two server-managed re-injection sites into ServerManagedFields.Preserve, so the
-/// scan is now a plain zero-occurrence invariant.
+/// property locked in here is a source scan — the CONTROLLER touches no provider link map directly
+/// (<see cref="Controller_NeverTouchesProviderLinkMaps"/>) — because the #372 extraction confines
+/// link-map access to CanonicalLinkService (the login/admin workflow) and ServerManagedFields.Preserve
+/// (the #157 server-managed re-injection the config tier owns), a boundary worth failing CI on, not just
+/// review; #383 retired the controller's last two inline re-injection sites into that shared Preserve, so
+/// the scan is now a plain zero-occurrence invariant on the controller.
 /// </summary>
 public class ArchitectureConformanceTests
 {
@@ -151,10 +152,11 @@ public class ArchitectureConformanceTests
     [Fact]
     public void Controller_NeverTouchesProviderLinkMaps()
     {
-        // Locked in by the link/unlink admin-surface extraction (#372) and completed by #383: every read
-        // or write of a provider's CanonicalLinks map flows through CanonicalLinkService under the config
-        // lock, and the two former server-managed re-injection statements now route through the shared
-        // ServerManagedFields.Preserve — so the controller has ZERO direct CanonicalLinks access, and the
+        // Locked in by the link/unlink admin-surface extraction (#372) and completed by #383: the two
+        // legitimate homes for provider-CanonicalLinks access are CanonicalLinkService (the login/admin
+        // link workflow, under the config lock) and ServerManagedFields.Preserve (the #157 re-injection
+        // the config tier owns) — and the controller's two former inline re-injection statements now route
+        // through that shared Preserve, so the CONTROLLER has ZERO direct CanonicalLinks access and the
         // earlier re-injection exemption is retired. This is a call-level property, so it is a source scan
         // rather than a reflection rule (the one exception to the "call-level invariants stay with
         // CodeQL/CodeRabbit" note in the class summary); a missing source file fails the test loudly.
