@@ -9,9 +9,10 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 
 /// <summary>
 /// In-process tests of the provider-add endpoints via <see cref="SsoControllerHarness"/>: a valid
-/// config is stored, a malformed base-URL override is rejected fail-closed, a re-save preserves
-/// the server-managed canonical links (#157) that the API body never carries, and a NEW provider
-/// name containing URI-reserved characters is rejected while an existing one stays updatable (#336).
+/// config is stored, a malformed base-URL override is rejected fail-closed, a re-save preserves the
+/// server-managed canonical links (#157) and the write-only OpenID secret (#189 — kept when the provider
+/// identity is unchanged, dropped when the endpoint changes) that the API body never carries, and a NEW
+/// provider name containing URI-reserved characters is rejected while an existing one stays updatable (#336).
 /// </summary>
 [Collection("SSOController")]
 public class SSOControllerAddTests
@@ -82,8 +83,12 @@ public class SSOControllerAddTests
 
         harness.Controller.OidAdd("keycloak", new OidConfig { OidSecret = string.Empty, OidEndpoint = "https://attacker.example/", OidClientId = "client-1" });
 
-        var secret = SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["keycloak"].OidSecret);
-        Assert.True(string.IsNullOrEmpty(secret)); // stored secret dropped, not carried to the new endpoint
+        var stored = SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["keycloak"]);
+        // The identity genuinely changed (so the drop is via the ResolveUpdatedSecret identity-change
+        // branch, not the unchanged branch), and the stored secret was dropped, not carried to it — this
+        // arm guards against an always-keep regression (Test 1 covers the links-only/never-keep case).
+        Assert.Equal("https://attacker.example/", stored.OidEndpoint);
+        Assert.True(string.IsNullOrEmpty(stored.OidSecret));
     }
 
     [Fact]
