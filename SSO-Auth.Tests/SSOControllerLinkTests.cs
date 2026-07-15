@@ -93,7 +93,9 @@ public class SSOControllerLinkTests
 
         var result = await harness.Controller.DeleteCanonicalLink("oid", "does-not-exist", Target, "sub-1");
 
-        Assert.IsType<BadRequestObjectResult>(result);
+        // Assert the body, not just the type: the UnknownProvider result must keep the exact message the
+        // old KeyNotFoundException catch returned, so the mapping is not silently changed.
+        Assert.Equal("No matching provider found", Assert.IsType<BadRequestObjectResult>(result).Value);
     }
 
     [Fact]

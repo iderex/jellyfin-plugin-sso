@@ -241,6 +241,22 @@ public class CanonicalLinkServiceTests
         Assert.DoesNotContain(log.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning);
     }
 
+    [Fact]
+    public async Task ResolveOrCreateAsync_ProviderDeletedMidLogin_FailsClosedWithoutCreating()
+    {
+        // TOCTOU (#373 review): the controller resolves the provider, then this runs. If an admin
+        // deletes the provider in that window, the links map is absent — the login must fail CLOSED
+        // (refuse), never fall through to the adoption gate whose create/adopt arms would mint a
+        // session for a provider that no longer exists.
+        var (service, _, users, _) = Build(); // no provider configured
+        users.GetUserByName("alice").Returns((User?)null); // name is free -> the create arm would fire
+
+        await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
+            service.ResolveOrCreateAsync("oid", "deleted-provider", "sub-1", "alice", allowExistingAccountLink: true));
+
+        await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
+    }
+
     // --- Admin surface: TryCreateLink / TryRemoveLink / LinksByUser (#372, finishing #241) ---
 
     [Fact]
@@ -339,9 +355,9 @@ public class CanonicalLinkServiceTests
     }
 
     [Fact]
-    public void LinksByUser_ReturnsOnlyTheUsersKeys_PerProvider()
+    public void LinksByUser_ReturnsOnlyTheUsersKeys_PerProvider_AsADetachedSnapshot()
     {
-        var (service, _, _, _) = Build(c =>
+        var (service, cfg, _, _) = Build(c =>
         {
             c.OidConfigs["kc"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing, ["sub-2"] = Other } };
             c.OidConfigs["authelia"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-3"] = Existing } };
@@ -353,6 +369,12 @@ public class CanonicalLinkServiceTests
         Assert.Equal(new[] { "sub-1" }, oid["kc"]); // the other user's sub-2 is excluded
         Assert.Equal(new[] { "sub-3" }, oid["authelia"]);
         Assert.DoesNotContain("adfs", oid.Keys); // SAML provider is not in the OID projection
+
+        // The projection is materialized (ToList, #157/F-10), not a deferred query over the live map:
+        // a subsequent write to the source must not appear in the already-returned result, or a JSON
+        // serialization could enumerate the live dictionary and tear against a concurrent login.
+        cfg.OidConfigs["kc"].CanonicalLinks["sub-9"] = Existing;
+        Assert.Equal(new[] { "sub-1" }, oid["kc"]);
     }
 
     [Fact]

@@ -109,14 +109,20 @@ internal sealed class CanonicalLinkService
         // as absent (dangling links are dead, not identities).
         var (subjectLink, legacyLink) = _configStore.Read(configuration =>
         {
-            // The login callbacks resolved the provider before calling, so it is present here; the
-            // guarded miss still yields fail-safe nulls, which defer to the name-adoption gate.
-            TryGetLinks(configuration, mode, provider, out var links);
-            Guid? bySubject = links is not null && links.TryGetValue(canonicalKey, out var s) && _userManager.GetUserById(s) != null
+            // The login callbacks resolve the provider before calling, so it is normally present. If it
+            // was deleted in the race between that lookup and here, fail CLOSED: refuse rather than fall
+            // through to the adoption gate, whose create/adopt arms would otherwise mint a session for a
+            // provider that no longer exists (a missing provider must never default the login to valid).
+            if (!TryGetLinks(configuration, mode, provider, out var links))
+            {
+                throw new AccountLinkForbiddenException("The SSO provider is no longer configured; refusing to resolve or create an account.");
+            }
+
+            Guid? bySubject = links.TryGetValue(canonicalKey, out var s) && _userManager.GetUserById(s) != null
                 ? s : null;
             Guid? byName = bySubject is null
                 && !string.Equals(canonicalKey, username, StringComparison.Ordinal)
-                && links is not null && links.TryGetValue(username, out var n) && _userManager.GetUserById(n) != null
+                && links.TryGetValue(username, out var n) && _userManager.GetUserById(n) != null
                 ? n : (Guid?)null;
             return (bySubject, byName);
         });
@@ -361,11 +367,12 @@ internal sealed class CanonicalLinkService
     {
         return _configStore.Mutate(configuration =>
         {
-            // The login path resolved the provider before reaching here; a guarded miss is fail-safe —
-            // write nothing and report the candidate as effective without persisting a link.
+            // The login path resolved the provider before reaching here. If it was deleted in the race
+            // since, fail CLOSED: refuse rather than return a session with no link written. A freshly
+            // created user may be left orphaned, the same benign outcome as the #133 race loser.
             if (!TryGetLinks(configuration, mode, provider, out var links))
             {
-                return (candidateUserId, false);
+                throw new AccountLinkForbiddenException("The SSO provider is no longer configured; refusing to link an account.");
             }
 
             Guid? existing = links.TryGetValue(canonicalKey, out var current) && _userManager.GetUserById(current) != null
