@@ -3,10 +3,8 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net;
 using System.Net.Http;
 using System.Net.Mime;
-using System.Net.Sockets;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Threading;
@@ -55,13 +53,13 @@ public class SSOController : ControllerBase
     private readonly ILogger<SSOController> _logger;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ICryptoProvider _cryptoProvider;
-    private readonly IProviderManager _providerManager;
-    private readonly IServerConfigurationManager _serverConfigurationManager;
     private readonly IHttpClientFactory _httpClientFactory;
 
     // The account-linking workflow (resolve/adopt/create, legacy re-key, revoke); the controller keeps
     // the authz guards, the one-time-use replay/state consume, and the HTTP mapping (#318).
     private readonly CanonicalLinkService _canonicalLinks;
+    // The SSRF-safe avatar fetch/store (#318); the controller only decides when to invoke it.
+    private readonly AvatarService _avatarService;
     // The in-flight OpenID authorize-state store (cap, lifetime, throttled sweep and capacity signal
     // all live inside; see OidcStateStore). One process-wide instance, like the SAML caches below.
     private static readonly OidcStateStore StateStore = new();
@@ -119,10 +117,9 @@ public class SSOController : ControllerBase
         _cryptoProvider = cryptoProvider;
         _logger = logger;
         _loggerFactory = loggerFactory;
-        _providerManager = providerManager;
-        _serverConfigurationManager = serverConfigurationManager;
         _httpClientFactory = httpClientFactory;
         _canonicalLinks = new CanonicalLinkService(userManager, cryptoProvider, SSOPlugin.Instance.ConfigStore, logger);
+        _avatarService = new AvatarService(userManager, providerManager, serverConfigurationManager, logger, UserAgentString);
         _logger.LogInformation("SSO Controller initialized");
     }
 
@@ -1228,7 +1225,7 @@ public class SSOController : ControllerBase
             user.SetPermission(PermissionKind.EnableLiveTvManagement, parameters.EnableLiveTvManagement);
         }
 
-        await TrySetUserAvatarAsync(user, parameters.AvatarUrl).ConfigureAwait(false);
+        await _avatarService.TrySetAsync(user, parameters.AvatarUrl).ConfigureAwait(false);
 
         await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
 
@@ -1256,96 +1253,6 @@ public class SSOController : ControllerBase
         }
 
         return await _sessionManager.AuthenticateDirect(authRequest).ConfigureAwait(false);
-    }
-
-    // Fetches the avatar and sets it as the user's profile image. Best-effort by design: any fetch or
-    // save failure is logged and the login proceeds without the avatar; only the URL guard and the
-    // SSRF-safe transport are security-relevant, and they fail closed (no fetch).
-    private async Task TrySetUserAvatarAsync(User user, string avatarUrl)
-    {
-        if (avatarUrl is null)
-        {
-            return;
-        }
-
-        if (!AvatarUrlValidator.IsAllowedUrl(avatarUrl, out var avatarUri))
-        {
-            _logger.LogWarning("Refusing to fetch avatar from disallowed URL: {AvatarUrl}", avatarUrl.ReplaceLineEndings(string.Empty));
-            return;
-        }
-
-        try
-        {
-            // Route every connection (including redirect targets) through a callback that rejects
-            // private/loopback addresses, closing the SSRF and DNS-rebinding vectors. Redirects stay
-            // enabled (many avatar URLs redirect) but are bounded, each hop is IP-validated, and both
-            // the request and the download are bounded.
-            using var handler = new SocketsHttpHandler
-            {
-                AllowAutoRedirect = true,
-                MaxAutomaticRedirections = 5,
-                ConnectCallback = AvatarConnectCallback,
-
-                // A system proxy would be the connection target, so the ConnectCallback would
-                // validate the proxy's address rather than the avatar host's - bypassing the guard.
-                UseProxy = false,
-            };
-            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
-
-            client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgentString);
-
-            // One deadline for the whole fetch: with ResponseHeadersRead the client Timeout stops
-            // applying once the headers arrive, so a malicious endpoint could send headers immediately
-            // then trickle the body forever. A single 10s token passed into GetAsync AND every body
-            // ReadAsync bounds the header wait and the streamed read together, while keeping the
-            // streaming size cap (#220).
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-
-            // ResponseHeadersRead so the body is streamed, not fully buffered, before ReadCappedAsync
-            // enforces the size limit; otherwise the cap runs only after the whole download is in memory.
-            using var avatarResponse = await client.GetAsync(avatarUri, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
-            avatarResponse.EnsureSuccessStatusCode();
-
-            // Media types are case-insensitive (RFC 7231); use the parsed type with parameters stripped.
-            var mediaType = avatarResponse.Content.Headers.ContentType?.MediaType;
-
-            // Allow only raster image types and derive the stored extension from that allow-list, never
-            // from the raw subtype — image/svg+xml is rejected because a stored SVG can carry script (#217).
-            if (!AvatarContentType.TryResolveExtension(mediaType, out var extension))
-            {
-                // Log the rejected type sanitized inline at the log call (mediaType is server-controlled),
-                // and keep the thrown/caught exception message generic so no untrusted text reaches the
-                // logged exception — mirrors the disallowed-URL warning above.
-                _logger.LogWarning("Refusing avatar with disallowed content type: {MediaType}", (mediaType ?? "(none)").ReplaceLineEndings(string.Empty));
-                throw new InvalidOperationException("Avatar content type is not an allowed raster image.");
-            }
-
-            const long MaxAvatarBytes = 10 * 1024 * 1024;
-            if (avatarResponse.Content.Headers.ContentLength > MaxAvatarBytes)
-            {
-                throw new InvalidOperationException("Avatar exceeds the maximum allowed size.");
-            }
-
-            using var stream = await ReadCappedAsync(avatarResponse, MaxAvatarBytes, timeout.Token).ConfigureAwait(false);
-
-            var userDataPath =
-                Path.Combine(
-                    _serverConfigurationManager.ApplicationPaths.UserConfigurationDirectoryPath,
-                    user.Username);
-            if (user.ProfileImage is not null)
-            {
-                await _userManager.ClearProfileImageAsync(user).ConfigureAwait(false);
-            }
-
-            user.ProfileImage = new ImageInfo(Path.Combine(userDataPath, "profile" + extension));
-
-            await _providerManager.SaveImage(stream, mediaType, user.ProfileImage.Path)
-                .ConfigureAwait(false);
-        }
-        catch (Exception e)
-        {
-            _logger.LogError(e, "Failed to fetch or save the SSO avatar.");
-        }
     }
 
     // Applies the opt-in per-client rate limit (#128) on an anonymous flow endpoint: null when the
@@ -1471,85 +1378,6 @@ public class SSOController : ControllerBase
         }
 
         return samlResponse.IsValid(expected);
-    }
-
-    // Resolves the target host and connects only to a non-blocked (public) address, so a hostname that
-    // resolves to an internal address - including via DNS rebinding on a redirect hop - cannot be reached.
-    private static async ValueTask<Stream> AvatarConnectCallback(SocketsHttpConnectionContext context, CancellationToken cancellationToken)
-    {
-        var addresses = await Dns.GetHostAddressesAsync(context.DnsEndPoint.Host, cancellationToken).ConfigureAwait(false);
-
-        // Try every non-blocked address in turn (a per-address connect fallback for dual-stack /
-        // multi-record hosts, since supplying a ConnectCallback replaces the handler's built-in one),
-        // connecting to the validated IP rather than the hostname so a DNS rebind cannot redirect the
-        // connection to an internal address.
-        Exception lastError = null;
-        var attempted = false;
-        foreach (var address in addresses)
-        {
-            if (AvatarUrlValidator.IsBlockedAddress(address))
-            {
-                continue;
-            }
-
-            attempted = true;
-            var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
-            var connected = false;
-            try
-            {
-                await socket.ConnectAsync(address, context.DnsEndPoint.Port, cancellationToken).ConfigureAwait(false);
-                connected = true;
-                return new NetworkStream(socket, ownsSocket: true);
-            }
-            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
-            {
-                lastError = ex;
-            }
-            finally
-            {
-                // Dispose unless ownership passed to the returned NetworkStream. Runs on the
-                // cancellation path too, where the catch filter is skipped and the socket would leak.
-                if (!connected)
-                {
-                    socket.Dispose();
-                }
-            }
-        }
-
-        if (attempted)
-        {
-            throw new HttpRequestException("Could not connect to any allowed address for the avatar host.", lastError);
-        }
-
-        throw new HttpRequestException("Avatar host resolves only to blocked addresses.");
-    }
-
-    // Copies the response body into memory, aborting if it exceeds the cap, so a hostile endpoint cannot
-    // exhaust resources with an unbounded (or Content-Length-lying) download.
-    private static async ValueTask<MemoryStream> ReadCappedAsync(HttpResponseMessage response, long maxBytes, CancellationToken cancellationToken)
-    {
-        var buffer = new MemoryStream();
-        var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        await using (source.ConfigureAwait(false))
-        {
-            var chunk = new byte[81920];
-            long total = 0;
-            int read;
-            while ((read = await source.ReadAsync(chunk, cancellationToken).ConfigureAwait(false)) > 0)
-            {
-                total += read;
-                if (total > maxBytes)
-                {
-                    await buffer.DisposeAsync().ConfigureAwait(false);
-                    throw new InvalidOperationException("Avatar exceeds the maximum allowed size.");
-                }
-
-                await buffer.WriteAsync(chunk.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-            }
-        }
-
-        buffer.Position = 0;
-        return buffer;
     }
 
     // Thin wrapper feeding the live request values into the pure CanonicalBaseUrl.Resolve decision (#242).
