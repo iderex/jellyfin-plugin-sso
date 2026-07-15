@@ -179,9 +179,18 @@ public class ArchitectureConformanceTests
         Assert.True(
             offending.Count == 0,
             "SSOController must not access a provider CanonicalLinks map except the two server-managed re-injection statements; route link-map access through CanonicalLinkService. Found: " + string.Join(" | ", offending));
-        Assert.True(
-            linkMapLines.Count == 2,
-            $"Expected exactly the two server-managed re-injection sites in SSOController; found {linkMapLines.Count}. A removed site should tighten this rule; a new one needs a conscious exemption update.");
+
+        // Assert each permitted statement exists EXACTLY ONCE, not just that two matching lines exist:
+        // otherwise two copies of the OID re-injection would pass while the SAML one was silently dropped,
+        // no longer preserving SAML canonical links. A removed site should tighten this rule (see #383); a
+        // duplicate needs a conscious update.
+        foreach (var expected in allowedReinjection)
+        {
+            var occurrences = linkMapLines.Count(l => string.Equals(l.Text, expected, StringComparison.Ordinal));
+            Assert.True(
+                occurrences == 1,
+                $"Expected exactly one server-managed re-injection statement '{expected}' in SSOController; found {occurrences}.");
+        }
     }
 
     [Fact]

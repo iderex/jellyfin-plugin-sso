@@ -364,6 +364,21 @@ public class CanonicalLinkServiceTests
     }
 
     [Fact]
+    public async Task ResolveOrCreateAsync_NullConfigProvider_FailsClosedWithoutCreating()
+    {
+        // The login-path companion to the admin null-config guards: a provider stored as a null config
+        // object (reachable via #350) must REJECT the login (fail closed), never fall through to the
+        // adoption gate whose create/adopt arms would mint a session for an unusable provider.
+        var (service, _, users, _) = Build(c => c.OidConfigs["broken"] = null);
+        users.GetUserByName("alice").Returns((User?)null); // name is free -> the create arm would fire if it fell through
+
+        await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
+            service.ResolveOrCreateAsync("oid", "broken", "sub-1", "alice", allowExistingAccountLink: true));
+
+        await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
+    }
+
+    [Fact]
     public void TryRemoveLink_NullConfigProvider_FailsClosedAsUnknownProvider()
     {
         // A provider stored with a null config object (reachable via #350's null-body add) must be read
