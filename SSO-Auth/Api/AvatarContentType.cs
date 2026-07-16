@@ -12,17 +12,21 @@ internal static class AvatarContentType
     /// Tries to map an avatar content type to a safe stored file extension.
     /// </summary>
     /// <param name="mediaType">The response media type (case-insensitive), with parameters already stripped.</param>
-    /// <param name="extension">The bare file extension (no leading dot) when allowed; otherwise null.</param>
+    /// <param name="extension">
+    /// The stored file extension <b>including the leading dot</b> (e.g. <c>.png</c>) when allowed;
+    /// otherwise null. The dot is included so the value is a real extension the store appends directly —
+    /// a bare form produced dotless filenames like <c>profilepng</c> (#384).
+    /// </param>
     /// <returns><c>true</c> when the media type is an allowed raster image; otherwise <c>false</c>.</returns>
     internal static bool TryResolveExtension(string mediaType, out string extension)
     {
         extension = (mediaType ?? string.Empty).ToLowerInvariant() switch
         {
-            "image/png" => "png",
-            "image/jpeg" => "jpeg",
-            "image/jpg" => "jpeg",
-            "image/gif" => "gif",
-            "image/webp" => "webp",
+            "image/png" => ".png",
+            "image/jpeg" => ".jpeg",
+            "image/jpg" => ".jpeg",
+            "image/gif" => ".gif",
+            "image/webp" => ".webp",
             _ => null,
         };
 

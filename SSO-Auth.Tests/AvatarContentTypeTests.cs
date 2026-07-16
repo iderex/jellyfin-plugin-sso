@@ -10,16 +10,19 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 public class AvatarContentTypeTests
 {
     [Theory]
-    [InlineData("image/png", "png")]
-    [InlineData("image/jpeg", "jpeg")]
-    [InlineData("image/jpg", "jpeg")]
-    [InlineData("image/gif", "gif")]
-    [InlineData("image/webp", "webp")]
-    [InlineData("IMAGE/PNG", "png")]
-    public void AllowedRasterTypes_Resolve(string mediaType, string expected)
+    [InlineData("image/png", ".png")]
+    [InlineData("image/jpeg", ".jpeg")]
+    [InlineData("image/jpg", ".jpeg")]
+    [InlineData("image/gif", ".gif")]
+    [InlineData("image/webp", ".webp")]
+    [InlineData("IMAGE/PNG", ".png")]
+    public void AllowedRasterTypes_ResolveWithLeadingDot(string mediaType, string expected)
     {
+        // The extension carries the leading dot so the store appends it directly (#384); a bare form
+        // produced dotless filenames like profilepng.
         Assert.True(AvatarContentType.TryResolveExtension(mediaType, out var extension));
         Assert.Equal(expected, extension);
+        Assert.StartsWith(".", extension);
     }
 
     [Theory]
