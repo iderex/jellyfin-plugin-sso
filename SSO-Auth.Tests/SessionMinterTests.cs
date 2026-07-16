@@ -157,21 +157,24 @@ public class SessionMinterTests
     }
 
     [Fact]
-    public async Task MintAsync_DefaultProviderSet_SetsItAndWritesTheUserTwice()
+    public async Task MintAsync_DefaultProviderSet_SetsItInASingleWrite()
     {
-        // When a default provider is configured the user's AuthenticationProviderId is set, which the
-        // pre-extraction Authenticate persisted with a SECOND UpdateUserAsync (once after
-        // permissions/avatar, once after the provider id). This pins that verbatim two-write behavior; a
-        // single-write optimization would be an observable change, tracked separately, not folded into the
-        // behavior-preserving extraction.
+        // When a default provider is configured the user's AuthenticationProviderId is set before the
+        // one UpdateUserAsync, so it persists in a single write (#391) — the pre-extraction Authenticate
+        // wrote the user a second time just for this field.
         var (minter, users, sessions) = Build();
         var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
         users.GetUserById(UserId).Returns(user);
         sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
 
+        // Capture the id at the write boundary, not off the shared user after MintAsync returns —
+        // otherwise the assertion passes even if the id is set AFTER the write, defeating the point (#391).
+        string? providerAtWrite = null;
+        users.UpdateUserAsync(Arg.Do<User>(u => providerAtWrite = u.AuthenticationProviderId)).Returns(Task.CompletedTask);
+
         await minter.MintAsync(Params(defaultProvider: "SSO-Auth"), () => "203.0.113.7");
 
-        Assert.Equal("SSO-Auth", user.AuthenticationProviderId);
-        await users.Received(2).UpdateUserAsync(user);
+        Assert.Equal("SSO-Auth", providerAtWrite);
+        await users.Received(1).UpdateUserAsync(user);
     }
 }

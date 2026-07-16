@@ -66,6 +66,14 @@ internal sealed class SessionMinter
 
         await _avatarService.TrySetAsync(user, parameters.AvatarUrl).ConfigureAwait(false);
 
+        // Set the default-provider id before the single user write so it persists in one round-trip
+        // (#391). The pre-extraction Authenticate wrote the user a second time just for this field.
+        if (!string.IsNullOrEmpty(parameters.DefaultProvider))
+        {
+            user.AuthenticationProviderId = parameters.DefaultProvider;
+            _logger.LogInformation("Set default login provider to {DefaultProvider}", parameters.DefaultProvider);
+        }
+
         await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
 
         var authRequest = new AuthenticationRequest();
@@ -85,12 +93,6 @@ internal sealed class SessionMinter
         // client byte-for-byte.
         authRequest.RemoteEndPoint = remoteEndPointResolver();
         _logger.LogInformation("Auth request created...");
-        if (!string.IsNullOrEmpty(parameters.DefaultProvider))
-        {
-            user.AuthenticationProviderId = parameters.DefaultProvider;
-            await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
-            _logger.LogInformation("Set default login provider to {DefaultProvider}", parameters.DefaultProvider);
-        }
 
         return await _sessionManager.AuthenticateDirect(authRequest).ConfigureAwait(false);
     }
