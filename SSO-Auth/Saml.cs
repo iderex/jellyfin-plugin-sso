@@ -32,8 +32,8 @@ internal sealed class SamlResponse
         "/samlp:Response/ds:Signature | /samlp:Response/saml:Assertion/ds:Signature";
 
     private readonly X509Certificate2 _certificate;
-    private XmlDocument _xmlDoc;
-    private XmlNamespaceManager _xmlNameSpaceManager; // we need this one to run our XPath queries on the SAML XML
+    private readonly XmlDocument _xmlDoc;
+    private readonly XmlNamespaceManager _xmlNameSpaceManager; // we need this one to run our XPath queries on the SAML XML
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SamlResponse"/> class.
@@ -42,11 +42,14 @@ internal sealed class SamlResponse
     /// <param name="responseString">The SAML response formatted as a string.</param>
     public SamlResponse(string certificateStr, string responseString)
     {
-        // Decode and load the certificate, then load the response — in that exact order, so the exception
+        // Decode and load the certificate, then parse the response — in that exact order, so the exception
         // sequence SamlResponseLoader.TryParse catches is unchanged: FormatException (bad certificate
         // base64), CryptographicException (bad certificate), then FormatException/XmlException (bad body).
+        // The XML is loaded here, at construction, and the fields are readonly: a validated response
+        // object can never have different XML swapped into it afterwards (#396).
         _certificate = X509CertificateLoader.LoadCertificate(Convert.FromBase64String(certificateStr));
-        LoadXmlFromBase64(responseString);
+        _xmlDoc = ParseResponseXml(responseString);
+        _xmlNameSpaceManager = GetNamespaceManager(); // lets construct a "manager" for XPath queries
     }
 
     /// <summary>
@@ -54,18 +57,20 @@ internal sealed class SamlResponse
     /// </summary>
     public string Xml => _xmlDoc.OuterXml;
 
-    /// <summary>
-    /// Loads XML from the parameter into the instance's XML data.
-    /// </summary>
-    /// <param name="xml">The XML string to put into the class.</param>
-    public void LoadXml(string xml)
+    // Parses the untrusted, Base64-encoded SAML response into a hardened XmlDocument. The body base64
+    // decode runs after the certificate load (preserving the constructor's exception ordering), and the
+    // DTD-prohibit / PreserveWhitespace / null-resolver hardening is applied here.
+    private static XmlDocument ParseResponseXml(string base64Response)
     {
-        _xmlDoc = new XmlDocument();
+        var xml = Encoding.UTF8.GetString(Convert.FromBase64String(base64Response));
 
         // PreserveWhitespace is load-bearing for XML signature validation (canonicalization depends
         // on the exact whitespace), so it must stay true.
-        _xmlDoc.PreserveWhitespace = true;
-        _xmlDoc.XmlResolver = null;
+        var xmlDoc = new XmlDocument
+        {
+            PreserveWhitespace = true,
+            XmlResolver = null,
+        };
 
         // The SAML response is untrusted input. Reject any DTD/DOCTYPE outright: XmlResolver=null
         // alone blocks only EXTERNAL entities (XXE/SSRF), while an internal DTD still expands
@@ -80,19 +85,10 @@ internal sealed class SamlResponse
         using (var stringReader = new StringReader(xml))
         using (var reader = XmlReader.Create(stringReader, settings))
         {
-            _xmlDoc.Load(reader);
+            xmlDoc.Load(reader);
         }
 
-        _xmlNameSpaceManager = GetNamespaceManager(); // lets construct a "manager" for XPath queries
-    }
-
-    /// <summary>
-    /// Loads Base64 encoded XML from the parameter into the instance's XML data.
-    /// </summary>
-    /// <param name="response">The Base64 encoded XML string to put into the class.</param>
-    public void LoadXmlFromBase64(string response)
-    {
-        LoadXml(Encoding.UTF8.GetString(Convert.FromBase64String(response)));
+        return xmlDoc;
     }
 
     /// <summary>
