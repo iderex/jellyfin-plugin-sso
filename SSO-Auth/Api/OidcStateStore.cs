@@ -61,6 +61,7 @@ internal sealed class OidcStateStore
         _capWarnGate = new IntervalGate(pruneInterval);
     }
 
+    /// <summary>Gets the live entry count. Test-only, like Seed/Clear: production code reads _states.Count directly.</summary>
     internal int Count => _states.Count;
 
     /// <summary>

@@ -14,7 +14,7 @@ namespace Jellyfin.Plugin.SSO_Auth;
 /// <see cref="ProviderConfigStore"/> (#318); the public methods below remain the plugin's
 /// configuration facade and delegate to it.
 /// </summary>
-public class SSOPlugin : BasePlugin<PluginConfiguration>, IPlugin, IHasWebPages
+public class SSOPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="SSOPlugin"/> class.
