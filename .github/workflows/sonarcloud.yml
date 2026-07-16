@@ -109,26 +109,67 @@ jobs:
           dotnet build --no-incremental
           ./.sonar/scanner/dotnet-coverage collect -f xml -o coverage.xml -- dotnet test --no-build
           # qualitygate.wait makes `end` block until the gate is computed and exit non-zero if it is
-          # red (on ANY condition, including coverage). We do NOT let that fail the job here — the
-          # policy step below is the single authority that decides coverage-only vs. a real failure.
+          # red (on ANY condition, including coverage). We tolerate ONLY that exit here — the policy
+          # step below is the single authority on coverage-only vs. a real failure. A genuine
+          # publish/auth failure does NOT slip through: `end` writes report-task.txt only after it
+          # submits the analysis, so the policy step fails closed when that file or its compute-engine
+          # task is missing or failed.
           ./.sonar/scanner/dotnet-sonarscanner end || true
       - name: Enforce the quality gate (coverage-only failures allowed, free-plan policy)
         if: steps.gate.outputs.is_scan == 'true'
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          if [ -n "${PR_NUMBER:-}" ]; then
-            scope="pullRequest=${PR_NUMBER}"
-          else
-            scope="branch=main"
+          # Fail closed on a missing analysis: report-task.txt is written by `end` only once the
+          # analysis is submitted, so its absence means the scan never published — there is nothing
+          # to gate on and we must NOT pass the required check.
+          task_file=".sonarqube/out/.sonar/report-task.txt"
+          if [ ! -f "$task_file" ]; then
+            echo "::error::SonarCloud analysis was not published (no ${task_file}) — failing closed."
+            exit 1
           fi
-          # Public project: the token authenticates as the user (token:'' basic auth) so this also
-          # works before the analysis is public. The scan step's qualitygate.wait guarantees the gate
-          # is already computed by the time we read it — no polling race.
-          status=$(curl -sf -u "${SONAR_TOKEN}:" \
-            "https://sonarcloud.io/api/qualitygates/project_status?projectKey=iderex_jellyfin-plugin-sso&${scope}")
+          ce_task_id=$(sed -n 's/^ceTaskId=//p' "$task_file")
+          if [ -z "$ce_task_id" ]; then
+            echo "::error::report-task.txt carries no ceTaskId — failing closed."
+            exit 1
+          fi
+          # Resolve the compute-engine task for THIS revision to its analysisId. qualitygate.wait
+          # usually means it is already SUCCESS; poll defensively and fail closed on FAILED/CANCELED
+          # or a timeout. Public project: the token authenticates the user via token:'' basic auth.
+          analysis_id=""
+          for _ in $(seq 1 30); do
+            if task=$(curl -sf -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/ce/task?id=${ce_task_id}"); then
+              ce_status=$(printf '%s' "$task" | jq -r '.task.status')
+              case "$ce_status" in
+                SUCCESS) analysis_id=$(printf '%s' "$task" | jq -r '.task.analysisId // empty'); break ;;
+                FAILED|CANCELED) echo "::error::SonarCloud compute-engine task ${ce_status} — failing closed."; exit 1 ;;
+              esac
+            fi
+            sleep 5
+          done
+          if [ -z "$analysis_id" ]; then
+            echo "::error::Could not tie a completed analysis to this revision — failing closed."
+            exit 1
+          fi
+          # Read the gate for THIS specific analysis, never a PR/branch-scoped "latest" that could be
+          # a stale prior run. Retry transient blips with the same posture as the CE poll, so a single
+          # sonarcloud.io hiccup on this one decisive read does not false-red a healthy PR; exhausting
+          # the retries (or an empty body) fails closed.
+          status=""
+          for _ in $(seq 1 10); do
+            if status=$(curl -sf -u "${SONAR_TOKEN}:" \
+              "https://sonarcloud.io/api/qualitygates/project_status?analysisId=${analysis_id}") \
+              && [ -n "$status" ]; then
+              break
+            fi
+            status=""
+            sleep 3
+          done
+          if [ -z "$status" ]; then
+            echo "::error::Could not read the quality gate for analysis ${analysis_id} — failing closed."
+            exit 1
+          fi
           gate=$(printf '%s' "$status" | jq -r '.projectStatus.status')
           # A red gate is acceptable ONLY when new-coverage is the sole failing condition (the free
           # plan hard-gates new_coverage<80 and cannot be reconfigured). Any OTHER failing condition —
@@ -136,6 +177,11 @@ jobs:
           blocking=$(printf '%s' "$status" | jq -r \
             '[.projectStatus.conditions[] | select(.status=="ERROR") | select(.metricKey | test("coverage") | not) | .metricKey] | join(", ")')
           echo "SonarCloud quality gate: ${gate}"
+          # Only OK, or a coverage-only ERROR, may pass. NONE or any other status fails closed.
+          if [ "$gate" != "OK" ] && [ "$gate" != "ERROR" ]; then
+            echo "::error::Unexpected quality-gate status '${gate}' — failing closed."
+            exit 1
+          fi
           if [ -n "$blocking" ]; then
             echo "::error::Quality gate failed on non-coverage conditions: ${blocking}"
             exit 1
