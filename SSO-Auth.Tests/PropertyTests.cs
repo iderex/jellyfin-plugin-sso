@@ -68,8 +68,8 @@ public class PropertyTests
             var config = SamlGrantConfig();
             var superset = roles.Concat(extra).ToList();
 
-            var g1 = SamlRolePrivilegeMapper.Evaluate(roles, config);
-            var g2 = SamlRolePrivilegeMapper.Evaluate(superset, config);
+            var g1 = RolePrivilegeMapper.Evaluate(roles, config);
+            var g2 = RolePrivilegeMapper.Evaluate(superset, config);
 
             return (!g1.Admin || g2.Admin)
                 && (!g1.EnableLiveTv || g2.EnableLiveTv)
@@ -87,8 +87,8 @@ public class PropertyTests
             var config = OidGrantConfig();
             var superset = roles.Concat(extra).ToList();
 
-            var g1 = OidcRolePrivilegeMapper.Evaluate(roles, config);
-            var g2 = OidcRolePrivilegeMapper.Evaluate(superset, config);
+            var g1 = RolePrivilegeMapper.Evaluate(roles, config);
+            var g2 = RolePrivilegeMapper.Evaluate(superset, config);
 
             return (!g1.Valid || g2.Valid)
                 && (!g1.Admin || g2.Admin)

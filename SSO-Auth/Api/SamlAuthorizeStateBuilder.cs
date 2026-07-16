@@ -31,9 +31,9 @@ internal static class SamlAuthorizeStateBuilder
             : new List<string>();
 
         // Map the roles to privileges and merge (monotonic: only ever grants). Login validity is
-        // decided separately by SamlLoginPolicy, so it is not mapped here. Admin starts false, so its
-        // OR-merge is a plain assignment; Live TV starts from the config default and is OR-ed.
-        var grants = SamlRolePrivilegeMapper.Evaluate(roles, config);
+        // decided separately by SamlLoginPolicy, so grants.Valid is ignored here. Admin starts false, so
+        // its OR-merge is a plain assignment; Live TV starts from the config default and is OR-ed.
+        var grants = RolePrivilegeMapper.Evaluate(roles, config);
         var admin = grants.Admin;
         var enableLiveTv = config.EnableLiveTv || grants.EnableLiveTv;
         var enableLiveTvManagement = config.EnableLiveTvManagement || grants.EnableLiveTvManagement;
