@@ -179,13 +179,15 @@ public class ArchitectureConformanceTests
         // Locked in by the AvatarService extraction (#375): the raw-socket/DNS surface lives only in the
         // avatar tier (AvatarService, AvatarUrlValidator) and SsoRateLimiter — the controller orchestrates
         // flows over injected collaborators and never opens a network primitive itself. Same plain source
-        // scan as the link-map rule above. Marker choice: any Socket/NetworkStream/SocketsHttpHandler use
-        // needs the System.Net.Sockets namespace in the file (using directive, alias, or full
-        // qualification), so that one marker subsumes the type names; "NetworkStream" is the
-        // belt-and-braces type-name catch on top; "Dns." catches System.Net.Dns call sites (which need no
-        // Sockets using) and "System.Net.Dns" the static-import form. Bare "Socket"/"Dns" are deliberately
-        // NOT markers — they would false-positive on prose in comments.
-        var markers = new[] { "System.Net.Sockets", "NetworkStream", "Dns.", "System.Net.Dns" };
+        // scan as the link-map rule above. Marker choice: any Socket/NetworkStream use needs the
+        // System.Net.Sockets namespace in the file (using directive, alias, or full qualification), so
+        // that one marker subsumes those type names; "NetworkStream" is the belt-and-braces type-name
+        // catch on top; "SocketsHttpHandler" lives in System.Net.Http, which the controller legitimately
+        // imports, so the namespace marker cannot cover it and it gets its own; "Dns." catches
+        // System.Net.Dns call sites (which need no Sockets using) and "System.Net.Dns" the static-import
+        // form. Bare "Socket"/"Dns" are deliberately NOT markers — they would false-positive on prose in
+        // comments.
+        var markers = new[] { "System.Net.Sockets", "SocketsHttpHandler", "NetworkStream", "Dns.", "System.Net.Dns" };
         var controllerSource = File.ReadAllLines(Path.Combine(RepoRoot(), "SSO-Auth", "Api", "SSOController.cs"));
         var socketLines = controllerSource
             .Select((line, index) => (Text: line.Trim(), Number: index + 1))
