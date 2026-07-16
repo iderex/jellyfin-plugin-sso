@@ -37,14 +37,13 @@ internal static class ProviderConfigValidator
 
         if (incoming.SamlConfigs != null)
         {
+            // One pass runs all three checks per provider, so with several invalid providers the first
+            // error reported follows map order rather than check kind; every invalid save is still
+            // rejected fail-closed before anything is persisted.
             foreach (var kvp in incoming.SamlConfigs)
             {
                 ValidateProviderName("SAML", kvp.Key, isNew: live?.SamlConfigs?.ContainsKey(kvp.Key) != true);
                 ValidateBaseUrlOverride("SAML", kvp.Key, kvp.Value?.BaseUrlOverride);
-            }
-
-            foreach (var kvp in incoming.SamlConfigs)
-            {
                 ValidateSamlCertificate(kvp.Key, kvp.Value?.SamlCertificate);
             }
         }
