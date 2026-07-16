@@ -166,5 +166,5 @@ public class SSOControllerOidAuthTests
     // Presents the browser-binding cookie on the controller's request (#326). Populating the Cookie header
     // is how a DefaultHttpContext exposes Request.Cookies, which the callback reads.
     private static void SetBindingCookie(SsoControllerHarness harness, string value) =>
-        harness.Controller.HttpContext.Request.Headers["Cookie"] = $"{AuthorizeStateBinding.CookieName}={value}";
+        harness.Controller.HttpContext.Request.Headers.Cookie = $"{AuthorizeStateBinding.CookieName}={value}";
 }

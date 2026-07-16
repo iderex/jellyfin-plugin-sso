@@ -38,21 +38,21 @@ internal static class AuthorizeStateBinding
            && string.Equals(storedBindingId, presentedBindingId, StringComparison.Ordinal);
 
     /// <summary>
-    /// The cookie policy for the binding cookie. <c>SameSite=Lax</c> is required, not Strict: the IdP
-    /// returns the browser to the callback via a top-level cross-site navigation, on which Lax cookies
-    /// are sent but Strict cookies are not — Strict would suppress the cookie and fail every login.
-    /// <c>Secure</c> tracks the request scheme so an HTTPS deployment gets a Secure cookie while a
-    /// plain-HTTP (or non-forwarded proxy) deployment still completes its login; the forced-login
-    /// defense rests on HttpOnly + SameSite + the unguessable value + the server-side match, not on the
-    /// Secure flag. Scoped to the whole app and bounded to the state's lifetime.
+    /// The cookie policy for the binding cookie. <c>Secure</c> is always set: every real OpenID
+    /// deployment is HTTPS at the browser edge (identity providers reject non-localhost <c>http</c>
+    /// redirect URIs), so the browser stores and sends the cookie even when a TLS-terminating proxy
+    /// forwards plain HTTP to the app — and marking it Secure is correct there, where a scheme-tracking
+    /// flag would wrongly under-set it. <c>SameSite=Lax</c> is required, not Strict: the IdP returns the
+    /// browser to the callback via a top-level cross-site navigation, on which Lax cookies are sent but
+    /// Strict cookies are not — Strict would suppress the cookie and fail every login. Scoped to the
+    /// whole app and bounded to the state's lifetime.
     /// </summary>
-    /// <param name="secure">Whether to mark the cookie Secure (the request is HTTPS).</param>
     /// <param name="lifetime">How long the cookie should live, matching the authorize-state lifetime.</param>
     /// <returns>The cookie options.</returns>
-    internal static CookieOptions CookieOptions(bool secure, TimeSpan lifetime) => new()
+    internal static CookieOptions CookieOptions(TimeSpan lifetime) => new()
     {
         HttpOnly = true,
-        Secure = secure,
+        Secure = true,
         SameSite = SameSiteMode.Lax,
         Path = "/",
         MaxAge = lifetime,

@@ -189,8 +189,8 @@ config so a save does not reset them.
 ## OpenID login browser binding
 
 Every OpenID login is bound to the browser that started it. When the login begins, the plugin sets a
-short-lived `HttpOnly`, `SameSite=Lax` cookie (`sso_oid_state_binding`, `Secure` on HTTPS) carrying a
-random id, and records the same id on the in-flight authorize state; the callback is only honored when
+short-lived `Secure`, `HttpOnly`, `SameSite=Lax` cookie (`sso_oid_state_binding`) carrying a random id,
+and records the same id on the in-flight authorize state; the callback is only honored when
 the cookie matches. This ties the OAuth `state` to the initiating user-agent as the OAuth 2.0 Security
 BCP requires, so a login started in one browser cannot be completed in another — closing a forced-login
 / session-fixation vector where an attacker lures a victim to the callback with the attacker's own code.

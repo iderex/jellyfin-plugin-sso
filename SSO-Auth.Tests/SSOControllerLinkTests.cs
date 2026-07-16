@@ -229,6 +229,34 @@ public class SSOControllerLinkTests
     }
 
     [Fact]
+    public async Task AddCanonicalLink_OidMismatchedBindingCookie_RejectsWithoutConsumingTheState()
+    {
+        // #326: the OID link redeem is browser-bound like the login path. A callback presenting a
+        // different browser's binding cookie is refused, and — the binding check preceding the atomic
+        // remove — the state is NOT consumed, so the browser that started the flow can still link.
+        var harness = ForCaller(isAdmin: true, callerId: Target, configure: c => c.OidConfigs["keycloak"] = new OidConfig { Enabled = true });
+        SSOController.SeedOidStateForTests("state-1", new TimedAuthorizeState(new AuthorizeState { State = "state-1" }, DateTime.Now)
+        {
+            Provider = "keycloak",
+            Valid = true,
+            Subject = "sub-1",
+            BindingId = Binding,
+        });
+        // A wrong-browser callback: overwrite the matching cookie ForCaller set with a different id.
+        harness.Controller.HttpContext.Request.Headers.Cookie = $"{AuthorizeStateBinding.CookieName}=other-browser";
+
+        var rejected = await harness.Controller.AddCanonicalLink("oid", "keycloak", Target, new AuthResponse { Data = "state-1" });
+
+        Assert.Equal("Invalid or expired state", Assert.IsType<ContentResult>(rejected).Content);
+        Assert.False(SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["keycloak"].CanonicalLinks.ContainsKey("sub-1")));
+
+        // The state was not burned: the originating browser (matching cookie) still completes the link.
+        harness.Controller.HttpContext.Request.Headers.Cookie = $"{AuthorizeStateBinding.CookieName}={Binding}";
+        var accepted = await harness.Controller.AddCanonicalLink("oid", "keycloak", Target, new AuthResponse { Data = "state-1" });
+        Assert.IsType<NoContentResult>(accepted);
+    }
+
+    [Fact]
     public async Task AddCanonicalLink_SamlDisabledProvider_RejectsWithoutConsumingTheAssertion()
     {
         // #343, SAML twin: the disabled check runs before the replay cache, so the assertion's
@@ -312,7 +340,7 @@ public class SSOControllerLinkTests
         // Present the browser-binding cookie (#326) so the OID link redeem sees the id the seeded state
         // records; the Cookie header is how a DefaultHttpContext exposes Request.Cookies. Harmless for the
         // SAML and non-redeem paths, which never read it.
-        harness.Controller.HttpContext.Request.Headers["Cookie"] = $"{AuthorizeStateBinding.CookieName}={Binding}";
+        harness.Controller.HttpContext.Request.Headers.Cookie = $"{AuthorizeStateBinding.CookieName}={Binding}";
         return harness;
     }
 }

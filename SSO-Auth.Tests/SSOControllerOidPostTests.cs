@@ -154,7 +154,7 @@ public class SSOControllerOidPostTests
         // different browser (no cookie), which the binding gate must refuse.
         if (bindingCookie is not null)
         {
-            harness.Controller.HttpContext.Request.Headers["Cookie"] = $"{AuthorizeStateBinding.CookieName}={bindingCookie}";
+            harness.Controller.HttpContext.Request.Headers.Cookie = $"{AuthorizeStateBinding.CookieName}={bindingCookie}";
         }
 
         // The authorize state the redirect leg would have created. The code flow is protected by the PKCE

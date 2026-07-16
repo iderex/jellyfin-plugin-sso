@@ -292,7 +292,7 @@ public class SSOController : ControllerBase
         }
 
         // Set the cookie only after the state is registered, so a refused challenge leaves no cookie.
-        Response.Cookies.Append(AuthorizeStateBinding.CookieName, bindingId, AuthorizeStateBinding.CookieOptions(Request.IsHttps, OidcStateStore.DefaultLifetime));
+        Response.Cookies.Append(AuthorizeStateBinding.CookieName, bindingId, AuthorizeStateBinding.CookieOptions(OidcStateStore.DefaultLifetime));
 
         return Redirect(state.StartUrl);
     }
