@@ -145,4 +145,101 @@ public class SSOControllerSamlAuthTests
         Assert.IsType<OkObjectResult>(result);
         await harness.UserManager.Received(1).CreateUserAsync("alice");
     }
+
+    private const string AuthnRequestId = "_authnreq-415";
+    private const string Binding = "AABBCCDDEEFF00112233445566778899AABBCCDDEEFF001122334455667788";
+
+    // Builds a harness whose "adfs" provider will provision "alice", and seeds an outstanding SAML
+    // AuthnRequest for it carrying the given binding id — the state SamlChallenge would have set (#415).
+    private static SsoControllerHarness SolicitedHarness(SamlFixture fixture, string bindingId)
+    {
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig
+        {
+            Enabled = true,
+            SamlCertificate = fixture.CertificateBase64,
+            DoNotValidateAudience = true,
+            EnableAuthorization = false,
+            AllowExistingAccountLink = false,
+        });
+        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        harness.UserManager.CreateUserAsync("alice").Returns(user);
+        harness.UserManager.GetUserById(UserId).Returns(user);
+        SSOController.SeedSamlRequestForTests("adfs", AuthnRequestId, bindingId, DateTime.UtcNow.AddMinutes(15));
+        return harness;
+    }
+
+    private static void SetSamlBindingCookie(SsoControllerHarness harness, string value) =>
+        harness.Controller.HttpContext.Request.Headers.Cookie = $"{AuthorizeStateBinding.SamlCookieName}={value}";
+
+    [Fact]
+    public async Task SamlAuth_SolicitedResponse_MatchingBindingCookie_ProvisionsAccount()
+    {
+        // #415: a solicited response whose InResponseTo matches an outstanding request completes only
+        // when the request carries the binding cookie the challenge set — the initiating browser.
+        var fixture = SamlTestFactory.Create(nameId: "alice", inResponseTo: AuthnRequestId);
+        var harness = SolicitedHarness(fixture, Binding);
+        SetSamlBindingCookie(harness, Binding);
+
+        var result = await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = fixture.EncodeResponse() });
+
+        Assert.IsType<OkObjectResult>(result);
+        await harness.UserManager.Received(1).CreateUserAsync("alice");
+    }
+
+    [Fact]
+    public async Task SamlAuth_SolicitedResponse_MissingBindingCookie_RejectsWithoutProvisioning()
+    {
+        // The forced-login shape: the response is lured into a browser that never started the flow, so
+        // it carries no binding cookie. Fail closed with the uniform SAML body; nothing is provisioned.
+        var fixture = SamlTestFactory.Create(nameId: "alice", inResponseTo: AuthnRequestId);
+        var harness = SolicitedHarness(fixture, Binding);
+        // No binding cookie set.
+
+        var result = Assert.IsType<ContentResult>(
+            await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = fixture.EncodeResponse() }));
+
+        Assert.Equal(400, result.StatusCode);
+        Assert.Equal("SAML response validation failed", result.Content);
+        await harness.UserManager.DidNotReceive().CreateUserAsync(Arg.Any<string>());
+    }
+
+    [Fact]
+    public async Task SamlAuth_SolicitedResponse_WrongBindingCookie_RejectsWithoutProvisioning()
+    {
+        var fixture = SamlTestFactory.Create(nameId: "alice", inResponseTo: AuthnRequestId);
+        var harness = SolicitedHarness(fixture, Binding);
+        SetSamlBindingCookie(harness, "a-different-browsers-binding-id");
+
+        var result = Assert.IsType<ContentResult>(
+            await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = fixture.EncodeResponse() }));
+
+        Assert.Equal(400, result.StatusCode);
+        Assert.Equal("SAML response validation failed", result.Content);
+        await harness.UserManager.DidNotReceive().CreateUserAsync(Arg.Any<string>());
+    }
+
+    [Fact]
+    public async Task SamlAuth_UnsolicitedResponse_NoBindingRequired_StillProvisions()
+    {
+        // IdP-initiated / unsolicited: no matching outstanding request, so browser binding imposes no
+        // requirement and (with ValidateInResponseTo off, the default) the login proceeds — the change
+        // does not break IdP-initiated deployments. No cookie is present, proving binding did not fire.
+        var fixture = SamlTestFactory.Create(nameId: "alice"); // no InResponseTo
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig
+        {
+            Enabled = true,
+            SamlCertificate = fixture.CertificateBase64,
+            DoNotValidateAudience = true,
+            EnableAuthorization = false,
+            AllowExistingAccountLink = false,
+        });
+        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        harness.UserManager.CreateUserAsync("alice").Returns(user);
+        harness.UserManager.GetUserById(UserId).Returns(user);
+
+        var result = await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = fixture.EncodeResponse() });
+
+        Assert.IsType<OkObjectResult>(result);
+        await harness.UserManager.Received(1).CreateUserAsync("alice");
+    }
 }

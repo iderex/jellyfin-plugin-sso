@@ -311,6 +311,11 @@ public class SSOController : ControllerBase
         PkceSupportCache.Clear();
     }
 
+    // Test-only: clears the outstanding-SAML-request cache so a prior test's seeded or in-flight entry
+    // (e.g. one left behind by a signature-failing response that returns before the consume) cannot leak
+    // into the next test. Same test-only surface as ResetOidStateForTests (internal, InternalsVisibleTo).
+    internal static void ResetSamlRequestsForTests() => SamlRequests.Clear();
+
     // Test-only seed of a single authorize-state entry so a test can exercise the OidAuth callback
     // (which consumes an already-validated state that the browser redirect leg normally populates)
     // without standing up the full token-exchange flow. Same test-only surface as ResetOidStateForTests
@@ -319,6 +324,13 @@ public class SSOController : ControllerBase
     {
         StateStore.Seed(token, state);
     }
+
+    // Test-only seed of an outstanding SAML AuthnRequest so a test can exercise SamlAuth's browser
+    // binding (#415) — normally populated by the SamlChallenge redirect leg — without deriving the
+    // random request id from the emitted AuthnRequest. Same test-only surface as SeedOidStateForTests
+    // (internal, InternalsVisibleTo, no endpoint/DI); never reachable in production.
+    internal static void SeedSamlRequestForTests(string provider, string requestId, string bindingId, DateTime expiryUtc) =>
+        SamlRequests.Register(ProviderScopedKey.For(provider, requestId), bindingId, expiryUtc, DateTime.UtcNow);
 
     // Reads a provider's config under the config lock, so an anonymous login-path lookup does not race an
     // admin Add/Del mutating the live provider dictionary in place — a Dictionary read-during-write is
@@ -778,14 +790,31 @@ public class SSOController : ControllerBase
             config.SamlClientId.Trim(),
             redirectUri);
 
-        // Solicited-only mode (#156): remember the request ID so the callback can require the
-        // response's InResponseTo to match a request we actually issued. Scoped by provider so
-        // two providers' request IDs cannot satisfy each other's correlation. Only for login
-        // flows — the linking callback (SamlLink) does not consume InResponseTo, so registering a
-        // linking request would only leave an id to expire unused.
-        if (config.ValidateInResponseTo && !isLinking)
+        // Bind this login to the initiating browser (#415): mint a binding id, set it as a cookie, and
+        // record it against the request id so the session-mint endpoint (SamlAuth) can require the
+        // response's browser to be the one that started the flow — closing the SP-initiated forced-login
+        // / session-fixation vector, the SAML analogue of #326. Only for login flows: the linking
+        // callback (SamlLink) is a separate flow that does not consume the outstanding request, so a
+        // linking registration would only leave an id to expire unused. Registration now happens for
+        // every login challenge (not only under ValidateInResponseTo), so the binding is enforced for
+        // every SOLICITED login this plugin initiated — the case ValidateInResponseTo alone left open.
+        // It does NOT bind an unsolicited (IdP-initiated) response, which carries no matching request;
+        // fully closing forced login for an IdP that issues unsolicited responses additionally requires
+        // ValidateInResponseTo (which refuses them). Because the cookie is __Host-/Secure, the browser
+        // only returns it over HTTPS — SP-initiated SAML now needs HTTPS at the browser edge, as OIDC
+        // already does.
+        if (!isLinking)
         {
-            SamlRequests.Register(ProviderScopedKey.For(provider, request.Id), DateTime.UtcNow + SamlRequestLifetime, DateTime.UtcNow);
+            var bindingId = AuthorizeStateBinding.NewId();
+            SamlRequests.Register(
+                ProviderScopedKey.For(provider, request.Id),
+                bindingId,
+                DateTime.UtcNow + SamlRequestLifetime,
+                DateTime.UtcNow);
+            Response.Cookies.Append(
+                AuthorizeStateBinding.SamlCookieName,
+                bindingId,
+                AuthorizeStateBinding.CookieOptions(SamlRequestLifetime));
         }
 
         return Redirect(request.GetRedirectUrl(config.SamlEndpoint.Trim(), relayState));
@@ -885,21 +914,47 @@ public class SSOController : ControllerBase
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
 
-        // Solicited-only correlation (#156, opt-in): consume the response's InResponseTo against
-        // an AuthnRequest this server issued. Enforced here (the session-minting endpoint), like
-        // the replay check, so the id is claimed once. An unsolicited (IdP-initiated) response
-        // carries no InResponseTo and is refused; a matching id is one-time-use. The rejection is a
-        // client-caused 400 in the uniform SAML body — never a 500, and the old body that disclosed
-        // the InResponseTo correlation to the submitter is gone (the warning log keeps the diagnosis).
-        if (config.ValidateInResponseTo)
+        // Correlate the response to an AuthnRequest this server issued (#156, #415). The outstanding
+        // entry is claimed once here (the session-minting endpoint), like the replay check, so its
+        // InResponseTo is one-time-use; a solicited response yields the browser-binding id recorded at
+        // the challenge. The claim runs regardless of ValidateInResponseTo so the browser binding below
+        // protects SP-initiated logins even when the opt-in solicited-only mode is off.
+        //
+        // Unlike the OpenID state (#326), the binding is checked AFTER the claim rather than before, and
+        // that is safe here: the response already passed signature validation above, and the InResponseTo
+        // is read from that validated document, so an attacker cannot mint a signature-valid response
+        // carrying a victim's request id to burn their outstanding entry. The OpenID state token is not
+        // signed by anyone who holds it, so it must be checked before the atomic remove; a SAML
+        // InResponseTo cannot be forged onto a valid response, so no in-flight entry can be burned by a
+        // wrong-browser hit.
+        var inResponseTo = samlResponse.GetInResponseTo();
+        var requestKey = ProviderScopedKey.For(provider, inResponseTo);
+        bool solicited = SamlRequests.TryConsume(requestKey, DateTime.UtcNow, out var storedBindingId);
+
+        // Browser binding (#415): a solicited response must complete in the browser that started the
+        // flow. When a binding id was recorded — every login challenge since #415 — require the request
+        // to carry the matching cookie, failing closed on an absent or mismatched one. This defeats
+        // SP-initiated forced login / session fixation: a response lured into a victim's browser lacks
+        // the attacker's binding cookie. The cookie is checked here (the same-origin auth endpoint), not
+        // at the cross-site ACS POST which would not carry a SameSite=Lax cookie. An entry with no
+        // binding id predates this protection (an in-flight login across the upgrade) and is deferred to
+        // the InResponseTo policy below rather than broken.
+        if (solicited && !string.IsNullOrEmpty(storedBindingId)
+            && !AuthorizeStateBinding.Matches(storedBindingId, Request.Cookies[AuthorizeStateBinding.SamlCookieName]))
         {
-            var inResponseTo = samlResponse.GetInResponseTo();
-            var requestKey = ProviderScopedKey.For(provider, inResponseTo);
-            if (!SamlRequests.TryConsume(requestKey, DateTime.UtcNow))
-            {
-                _logger.LogWarning("SAML login denied: the response was not solicited by this server (unknown, expired, or already-used InResponseTo).");
-                return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
-            }
+            _logger.LogWarning("SAML login denied: the response was not completed in the browser that initiated the login (binding mismatch).");
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
+        }
+
+        // Solicited-only mode (#156, opt-in): with the flag on, an unsolicited (IdP-initiated) response —
+        // one with no matching outstanding request — is refused. The correlation was already claimed
+        // above, so this only decides the unsolicited case. The rejection is a client-caused 400 in the
+        // uniform SAML body — never a 500, and the old body that disclosed the InResponseTo correlation
+        // to the submitter is gone (the warning log keeps the diagnosis).
+        if (config.ValidateInResponseTo && !solicited)
+        {
+            _logger.LogWarning("SAML login denied: the response was not solicited by this server (unknown, expired, or already-used InResponseTo).");
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
 
         // Enforce the login allow-list here too, not only at the assertion-consumer page: a caller

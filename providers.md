@@ -185,6 +185,33 @@ config so a save does not reset them.
   flow only (not account linking). The outstanding-request store is **in-process**, so it requires a
   single Jellyfin instance or sticky sessions: behind a load balancer without session affinity, the
   challenge and the response can land on different instances and every solicited login is rejected.
+  It also completes the browser-binding defense below: browser binding closes forced login for
+  _solicited_ (SP-initiated) responses, and turning this on refuses the _unsolicited_ ones that
+  binding cannot cover — so together they close the vector for an identity provider that can issue
+  unsolicited responses.
+
+## SAML login browser binding
+
+Every SP-initiated SAML login (one started from Jellyfin, i.e. `SAML/start/...`) is bound to the
+browser that started it, the SAML analogue of the OpenID binding below. When the login begins the
+plugin sets a short-lived `Secure`, `HttpOnly`, `SameSite=Lax`, `__Host-`-prefixed cookie
+(`__Host-sso_saml_state_binding`) carrying a random id, and records the same id against the
+`AuthnRequest`; the session-minting callback (`SAML/Auth/...`) only proceeds when a solicited response
+returns with the matching cookie. This closes the forced-login / session-fixation vector where an
+attacker lures a victim to submit the attacker's own signed response. It is automatic, with no
+configuration. Points worth knowing:
+
+- **HTTPS is required at the browser edge.** The `__Host-`/`Secure` cookie is only stored and returned
+  over HTTPS (a TLS-terminating reverse proxy is fine — the browser sees HTTPS). Over plain `http://`
+  the cookie never comes back and every SP-initiated login is refused. This is the same requirement the
+  OpenID binding already imposes; serve SSO over HTTPS.
+- **Complete the login in the same browser that started it**, and serve the whole flow from one origin
+  — the same two consequences as the OpenID binding below.
+- **Scope, and how to close it fully.** Binding covers _solicited_ responses (those answering a request
+  this plugin issued). An _unsolicited_ (IdP-initiated) response carries no matching request, so binding
+  cannot bind it; if your identity provider can issue unsolicited responses, enable
+  `ValidateInResponseTo` (above) to refuse them and close forced login completely. Account linking
+  (`RelayState=linking`) is a separate, differently-gated flow and is unaffected.
 
 ## OpenID login browser binding
 
