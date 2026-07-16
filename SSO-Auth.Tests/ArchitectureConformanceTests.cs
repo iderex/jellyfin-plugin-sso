@@ -18,9 +18,10 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 /// structure fails CI. The rules encode structural invariants that hold today and are part of the target;
 /// as each migration step lands a new structural property, add the rule that locks it in here so it
 /// cannot regress. Most rules are type-level (reflection over the production assembly); call-level
-/// invariants otherwise stay guarded by CodeQL/CodeRabbit and the pinning tests. The one call-level
-/// property locked in here is a source scan — the CONTROLLER touches no provider link map directly
-/// (<see cref="Controller_NeverTouchesProviderLinkMaps"/>) — because the #372 extraction confines
+/// invariants otherwise stay guarded by CodeQL/CodeRabbit and the pinning tests. Two call-level
+/// properties are locked in as source scans — the CONTROLLER touches no provider link map directly
+/// (<see cref="Controller_NeverTouchesProviderLinkMaps"/>) and no raw socket/DNS surface
+/// (<see cref="Controller_NeverTouchesRawSocketsOrDns"/>) — because the #372 extraction confines
 /// link-map access to CanonicalLinkService (the login/admin workflow) and ServerManagedFields.Preserve
 /// (the #157 server-managed re-injection the config tier owns), a boundary worth failing CI on, not just
 /// review; #383 retired the controller's last two inline re-injection sites into that shared Preserve, so
@@ -170,6 +171,31 @@ public class ArchitectureConformanceTests
         Assert.True(
             linkMapLines.Count == 0,
             "SSOController must not access a provider CanonicalLinks map directly; route link-map access through CanonicalLinkService and server-managed re-injection through ServerManagedFields.Preserve. Found: " + string.Join(" | ", linkMapLines));
+    }
+
+    [Fact]
+    public void Controller_NeverTouchesRawSocketsOrDns()
+    {
+        // Locked in by the AvatarService extraction (#375): the raw-socket/DNS surface lives only in the
+        // avatar tier (AvatarService, AvatarUrlValidator) and SsoRateLimiter — the controller orchestrates
+        // flows over injected collaborators and never opens a network primitive itself. Same plain source
+        // scan as the link-map rule above. Marker choice: any Socket/NetworkStream/SocketsHttpHandler use
+        // needs the System.Net.Sockets namespace in the file (using directive, alias, or full
+        // qualification), so that one marker subsumes the type names; "NetworkStream" is the
+        // belt-and-braces type-name catch on top; "Dns." catches System.Net.Dns call sites (which need no
+        // Sockets using) and "System.Net.Dns" the static-import form. Bare "Socket"/"Dns" are deliberately
+        // NOT markers — they would false-positive on prose in comments.
+        var markers = new[] { "System.Net.Sockets", "NetworkStream", "Dns.", "System.Net.Dns" };
+        var controllerSource = File.ReadAllLines(Path.Combine(RepoRoot(), "SSO-Auth", "Api", "SSOController.cs"));
+        var socketLines = controllerSource
+            .Select((line, index) => (Text: line.Trim(), Number: index + 1))
+            .Where(l => markers.Any(m => l.Text.Contains(m, StringComparison.Ordinal)))
+            .Select(l => $"line {l.Number}: {l.Text}")
+            .ToList();
+
+        Assert.True(
+            socketLines.Count == 0,
+            "SSOController must not touch the raw socket/DNS surface (System.Net.Sockets, Socket, NetworkStream, Dns); outbound network primitives belong to AvatarService/AvatarUrlValidator and SsoRateLimiter. Found: " + string.Join(" | ", socketLines));
     }
 
     [Fact]
