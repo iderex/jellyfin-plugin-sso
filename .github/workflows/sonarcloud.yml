@@ -27,20 +27,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      # Dependabot PRs never receive repository secrets, so SONAR_TOKEN is absent and the scan cannot
-      # run there. Skipping the scan steps (rather than the whole job) keeps this required check GREEN
-      # for a version-bump PR — which has nothing for Sonar to analyze anyway — instead of leaving it
-      # forever pending. is_scan gates every step that needs the token.
+      # Some PRs never receive repository secrets, so SONAR_TOKEN is absent and the scan cannot run:
+      # Dependabot PRs, and PRs opened from a fork. Skipping the scan steps (rather than the whole job)
+      # keeps this required check GREEN for those — a version bump or a fork PR has nothing we can
+      # analyze here anyway — instead of leaving the check forever pending. is_scan gates every step
+      # that needs the token.
       - name: Decide whether to scan
         id: gate
-        # Read the actor from the environment, not a ${{ }} expansion inside the script, so the value
-        # can never expand into the run block as code (zizmor template-injection).
+        # Read the actor / fork flag from the environment, not a ${{ }} expansion inside the script, so
+        # the values can never expand into the run block as code (zizmor template-injection).
         env:
           ACTOR: ${{ github.actor }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
         run: |
-          if [ "$ACTOR" = "dependabot[bot]" ]; then
+          if [ "$ACTOR" = "dependabot[bot]" ] || [ "$IS_FORK" = "true" ]; then
             echo "is_scan=false" >> "$GITHUB_OUTPUT"
-            echo "Dependabot PR: skipping the Sonar scan (secrets are withheld); the gate passes."
+            echo "No repository secrets available (Dependabot or fork PR): skipping the Sonar scan; the gate passes."
           else
             echo "is_scan=true" >> "$GITHUB_OUTPUT"
           fi
