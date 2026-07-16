@@ -53,6 +53,25 @@ public class ChallengePathTests
     }
 
     [Theory]
+    // A protocol-like reverse-proxy prefix must not decide the spelling: only the route's
+    // {protocol}/{path-kind}/{provider} suffix does. The real route below is legacy (OID/p).
+    [InlineData("/OID/start/proxy/sso/OID/p/provider")]
+    // A doubled internal slash shifts the suffix and must not collapse into a valid new route.
+    [InlineData("/sso/OID//start/provider")]
+    public void IsNewPath_ProtocolLikePrefixOrInternalEmptySegment_IsFalse(string path)
+    {
+        Assert.False(ChallengePath.IsNewPath(path));
+    }
+
+    [Fact]
+    public void IsNewPath_StartRouteBehindProtocolLikePrefix_IsTrue()
+    {
+        // The suffix is the real route (OID/start/provider); a SAML-like prefix earlier in the path
+        // is ignored.
+        Assert.True(ChallengePath.IsNewPath("/SAML/prefix/sso/OID/start/provider"));
+    }
+
+    [Theory]
     [InlineData("")]
     [InlineData(null)]
     public void IsNewPath_EmptyOrNull_IsFalse(string? path)
