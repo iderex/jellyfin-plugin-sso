@@ -167,9 +167,14 @@ public class SessionMinterTests
         users.GetUserById(UserId).Returns(user);
         sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
 
+        // Capture the id at the write boundary, not off the shared user after MintAsync returns —
+        // otherwise the assertion passes even if the id is set AFTER the write, defeating the point (#391).
+        string? providerAtWrite = null;
+        users.UpdateUserAsync(Arg.Do<User>(u => providerAtWrite = u.AuthenticationProviderId)).Returns(Task.CompletedTask);
+
         await minter.MintAsync(Params(defaultProvider: "SSO-Auth"), () => "203.0.113.7");
 
-        Assert.Equal("SSO-Auth", user.AuthenticationProviderId);
+        Assert.Equal("SSO-Auth", providerAtWrite);
         await users.Received(1).UpdateUserAsync(user);
     }
 }
