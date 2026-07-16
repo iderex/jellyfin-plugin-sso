@@ -41,6 +41,13 @@ internal sealed class TimedAuthorizeState
     public string BindingId { get; set; }
 
     /// <summary>
+    /// Gets or sets the normalized client key that reserved this state's per-client budget slot (#327),
+    /// or null for an unattributable/exempt source. Recorded so the store releases the right client's
+    /// slot when this state is redeemed or pruned.
+    /// </summary>
+    public string ClientKey { get; set; }
+
+    /// <summary>
     /// Gets or sets when this object was created to time it out.
     /// </summary>
     public DateTime Created { get; set; }

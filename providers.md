@@ -240,6 +240,28 @@ It is automatic, with no configuration. Two consequences worth knowing:
   actually browse, the binding cookie will not travel with them; keep the challenge and callback on the
   same origin (which a working setup already does).
 
+## In-flight login capacity (per-client)
+
+Each started login holds one short-lived in-flight entry (an OpenID authorize state or a SAML
+outstanding-request record) until it is completed or expires (~15 minutes). Those stores are globally
+capped so an abandoned-login flood cannot exhaust memory, and — so a single anonymous source cannot fill
+that global budget and lock out **everyone's** logins — each **client** is additionally bounded to a small
+share of it (1% — up to 1000 concurrent in-flight logins per client). This is automatic, always on, and
+needs no configuration; a real user starting a handful of logins never approaches it.
+
+The per-client share is keyed on the **client IP the plugin sees**, so **set Jellyfin's _Known proxies_**
+if you run behind a reverse proxy. Otherwise the plugin sees the proxy's address for every request:
+
+- If the proxy sits on a **private/loopback** address (the common co-located setup), that address is
+  treated as un-attributable and is **exempt** from the per-client share — correct, since it is your whole
+  userbase behind one hop, but it means the per-client protection does nothing until _Known proxies_ is
+  set so the real client IPs are attributed.
+- If the proxy has a **public** address and _Known proxies_ is unset, your entire userbase is attributed
+  to that one public IP and therefore **shares a single 1000-in-flight bucket** — enough for normal use,
+  but a very large deployment could brush it. Setting _Known proxies_ resolves this (and is the correct
+  configuration regardless). A refused login returns a generic "could not start login; please retry" and
+  logs a throttled capacity warning server-side.
+
 ## Authelia
 
 Authelia is simple to configure, and RBAC is straightforward.

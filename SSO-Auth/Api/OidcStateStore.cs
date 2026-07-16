@@ -46,6 +46,10 @@ internal sealed class OidcStateStore
     // volume. The gate self-heals a backward wall-clock step.
     private readonly IntervalGate _capWarnGate;
 
+    // Per-client occupancy sub-cap (#327): bounds how much of the global budget one client key can hold,
+    // so a single anonymous source cannot fill the store and lock out everyone else's logins.
+    private readonly PerClientBudgetLimiter _perClient;
+
     internal OidcStateStore()
         : this(DefaultMaxEntries, DefaultLifetime, DefaultPruneInterval)
     {
@@ -59,6 +63,7 @@ internal sealed class OidcStateStore
         _lifetime = lifetime;
         _pruneGate = new IntervalGate(pruneInterval);
         _capWarnGate = new IntervalGate(pruneInterval);
+        _perClient = PerClientBudgetLimiter.FromGlobalCap(maxEntries);
     }
 
     /// <summary>Gets the live entry count. Test-only, like Seed/Clear: production code reads _states.Count directly.</summary>
@@ -79,13 +84,26 @@ internal sealed class OidcStateStore
     /// <param name="isLinking">Whether this flow is a linking request rather than a login.</param>
     /// <param name="now">The current time, recorded as the entry's creation instant.</param>
     /// <param name="bindingId">The browser-binding id to record on the entry, matched at the callback (#326).</param>
+    /// <param name="clientKey">The normalized client key for the per-client sub-cap (#327), or null to exempt.</param>
     /// <param name="shouldWarnCapacity">True when the caller should emit the throttled capacity warning.</param>
-    /// <returns>True if the state was registered; false if refused (cap, or the key already existed).</returns>
-    internal bool TryAdd(AuthorizeState state, string provider, bool isLinking, DateTime now, string bindingId, out bool shouldWarnCapacity)
+    /// <returns>True if the state was registered; false if refused (per-client sub-cap, global cap, or the key already existed).</returns>
+    internal bool TryAdd(AuthorizeState state, string provider, bool isLinking, DateTime now, string bindingId, string clientKey, out bool shouldWarnCapacity)
     {
-        if ((_states.Count >= _maxEntries && !_states.ContainsKey(state.State))
-            || !_states.TryAdd(state.State, new TimedAuthorizeState(state, now) { IsLinking = isLinking, Provider = provider, BindingId = bindingId }))
+        // Per-client sub-cap (#327): reserve this client's slot BEFORE the global insert so one source
+        // cannot fill the whole budget and lock out every other login. A null key is exempt (the shared
+        // proxy/private-source bucket, still bounded by the global cap below).
+        if (!_perClient.TryReserve(clientKey))
         {
+            shouldWarnCapacity = _capWarnGate.TryEnter(now);
+            return false;
+        }
+
+        if ((_states.Count >= _maxEntries && !_states.ContainsKey(state.State))
+            || !_states.TryAdd(state.State, new TimedAuthorizeState(state, now) { IsLinking = isLinking, Provider = provider, BindingId = bindingId, ClientKey = clientKey }))
+        {
+            // The entry never entered the store (global cap, or a CSPRNG-token collision losing the
+            // atomic add) — release the reservation so the client's bucket does not leak a slot.
+            _perClient.Release(clientKey);
             shouldWarnCapacity = _capWarnGate.TryEnter(now);
             return false;
         }
@@ -130,13 +148,19 @@ internal sealed class OidcStateStore
     /// <returns>The redeemed snapshot, or null when not redeemable, already claimed, or binding-mismatched.</returns>
     internal RedeemedState TryRedeem(string responseData, string provider, DateTime now, string presentedBindingId)
     {
-        return !string.IsNullOrEmpty(responseData)
-            && _states.TryGetValue(responseData, out var state)
-            && IsRedeemableBy(state, responseData, provider, now)
-            && AuthorizeStateBinding.Matches(state.BindingId, presentedBindingId)
-            && _states.TryRemove(new KeyValuePair<string, TimedAuthorizeState>(responseData, state))
-            ? new RedeemedState(state)
-            : null;
+        if (string.IsNullOrEmpty(responseData)
+            || !_states.TryGetValue(responseData, out var state)
+            || !IsRedeemableBy(state, responseData, provider, now)
+            || !AuthorizeStateBinding.Matches(state.BindingId, presentedBindingId)
+            || !_states.TryRemove(new KeyValuePair<string, TimedAuthorizeState>(responseData, state)))
+        {
+            return null;
+        }
+
+        // Only the winner of the atomic TryRemove reaches here, so the client's slot is released exactly
+        // once (#327).
+        _perClient.Release(state.ClientKey);
+        return new RedeemedState(state);
     }
 
     /// <summary>
@@ -158,7 +182,12 @@ internal sealed class OidcStateStore
         // step) is dead weight the predicates already reject; it is swept once the clock passes it.
         foreach (var kvp in _states.Where(kvp => now.Subtract(kvp.Value.Created) > _lifetime))
         {
-            _states.TryRemove(kvp.Key, out _);
+            // Release only on the winning removal so a concurrent redeem does not double-release the
+            // client's slot (#327).
+            if (_states.TryRemove(kvp.Key, out var removed))
+            {
+                _perClient.Release(removed.ClientKey);
+            }
         }
     }
 
@@ -172,7 +201,11 @@ internal sealed class OidcStateStore
         _states.Values.Select(s => new Summary(s.Provider, s.Created, s.Valid, s.IsLinking));
 
     /// <summary>Test-only: drops every entry, restoring a fresh store between tests.</summary>
-    internal void Clear() => _states.Clear();
+    internal void Clear()
+    {
+        _states.Clear();
+        _perClient.Clear();
+    }
 
     /// <summary>Test-only: seeds one entry directly, bypassing the challenge leg.</summary>
     /// <param name="token">The state token to key the entry under.</param>

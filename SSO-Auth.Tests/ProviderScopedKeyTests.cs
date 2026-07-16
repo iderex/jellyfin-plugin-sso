@@ -48,7 +48,7 @@ public class ProviderScopedKeyTests
         Assert.False(new SamlReplayCache().TryConsume(replayKey, now.AddMinutes(10), now));
 
         var requests = new SamlRequestCache();
-        requests.Register(requestKey!, "binding", now.AddMinutes(15), now);
+        requests.Register(requestKey!, "binding", now.AddMinutes(15), now, clientKey: null, out _);
         Assert.False(requests.TryConsume(requestKey!, now, out _));
     }
 }
