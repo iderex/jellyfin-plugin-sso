@@ -135,83 +135,77 @@ public class SSOController : ControllerBase
             return throttled;
         }
 
+        // Unknown and disabled providers share one rejection so neither can be probed apart, matching
+        // the guard-clause form the SAML sibling (SamlPost) already uses.
         var config = FindOidConfig(provider);
-        if (config is null)
+        if (config is not { Enabled: true })
         {
             return BadRequest(NoMatchingProviderMessage);
         }
 
-        if (config.Enabled)
+        if (string.IsNullOrEmpty(state))
         {
-            if (string.IsNullOrEmpty(state))
-            {
-                return BadRequest("Missing state");
-            }
-
-            if (StateStore.PeekCurrent(state, provider, DateTime.Now, Request.Cookies[AuthorizeStateBinding.CookieName]) is not { } pending)
-            {
-                // Unknown, expired, minted for a different provider, or from a different browser than the
-                // one that started the flow (#326) — reject (details on PeekCurrent / AuthorizeStateBinding).
-                return BadRequest("Invalid or expired state");
-            }
-
-            var oidcClient = CreateCallbackOidcClient(config, provider);
-            var result = await oidcClient.ProcessResponseAsync(Request.QueryString.Value, pending.OidcState).ConfigureAwait(false);
-
-            if (result.IsError)
-            {
-                return ReturnError(StatusCodes.Status400BadRequest, $"Error logging in: {result.Error} - {result.ErrorDescription}");
-            }
-
-            // RFC 9207 (#125): the library parses the authorization-response `iss` but never checks it.
-            // When present it must name the same issuer as the redeemed id_token (which OidcIdTokenValidator
-            // already validated against the discovery issuer); a mismatch means the response came from a
-            // different authorization server than the one we hold a token for — a mix-up — so reject.
-            if (!config.DoNotValidateResponseIssuer
-                && OidcResponseIssuer.IsMismatch(Request.Query["iss"], result.IdentityToken))
-            {
-                _logger.LogWarning("OpenID login denied for provider {Provider}: the authorization-response issuer did not match the id_token issuer (RFC 9207 mix-up check).", provider?.ReplaceLineEndings(string.Empty));
-                return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SsoResponseInvalid));
-            }
-
-            // Derive the authorize-state values (username, validity, admin, Live TV, folders, avatar)
-            // from the verified login's claims and the provider configuration; Complete applies them
-            // to the stored pending state.
-            var derived = OidcAuthorizeStateBuilder.Build(result.User.Claims, config);
-
-            // Fail closed (#155): a valid OpenID login must resolve a stable subject to key the account
-            // link on. sub is an OIDC Core MUST and (post-#134) the id_token validator has verified the
-            // token, so a missing sub means a non-conformant provider — reject rather than fall back to
-            // keying on the mutable username.
-            if (derived.Valid && string.IsNullOrWhiteSpace(derived.Subject))
-            {
-                _logger.LogWarning("OpenID login denied for provider {Provider}: the id_token carried no 'sub' claim to key the account link on.", provider?.ReplaceLineEndings(string.Empty));
-                return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
-            }
-
-            pending.Complete(derived);
-
-            bool isLinking = pending.IsLinking;
-
-            if (derived.Valid)
-            {
-                _logger.LogInformation("Is request linking: {IsLinking}", isLinking);
-                return HtmlAuthPage(nonce => WebResponse.Generator(data: state, provider: provider, baseUrl: GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), mode: "OID", nonce: nonce, isLinking: isLinking));
-            }
-            else
-            {
-                _logger.LogWarning(
-                    "OpenID login denied for {Username}: no role matched the allow-list, or the login resolved no username. Claims: {@Claims}. Roles expected (any one of): {@ExpectedClaims}",
-                    derived.Username?.ReplaceLineEndings(string.Empty),
-                    result.User.Claims.Select(o => new { Type = o.Type?.ReplaceLineEndings(string.Empty), Value = o.Value?.ReplaceLineEndings(string.Empty) }),
-                    config.Roles);
-
-                return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
-            }
+            return BadRequest("Missing state");
         }
 
-        // If the config doesn't have an active provider matching the request, show an error
-        return BadRequest(NoMatchingProviderMessage);
+        if (StateStore.PeekCurrent(state, provider, DateTime.Now, Request.Cookies[AuthorizeStateBinding.CookieName]) is not { } pending)
+        {
+            // Unknown, expired, minted for a different provider, or from a different browser than the
+            // one that started the flow (#326) — reject (details on PeekCurrent / AuthorizeStateBinding).
+            return BadRequest("Invalid or expired state");
+        }
+
+        var oidcClient = CreateCallbackOidcClient(config, provider);
+        var result = await oidcClient.ProcessResponseAsync(Request.QueryString.Value, pending.OidcState).ConfigureAwait(false);
+
+        if (result.IsError)
+        {
+            return ReturnError(StatusCodes.Status400BadRequest, $"Error logging in: {result.Error} - {result.ErrorDescription}");
+        }
+
+        // RFC 9207 (#125): the library parses the authorization-response `iss` but never checks it.
+        // When present it must name the same issuer as the redeemed id_token (which OidcIdTokenValidator
+        // already validated against the discovery issuer); a mismatch means the response came from a
+        // different authorization server than the one we hold a token for — a mix-up — so reject.
+        if (!config.DoNotValidateResponseIssuer
+            && OidcResponseIssuer.IsMismatch(Request.Query["iss"], result.IdentityToken))
+        {
+            _logger.LogWarning("OpenID login denied for provider {Provider}: the authorization-response issuer did not match the id_token issuer (RFC 9207 mix-up check).", provider?.ReplaceLineEndings(string.Empty));
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SsoResponseInvalid));
+        }
+
+        // Derive the authorize-state values (username, validity, admin, Live TV, folders, avatar)
+        // from the verified login's claims and the provider configuration; Complete applies them
+        // to the stored pending state.
+        var derived = OidcAuthorizeStateBuilder.Build(result.User.Claims, config);
+
+        // Fail closed (#155): a valid OpenID login must resolve a stable subject to key the account
+        // link on. sub is an OIDC Core MUST and (post-#134) the id_token validator has verified the
+        // token, so a missing sub means a non-conformant provider — reject rather than fall back to
+        // keying on the mutable username.
+        if (derived.Valid && string.IsNullOrWhiteSpace(derived.Subject))
+        {
+            _logger.LogWarning("OpenID login denied for provider {Provider}: the id_token carried no 'sub' claim to key the account link on.", provider?.ReplaceLineEndings(string.Empty));
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
+        }
+
+        pending.Complete(derived);
+
+        bool isLinking = pending.IsLinking;
+
+        if (derived.Valid)
+        {
+            _logger.LogInformation("Is request linking: {IsLinking}", isLinking);
+            return HtmlAuthPage(nonce => WebResponse.Generator(data: state, provider: provider, baseUrl: GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), mode: "OID", nonce: nonce, isLinking: isLinking));
+        }
+
+        _logger.LogWarning(
+            "OpenID login denied for {Username}: no role matched the allow-list, or the login resolved no username. Claims: {@Claims}. Roles expected (any one of): {@ExpectedClaims}",
+            derived.Username?.ReplaceLineEndings(string.Empty),
+            result.User.Claims.Select(o => new { Type = o.Type?.ReplaceLineEndings(string.Empty), Value = o.Value?.ReplaceLineEndings(string.Empty) }),
+            config.Roles);
+
+        return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
     }
 
     /// <summary>
@@ -1173,8 +1167,9 @@ public class SSOController : ControllerBase
     /// </param>
     /// <param name="response">The data passed to the client to ensure it is the right one.</param>
     /// <returns>JSON for the client to populate information with.</returns>
-    [Consumes(MediaTypeNames.Application.Json)]
-    [Produces(MediaTypeNames.Application.Json)]
+    // No [Consumes]/[Produces]: ASP.NET Core honors content-negotiation filters only on public action
+    // methods, and this is a private helper invoked directly from AddCanonicalLink, which carries its
+    // own. The attributes were inert metadata here (#393).
     private ActionResult SamlLink(string provider, Guid jellyfinUserId, AuthResponse response)
     {
         // A disabled provider must neither create a link nor consume the assertion's one-time-use ID
@@ -1218,8 +1213,8 @@ public class SSOController : ControllerBase
     /// </param>
     /// <param name="response">The data passed to the client to ensure it is the right one.</param>
     /// <returns>JSON for the client to populate information with.</returns>
-    [Consumes(MediaTypeNames.Application.Json)]
-    [Produces(MediaTypeNames.Application.Json)]
+    // No [Consumes]/[Produces]: inert on a private helper (see SamlLink) — AddCanonicalLink owns the
+    // content negotiation (#393).
     private ActionResult OidLink(string provider, Guid jellyfinUserId, AuthResponse response)
     {
         if (string.IsNullOrEmpty(response?.Data))
