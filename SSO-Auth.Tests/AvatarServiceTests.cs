@@ -234,19 +234,15 @@ public class AvatarServiceTests
     }
 
     [Fact]
-    public async Task TrySetAsync_AllowedImage_FetchesAndStores()
+    public async Task TrySetAsync_AllowedImage_FetchesAndStoresWithDottedExtension()
     {
         // The happy path end to end over the seam: an allowed raster type within the cap is fetched and
-        // saved under the user's profile path with the media type carried through. The exact filename
-        // (the missing extension dot) is #384's concern, so it is not pinned here.
+        // saved to the resolved profile path — with a real dotted extension since #384.
         using var response = ImageResponse("image/png", new byte[] { 1, 2, 3 });
         var (service, providers, _, _) = Build(response);
 
         await service.TrySetAsync(UserNamed("alice"), AllowedUrl);
 
-        await providers.Received(1).SaveImage(
-            Arg.Any<Stream>(),
-            "image/png",
-            Arg.Is<string>(path => path.Contains("alice") && path.Contains("profile")));
+        await providers.Received(1).SaveImage(Arg.Any<Stream>(), "image/png", ProfilePath("alice", ".png"));
     }
 }
