@@ -58,7 +58,7 @@ internal static class OidcAuthorizeStateBuilder
         var subject = ResolveSubject(claimList);
 
         // Map the collected roles to privileges and merge (monotonic: only ever grants).
-        var grants = OidcRolePrivilegeMapper.Evaluate(roles, config);
+        var grants = RolePrivilegeMapper.Evaluate(roles, config);
         valid |= grants.Valid;
         var admin = grants.Admin;
         var enableLiveTv = config.EnableLiveTv || grants.EnableLiveTv;
