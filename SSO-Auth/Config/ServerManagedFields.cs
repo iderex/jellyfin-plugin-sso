@@ -53,6 +53,13 @@ internal static class ServerManagedFields
     // Links + secret: an OpenID provider carries both server-managed fields (#157/#189).
     internal static void Preserve(OidConfig incoming, OidConfig live)
     {
+        // A null provider entry (a malformed Add before #350, or a legacy store) carries no
+        // server-managed fields; skip it rather than NRE the whole config-page save.
+        if (incoming is null || live is null)
+        {
+            return;
+        }
+
         incoming.CanonicalLinks = live.CanonicalLinks;
         incoming.OidSecret = ResolveUpdatedSecret(incoming, live);
     }
@@ -60,6 +67,11 @@ internal static class ServerManagedFields
     // Links only: a SAML provider has no write-only secret (#157).
     internal static void Preserve(SamlConfig incoming, SamlConfig live)
     {
+        if (incoming is null || live is null)
+        {
+            return;
+        }
+
         incoming.CanonicalLinks = live.CanonicalLinks;
     }
 

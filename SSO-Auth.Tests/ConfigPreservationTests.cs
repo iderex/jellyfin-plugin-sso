@@ -71,6 +71,26 @@ public class ConfigPreservationTests
     }
 
     [Fact]
+    public void Preserve_NullProviderEntry_DoesNotThrow()
+    {
+        // A malformed Add before #350 could store a null provider entry; preserving with a null on
+        // either side must skip it, not NRE the whole config-page save.
+        var live = new PluginConfiguration();
+        live.OidConfigs["null-in-live"] = null;
+        live.OidConfigs["null-in-incoming"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub"] = User } };
+        live.SamlConfigs["saml-null-in-live"] = null;
+
+        var incoming = new PluginConfiguration();
+        incoming.OidConfigs["null-in-live"] = new OidConfig();
+        incoming.OidConfigs["null-in-incoming"] = null;
+        incoming.SamlConfigs["saml-null-in-live"] = new SamlConfig();
+
+        var exception = Record.Exception(() => ServerManagedFields.Preserve(incoming, live));
+
+        Assert.Null(exception);
+    }
+
+    [Fact]
     public void CanonicalLinks_AreOmittedFromJson_ButKeptInXml()
     {
         var config = new OidConfig

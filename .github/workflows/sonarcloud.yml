@@ -16,12 +16,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  analyze:
-    name: Build and analyze
+  # This job IS the required "SonarCloud quality gate" status check. It no longer relies on the
+  # SonarCloud GitHub App posting a "SonarCloud Code Analysis" decoration status (that binding is
+  # UI-only and silently stopped posting, #401, forcing every merge through an admin bypass). Instead
+  # the scanner waits for the gate to compute (sonar.qualitygate.wait) and a final step reads the gate
+  # via the public API and fails ONLY on a non-coverage condition — encoding the free-plan policy
+  # (coverage is a goal, not a blocker) directly, so a green check here is a real, self-contained gate.
+  quality-gate:
+    name: SonarCloud quality gate
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # Some PRs never receive repository secrets, so SONAR_TOKEN is absent and the scan cannot run:
+      # Dependabot PRs, and PRs opened from a fork. Skipping the scan steps (rather than the whole job)
+      # keeps this required check GREEN for those — a version bump or a fork PR has nothing we can
+      # analyze here anyway — instead of leaving the check forever pending. is_scan gates every step
+      # that needs the token.
+      - name: Decide whether to scan
+        id: gate
+        # Read the actor / fork flag from the environment, not a ${{ }} expansion inside the script, so
+        # the values can never expand into the run block as code (zizmor template-injection).
+        env:
+          ACTOR: ${{ github.actor }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          if [ "$ACTOR" = "dependabot[bot]" ] || [ "$IS_FORK" = "true" ]; then
+            echo "is_scan=false" >> "$GITHUB_OUTPUT"
+            echo "No repository secrets available (Dependabot or fork PR): skipping the Sonar scan; the gate passes."
+          else
+            echo "is_scan=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Checkout
+        if: steps.gate.outputs.is_scan == 'true'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           # A full clone lets SonarCloud attribute issues to the right commits/authors.
@@ -29,11 +55,13 @@ jobs:
           # The scanner reads git history, not the remote; drop the persisted push token.
           persist-credentials: false
       - name: Set up JDK 17
+        if: steps.gate.outputs.is_scan == 'true'
         uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
         with:
           java-version: 17
           distribution: zulu
       - name: Set up .NET
+        if: steps.gate.outputs.is_scan == 'true'
         uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: 9.0.x
@@ -42,18 +70,21 @@ jobs:
           cache: true
           cache-dependency-path: '**/packages.lock.json'
       - name: Cache SonarCloud packages
+        if: steps.gate.outputs.is_scan == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.sonar/cache
           key: ${{ runner.os }}-sonar
           restore-keys: ${{ runner.os }}-sonar
       - name: Cache SonarCloud scanner
+        if: steps.gate.outputs.is_scan == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ./.sonar/scanner
           key: ${{ runner.os }}-sonar-scanner
           restore-keys: ${{ runner.os }}-sonar-scanner
       - name: Install or update SonarCloud scanner and coverage tool
+        if: steps.gate.outputs.is_scan == 'true'
         # Always run: with a cache hit this is a fast no-op when current, but it keeps the cached
         # tools from going stale forever (the cache key never changes). dotnet-coverage collects
         # coverage at the process level, which is what works for the xUnit v3 / Microsoft Testing
@@ -63,16 +94,115 @@ jobs:
           dotnet tool update dotnet-sonarscanner --tool-path ./.sonar/scanner
           dotnet tool update dotnet-coverage --tool-path ./.sonar/scanner
       - name: Build and analyze
+        if: steps.gate.outputs.is_scan == 'true'
         env:
           # The scanner reads SONAR_TOKEN from the environment; sourcing it via env keeps the
           # token out of the script text and the process command line, and Actions masks it in logs.
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
-          ./.sonar/scanner/dotnet-sonarscanner begin \
-            /k:"iderex_jellyfin-plugin-sso" \
-            /o:"iderex" \
-            /d:sonar.exclusions="img/**" \
-            /d:sonar.cs.vscoveragexml.reportsPaths="coverage.xml"
+          # Pre-processing queries sonarcloud.io for the server version and fails the whole step on a
+          # transient blip (a GatewayTimeout here has false-red the required check). Retry only `begin`
+          # with a bounded backoff so an outage flap does not block a healthy PR; build/coverage/end
+          # stay single-shot. Exhausting the retries fails the step, which fails the gate closed — we
+          # never analyze less and pass.
+          begin() {
+            ./.sonar/scanner/dotnet-sonarscanner begin \
+              /k:"iderex_jellyfin-plugin-sso" \
+              /o:"iderex" \
+              /d:sonar.exclusions="img/**" \
+              /d:sonar.cs.vscoveragexml.reportsPaths="coverage.xml" \
+              /d:sonar.qualitygate.wait=true
+          }
+          begin_ok=false
+          for attempt in $(seq 1 4); do
+            if begin; then begin_ok=true; break; fi
+            echo "::warning::SonarCloud pre-processing (begin) attempt ${attempt} failed; retrying after backoff."
+            sleep 10
+          done
+          if [ "$begin_ok" != "true" ]; then
+            echo "::error::SonarCloud pre-processing (begin) failed after retries — failing closed."
+            exit 1
+          fi
           dotnet build --no-incremental
           ./.sonar/scanner/dotnet-coverage collect -f xml -o coverage.xml -- dotnet test --no-build
-          ./.sonar/scanner/dotnet-sonarscanner end
+          # qualitygate.wait makes `end` block until the gate is computed and exit non-zero if it is
+          # red (on ANY condition, including coverage). We tolerate ONLY that exit here — the policy
+          # step below is the single authority on coverage-only vs. a real failure. A genuine
+          # publish/auth failure does NOT slip through: `end` writes report-task.txt only after it
+          # submits the analysis, so the policy step fails closed when that file or its compute-engine
+          # task is missing or failed.
+          ./.sonar/scanner/dotnet-sonarscanner end || true
+      - name: Enforce the quality gate (coverage-only failures allowed, free-plan policy)
+        if: steps.gate.outputs.is_scan == 'true'
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Fail closed on a missing analysis: report-task.txt is written by `end` only once the
+          # analysis is submitted, so its absence means the scan never published — there is nothing
+          # to gate on and we must NOT pass the required check.
+          task_file=".sonarqube/out/.sonar/report-task.txt"
+          if [ ! -f "$task_file" ]; then
+            echo "::error::SonarCloud analysis was not published (no ${task_file}) — failing closed."
+            exit 1
+          fi
+          ce_task_id=$(sed -n 's/^ceTaskId=//p' "$task_file")
+          if [ -z "$ce_task_id" ]; then
+            echo "::error::report-task.txt carries no ceTaskId — failing closed."
+            exit 1
+          fi
+          # Resolve the compute-engine task for THIS revision to its analysisId. qualitygate.wait
+          # usually means it is already SUCCESS; poll defensively and fail closed on FAILED/CANCELED
+          # or a timeout. Public project: the token authenticates the user via token:'' basic auth.
+          analysis_id=""
+          for _ in $(seq 1 30); do
+            if task=$(curl -sf -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/ce/task?id=${ce_task_id}"); then
+              ce_status=$(printf '%s' "$task" | jq -r '.task.status')
+              case "$ce_status" in
+                SUCCESS) analysis_id=$(printf '%s' "$task" | jq -r '.task.analysisId // empty'); break ;;
+                FAILED|CANCELED) echo "::error::SonarCloud compute-engine task ${ce_status} — failing closed."; exit 1 ;;
+              esac
+            fi
+            sleep 5
+          done
+          if [ -z "$analysis_id" ]; then
+            echo "::error::Could not tie a completed analysis to this revision — failing closed."
+            exit 1
+          fi
+          # Read the gate for THIS specific analysis, never a PR/branch-scoped "latest" that could be
+          # a stale prior run. Retry transient blips with the same posture as the CE poll, so a single
+          # sonarcloud.io hiccup on this one decisive read does not false-red a healthy PR; exhausting
+          # the retries (or an empty body) fails closed.
+          status=""
+          for _ in $(seq 1 10); do
+            if status=$(curl -sf -u "${SONAR_TOKEN}:" \
+              "https://sonarcloud.io/api/qualitygates/project_status?analysisId=${analysis_id}") \
+              && [ -n "$status" ]; then
+              break
+            fi
+            status=""
+            sleep 3
+          done
+          if [ -z "$status" ]; then
+            echo "::error::Could not read the quality gate for analysis ${analysis_id} — failing closed."
+            exit 1
+          fi
+          gate=$(printf '%s' "$status" | jq -r '.projectStatus.status')
+          # A red gate is acceptable ONLY when new-coverage is the sole failing condition (the free
+          # plan hard-gates new_coverage<80 and cannot be reconfigured). Any OTHER failing condition —
+          # rating, duplication, hotspots — blocks the merge and must be fixed.
+          blocking=$(printf '%s' "$status" | jq -r \
+            '[.projectStatus.conditions[] | select(.status=="ERROR") | select(.metricKey | test("coverage") | not) | .metricKey] | join(", ")')
+          echo "SonarCloud quality gate: ${gate}"
+          # Only OK, or a coverage-only ERROR, may pass. NONE or any other status fails closed.
+          if [ "$gate" != "OK" ] && [ "$gate" != "ERROR" ]; then
+            echo "::error::Unexpected quality-gate status '${gate}' — failing closed."
+            exit 1
+          fi
+          if [ -n "$blocking" ]; then
+            echo "::error::Quality gate failed on non-coverage conditions: ${blocking}"
+            exit 1
+          fi
+          if [ "$gate" != "OK" ]; then
+            echo "::warning::Gate is ${gate} but only new-coverage conditions are failing — accepted per the documented free-plan policy (coverage is a goal, not a blocker)."
+          fi
