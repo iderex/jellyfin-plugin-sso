@@ -263,7 +263,7 @@ public class SSOController : ControllerBase
 
         string redirectUri = SsoUrlBuilder.OidRedirectUri(GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), newPath, provider);
 
-        var oidcClient = CreateOidcClient(config, redirectUri, string.Join(" ", config.OidScopes.Prepend("openid profile")));
+        var oidcClient = CreateOidcClient(config, redirectUri, BuildScopeString(config));
         var state = await oidcClient.PrepareLoginAsync().ConfigureAwait(false);
 
         if (state.IsError)
@@ -340,6 +340,13 @@ public class SSOController : ControllerBase
         record(newPath);
         return newPath;
     }
+
+    // Builds the space-delimited OpenID scope string, always leading with the base "openid profile".
+    // OidScopes is null when a provider was stored without scopes (#368, e.g. via the OID/Add API) —
+    // normalize to empty so neither the challenge nor the callback throws (an unhandled 500 on the
+    // anonymous challenge endpoint) or pads the scope string with null entries. Shared by both sites.
+    internal static string BuildScopeString(OidConfig config)
+        => string.Join(" ", (config.OidScopes ?? Array.Empty<string>()).Prepend("openid profile"));
 
     // Builds the OidcClient that both the challenge and the callback use. Pure mechanical assembly:
     // the redirect URI and the scope string are the only two inputs the endpoints derive differently,
@@ -421,14 +428,13 @@ public class SSOController : ControllerBase
 
     // Callback-side client: the redirect URI is rebuilt from the callback's own route (the IdP calls
     // back on exactly the route the authorization request advertised), so the token request's
-    // redirect_uri matches the authorization request's as RFC 6749 requires (#98). A null scopes
-    // array is tolerated here but not on the challenge side — a pre-existing asymmetry deliberately
-    // preserved.
+    // redirect_uri matches the authorization request's as RFC 6749 requires (#98). The scope string
+    // is normalized the same way as the challenge side (BuildScopeString) — both tolerate a null
+    // OidScopes identically (#368).
     private OidcClient CreateCallbackOidcClient(OidConfig config, string provider)
     {
-        var scopes = config.OidScopes == null ? new string[2] : config.OidScopes;
         var redirectUri = SsoUrlBuilder.OidCallbackRedirectUri(GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), Request.Path.Value, provider);
-        return CreateOidcClient(config, redirectUri, string.Join(" ", scopes.Prepend("openid profile")));
+        return CreateOidcClient(config, redirectUri, BuildScopeString(config));
     }
 
     // Rejects a malformed canonical base-URL override (#139) at the OID/SAML Add endpoints. These persist
