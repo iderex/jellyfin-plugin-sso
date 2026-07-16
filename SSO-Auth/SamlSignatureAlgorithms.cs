@@ -65,24 +65,7 @@ internal static class SamlSignatureAlgorithms
     /// <param name="transforms">The transform-algorithm URIs of one reference, in order.</param>
     /// <returns>True only if there is at least one transform and all are allowed.</returns>
     internal static bool AreTransformsAllowed(IEnumerable<string> transforms)
-    {
-        if (transforms == null)
-        {
-            return false;
-        }
-
-        var any = false;
-        foreach (var transform in transforms)
-        {
-            any = true;
-            if (!AllowedTransforms.Contains(transform ?? string.Empty))
-            {
-                return false;
-            }
-        }
-
-        return any;
-    }
+        => AllOnList(AllowedTransforms, transforms);
 
     /// <summary>
     /// Whether the signature method and every reference digest method are on the allowlist.
@@ -91,22 +74,26 @@ internal static class SamlSignatureAlgorithms
     /// <param name="digestMethods">The digest-method URI of every reference.</param>
     /// <returns>True only if the signature method is allowed and there is at least one reference, all of whose digests are allowed.</returns>
     internal static bool IsAllowed(string signatureMethod, IEnumerable<string> digestMethods)
-    {
-        if (!AllowedSignatureMethods.Contains(signatureMethod ?? string.Empty))
-        {
-            return false;
-        }
+        => AllowedSignatureMethods.Contains(signatureMethod ?? string.Empty)
+           && AllOnList(AllowedDigestMethods, digestMethods);
 
-        if (digestMethods == null)
+    // The fail-closed shape both the transform chain and the reference digests require: a non-null
+    // enumerable with at least one element, every element on the allowlist. A null enumerable is
+    // rejected, an empty chain is rejected (nothing was actually signed/canonicalized), and a null
+    // element normalizes to string.Empty — never on any allowlist — so it is rejected too. Short-circuits
+    // on the first off-list element. Defined once so the two call sites cannot drift apart (#395).
+    private static bool AllOnList(HashSet<string> allow, IEnumerable<string> values)
+    {
+        if (values == null)
         {
             return false;
         }
 
         var any = false;
-        foreach (var digest in digestMethods)
+        foreach (var value in values)
         {
             any = true;
-            if (!AllowedDigestMethods.Contains(digest ?? string.Empty))
+            if (!allow.Contains(value ?? string.Empty))
             {
                 return false;
             }
