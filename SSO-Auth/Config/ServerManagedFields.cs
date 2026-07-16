@@ -27,25 +27,27 @@ internal static class ServerManagedFields
     /// <param name="live">The current live configuration to read server-managed values from.</param>
     internal static void Preserve(PluginConfiguration incoming, PluginConfiguration live)
     {
-        if (incoming?.OidConfigs != null && live?.OidConfigs != null)
+        Preserve(incoming?.OidConfigs, live?.OidConfigs, Preserve);
+        Preserve(incoming?.SamlConfigs, live?.SamlConfigs, Preserve);
+    }
+
+    // One generic loop for both protocols — the maps differ only in the per-provider overload the method
+    // group resolves to. Only providers present in BOTH maps are touched (a deleted provider stays
+    // deleted; a newly added one keeps its own empty map), and a null map on either side (a legacy store,
+    // a partial post) preserves nothing rather than NRE the save.
+    private static void Preserve<T>(SerializableDictionary<string, T> incoming, SerializableDictionary<string, T> live, Action<T, T> preserveProvider)
+        where T : ProviderConfigBase
+    {
+        if (incoming is null || live is null)
         {
-            foreach (var kvp in live.OidConfigs)
-            {
-                if (incoming.OidConfigs.TryGetValue(kvp.Key, out var incomingProvider))
-                {
-                    Preserve(incomingProvider, kvp.Value);
-                }
-            }
+            return;
         }
 
-        if (incoming?.SamlConfigs != null && live?.SamlConfigs != null)
+        foreach (var kvp in live)
         {
-            foreach (var kvp in live.SamlConfigs)
+            if (incoming.TryGetValue(kvp.Key, out var incomingProvider))
             {
-                if (incoming.SamlConfigs.TryGetValue(kvp.Key, out var incomingProvider))
-                {
-                    Preserve(incomingProvider, kvp.Value);
-                }
+                preserveProvider(incomingProvider, kvp.Value);
             }
         }
     }

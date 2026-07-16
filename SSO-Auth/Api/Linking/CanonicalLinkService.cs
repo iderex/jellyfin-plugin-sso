@@ -334,20 +334,25 @@ internal sealed class CanonicalLinkService
     {
         return _configStore.Read(configuration =>
         {
-            // A provider stored with a null config object (reachable today via #350's null-body add)
-            // is skipped rather than dereferenced — same fail-closed treatment TryGetLinks gives it,
-            // so the read side cannot NRE into a 500 on a state the write side can produce.
-            var providerList = string.Equals(mode, "saml", StringComparison.Ordinal)
-                ? configuration.SamlConfigs.Where(p => p.Value?.CanonicalLinks != null).Select(p => new KeyValuePair<string, SerializableDictionary<string, Guid>>(p.Key, p.Value.CanonicalLinks))
-                : configuration.OidConfigs.Where(p => p.Value?.CanonicalLinks != null).Select(p => new KeyValuePair<string, SerializableDictionary<string, Guid>>(p.Key, p.Value.CanonicalLinks));
+            // Both arms project (name, links) tuples through ProviderConfigBase.CanonicalLinks, so the
+            // per-mode twin queries are one shape. A provider stored with a null config object (reachable
+            // today via #350's null-body add) yields null links and is skipped rather than dereferenced —
+            // same fail-closed treatment TryGetLinks gives it, so the read side cannot NRE into a 500 on
+            // a state the write side can produce.
+            var providerLinks = string.Equals(mode, "saml", StringComparison.Ordinal)
+                ? configuration.SamlConfigs.Select(p => (p.Key, p.Value?.CanonicalLinks))
+                : configuration.OidConfigs.Select(p => (p.Key, p.Value?.CanonicalLinks));
 
             var mappings = new SerializableDictionary<string, IEnumerable<string>>();
-            foreach (var provider in providerList)
+            foreach (var (provider, links) in providerLinks)
             {
-                mappings[provider.Key] = provider.Value
-                    .Where(link => link.Value == jellyfinUserId)
-                    .Select(link => link.Key)
-                    .ToList();
+                if (links != null)
+                {
+                    mappings[provider] = links
+                        .Where(link => link.Value == jellyfinUserId)
+                        .Select(link => link.Key)
+                        .ToList();
+                }
             }
 
             return mappings;
@@ -367,17 +372,10 @@ internal sealed class CanonicalLinkService
         {
             int removed = 0;
 
-            // Skip a provider stored with a null config object (reachable via #350); it holds no links to
-            // revoke, and dereferencing it would NRE into a 500 — the same fail-closed skip TryGetLinks uses.
-            foreach (var config in configuration.SamlConfigs.Values)
-            {
-                if (config?.CanonicalLinks is { } links)
-                {
-                    removed += CanonicalLinkRevoker.RemoveUser(links, userId);
-                }
-            }
-
-            foreach (var config in configuration.OidConfigs.Values)
+            // One loop over both protocols' providers (covariant Concat over the shared base). Skip a
+            // provider stored with a null config object (reachable via #350); it holds no links to revoke,
+            // and dereferencing it would NRE into a 500 — the same fail-closed skip TryGetLinks uses.
+            foreach (var config in configuration.SamlConfigs.Values.Concat<ProviderConfigBase>(configuration.OidConfigs.Values))
             {
                 if (config?.CanonicalLinks is { } links)
                 {
@@ -472,21 +470,25 @@ internal sealed class CanonicalLinkService
         switch (mode.ToLowerInvariant())
         {
             case "saml":
-            {
-                var ok = configuration.SamlConfigs.TryGetValue(provider, out var config);
-                links = config?.CanonicalLinks;
-                return ok && links != null && (!requireEnabled || config.Enabled);
-            }
+                return TryGetLinks(configuration.SamlConfigs, provider, requireEnabled, out links);
 
             case "oid":
-            {
-                var ok = configuration.OidConfigs.TryGetValue(provider, out var config);
-                links = config?.CanonicalLinks;
-                return ok && links != null && (!requireEnabled || config.Enabled);
-            }
+                return TryGetLinks(configuration.OidConfigs, provider, requireEnabled, out links);
 
             default:
                 throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'");
         }
+    }
+
+    // Generic over the provider config type (both maps hold ProviderConfigBase since #204), so the SAML
+    // and OpenID arms are one body: a missing provider or a null-valued entry returns false; with
+    // requireEnabled a disabled provider also returns false. Reads Enabled only after links != null has
+    // proven config non-null.
+    private static bool TryGetLinks<T>(SerializableDictionary<string, T> configs, string provider, bool requireEnabled, out SerializableDictionary<string, Guid> links)
+        where T : ProviderConfigBase
+    {
+        var ok = configs.TryGetValue(provider, out var config);
+        links = config?.CanonicalLinks;
+        return ok && links != null && (!requireEnabled || config.Enabled);
     }
 }
