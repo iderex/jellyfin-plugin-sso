@@ -33,8 +33,12 @@ jobs:
       # forever pending. is_scan gates every step that needs the token.
       - name: Decide whether to scan
         id: gate
+        # Read the actor from the environment, not a ${{ }} expansion inside the script, so the value
+        # can never expand into the run block as code (zizmor template-injection).
+        env:
+          ACTOR: ${{ github.actor }}
         run: |
-          if [ "${{ github.actor }}" = "dependabot[bot]" ]; then
+          if [ "$ACTOR" = "dependabot[bot]" ]; then
             echo "is_scan=false" >> "$GITHUB_OUTPUT"
             echo "Dependabot PR: skipping the Sonar scan (secrets are withheld); the gate passes."
           else
