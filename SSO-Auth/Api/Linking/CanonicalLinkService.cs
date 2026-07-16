@@ -109,13 +109,20 @@ internal sealed class CanonicalLinkService
         // as absent (dangling links are dead, not identities).
         var (subjectLink, legacyLink) = _configStore.Read(configuration =>
         {
-            // The login callbacks resolve the provider before calling, so it is normally present. If it
-            // was deleted in the race between that lookup and here, fail CLOSED: refuse rather than fall
-            // through to the adoption gate, whose create/adopt arms would otherwise mint a session for a
-            // provider that no longer exists (a missing provider must never default the login to valid).
-            if (!TryGetLinks(configuration, mode, provider, out var links))
+            // The login callbacks resolve the provider before calling, so it is normally present and
+            // enabled. If it was deleted OR DISABLED in the race between that lookup and here, fail
+            // CLOSED: refuse rather than fall through to the adoption gate, whose create/adopt arms
+            // would otherwise mint a session with the provider's pre-delete/pre-disable settings (#373,
+            // #380 — a missing provider must never default the login to valid, and the same holds for a
+            // disabled one). Residual window, documented honestly: the mint itself always runs OUTSIDE
+            // the config lock, so a delete/disable after the LAST guarded transaction of any arm — this
+            // single read on the UseExistingLink path, the link write on adopt/create, the migration on
+            // the legacy path — still mints once. The guards move the final checkpoint later; #343's
+            // "disabling takes effect immediately" stays best-effort for an in-flight request unless the
+            // lock were held through minting.
+            if (!TryGetLinks(configuration, mode, provider, requireEnabled: true, out var links))
             {
-                throw new AccountLinkForbiddenException("The SSO provider is no longer configured; refusing to resolve or create an account.");
+                throw new AccountLinkForbiddenException("The SSO provider is no longer configured or is disabled; refusing to resolve or create an account.");
             }
 
             Guid? bySubject = links.TryGetValue(canonicalKey, out var s) && _userManager.GetUserById(s) != null
@@ -251,7 +258,13 @@ internal sealed class CanonicalLinkService
 
         return _configStore.Mutate(configuration =>
         {
-            if (!TryGetLinks(configuration, mode, provider, out var links))
+            // Link creation is a GRANT of future login capability, and both callers (the self-or-admin
+            // link endpoints) already gate Enabled at the controller — so requiring it here too costs no
+            // reachable workflow and closes the same mid-flight-disable window the login-path write guard
+            // closes (#380): without it, a link could still be written for a provider disabled between
+            // the controller gate and this transaction, surviving a cleanup sweep and minting on
+            // re-enable. Steady-state result is unchanged (UnknownProvider, as the controller yields).
+            if (!TryGetLinks(configuration, mode, provider, requireEnabled: true, out var links))
             {
                 return CanonicalLinkWriteResult.UnknownProvider;
             }
@@ -285,7 +298,10 @@ internal sealed class CanonicalLinkService
         // mutate would avoid the write but reintroduce the resolve/act race this deliberately excludes.
         return _configStore.Mutate(configuration =>
         {
-            if (!TryGetLinks(configuration, mode, provider, out var links))
+            // Removal REVOKES a grant, so it must keep working on a disabled provider —
+            // disable-then-clean-up is the normal workflow, and gating a revocation on Enabled would
+            // fail-open nothing while blocking exactly that cleanup (#380). Only absence is unknown here.
+            if (!TryGetLinks(configuration, mode, provider, requireEnabled: false, out var links))
             {
                 return CanonicalLinkRemoveResult.UnknownProvider;
             }
@@ -383,12 +399,13 @@ internal sealed class CanonicalLinkService
     {
         return _configStore.Mutate(configuration =>
         {
-            // The login path resolved the provider before reaching here. If it was deleted in the race
-            // since, fail CLOSED: refuse rather than return a session with no link written. A freshly
-            // created user may be left orphaned, the same benign outcome as the #133 race loser.
-            if (!TryGetLinks(configuration, mode, provider, out var links))
+            // The login path resolved the provider before reaching here. If it was deleted or disabled
+            // in the race since, fail CLOSED: refuse rather than return a session with no link written
+            // (#373, #380). A freshly created user may be left orphaned, the same benign outcome as the
+            // #133 race loser.
+            if (!TryGetLinks(configuration, mode, provider, requireEnabled: true, out var links))
             {
-                throw new AccountLinkForbiddenException("The SSO provider is no longer configured; refusing to link an account.");
+                throw new AccountLinkForbiddenException("The SSO provider is no longer configured or is disabled; refusing to link an account.");
             }
 
             Guid? existing = links.TryGetValue(canonicalKey, out var current) && _userManager.GetUserById(current) != null
@@ -414,12 +431,13 @@ internal sealed class CanonicalLinkService
         _configStore.Mutate(configuration =>
         {
             // Migration is a SECOND transaction after the candidate-resolving read. If the provider was
-            // deleted in that window, fail CLOSED: throw rather than no-op, because the caller still
-            // holds the legacy user id from the pre-deletion snapshot and would otherwise return
-            // UseExistingLink, minting a session for a provider that no longer exists (#373).
-            if (!TryGetLinks(configuration, mode, provider, out var links))
+            // deleted or disabled in that window, fail CLOSED: throw rather than no-op, because the
+            // caller still holds the legacy user id from the pre-deletion snapshot and would otherwise
+            // return UseExistingLink, minting a session for a provider that no longer exists or was just
+            // switched off (#373, #380).
+            if (!TryGetLinks(configuration, mode, provider, requireEnabled: true, out var links))
             {
-                throw new AccountLinkForbiddenException("The SSO provider is no longer configured; refusing to migrate the account link.");
+                throw new AccountLinkForbiddenException("The SSO provider is no longer configured or is disabled; refusing to migrate the account link.");
             }
 
             // A no-op here (unlike the throwing miss above) is the GOOD idempotent case: the provider
@@ -439,13 +457,17 @@ internal sealed class CanonicalLinkService
     // UnknownProvider — finishing the #241 removal of KeyNotFoundException-as-control-flow. Returns true
     // and a non-null map only when the provider exists AND has a config object; a missing provider — or a
     // null-valued entry (reachable today via the null-body add, #350) — returns false, so the caller fails
-    // closed (UnknownProvider on admin paths, a reject on login paths) instead of dereferencing null. The
-    // map is self-healing (CanonicalLinks lazily creates and stores it), so mutating the returned map
-    // persists directly; callers must hold the config lock (Read / Mutate) while touching it. An
-    // unrecognized mode is not an unknown provider but a caller contract violation, so it throws — note the
-    // DELETE route forwards mode unvalidated (unlike the AddCanonicalLink dispatch), so that throw is
-    // reachable there; #369 tracks parsing mode once at the HTTP boundary into an internal enum.
-    private static bool TryGetLinks(PluginConfiguration configuration, string mode, string provider, out SerializableDictionary<string, Guid> links)
+    // closed (UnknownProvider on admin paths, a reject on login paths) instead of dereferencing null. With
+    // requireEnabled, a DISABLED provider is treated like an absent one — every GRANT path (the login
+    // guards and the link-create write) passes true so a provider disabled mid-flight is rejected exactly
+    // like a deleted one (#380), while removal passes false because revoking must keep working on a
+    // disabled provider (disable-then-clean-up). The map is
+    // self-healing (CanonicalLinks lazily creates and stores it), so mutating the returned map persists
+    // directly; callers must hold the config lock (Read / Mutate) while touching it. An unrecognized mode
+    // is not an unknown provider but a caller contract violation, so it throws — note the DELETE route
+    // forwards mode unvalidated (unlike the AddCanonicalLink dispatch), so that throw is reachable there;
+    // #369 tracks parsing mode once at the HTTP boundary into an internal enum.
+    private static bool TryGetLinks(PluginConfiguration configuration, string mode, string provider, bool requireEnabled, out SerializableDictionary<string, Guid> links)
     {
         switch (mode.ToLowerInvariant())
         {
@@ -453,14 +475,14 @@ internal sealed class CanonicalLinkService
             {
                 var ok = configuration.SamlConfigs.TryGetValue(provider, out var config);
                 links = config?.CanonicalLinks;
-                return ok && links != null;
+                return ok && links != null && (!requireEnabled || config.Enabled);
             }
 
             case "oid":
             {
                 var ok = configuration.OidConfigs.TryGetValue(provider, out var config);
                 links = config?.CanonicalLinks;
-                return ok && links != null;
+                return ok && links != null && (!requireEnabled || config.Enabled);
             }
 
             default:
