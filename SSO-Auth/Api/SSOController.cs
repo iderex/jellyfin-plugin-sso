@@ -464,6 +464,19 @@ public class SSOController : ControllerBase
         }
     }
 
+    // Rejects a null provider body at the Add endpoints (#350). ASP.NET model binding hands a null
+    // [FromBody] object for an empty or literal "null" JSON payload; storing it would put a null entry
+    // in the config map that then NREs the config-page save (ServerManagedFields.Preserve). Reject at
+    // the door so the store never holds a null provider — the same fail-closed posture as the other
+    // Add-endpoint gates.
+    internal static void RejectNullProviderBody(object config)
+    {
+        if (config is null)
+        {
+            throw new ArgumentException("The provider configuration body must not be empty.");
+        }
+    }
+
     // Rejects a provider name containing URI-reserved or control characters when it would register a NEW
     // provider (#336, #360): the name is appended raw to the callback URLs handed to the identity provider
     // (SsoUrlBuilder), so '%' breaks route decoding, '/' dead-ends the IdP redirect on a path no route
@@ -489,7 +502,8 @@ public class SSOController : ControllerBase
     [HttpPost("OID/Add/{provider}")]
     public void OidAdd(string provider, [FromBody] OidConfig config)
     {
-        RejectInvalidBaseUrlOverride(config?.BaseUrlOverride);
+        RejectNullProviderBody(config);
+        RejectInvalidBaseUrlOverride(config.BaseUrlOverride);
         SSOPlugin.Instance.MutateConfiguration(configuration =>
         {
             // The name guard needs the under-lock existence check (#336) and runs before any mutation,
@@ -500,7 +514,7 @@ public class SSOController : ControllerBase
             // Re-inject the server-managed fields this API cannot carry — CanonicalLinks ([JsonIgnore],
             // #157) and the write-only secret's blank-means-keep rule (#189) — through the one shared
             // ServerManagedFields.Preserve the config-page save also uses, so every write path agrees.
-            if (config != null && providerExists)
+            if (providerExists)
             {
                 ServerManagedFields.Preserve(config, existing);
             }
@@ -775,8 +789,9 @@ public class SSOController : ControllerBase
     [HttpPost("SAML/Add/{provider}")]
     public OkResult SamlAdd(string provider, [FromBody] SamlConfig newConfig)
     {
-        RejectInvalidBaseUrlOverride(newConfig?.BaseUrlOverride);
-        RejectInvalidSamlCertificate(newConfig?.SamlCertificate);
+        RejectNullProviderBody(newConfig);
+        RejectInvalidBaseUrlOverride(newConfig.BaseUrlOverride);
+        RejectInvalidSamlCertificate(newConfig.SamlCertificate);
         SSOPlugin.Instance.MutateConfiguration(configuration =>
         {
             // The name guard needs the under-lock existence check (#336) and runs before any mutation,
@@ -787,7 +802,7 @@ public class SSOController : ControllerBase
             // Preserve the server-managed canonical links (#157), as OidAdd does, through the shared
             // ServerManagedFields.Preserve: the posted config never carries them ([JsonIgnore]), so
             // re-inject the live map before the wholesale replace so an API save cannot wipe links.
-            if (newConfig != null && providerExists)
+            if (providerExists)
             {
                 ServerManagedFields.Preserve(newConfig, existing);
             }
