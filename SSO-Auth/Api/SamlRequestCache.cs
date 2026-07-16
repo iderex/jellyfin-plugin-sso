@@ -18,20 +18,49 @@ internal sealed class SamlRequestCache
     // transiently overshoot by at most the number of in-flight threads — immaterial against a
     // best-effort DoS backstop. Given the short request lifetime, real load never approaches it;
     // rate-limiting at the edge (#128) is the primary defense.
-    private const int MaxEntries = 100_000;
+    internal const int DefaultMaxEntries = 100_000;
 
     // Expired-entry sweeping is throttled to at most once per this interval. The sweep is an O(n)
     // scan; running it on every anonymous challenge would amplify a flood into CPU load. Throttling
     // is safe because it is only memory reclamation — TryConsume independently rejects an expired
     // entry via its own expiry check, so a not-yet-swept entry never grants a login.
-    private static readonly TimeSpan PruneInterval = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan DefaultPruneInterval = TimeSpan.FromMinutes(1);
+
+    private readonly int _maxEntries;
 
     private readonly ConcurrentDictionary<string, Entry> _outstanding = new(StringComparer.Ordinal);
 
-    // Throttles the sweep to one run per PruneInterval; the gate owns the atomic cursor and self-heals
+    // Throttles the sweep to one run per prune interval; the gate owns the atomic cursor and self-heals
     // a backward wall-clock step (the hand-rolled predecessor stalled until the clock re-passed its
     // cursor). See PruneExpired.
-    private readonly IntervalGate _pruneGate = new(PruneInterval);
+    private readonly IntervalGate _pruneGate;
+
+    // Throttles the capacity-full warning to one signal per interval (CWE-400): under a flood every
+    // refused registration would otherwise emit a warning, amplifying the flood into unbounded log
+    // volume. Mirrors OidcStateStore so the SAML refusal has the same observability (#327 review).
+    private readonly IntervalGate _capWarnGate;
+
+    // Per-client occupancy sub-cap (#327): bounds how much of the global budget one client key can hold,
+    // so a single anonymous source cannot fill the cache and deny every other login's callback.
+    private readonly PerClientBudgetLimiter _perClient;
+
+    internal SamlRequestCache()
+        : this(DefaultMaxEntries, DefaultPruneInterval)
+    {
+    }
+
+    // Test constructor: a small cap makes the global-cap and per-client sub-cap paths reachable in unit
+    // tests (the production values are unreachable there).
+    internal SamlRequestCache(int maxEntries, TimeSpan pruneInterval)
+    {
+        _maxEntries = maxEntries;
+        _pruneGate = new IntervalGate(pruneInterval);
+        _capWarnGate = new IntervalGate(pruneInterval);
+        _perClient = PerClientBudgetLimiter.FromGlobalCap(maxEntries);
+    }
+
+    /// <summary>Gets the live entry count. Test-only, like Clear.</summary>
+    internal int Count => _outstanding.Count;
 
     /// <summary>
     /// Records an issued request ID as outstanding until <paramref name="expiryUtc"/>, together with the
@@ -42,25 +71,41 @@ internal sealed class SamlRequestCache
     /// <param name="bindingId">The browser-binding id set as a cookie at the challenge (may be empty).</param>
     /// <param name="expiryUtc">When the entry may be evicted (the request's validity horizon).</param>
     /// <param name="nowUtc">The current time.</param>
-    internal void Register(string requestId, string bindingId, DateTime expiryUtc, DateTime nowUtc)
+    /// <param name="clientKey">The normalized client key for the per-client sub-cap (#327), or null to exempt.</param>
+    /// <param name="shouldWarnCapacity">True when the caller should emit the throttled capacity warning (a cap refusal, at most once per interval).</param>
+    /// <returns>True if the entry was registered; false if refused (blank ID, per-client sub-cap, or global cap).</returns>
+    internal bool Register(string requestId, string bindingId, DateTime expiryUtc, DateTime nowUtc, string clientKey, out bool shouldWarnCapacity)
     {
         PruneExpired(nowUtc);
+        shouldWarnCapacity = false;
         if (string.IsNullOrEmpty(requestId))
         {
-            return;
+            return false;
+        }
+
+        // Per-client sub-cap (#327): reserve before the global insert so one source cannot fill the
+        // cache and lock out everyone. A null key is exempt (the shared proxy/private-source bucket).
+        if (!_perClient.TryReserve(clientKey))
+        {
+            shouldWarnCapacity = _capWarnGate.TryEnter(nowUtc);
+            return false;
         }
 
         // At the cap, refuse the NEW registration rather than evicting an existing one: a flood of
         // fresh challenges must not displace a user already mid-login (whose entry we would otherwise
         // drop, failing their callback). A refused challenge simply won't correlate — that one login
-        // fails closed, which under a flood is overwhelmingly attacker traffic. Overwriting an
-        // already-present key (a re-registered id) stays allowed.
-        if (_outstanding.Count >= MaxEntries && !_outstanding.ContainsKey(requestId))
+        // fails closed. TryAdd (not the indexer) also refuses a DUPLICATE id, so this rollback stays
+        // leak-free even if two registrations of the same CSPRNG id ever raced (the loser's TryAdd
+        // fails and releases its reservation); request ids are fresh, so a real duplicate never occurs.
+        if ((_outstanding.Count >= _maxEntries && !_outstanding.ContainsKey(requestId))
+            || !_outstanding.TryAdd(requestId, new Entry(expiryUtc, bindingId ?? string.Empty, clientKey)))
         {
-            return;
+            _perClient.Release(clientKey);
+            shouldWarnCapacity = _capWarnGate.TryEnter(nowUtc);
+            return false;
         }
 
-        _outstanding[requestId] = new Entry(expiryUtc, bindingId ?? string.Empty);
+        return true;
     }
 
     /// <summary>
@@ -82,17 +127,27 @@ internal sealed class SamlRequestCache
             return false;
         }
 
-        if (_outstanding.TryRemove(requestId, out var entry) && entry.ExpiryUtc > nowUtc)
+        if (_outstanding.TryRemove(requestId, out var entry))
         {
-            bindingId = entry.BindingId;
-            return true;
+            // The slot is freed whether or not the entry was still valid — release on any successful
+            // removal (the single winner of TryRemove), so the client's sub-cap slot never leaks (#327).
+            _perClient.Release(entry.ClientKey);
+            if (entry.ExpiryUtc > nowUtc)
+            {
+                bindingId = entry.BindingId;
+                return true;
+            }
         }
 
         return false;
     }
 
     /// <summary>Test-only: drops all outstanding entries so process-wide state cannot leak between tests.</summary>
-    internal void Clear() => _outstanding.Clear();
+    internal void Clear()
+    {
+        _outstanding.Clear();
+        _perClient.Clear();
+    }
 
     // Drops expired entries, at most once per PruneInterval. Enumerating a ConcurrentDictionary yields
     // a safe moving snapshot and TryRemove is atomic, so this is correct under concurrent
@@ -108,16 +163,19 @@ internal sealed class SamlRequestCache
 
         foreach (var kvp in _outstanding)
         {
-            if (kvp.Value.ExpiryUtc <= nowUtc)
+            // Release only on the winning removal (out overload) so a concurrent consume does not
+            // double-release the client's slot (#327).
+            if (kvp.Value.ExpiryUtc <= nowUtc && _outstanding.TryRemove(kvp.Key, out var removed))
             {
-                _outstanding.TryRemove(kvp.Key, out _);
+                _perClient.Release(removed.ClientKey);
             }
         }
     }
 
-    // One outstanding AuthnRequest: when it expires, and the browser-binding id minted alongside it at
-    // the challenge (#415). The binding id ties the eventual response to the browser that started the
-    // flow; it is returned on consume so the session-mint endpoint can require the request's cookie to
-    // match. Empty for entries registered before browser binding existed (treated as unbound).
-    private readonly record struct Entry(DateTime ExpiryUtc, string BindingId);
+    // One outstanding AuthnRequest: when it expires, the browser-binding id minted alongside it at the
+    // challenge (#415), and the client key that reserved its per-client budget slot (#327, null for an
+    // exempt source). The binding id ties the eventual response to the browser that started the flow; it
+    // is returned on consume so the session-mint endpoint can require the request's cookie to match.
+    // Empty binding for entries registered before browser binding existed (treated as unbound).
+    private readonly record struct Entry(DateTime ExpiryUtc, string BindingId, string ClientKey);
 }

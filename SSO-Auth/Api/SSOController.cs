@@ -275,7 +275,10 @@ public class SSOController : ControllerBase
         // IsLinking tracks whether this is a linking request rather than a login. The state value
         // is a fresh CSPRNG token, so a collision is effectively impossible; a refusal is almost
         // always the capacity backstop under a flood, and the store throttles its warning signal.
-        if (!StateStore.TryAdd(state, provider, isLinking, DateTime.Now, bindingId, out var shouldWarnCapacity))
+        // The client key bounds how much of the store one source can occupy (#327); a proxy/private
+        // source normalizes to null and is exempt.
+        var clientKey = SsoRateLimiter.NormalizeClientKey(HttpContext.Connection.RemoteIpAddress);
+        if (!StateStore.TryAdd(state, provider, isLinking, DateTime.Now, bindingId, clientKey, out var shouldWarnCapacity))
         {
             if (shouldWarnCapacity)
             {
@@ -324,7 +327,7 @@ public class SSOController : ControllerBase
     // random request id from the emitted AuthnRequest. Same test-only surface as SeedOidStateForTests
     // (internal, InternalsVisibleTo, no endpoint/DI); never reachable in production.
     internal static void SeedSamlRequestForTests(string provider, string requestId, string bindingId, DateTime expiryUtc) =>
-        SamlRequests.Register(ProviderScopedKey.For(provider, requestId), bindingId, expiryUtc, DateTime.UtcNow);
+        SamlRequests.Register(ProviderScopedKey.For(provider, requestId), bindingId, expiryUtc, DateTime.UtcNow, clientKey: null, out _);
 
     // Reads a provider's config under the config lock, so an anonymous login-path lookup does not race an
     // admin Add/Del mutating the live provider dictionary in place — a Dictionary read-during-write is
@@ -800,11 +803,31 @@ public class SSOController : ControllerBase
         if (!isLinking)
         {
             var bindingId = AuthorizeStateBinding.NewId();
-            SamlRequests.Register(
-                ProviderScopedKey.For(provider, request.Id),
-                bindingId,
-                DateTime.UtcNow + SamlRequestLifetime,
-                DateTime.UtcNow);
+
+            // The client key bounds how much of the request cache one source can occupy (#327); a
+            // proxy/private source normalizes to null and is exempt.
+            var clientKey = SsoRateLimiter.NormalizeClientKey(HttpContext.Connection.RemoteIpAddress);
+            if (!SamlRequests.Register(
+                    ProviderScopedKey.For(provider, request.Id),
+                    bindingId,
+                    DateTime.UtcNow + SamlRequestLifetime,
+                    DateTime.UtcNow,
+                    clientKey,
+                    out var shouldWarnCapacity))
+            {
+                // The per-client sub-cap or the global cap refused this login's outstanding-request
+                // entry (#327). Fail closed HERE rather than redirect to the IdP for a login that could
+                // then only be refused at the callback (no correlation entry). The store throttles the
+                // capacity warning to one signal per interval so a flood cannot amplify into log volume
+                // (CWE-400) — parity with the OpenID challenge refusal.
+                if (shouldWarnCapacity)
+                {
+                    _logger.LogWarning("SAML request refused for provider {Provider}: the per-client sub-cap or the outstanding-request cache is at capacity (warning throttled).", provider?.ReplaceLineEndings(string.Empty));
+                }
+
+                return ReturnError(StatusCodes.Status500InternalServerError, "Could not start login; please retry.");
+            }
+
             Response.Cookies.Append(
                 AuthorizeStateBinding.SamlCookieName,
                 bindingId,
