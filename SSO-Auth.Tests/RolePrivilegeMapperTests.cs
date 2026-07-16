@@ -177,6 +177,26 @@ public class RolePrivilegeMapperTests
     }
 
     [Fact]
+    public void FolderRolesEnabled_ConfiguredWhitespaceDoesNotMatchAnIdenticallyPaddedRole()
+    {
+        // #367 edge case, on the record: only the CONFIG side is trimmed and the IdP role is compared
+        // raw, so a configured "  media  " matches the trimmed "media" (above) but NOT a raw, identically
+        // padded "  media  " from the IdP. The old SAML path (exact, un-trimmed) matched this
+        // doubly-padded case; the reconciliation deliberately no longer does. This is an implausible
+        // config (both sides accidentally padded the same way) and it degrades access, never grants more.
+        var config = Saml(c =>
+        {
+            c.EnableFolderRoles = true;
+            c.FolderRoleMapping = new List<FolderRoleMap>
+            {
+                new FolderRoleMap { Role = "  media  ", Folders = new List<string> { "movies" } },
+            };
+        });
+
+        Assert.Empty(RolePrivilegeMapper.Evaluate(new[] { "  media  " }, config).Folders);
+    }
+
+    [Fact]
     public void FolderRolesEnabled_AccumulatesAcrossRolesAndMaps_PreservingDuplicates()
     {
         var config = Oid(c =>
