@@ -18,7 +18,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 /// structure fails CI. The rules encode structural invariants that hold today and are part of the target;
 /// as each migration step lands a new structural property, add the rule that locks it in here so it
 /// cannot regress. Most rules are type-level (reflection over the production assembly); call-level
-/// invariants otherwise stay guarded by CodeQL/CodeRabbit and the pinning tests. Two call-level
+/// invariants otherwise stay guarded by CodeQL and the pinning tests. Two call-level
 /// properties are locked in as source scans — the CONTROLLER touches no provider link map directly
 /// (<see cref="Controller_NeverTouchesProviderLinkMaps"/>) and no raw socket/DNS surface
 /// (<see cref="Controller_NeverTouchesRawSocketsOrDns"/>) — because the #372 extraction confines
@@ -160,7 +160,7 @@ public class ArchitectureConformanceTests
         // through that shared Preserve, so the CONTROLLER has ZERO direct CanonicalLinks access and the
         // earlier re-injection exemption is retired. This is a call-level property, so it is a source scan
         // rather than a reflection rule (the one exception to the "call-level invariants stay with
-        // CodeQL/CodeRabbit" note in the class summary); a missing source file fails the test loudly.
+        // CodeQL" note in the class summary); a missing source file fails the test loudly.
         var controllerSource = File.ReadAllLines(Path.Combine(RepoRoot(), "SSO-Auth", "Api", "SSOController.cs"));
         var linkMapLines = controllerSource
             .Select((line, index) => (Text: line.Trim(), Number: index + 1))

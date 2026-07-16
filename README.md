@@ -35,7 +35,7 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 >
 > ### How this project is developed
 >
-> This is a **security-sensitive login path**, so every change — even a one-liner — runs the same gated flow: a GitHub **issue** first, then a short-lived work branch, an implementation with **tests** (a negative test for every fail-closed branch), an **adversarial security review** for anything touching the login path or crypto, and a pull request that must pass **CI** (build with warnings-as-errors, the full test suite, format and conformance checks), **CodeQL**, **SonarCloud**, and a **CodeRabbit** review whose every finding is either fixed or answered with a written reason — before it merges. Security work always outranks feature work, and the code stays minimal and self-documenting.
+> This is a **security-sensitive login path**, so every change — even a one-liner — runs the same gated flow: a GitHub **issue** first, then a short-lived work branch, an implementation with **tests** (a negative test for every fail-closed branch), an **adversarial security review** for anything touching the login path or crypto, and a pull request that must pass **CI** (build with warnings-as-errors, the full test suite, format and conformance checks), **CodeQL**, and **SonarCloud** — before it merges. Security work always outranks feature work, and the code stays minimal and self-documenting.
 >
 > If you contribute, please work the same way: understand and own every line you propose, and be ready to explain what it does and why. 🙂
 
