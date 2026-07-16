@@ -83,6 +83,14 @@ public class SamlSignatureAlgorithmsTests
         Assert.False(SamlSignatureAlgorithms.IsAllowed("urn:made:up", new[] { DigestSha256 }));
     }
 
+    [Fact]
+    public void IsAllowed_DisallowedSignatureWithNullDigests_ReturnsFalseWithoutThrowing()
+    {
+        // The signature method is checked first and short-circuits, so a disallowed signature with a
+        // null digest enumerable fails closed rather than dereferencing the null (#395).
+        Assert.False(SamlSignatureAlgorithms.IsAllowed("urn:made:up", null!));
+    }
+
     // --- Canonicalization allowlist (#137) ---
 
     private const string ExcC14n = "http://www.w3.org/2001/10/xml-exc-c14n#";
