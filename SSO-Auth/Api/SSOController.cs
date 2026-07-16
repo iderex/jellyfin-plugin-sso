@@ -914,46 +914,39 @@ public class SSOController : ControllerBase
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
 
-        // Correlate the response to an AuthnRequest this server issued (#156, #415). The outstanding
-        // entry is claimed once here (the session-minting endpoint), like the replay check, so its
-        // InResponseTo is one-time-use; a solicited response yields the browser-binding id recorded at
-        // the challenge. The claim runs regardless of ValidateInResponseTo so the browser binding below
-        // protects SP-initiated logins even when the opt-in solicited-only mode is off.
+        // Correlate the response to an AuthnRequest this server issued (#156, #415), and enforce the
+        // browser binding for a solicited login. A NON-EMPTY InResponseTo means the response claims to
+        // answer a request this server issued, so it must actually correlate to a live outstanding
+        // request AND carry that request's binding cookie — anything less fails closed. Crucially, a
+        // non-empty InResponseTo whose entry is gone (expired past the 15-minute window, evicted at the
+        // cap, lost to a restart or a non-sticky multi-node hop) is a LOST correlation, not an
+        // unsolicited response: treating it as unsolicited would let a signature-valid response mint a
+        // session with no binding check when ValidateInResponseTo is off, which is exactly the
+        // forced-login bypass the binding exists to close (login validity must never default to true).
         //
-        // Unlike the OpenID state (#326), the binding is checked AFTER the claim rather than before, and
-        // that is safe here: the response already passed signature validation above, and the InResponseTo
-        // is read from that validated document, so an attacker cannot mint a signature-valid response
-        // carrying a victim's request id to burn their outstanding entry. The OpenID state token is not
-        // signed by anyone who holds it, so it must be checked before the atomic remove; a SAML
-        // InResponseTo cannot be forged onto a valid response, so no in-flight entry can be burned by a
-        // wrong-browser hit.
+        // The binding is checked AFTER the atomic claim (unlike the OpenID state, #326) and that is safe:
+        // the response already passed signature validation above and the InResponseTo is read from that
+        // validated document, so an attacker cannot mint a signature-valid response carrying a victim's
+        // request id to burn their outstanding entry. The cookie is checked here (the same-origin auth
+        // endpoint), not at the cross-site ACS POST which would not carry a SameSite=Lax cookie.
         var inResponseTo = samlResponse.GetInResponseTo();
-        var requestKey = ProviderScopedKey.For(provider, inResponseTo);
-        bool solicited = SamlRequests.TryConsume(requestKey, DateTime.UtcNow, out var storedBindingId);
-
-        // Browser binding (#415): a solicited response must complete in the browser that started the
-        // flow. When a binding id was recorded — every login challenge since #415 — require the request
-        // to carry the matching cookie, failing closed on an absent or mismatched one. This defeats
-        // SP-initiated forced login / session fixation: a response lured into a victim's browser lacks
-        // the attacker's binding cookie. The cookie is checked here (the same-origin auth endpoint), not
-        // at the cross-site ACS POST which would not carry a SameSite=Lax cookie. An entry with no
-        // binding id predates this protection (an in-flight login across the upgrade) and is deferred to
-        // the InResponseTo policy below rather than broken.
-        if (solicited && !string.IsNullOrEmpty(storedBindingId)
-            && !AuthorizeStateBinding.Matches(storedBindingId, Request.Cookies[AuthorizeStateBinding.SamlCookieName]))
+        if (!string.IsNullOrEmpty(inResponseTo))
         {
-            _logger.LogWarning("SAML login denied: the response was not completed in the browser that initiated the login (binding mismatch).");
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
+            var requestKey = ProviderScopedKey.For(provider, inResponseTo);
+            if (!SamlRequests.TryConsume(requestKey, DateTime.UtcNow, out var storedBindingId)
+                || !AuthorizeStateBinding.Matches(storedBindingId, Request.Cookies[AuthorizeStateBinding.SamlCookieName]))
+            {
+                _logger.LogWarning("SAML login denied: a solicited response did not correlate to a live outstanding request from the initiating browser (binding mismatch, expiry, or lost correlation).");
+                return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
+            }
         }
-
-        // Solicited-only mode (#156, opt-in): with the flag on, an unsolicited (IdP-initiated) response —
-        // one with no matching outstanding request — is refused. The correlation was already claimed
-        // above, so this only decides the unsolicited case. The rejection is a client-caused 400 in the
-        // uniform SAML body — never a 500, and the old body that disclosed the InResponseTo correlation
-        // to the submitter is gone (the warning log keeps the diagnosis).
-        if (config.ValidateInResponseTo && !solicited)
+        else if (config.ValidateInResponseTo)
         {
-            _logger.LogWarning("SAML login denied: the response was not solicited by this server (unknown, expired, or already-used InResponseTo).");
+            // No InResponseTo at all: a genuinely unsolicited (IdP-initiated) response. It is refused
+            // only when the opt-in solicited-only mode is on; otherwise it proceeds — unchanged and
+            // non-breaking for IdP-initiated deployments. The rejection is a client-caused 400 in the
+            // uniform SAML body, never a 500, and the diagnosis stays in the warning log.
+            _logger.LogWarning("SAML login denied: the response was not solicited by this server (no InResponseTo).");
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
 

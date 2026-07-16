@@ -207,6 +207,14 @@ configuration. Points worth knowing:
   OpenID binding already imposes; serve SSO over HTTPS.
 - **Complete the login in the same browser that started it**, and serve the whole flow from one origin
   — the same two consequences as the OpenID binding below.
+- **Single instance or sticky sessions, within ~15 minutes.** A response that carries an `InResponseTo`
+  (every SP-initiated response does) must correlate to the outstanding request the challenge recorded,
+  which lives in an **in-process** store — so it must be answered on the same instance that issued it
+  and within the request's ~15-minute lifetime. A response whose outstanding request is gone (expired,
+  or the challenge landed on a different instance behind a load balancer without session affinity) is
+  refused rather than waved through, because a lost correlation must fail closed. Run a single Jellyfin
+  instance or enable sticky sessions for SP-initiated SAML. (An IdP-initiated response carries no
+  `InResponseTo`, so this does not apply to it.)
 - **Scope, and how to close it fully.** Binding covers _solicited_ responses (those answering a request
   this plugin issued). An _unsolicited_ (IdP-initiated) response carries no matching request, so binding
   cannot bind it; if your identity provider can issue unsolicited responses, enable

@@ -219,6 +219,35 @@ public class SSOControllerSamlAuthTests
     }
 
     [Fact]
+    public async Task SamlAuth_InResponseToPresentButNoOutstandingRequest_RejectsEvenWithValidateOff()
+    {
+        // The bypass this fix closes: a response that DOES carry an InResponseTo (so it claims to be
+        // solicited) but whose outstanding entry is gone — expired, evicted, lost to a restart or a
+        // non-sticky multi-node hop — must NOT be treated as unsolicited and waved through. Without an
+        // entry there is no binding to check, so a lost correlation fails closed even when
+        // ValidateInResponseTo is off (the default). Otherwise an attacker could defeat the binding by
+        // submitting a signature-valid response after its 15-minute window elapsed.
+        var fixture = SamlTestFactory.Create(nameId: "alice", inResponseTo: "_authnreq-expired");
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig
+        {
+            Enabled = true,
+            SamlCertificate = fixture.CertificateBase64,
+            DoNotValidateAudience = true,
+            EnableAuthorization = false,
+            AllowExistingAccountLink = false,
+            // ValidateInResponseTo deliberately left off (the default) — the reject must not depend on it.
+        });
+        // No SeedSamlRequestForTests: the outstanding entry does not exist.
+
+        var result = Assert.IsType<ContentResult>(
+            await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = fixture.EncodeResponse() }));
+
+        Assert.Equal(400, result.StatusCode);
+        Assert.Equal("SAML response validation failed", result.Content);
+        await harness.UserManager.DidNotReceive().CreateUserAsync(Arg.Any<string>());
+    }
+
+    [Fact]
     public async Task SamlAuth_UnsolicitedResponse_NoBindingRequired_StillProvisions()
     {
         // IdP-initiated / unsolicited: no matching outstanding request, so browser binding imposes no
