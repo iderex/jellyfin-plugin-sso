@@ -2,11 +2,9 @@
 
 > [!WARNING]
 >
-> ## 🟠 Semi-halted — do NOT install this on a production system
+> ## 🟠 In development — do NOT install this on a production system
 >
-> **This project is semi-halted.** iderex, who revived it, currently isn't in a position to carry it forward, so **[TheRealStroopwafel](https://github.com/TheRealStroopwafel)** has taken it on and now continues its development.
->
-> This plugin is still at the **In-Development** stage — the first rung of its maturity ladder (**In-Development → Alpha → Beta → Release Candidate → Full Release**; see the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap)). It exists **exclusively for developers to test** — nothing else. Under **no circumstances** should it be installed on a production system or put in front of a real Jellyfin instance with real user accounts: it is a login path still under reconstruction, hardened slowly and with long pauses, and you must expect **breaking changes, incomplete features, and security gaps that are still open**. Wait for a **Full Release** before using it anywhere that matters.
+> This plugin is at the **In-Development** stage — the first rung of its maturity ladder (**In-Development → Alpha → Beta → Release Candidate → Full Release**; see the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap)). It exists **exclusively for developers to test** — nothing else. Under **no circumstances** should it be installed on a production system or put in front of a real Jellyfin instance with real user accounts: it is a login path still under reconstruction, and you must expect **breaking changes, incomplete features, and security gaps that are still open**. Wait for a **Full Release** before using it anywhere that matters.
 
 <h1 align="center">Jellyfin SSO Plugin</h1>
 
@@ -29,15 +27,17 @@
 Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia, authentik, Entra ID, Google, and more — over <b>OpenID&nbsp;Connect</b> or <b>SAML&nbsp;2.0</b>, instead of a separate Jellyfin password.
 </p>
 
-> ### 🔁 Revival — handed over, continuing slowly
+> ### 🔁 Revival
 >
-> This is a revival of [**9p4/jellyfin-plugin-sso**](https://github.com/9p4/jellyfin-plugin-sso), which its original author has since archived. It continued from the last upstream release (**4.0.0.x**, Jellyfin 10.11 / .NET 9) and was taken forward **security-first** — an automated test suite was added and the login path hardened step by step. iderex has since stepped back, and **[TheRealStroopwafel](https://github.com/TheRealStroopwafel)** now continues the work at a slow, best-effort pace. Huge thanks to the original author and contributors for the foundation.
+> This is a revival of [**9p4/jellyfin-plugin-sso**](https://github.com/9p4/jellyfin-plugin-sso), which its original author has since archived. It continues from the last upstream release (**4.0.0.x**, Jellyfin 10.11 / .NET 9) and is taken forward **security-first**. Its hardened sibling project, **`jellyfin-plugin-sso-V2`** (private), is the reference this repository draws on — ported across deliberately, one reviewed change at a time. Huge thanks to the original author and contributors for the foundation.
 >
-> Its hardened sibling project, **`jellyfin-plugin-sso-V2`** (private), is the reference this repository draws on — a good deal still remains to be ported across from there, deliberately, one reviewed change at a time as time allows.
->
-> **Status:** **In-Development**, slow — the first stage of the maturity ladder. See the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap) for what each stage gates, and [Installing](#installing) — for now the only path is building from source; a packaged release would only follow once the security-hardening pass has advanced the maturity stages.
+> **Status:** **In-Development** — the first stage of the maturity ladder. See the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap) for what each stage gates, and [Installing](#installing) — for now the only path is building from source; a packaged release follows once the security-hardening pass has advanced the maturity stages.
 
-> **On code, please don't "vibe-code" it.** This is a security-sensitive login path. If you contribute, understand and own every line you propose, and be ready to explain what it does and why. 🙂
+> ### How this project is developed
+>
+> This is a **security-sensitive login path**, so every change — even a one-liner — runs the same gated flow: a GitHub **issue** first, then a short-lived work branch, an implementation with **tests** (a negative test for every fail-closed branch), an **adversarial security review** for anything touching the login path or crypto, and a pull request that must pass **CI** (build with warnings-as-errors, the full test suite, format and conformance checks), **CodeQL**, **SonarCloud**, and a **CodeRabbit** review whose every finding is either fixed or answered with a written reason — before it merges. Security work always outranks feature work, and the code stays minimal and self-documenting.
+>
+> If you contribute, please work the same way: understand and own every line you propose, and be ready to explain what it does and why. 🙂
 
 ## Features
 
