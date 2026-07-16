@@ -336,7 +336,7 @@ public class SSOController : ControllerBase
             return currentNewPath;
         }
 
-        var newPath = Request.Path.Value.Contains("/start/", StringComparison.InvariantCultureIgnoreCase);
+        var newPath = ChallengePath.IsNewPath(Request.Path.Value);
         record(newPath);
         return newPath;
     }
