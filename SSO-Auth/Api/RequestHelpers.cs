@@ -27,21 +27,16 @@ public static class RequestHelpers
     /// <param name="authContext">Instance of the <see cref="IAuthorizationContext"/> interface.</param>
     /// <param name="requestContext">The <see cref="HttpRequest"/>.</param>
     /// <param name="userId">The user id.</param>
-    /// <param name="restrictUserPreferences">Whether to restrict the user preferences.</param>
     /// <returns>A <see cref="bool"/> whether the user can update the entry.</returns>
-    internal static async Task<bool> AssertCanUpdateUser(IAuthorizationContext authContext, HttpRequest requestContext, Guid userId, bool restrictUserPreferences)
+    internal static async Task<bool> AssertCanUpdateUser(IAuthorizationContext authContext, HttpRequest requestContext, Guid userId)
     {
         var auth = await authContext.GetAuthorizationInfo(requestContext).ConfigureAwait(false);
 
         var authenticatedUser = auth.User;
 
-        // If they're going to update the record of another user, they must be an administrator
-        if ((!userId.Equals(auth.UserId) && !authenticatedUser.HasPermission(PermissionKind.IsAdministrator))
-            || (restrictUserPreferences && !authenticatedUser.EnableUserPreferenceAccess))
-        {
-            return false;
-        }
-
-        return true;
+        // Updating the record of another user requires an administrator; every caller edits user
+        // preferences, so the upstream restrictUserPreferences flag is folded in as always-on here.
+        return (userId.Equals(auth.UserId) || authenticatedUser.HasPermission(PermissionKind.IsAdministrator))
+            && authenticatedUser.EnableUserPreferenceAccess;
     }
 }

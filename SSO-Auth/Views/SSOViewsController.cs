@@ -1,9 +1,6 @@
 using System;
-using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using MediaBrowser.Model;
-using MediaBrowser.Model.Plugins;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using Microsoft.Net.Http.Headers;
@@ -46,38 +43,27 @@ public class SSOViewsController : ControllerBase
     [HttpGet("{viewName}")]
     public ActionResult GetView([FromRoute] string viewName)
     {
-        return ServeView(viewName);
-    }
-
-    private ActionResult ServeView(string viewName)
-    {
         if (SSOPlugin.Instance == null)
         {
             return BadRequest("No plugin instance found");
         }
 
-        IEnumerable<PluginPageInfo> pages = SSOPlugin.Instance.GetViews();
-
-        if (pages == null)
-        {
-            return NotFound("Pages is null or empty");
-        }
-
-        var view = pages.FirstOrDefault(pageInfo => string.Equals(pageInfo.Name, viewName, StringComparison.Ordinal), null);
+        var view = SSOPlugin.Instance.GetViews()
+            .FirstOrDefault(pageInfo => string.Equals(pageInfo.Name, viewName, StringComparison.Ordinal));
 
         if (view == null)
         {
             return NotFound("No matching view found");
         }
-#nullable enable
-        Stream? stream = SSOPlugin.Instance.GetType().Assembly.GetManifestResourceStream(view.EmbeddedResourcePath);
+
+        var stream = SSOPlugin.Instance.GetType().Assembly.GetManifestResourceStream(view.EmbeddedResourcePath);
 
         if (stream == null)
         {
             _logger.LogError("Failed to get resource {Resource}", view.EmbeddedResourcePath);
             return NotFound();
         }
-#nullable disable
+
         return File(stream, MimeTypes.GetMimeType(view.EmbeddedResourcePath), lastModified: null, entityTag: AssetETag);
     }
 }

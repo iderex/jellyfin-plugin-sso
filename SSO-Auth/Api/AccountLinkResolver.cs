@@ -23,25 +23,9 @@ internal enum AccountLinkAction
 /// <summary>
 /// A resolved account-link decision: the action and the Jellyfin user id it applies to.
 /// </summary>
-internal readonly struct AccountLinkDecision
-{
-    /// <summary>
-    /// Initializes a new instance of the <see cref="AccountLinkDecision"/> struct.
-    /// </summary>
-    /// <param name="action">The action to take.</param>
-    /// <param name="userId">The Jellyfin user id the action applies to (empty when creating/rejecting).</param>
-    internal AccountLinkDecision(AccountLinkAction action, Guid userId)
-    {
-        Action = action;
-        UserId = userId;
-    }
-
-    /// <summary>Gets the action to take.</summary>
-    internal AccountLinkAction Action { get; }
-
-    /// <summary>Gets the Jellyfin user id the action applies to.</summary>
-    internal Guid UserId { get; }
-}
+/// <param name="Action">The action to take.</param>
+/// <param name="UserId">The Jellyfin user id the action applies to (empty when creating/rejecting).</param>
+internal readonly record struct AccountLinkDecision(AccountLinkAction Action, Guid UserId);
 
 /// <summary>
 /// Pure decision logic mapping an SSO identity to a Jellyfin account. An identity already linked to

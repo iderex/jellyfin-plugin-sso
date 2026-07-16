@@ -199,6 +199,9 @@ public abstract class ProviderConfigBase
 /// <summary>
 /// The configuration required for a SAML flow.
 /// </summary>
+// Load-bearing, not copy-paste cruft: this names the element SerializableDictionary.WriteXml persists
+// via new XmlSerializer(typeof(TValue)); removing it renames that element and every stored provider
+// entry on disk stops deserializing.
 [XmlRoot("PluginConfiguration")]
 public class SamlConfig : ProviderConfigBase
 {
@@ -249,6 +252,9 @@ public class SamlConfig : ProviderConfigBase
 /// <summary>
 /// The configuration required for a OpenID flow.
 /// </summary>
+// Load-bearing, not copy-paste cruft: this names the element SerializableDictionary.WriteXml persists
+// via new XmlSerializer(typeof(TValue)); removing it renames that element and every stored provider
+// entry on disk stops deserializing.
 [XmlRoot("PluginConfiguration")]
 public class OidConfig : ProviderConfigBase
 {

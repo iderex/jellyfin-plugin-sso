@@ -14,14 +14,6 @@ public class SerializableDictionary<TKey, TValue>
     : Dictionary<TKey, TValue>, IXmlSerializable
 {
     /// <summary>
-    /// Initializes a new instance of the <see cref="SerializableDictionary{TKey,TValue}"/> class.
-    /// </summary>
-    public SerializableDictionary()
-    {
-        // Empty
-    }
-
-    /// <summary>
     /// Gets the schema of the XML object.
     /// </summary>
     /// <returns>Nothing.</returns>

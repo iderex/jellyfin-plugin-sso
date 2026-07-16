@@ -58,6 +58,19 @@ public class SSOControllerLinkTests
     }
 
     [Fact]
+    public async Task AddCanonicalLink_AdminWithoutPreferenceAccess_Returns403()
+    {
+        // Pins the EnableUserPreferenceAccess term of AssertCanUpdateUser (#397 folded it from an
+        // always-true parameter into the helper): even an administrator is refused without it, so a
+        // future edit dropping the term cannot pass silently.
+        var harness = ForCaller(isAdmin: true, callerId: Target, enableUserPreferenceAccess: false);
+
+        var result = await harness.Controller.AddCanonicalLink("oid", "keycloak", Target, new AuthResponse());
+
+        Assert.Equal(403, Assert.IsType<ObjectResult>(result).StatusCode);
+    }
+
+    [Fact]
     public async Task GetOidLinksByUser_NonAdminQueryingAnotherUser_Returns403()
     {
         var harness = ForCaller(isAdmin: false, callerId: Other);
@@ -324,13 +337,13 @@ public class SSOControllerLinkTests
     }
 
     // Builds a harness whose mocked IAuthorizationContext resolves the request to the given caller. An
-    // admin (or the target user themselves) passes AssertCanUpdateUser; a non-admin editing another user
-    // is refused.
-    private static SsoControllerHarness ForCaller(bool isAdmin, Guid callerId, Action<PluginConfiguration>? configure = null)
+    // admin (or the target user themselves) with preference access passes AssertCanUpdateUser; a
+    // non-admin editing another user, or any caller without EnableUserPreferenceAccess, is refused.
+    private static SsoControllerHarness ForCaller(bool isAdmin, Guid callerId, Action<PluginConfiguration>? configure = null, bool enableUserPreferenceAccess = true)
     {
         var harness = new SsoControllerHarness(configure);
 
-        var user = new User("caller", "SSO-Auth", "Default") { Id = callerId, EnableUserPreferenceAccess = true };
+        var user = new User("caller", "SSO-Auth", "Default") { Id = callerId, EnableUserPreferenceAccess = enableUserPreferenceAccess };
         user.SetPermission(PermissionKind.IsAdministrator, isAdmin);
 
         // AuthorizationInfo.UserId is derived from User.Id, so setting the user fixes the caller identity.

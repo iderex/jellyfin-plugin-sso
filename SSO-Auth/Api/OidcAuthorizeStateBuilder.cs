@@ -105,8 +105,8 @@ internal static class OidcAuthorizeStateBuilder
     }
 
     // Resolves the avatar URL by substituting @{claimType} tokens in the configured format, or null
-    // when no format is configured. For a duplicate claim type the first occurrence wins (after the
-    // first Replace the token is gone).
+    // when no format is configured. For a duplicate claim type the first occurrence wins: after the
+    // first Replace the token is gone, and Replace on an absent token returns the instance unchanged.
     private static string? ResolveAvatarUrl(IReadOnlyList<Claim> claims, OidConfig config)
     {
         if (config.AvatarUrlFormat is null)
@@ -116,7 +116,7 @@ internal static class OidcAuthorizeStateBuilder
 
         return claims.Aggregate(
             config.AvatarUrlFormat,
-            (s, claim) => s.Contains($"@{{{claim.Type}}}") ? s.Replace($"@{{{claim.Type}}}", claim.Value) : s);
+            (s, claim) => s.Replace($"@{{{claim.Type}}}", claim.Value));
     }
 
     // Splits the configured role-claim path on unescaped dots; escaped "\." are normalized to ".".
@@ -137,12 +137,15 @@ internal static class OidcAuthorizeStateBuilder
     {
         var roleClaimSegments = SplitRoleClaimPath(config);
 
+        // Depends only on the configuration, so it is resolved once, not per claim.
+        var usernameClaimType = config.DefaultUsernameClaim?.Trim() ?? "preferred_username";
+
         string? username = null;
         var valid = false;
         var roles = new List<string>();
         foreach (var claim in claims)
         {
-            if (string.Equals(claim.Type, config.DefaultUsernameClaim?.Trim() ?? "preferred_username", StringComparison.Ordinal))
+            if (string.Equals(claim.Type, usernameClaimType, StringComparison.Ordinal))
             {
                 username = claim.Value;
                 if (config.Roles == null || config.Roles.Length == 0)
