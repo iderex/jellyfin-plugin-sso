@@ -64,10 +64,18 @@ public class SessionMinterTests
         // resolution and the mint), so no session may be minted — the throw precedes any AuthenticateDirect.
         var (minter, users, sessions) = Build();
         users.GetUserById(UserId).Returns((User?)null);
+        var resolverInvoked = false;
 
-        await Assert.ThrowsAsync<AuthenticationException>(() => minter.MintAsync(Params(), () => "203.0.113.7"));
+        await Assert.ThrowsAsync<AuthenticationException>(() => minter.MintAsync(Params(), () =>
+        {
+            resolverInvoked = true;
+            return "203.0.113.7";
+        }));
 
         await sessions.DidNotReceive().AuthenticateDirect(Arg.Any<AuthenticationRequest>());
+        // The deferred-evaluation contract of the resolver (the reason it is a Func): the fail-closed
+        // path rejects before the controller-supplied HttpContext read would ever happen.
+        Assert.False(resolverInvoked);
     }
 
     [Fact]
