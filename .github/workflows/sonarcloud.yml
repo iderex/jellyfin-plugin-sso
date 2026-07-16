@@ -100,12 +100,29 @@ jobs:
           # token out of the script text and the process command line, and Actions masks it in logs.
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
-          ./.sonar/scanner/dotnet-sonarscanner begin \
-            /k:"iderex_jellyfin-plugin-sso" \
-            /o:"iderex" \
-            /d:sonar.exclusions="img/**" \
-            /d:sonar.cs.vscoveragexml.reportsPaths="coverage.xml" \
-            /d:sonar.qualitygate.wait=true
+          # Pre-processing queries sonarcloud.io for the server version and fails the whole step on a
+          # transient blip (a GatewayTimeout here has false-red the required check). Retry only `begin`
+          # with a bounded backoff so an outage flap does not block a healthy PR; build/coverage/end
+          # stay single-shot. Exhausting the retries fails the step, which fails the gate closed — we
+          # never analyze less and pass.
+          begin() {
+            ./.sonar/scanner/dotnet-sonarscanner begin \
+              /k:"iderex_jellyfin-plugin-sso" \
+              /o:"iderex" \
+              /d:sonar.exclusions="img/**" \
+              /d:sonar.cs.vscoveragexml.reportsPaths="coverage.xml" \
+              /d:sonar.qualitygate.wait=true
+          }
+          begin_ok=false
+          for attempt in $(seq 1 4); do
+            if begin; then begin_ok=true; break; fi
+            echo "::warning::SonarCloud pre-processing (begin) attempt ${attempt} failed; retrying after backoff."
+            sleep 10
+          done
+          if [ "$begin_ok" != "true" ]; then
+            echo "::error::SonarCloud pre-processing (begin) failed after retries — failing closed."
+            exit 1
+          fi
           dotnet build --no-incremental
           ./.sonar/scanner/dotnet-coverage collect -f xml -o coverage.xml -- dotnet test --no-build
           # qualitygate.wait makes `end` block until the gate is computed and exit non-zero if it is
