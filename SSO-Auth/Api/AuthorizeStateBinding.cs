@@ -17,8 +17,13 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 /// </summary>
 internal static class AuthorizeStateBinding
 {
-    /// <summary>The browser-binding cookie name.</summary>
-    internal const string CookieName = "sso_oid_state_binding";
+    /// <summary>
+    /// The browser-binding cookie name. The <c>__Host-</c> prefix makes the browser enforce that the
+    /// cookie is Secure, host-only (no <c>Domain</c>), and <c>Path=/</c> — so a sibling subdomain under
+    /// a shared parent domain cannot plant a same-named <c>Domain</c>-scoped cookie to poison the binding
+    /// check (cookie tossing). The prefix requires HTTPS, which every real OpenID deployment already uses.
+    /// </summary>
+    internal const string CookieName = "__Host-sso_oid_state_binding";
 
     /// <summary>A fresh 256-bit CSPRNG binding id, hex-encoded (URL- and cookie-safe).</summary>
     /// <returns>The new binding id.</returns>
