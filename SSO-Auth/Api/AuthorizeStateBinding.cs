@@ -25,6 +25,15 @@ internal static class AuthorizeStateBinding
     /// </summary>
     internal const string CookieName = "__Host-sso_oid_state_binding";
 
+    /// <summary>
+    /// The SAML browser-binding cookie name (#415). Separate from the OpenID cookie so the two flows
+    /// cannot cross-satisfy each other's binding check; the <c>__Host-</c> prefix carries the same
+    /// cookie-tossing defense described for <see cref="CookieName"/>. Checked at the same-origin
+    /// session-mint endpoint (SAML/auth), where a <c>SameSite=Lax</c> cookie is sent — the ACS POST
+    /// from the identity provider is cross-site and would not carry it.
+    /// </summary>
+    internal const string SamlCookieName = "__Host-sso_saml_state_binding";
+
     /// <summary>A fresh 256-bit CSPRNG binding id, hex-encoded (URL- and cookie-safe).</summary>
     /// <returns>The new binding id.</returns>
     internal static string NewId() => Convert.ToHexString(RandomNumberGenerator.GetBytes(32));

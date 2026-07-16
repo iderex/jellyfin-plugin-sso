@@ -2,6 +2,7 @@ using System;
 using System.Net;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.SSO_Auth;
+using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Microsoft.AspNetCore.Mvc;
 using Xunit;
@@ -36,7 +37,23 @@ public class SSOControllerChallengeTests
     }
 
     [Fact]
-    public void SamlChallenge_LinkingFlow_CarriesTheLinkingRelayState()
+    public void SamlChallenge_LoginFlow_SetsTheBrowserBindingCookie()
+    {
+        // #415: a login challenge sets the browser-binding cookie whose id is recorded against the
+        // AuthnRequest, so the session-mint endpoint can require the response to return in the same
+        // browser. Secure + HttpOnly + the __Host- prefix mirror #326.
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = EnabledProvider());
+
+        Assert.IsType<RedirectResult>(harness.Controller.SamlChallenge("adfs"));
+
+        var setCookie = harness.Controller.HttpContext.Response.Headers.SetCookie.ToString();
+        Assert.Contains(AuthorizeStateBinding.SamlCookieName + "=", setCookie);
+        Assert.Contains("secure", setCookie, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("httponly", setCookie, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void SamlChallenge_LinkingFlow_CarriesTheLinkingRelayState_AndSetsNoBindingCookie()
     {
         var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = EnabledProvider());
 
@@ -45,6 +62,10 @@ public class SSOControllerChallengeTests
         // The linking callback is told apart from a login by the RelayState the challenge sets.
         Assert.Contains("SAMLRequest=", result.Url);
         Assert.Contains("RelayState=linking", result.Url);
+        // Linking is a separate flow that does not consume the outstanding request, so no binding
+        // cookie is minted for it (#415).
+        var setCookie = harness.Controller.HttpContext.Response.Headers.SetCookie.ToString();
+        Assert.DoesNotContain(AuthorizeStateBinding.SamlCookieName, setCookie);
     }
 
     [Fact]

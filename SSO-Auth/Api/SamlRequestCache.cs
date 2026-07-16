@@ -26,7 +26,7 @@ internal sealed class SamlRequestCache
     // entry via its own expiry check, so a not-yet-swept entry never grants a login.
     private static readonly TimeSpan PruneInterval = TimeSpan.FromMinutes(1);
 
-    private readonly ConcurrentDictionary<string, DateTime> _outstanding = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Entry> _outstanding = new(StringComparer.Ordinal);
 
     // Throttles the sweep to one run per PruneInterval; the gate owns the atomic cursor and self-heals
     // a backward wall-clock step (the hand-rolled predecessor stalled until the clock re-passed its
@@ -34,13 +34,15 @@ internal sealed class SamlRequestCache
     private readonly IntervalGate _pruneGate = new(PruneInterval);
 
     /// <summary>
-    /// Records an issued request ID as outstanding until <paramref name="expiryUtc"/>. A blank ID is
-    /// ignored (the correlation at consume time then fails closed).
+    /// Records an issued request ID as outstanding until <paramref name="expiryUtc"/>, together with the
+    /// browser-binding id minted for it at the challenge (#415). A blank ID is ignored (the correlation
+    /// at consume time then fails closed).
     /// </summary>
     /// <param name="requestId">The request ID (scoped by the caller, e.g. by provider).</param>
+    /// <param name="bindingId">The browser-binding id set as a cookie at the challenge (may be empty).</param>
     /// <param name="expiryUtc">When the entry may be evicted (the request's validity horizon).</param>
     /// <param name="nowUtc">The current time.</param>
-    internal void Register(string requestId, DateTime expiryUtc, DateTime nowUtc)
+    internal void Register(string requestId, string bindingId, DateTime expiryUtc, DateTime nowUtc)
     {
         PruneExpired(nowUtc);
         if (string.IsNullOrEmpty(requestId))
@@ -58,27 +60,39 @@ internal sealed class SamlRequestCache
             return;
         }
 
-        _outstanding[requestId] = expiryUtc;
+        _outstanding[requestId] = new Entry(expiryUtc, bindingId ?? string.Empty);
     }
 
     /// <summary>
     /// Atomically claims an outstanding request ID: succeeds once for a known, unexpired ID, then the
     /// entry is gone so a second response carrying the same <c>InResponseTo</c> is refused. Fails for a
-    /// blank, unknown, expired, or already-consumed ID (fail closed).
+    /// blank, unknown, expired, or already-consumed ID (fail closed). On success, yields the
+    /// browser-binding id registered with it so the caller can enforce the binding (#415).
     /// </summary>
     /// <param name="requestId">The response's <c>InResponseTo</c>, scoped the same way as at registration.</param>
     /// <param name="nowUtc">The current time.</param>
+    /// <param name="bindingId">The binding id recorded at registration (empty if none), when this returns true.</param>
     /// <returns>True if the ID was outstanding and is now consumed; false otherwise.</returns>
-    internal bool TryConsume(string requestId, DateTime nowUtc)
+    internal bool TryConsume(string requestId, DateTime nowUtc, out string bindingId)
     {
         PruneExpired(nowUtc);
+        bindingId = string.Empty;
         if (string.IsNullOrEmpty(requestId))
         {
             return false;
         }
 
-        return _outstanding.TryRemove(requestId, out var expiry) && expiry > nowUtc;
+        if (_outstanding.TryRemove(requestId, out var entry) && entry.ExpiryUtc > nowUtc)
+        {
+            bindingId = entry.BindingId;
+            return true;
+        }
+
+        return false;
     }
+
+    /// <summary>Test-only: drops all outstanding entries so process-wide state cannot leak between tests.</summary>
+    internal void Clear() => _outstanding.Clear();
 
     // Drops expired entries, at most once per PruneInterval. Enumerating a ConcurrentDictionary yields
     // a safe moving snapshot and TryRemove is atomic, so this is correct under concurrent
@@ -94,10 +108,16 @@ internal sealed class SamlRequestCache
 
         foreach (var kvp in _outstanding)
         {
-            if (kvp.Value <= nowUtc)
+            if (kvp.Value.ExpiryUtc <= nowUtc)
             {
                 _outstanding.TryRemove(kvp.Key, out _);
             }
         }
     }
+
+    // One outstanding AuthnRequest: when it expires, and the browser-binding id minted alongside it at
+    // the challenge (#415). The binding id ties the eventual response to the browser that started the
+    // flow; it is returned on consume so the session-mint endpoint can require the request's cookie to
+    // match. Empty for entries registered before browser binding existed (treated as unbound).
+    private readonly record struct Entry(DateTime ExpiryUtc, string BindingId);
 }
