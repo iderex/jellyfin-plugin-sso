@@ -65,10 +65,17 @@ internal static class OidcAuthorizeStateBuilder
         var enableLiveTvManagement = config.EnableLiveTvManagement || grants.EnableLiveTvManagement;
         folders.AddRange(grants.Folders);
 
-        // If the provider doesn't supply the preferred-username claim, fall back to the "sub" claim.
-        if (!valid)
+        // If nothing has validated the login yet, fall back to the stable "sub" as the username. The
+        // subject was already resolved above (last "sub" wins), so this reuses it instead of scanning
+        // the claims a second time. Faithful to the original: unlike the preferred-username branch, this
+        // does NOT null-check config.Roles, so a null Roles array throws here (an admin misconfiguration
+        // where RBAC is off and the provider supplies only "sub") — the null-forgiving operator keeps
+        // that exact fail-closed behavior, tracked in #89. Reached only when a sub exists (subject is
+        // non-null), matching the old loop, which touched Roles only inside a sub-claim iteration.
+        if (!valid && subject != null)
         {
-            (username, valid) = ResolveSubFallback(claimList, config, username);
+            username = subject;
+            valid = config.Roles!.Length == 0;
         }
 
         // Fail closed (#95): a valid login must also have resolved an identity. A role matching the
@@ -151,31 +158,6 @@ internal static class OidcAuthorizeStateBuilder
         }
 
         return (username, valid, roles);
-    }
-
-    // The "sub"-claim fallback, entered only when nothing validated the login (so validity starts
-    // false here): the LAST sub claim wins as the username.
-    private static (string? Username, bool Valid) ResolveSubFallback(IReadOnlyList<Claim> claims, OidConfig config, string? username)
-    {
-        var valid = false;
-        foreach (var claim in claims)
-        {
-            if (string.Equals(claim.Type, "sub", StringComparison.Ordinal))
-            {
-                username = claim.Value;
-
-                // Faithful to the original: unlike the preferred-username branch in ScanClaims, this
-                // does NOT null-check config.Roles, so a null Roles array here throws (an admin
-                // misconfiguration where RBAC is off and the provider supplies only "sub"). The
-                // null-forgiving operator keeps that exact fail-closed behavior; tracked in #89.
-                if (config.Roles!.Length == 0)
-                {
-                    valid = true;
-                }
-            }
-        }
-
-        return (username, valid);
     }
 
     /// <summary>
