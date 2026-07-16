@@ -117,23 +117,58 @@ internal sealed class AvatarService
 
             using var stream = await ReadCappedAsync(avatarResponse, MaxAvatarBytes, timeout.Token).ConfigureAwait(false);
 
-            var userDataPath =
-                Path.Combine(
-                    _serverConfigurationManager.ApplicationPaths.UserConfigurationDirectoryPath,
-                    user.Username);
-            if (user.ProfileImage is not null)
-            {
-                await _userManager.ClearProfileImageAsync(user).ConfigureAwait(false);
-            }
-
-            user.ProfileImage = new ImageInfo(Path.Combine(userDataPath, "profile" + extension));
-
-            await _providerManager.SaveImage(stream, mediaType, user.ProfileImage.Path)
-                .ConfigureAwait(false);
+            await StoreAsync(user, stream, mediaType, extension).ConfigureAwait(false);
         }
         catch (Exception e)
         {
             _logger.LogError(e, "Failed to fetch or save the SSO avatar.");
+        }
+    }
+
+    /// <summary>
+    /// Writes the fetched avatar to disk and only then updates the user's profile-image reference, so a
+    /// failed save leaves the previous profile-image record intact instead of a cleared record pointing
+    /// at a never-written path (#377). (When the target path is unchanged the host writes the file in
+    /// place, so a mid-write failure can still truncate the bytes — that is ImageSaver's contract, not
+    /// ours to fix.) Throws on save failure; <see cref="TrySetAsync"/>'s best-effort catch owns the logging.
+    /// </summary>
+    /// <param name="user">The user whose profile image is set.</param>
+    /// <param name="image">The fetched avatar bytes.</param>
+    /// <param name="mediaType">The validated image media type.</param>
+    /// <param name="extension">The stored extension resolved from the content-type allow-list.</param>
+    /// <returns>A <see cref="Task"/> that completes when the avatar is stored and the user updated.</returns>
+    internal async Task StoreAsync(User user, Stream image, string mediaType, string extension)
+    {
+        var newPath = Path.Combine(
+            _serverConfigurationManager.ApplicationPaths.UserConfigurationDirectoryPath,
+            user.Username,
+            "profile" + extension);
+
+        // The write comes FIRST: if it throws, nothing below runs, so the user keeps the previous
+        // profile-image record instead of a cleared record plus a dangling path to a file that was
+        // never written.
+        await _providerManager.SaveImage(image, mediaType, newPath).ConfigureAwait(false);
+
+        if (user.ProfileImage is null)
+        {
+            user.ProfileImage = new ImageInfo(newPath);
+        }
+        else if (string.Equals(user.ProfileImage.Path, newPath, StringComparison.Ordinal))
+        {
+            // Same target file (the common same-extension re-login), just overwritten in place: the
+            // record is already correct, so clearing it (which removes only the DB row — the host's
+            // ClearProfileImageAsync does not touch the file) would drop and re-insert it for nothing.
+            // Keep the record and refresh the timestamp so clients re-fetch the changed image.
+            user.ProfileImage.LastModified = DateTime.UtcNow;
+        }
+        else
+        {
+            // The content type (and so the stored path) changed: drop the old RECORD only now that the
+            // new bytes are safely on disk, then point the user at them. The old file stays on disk —
+            // ClearProfileImageAsync removes just the DB row, the same residue Jellyfin's own image
+            // replace leaves behind.
+            await _userManager.ClearProfileImageAsync(user).ConfigureAwait(false);
+            user.ProfileImage = new ImageInfo(newPath);
         }
     }
 
