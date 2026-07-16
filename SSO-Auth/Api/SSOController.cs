@@ -47,7 +47,9 @@ public class SSOController : ControllerBase
     private const string SamlProtocol = "SAML";
 
     private readonly IUserManager _userManager;
-    private readonly ISessionManager _sessionManager;
+    // The session-minting flow (#318): permissions + avatar + default-provider, then AuthenticateDirect.
+    // The controller passes the HttpContext-derived remote endpoint in and keeps no session/avatar field.
+    private readonly SessionMinter _sessionMinter;
     private readonly IAuthorizationContext _authContext;
     private readonly ILogger<SSOController> _logger;
     private readonly ILoggerFactory _loggerFactory;
@@ -57,8 +59,6 @@ public class SSOController : ControllerBase
     // The account-linking workflow (resolve/adopt/create, legacy re-key, revoke); the controller keeps
     // the authz guards, the one-time-use replay/state consume, and the HTTP mapping (#318).
     private readonly CanonicalLinkService _canonicalLinks;
-    // The SSRF-safe avatar fetch/store (#318); the controller only decides when to invoke it.
-    private readonly AvatarService _avatarService;
     // The in-flight OpenID authorize-state store (cap, lifetime, throttled sweep and capacity signal
     // all live inside; see OidcStateStore). One process-wide instance, like the SAML caches below.
     private static readonly OidcStateStore StateStore = new();
@@ -105,7 +105,6 @@ public class SSOController : ControllerBase
         IHttpClientFactory httpClientFactory,
         IServerConfigurationManager serverConfigurationManager)
     {
-        _sessionManager = sessionManager;
         _userManager = userManager;
         _authContext = authContext;
         _cryptoProvider = cryptoProvider;
@@ -113,7 +112,8 @@ public class SSOController : ControllerBase
         _loggerFactory = loggerFactory;
         _httpClientFactory = httpClientFactory;
         _canonicalLinks = new CanonicalLinkService(userManager, cryptoProvider, SSOPlugin.Instance.ConfigStore, logger);
-        _avatarService = new AvatarService(userManager, providerManager, serverConfigurationManager, logger, SsoHttp.UserAgent);
+        var avatarService = new AvatarService(userManager, providerManager, serverConfigurationManager, logger, SsoHttp.UserAgent);
+        _sessionMinter = new SessionMinter(userManager, avatarService, sessionManager, logger);
         _logger.LogInformation("SSO Controller initialized");
     }
 
@@ -1180,67 +1180,13 @@ public class SSOController : ControllerBase
         _ => throw new InvalidOperationException($"Unhandled canonical-link write result: {result}"),
     };
 
-    /// <summary>
-    /// Mints a Jellyfin session for a resolved SSO login: applies the granted permissions and the
-    /// optional avatar/default-provider updates to the user, then authenticates the client.
-    /// </summary>
-    /// <param name="parameters">The resolved user, granted privileges, and client identity.</param>
-    private async Task<AuthenticationResult> Authenticate(SessionParameters parameters)
-    {
-        User user = _userManager.GetUserById(parameters.UserId);
-        if (user is null)
-        {
-            // Fail closed: the account resolved for this SSO login no longer exists (e.g. it was
-            // deleted between resolution and this call), so no session may be minted for it.
-            throw new AuthenticationException("SSO authentication aborted: the target user does not exist.");
-        }
-
-        if (parameters.EnableAuthorization)
-        {
-            user.SetPermission(PermissionKind.IsAdministrator, parameters.IsAdmin);
-            user.SetPermission(PermissionKind.EnableAllFolders, parameters.EnableAllFolders);
-            if (!parameters.EnableAllFolders)
-            {
-                user.SetPreference(PreferenceKind.EnabledFolders, parameters.EnabledFolders);
-            }
-
-            // Live TV access/management are role-derived grants too, so they must respect the same
-            // EnableAuthorization master switch. Applied unconditionally they let a provider grant (or
-            // silently toggle) Live TV on every login even when the admin turned SSO permission
-            // management off (#215).
-            user.SetPermission(PermissionKind.EnableLiveTvAccess, parameters.EnableLiveTv);
-            user.SetPermission(PermissionKind.EnableLiveTvManagement, parameters.EnableLiveTvManagement);
-        }
-
-        await _avatarService.TrySetAsync(user, parameters.AvatarUrl).ConfigureAwait(false);
-
-        await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
-
-        var authRequest = new AuthenticationRequest();
-        authRequest.UserId = user.Id;
-        authRequest.Username = user.Username;
-        authRequest.App = parameters.AuthResponse.AppName;
-        authRequest.AppVersion = parameters.AuthResponse.AppVersion;
-        authRequest.DeviceId = parameters.AuthResponse.DeviceID;
-        authRequest.DeviceName = parameters.AuthResponse.DeviceName;
-
-        // Record the client IP so the SSO login shows a source address in Jellyfin's activity log,
-        // exactly as password logins do (#177): use Jellyfin's own GetNormalizedRemoteIP, the very
-        // helper its built-in login path uses. It reads the already-resolved connection address (so
-        // the plugin adds no proxy-trust logic of its own — the server's "Known proxies" setting
-        // governs it) and normalizes it the same way (IPv4-mapped IPv6 collapsed to IPv4), so the
-        // SSO entry's source address matches a password entry's for the same client byte-for-byte.
-        authRequest.RemoteEndPoint = HttpContext.GetNormalizedRemoteIP().ToString();
-        _logger.LogInformation("Auth request created...");
-        if (!string.IsNullOrEmpty(parameters.DefaultProvider))
-        {
-            user.AuthenticationProviderId = parameters.DefaultProvider;
-            await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
-            _logger.LogInformation("Set default login provider to {DefaultProvider}", parameters.DefaultProvider);
-        }
-
-        return await _sessionManager.AuthenticateDirect(authRequest).ConfigureAwait(false);
-    }
+    // The HTTP boundary for session minting: hand the resolved parameters and a resolver for the client's
+    // normalized remote IP (#177 — Jellyfin's own GetNormalizedRemoteIP, so the plugin adds no proxy-trust
+    // logic of its own) to the SessionMinter flow. The resolver is passed rather than the value so the
+    // flow evaluates it at the exact original point (after avatar/persistence, and NOT at all on the
+    // fail-closed deleted-user path) — the pre-extraction Authenticate read it inline there.
+    private Task<AuthenticationResult> Authenticate(SessionParameters parameters) =>
+        _sessionMinter.MintAsync(parameters, () => HttpContext.GetNormalizedRemoteIP().ToString());
 
     // Applies the opt-in per-client rate limit (#128) on an anonymous flow endpoint: null when the
     // request may proceed, else a 429 carrying Retry-After. Reads the settings under the config
