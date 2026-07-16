@@ -1,5 +1,9 @@
 using System;
 using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Plugin.SSO_Auth.Api;
@@ -32,6 +36,46 @@ public class AvatarServiceTests
         var log = new CapturingLogger();
         var service = new AvatarService(users, providers, serverConfig, log, "test-agent/1.0");
         return (service, providers, users, log);
+    }
+
+    // Builds a service whose HTTP fetch is served by a stub handler returning the given response, so the
+    // fetch path (content-type gate, size cap, happy path) runs without live HTTP (#385 seam).
+    private static (AvatarService Service, IProviderManager Providers, IUserManager Users, CapturingLogger Log) Build(HttpResponseMessage response)
+    {
+        var users = Substitute.For<IUserManager>();
+        var providers = Substitute.For<IProviderManager>();
+        var serverConfig = Substitute.For<IServerConfigurationManager>();
+        serverConfig.ApplicationPaths.UserConfigurationDirectoryPath.Returns(UserDataRoot);
+        var log = new CapturingLogger();
+        var service = new AvatarService(users, providers, serverConfig, log, "test-agent/1.0", () => new StubHandler(response));
+        return (service, providers, users, log);
+    }
+
+    // An allowed public URL: the stub handler answers before any connection, so the URL only needs to
+    // clear the allow-list — the SSRF transport guard (ConnectCallback) is never reached here.
+    private const string AllowedUrl = "https://cdn.example.com/avatar.png";
+
+    private static HttpResponseMessage ImageResponse(string mediaType, byte[] body, long? contentLength = null)
+    {
+        var content = new StreamContent(new MemoryStream(body));
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(mediaType);
+        if (contentLength is { } length)
+        {
+            content.Headers.ContentLength = length;
+        }
+
+        return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+    }
+
+    // Returns a single canned response for every request, standing in for the live HTTP fetch.
+    private sealed class StubHandler : HttpMessageHandler
+    {
+        private readonly HttpResponseMessage _response;
+
+        public StubHandler(HttpResponseMessage response) => _response = response;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromResult(_response);
     }
 
     private static string ProfilePath(string username, string extension)
@@ -136,5 +180,73 @@ public class AvatarServiceTests
         Assert.Equal(ProfilePath("alice", ".png"), user.ProfileImage?.Path);
         await users.DidNotReceive().ClearProfileImageAsync(Arg.Any<User>());
         await providers.Received(1).SaveImage(Arg.Any<Stream>(), "image/png", ProfilePath("alice", ".png"));
+    }
+
+    [Fact]
+    public async Task ReadCappedAsync_BodyOverTheCap_Throws()
+    {
+        // #220, the single most security-relevant untested branch: a body larger than the cap — the
+        // shape a hostile or Content-Length-lying endpoint produces — is aborted rather than buffered.
+        using var response = ImageResponse("image/png", new byte[11]);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await AvatarService.ReadCappedAsync(response, maxBytes: 10, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ReadCappedAsync_BodyAtTheCap_RoundTripsRewound()
+    {
+        // A body exactly at the cap is accepted and returned ready to read (Position 0) for the store step.
+        var body = new byte[10];
+        using var response = ImageResponse("image/png", body);
+
+        using var result = await AvatarService.ReadCappedAsync(response, maxBytes: 10, CancellationToken.None);
+
+        Assert.Equal(10, result.Length);
+        Assert.Equal(0, result.Position);
+    }
+
+    [Fact]
+    public async Task TrySetAsync_DisallowedContentType_RefusesWithoutStoring()
+    {
+        // The content-type allow-list (#217): a non-raster type (here text/html, the shape an SVG or an
+        // HTML error page would take) is refused after the fetch, before anything is written.
+        using var response = ImageResponse("text/html", Encoding.UTF8.GetBytes("<html></html>"));
+        var (service, providers, users, log) = Build(response);
+
+        await service.TrySetAsync(UserNamed("alice"), AllowedUrl);
+
+        await providers.DidNotReceive().SaveImage(Arg.Any<Stream>(), Arg.Any<string>(), Arg.Any<string>());
+        await users.DidNotReceive().ClearProfileImageAsync(Arg.Any<User>());
+        Assert.Contains(log.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("disallowed content type"));
+    }
+
+    [Fact]
+    public async Task TrySetAsync_ContentLengthOverTheCap_RefusesWithoutStoring()
+    {
+        // The Content-Length pre-check rejects an oversized advertised body before streaming a byte.
+        using var response = ImageResponse("image/png", new byte[1], contentLength: AvatarService.MaxAvatarBytes + 1);
+        var (service, providers, _, _) = Build(response);
+
+        await service.TrySetAsync(UserNamed("alice"), AllowedUrl);
+
+        await providers.DidNotReceive().SaveImage(Arg.Any<Stream>(), Arg.Any<string>(), Arg.Any<string>());
+    }
+
+    [Fact]
+    public async Task TrySetAsync_AllowedImage_FetchesAndStores()
+    {
+        // The happy path end to end over the seam: an allowed raster type within the cap is fetched and
+        // saved under the user's profile path with the media type carried through. The exact filename
+        // (the missing extension dot) is #384's concern, so it is not pinned here.
+        using var response = ImageResponse("image/png", new byte[] { 1, 2, 3 });
+        var (service, providers, _, _) = Build(response);
+
+        await service.TrySetAsync(UserNamed("alice"), AllowedUrl);
+
+        await providers.Received(1).SaveImage(
+            Arg.Any<Stream>(),
+            "image/png",
+            Arg.Is<string>(path => path.Contains("alice") && path.Contains("profile")));
     }
 }

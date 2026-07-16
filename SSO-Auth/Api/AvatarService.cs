@@ -22,11 +22,15 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 /// </summary>
 internal sealed class AvatarService
 {
+    /// <summary>The maximum avatar size accepted, enforced both against Content-Length and while streaming (#220).</summary>
+    internal const long MaxAvatarBytes = 10 * 1024 * 1024;
+
     private readonly IUserManager _userManager;
     private readonly IProviderManager _providerManager;
     private readonly IServerConfigurationManager _serverConfigurationManager;
     private readonly ILogger _logger;
     private readonly string _userAgent;
+    private readonly Func<HttpMessageHandler> _handlerFactory;
 
     internal AvatarService(
         IUserManager userManager,
@@ -34,12 +38,36 @@ internal sealed class AvatarService
         IServerConfigurationManager serverConfigurationManager,
         ILogger logger,
         string userAgent)
+        : this(userManager, providerManager, serverConfigurationManager, logger, userAgent, CreateHardenedHandler)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="AvatarService"/> class with an injected HTTP message
+    /// handler factory. This is the test seam (#385): a stub handler makes the content-type gate, the
+    /// size cap, the happy path, and the timeout reachable without live HTTP. Production uses the
+    /// five-argument constructor, which supplies the hardened SSRF-safe <see cref="SocketsHttpHandler"/>.
+    /// </summary>
+    /// <param name="userManager">The Jellyfin user manager.</param>
+    /// <param name="providerManager">The Jellyfin provider manager (image saving).</param>
+    /// <param name="serverConfigurationManager">The server configuration manager (user data paths).</param>
+    /// <param name="logger">The logger.</param>
+    /// <param name="userAgent">The outbound User-Agent.</param>
+    /// <param name="handlerFactory">Builds the message handler used for each fetch; called once per fetch and disposed after.</param>
+    internal AvatarService(
+        IUserManager userManager,
+        IProviderManager providerManager,
+        IServerConfigurationManager serverConfigurationManager,
+        ILogger logger,
+        string userAgent,
+        Func<HttpMessageHandler> handlerFactory)
     {
         _userManager = userManager ?? throw new ArgumentNullException(nameof(userManager));
         _providerManager = providerManager ?? throw new ArgumentNullException(nameof(providerManager));
         _serverConfigurationManager = serverConfigurationManager ?? throw new ArgumentNullException(nameof(serverConfigurationManager));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _userAgent = userAgent ?? throw new ArgumentNullException(nameof(userAgent));
+        _handlerFactory = handlerFactory ?? throw new ArgumentNullException(nameof(handlerFactory));
     }
 
     /// <summary>
@@ -65,20 +93,7 @@ internal sealed class AvatarService
 
         try
         {
-            // Route every connection (including redirect targets) through a callback that rejects
-            // private/loopback addresses, closing the SSRF and DNS-rebinding vectors. Redirects stay
-            // enabled (many avatar URLs redirect) but are bounded, each hop is IP-validated, and both
-            // the request and the download are bounded.
-            using var handler = new SocketsHttpHandler
-            {
-                AllowAutoRedirect = true,
-                MaxAutomaticRedirections = 5,
-                ConnectCallback = ConnectCallback,
-
-                // A system proxy would be the connection target, so the ConnectCallback would
-                // validate the proxy's address rather than the avatar host's - bypassing the guard.
-                UseProxy = false,
-            };
+            using var handler = _handlerFactory();
             using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
 
             client.DefaultRequestHeaders.UserAgent.ParseAdd(_userAgent);
@@ -109,7 +124,6 @@ internal sealed class AvatarService
                 throw new InvalidOperationException("Avatar content type is not an allowed raster image.");
             }
 
-            const long MaxAvatarBytes = 10 * 1024 * 1024;
             if (avatarResponse.Content.Headers.ContentLength > MaxAvatarBytes)
             {
                 throw new InvalidOperationException("Avatar exceeds the maximum allowed size.");
@@ -172,9 +186,24 @@ internal sealed class AvatarService
         }
     }
 
+    // The production handler: routes every connection (including redirect targets) through a callback
+    // that rejects private/loopback addresses, closing the SSRF and DNS-rebinding vectors. Redirects
+    // stay enabled (many avatar URLs redirect) but are bounded, each hop is IP-validated, and both the
+    // request and the download are bounded. A fresh handler is built per fetch and disposed by the caller.
+    private static HttpMessageHandler CreateHardenedHandler() => new SocketsHttpHandler
+    {
+        AllowAutoRedirect = true,
+        MaxAutomaticRedirections = 5,
+        ConnectCallback = ConnectToAllowedAddressAsync,
+
+        // A system proxy would be the connection target, so the connect callback would validate the
+        // proxy's address rather than the avatar host's - bypassing the guard.
+        UseProxy = false,
+    };
+
     // Resolves the target host and connects only to a non-blocked (public) address, so a hostname that
     // resolves to an internal address - including via DNS rebinding on a redirect hop - cannot be reached.
-    private static async ValueTask<Stream> ConnectCallback(SocketsHttpConnectionContext context, CancellationToken cancellationToken)
+    private static async ValueTask<Stream> ConnectToAllowedAddressAsync(SocketsHttpConnectionContext context, CancellationToken cancellationToken)
     {
         var addresses = await Dns.GetHostAddressesAsync(context.DnsEndPoint.Host, cancellationToken).ConfigureAwait(false);
 
@@ -224,8 +253,10 @@ internal sealed class AvatarService
     }
 
     // Copies the response body into memory, aborting if it exceeds the cap, so a hostile endpoint cannot
-    // exhaust resources with an unbounded (or Content-Length-lying) download.
-    private static async ValueTask<MemoryStream> ReadCappedAsync(HttpResponseMessage response, long maxBytes, CancellationToken cancellationToken)
+    // exhaust resources with an unbounded (or Content-Length-lying) download. Internal so the streamed
+    // size cap (#220) — the most security-relevant branch — is unit-testable over a StreamContent body
+    // without live HTTP (#385).
+    internal static async ValueTask<MemoryStream> ReadCappedAsync(HttpResponseMessage response, long maxBytes, CancellationToken cancellationToken)
     {
         var buffer = new MemoryStream();
         var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
