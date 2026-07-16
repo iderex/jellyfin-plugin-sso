@@ -16,12 +16,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  analyze:
-    name: Build and analyze
+  # This job IS the required "SonarCloud quality gate" status check. It no longer relies on the
+  # SonarCloud GitHub App posting a "SonarCloud Code Analysis" decoration status (that binding is
+  # UI-only and silently stopped posting, #401, forcing every merge through an admin bypass). Instead
+  # the scanner waits for the gate to compute (sonar.qualitygate.wait) and a final step reads the gate
+  # via the public API and fails ONLY on a non-coverage condition — encoding the free-plan policy
+  # (coverage is a goal, not a blocker) directly, so a green check here is a real, self-contained gate.
+  quality-gate:
+    name: SonarCloud quality gate
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # Dependabot PRs never receive repository secrets, so SONAR_TOKEN is absent and the scan cannot
+      # run there. Skipping the scan steps (rather than the whole job) keeps this required check GREEN
+      # for a version-bump PR — which has nothing for Sonar to analyze anyway — instead of leaving it
+      # forever pending. is_scan gates every step that needs the token.
+      - name: Decide whether to scan
+        id: gate
+        run: |
+          if [ "${{ github.actor }}" = "dependabot[bot]" ]; then
+            echo "is_scan=false" >> "$GITHUB_OUTPUT"
+            echo "Dependabot PR: skipping the Sonar scan (secrets are withheld); the gate passes."
+          else
+            echo "is_scan=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Checkout
+        if: steps.gate.outputs.is_scan == 'true'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           # A full clone lets SonarCloud attribute issues to the right commits/authors.
@@ -29,11 +49,13 @@ jobs:
           # The scanner reads git history, not the remote; drop the persisted push token.
           persist-credentials: false
       - name: Set up JDK 17
+        if: steps.gate.outputs.is_scan == 'true'
         uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
         with:
           java-version: 17
           distribution: zulu
       - name: Set up .NET
+        if: steps.gate.outputs.is_scan == 'true'
         uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: 9.0.x
@@ -42,18 +64,21 @@ jobs:
           cache: true
           cache-dependency-path: '**/packages.lock.json'
       - name: Cache SonarCloud packages
+        if: steps.gate.outputs.is_scan == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.sonar/cache
           key: ${{ runner.os }}-sonar
           restore-keys: ${{ runner.os }}-sonar
       - name: Cache SonarCloud scanner
+        if: steps.gate.outputs.is_scan == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ./.sonar/scanner
           key: ${{ runner.os }}-sonar-scanner
           restore-keys: ${{ runner.os }}-sonar-scanner
       - name: Install or update SonarCloud scanner and coverage tool
+        if: steps.gate.outputs.is_scan == 'true'
         # Always run: with a cache hit this is a fast no-op when current, but it keeps the cached
         # tools from going stale forever (the cache key never changes). dotnet-coverage collects
         # coverage at the process level, which is what works for the xUnit v3 / Microsoft Testing
@@ -63,6 +88,7 @@ jobs:
           dotnet tool update dotnet-sonarscanner --tool-path ./.sonar/scanner
           dotnet tool update dotnet-coverage --tool-path ./.sonar/scanner
       - name: Build and analyze
+        if: steps.gate.outputs.is_scan == 'true'
         env:
           # The scanner reads SONAR_TOKEN from the environment; sourcing it via env keeps the
           # token out of the script text and the process command line, and Actions masks it in logs.
@@ -72,7 +98,42 @@ jobs:
             /k:"iderex_jellyfin-plugin-sso" \
             /o:"iderex" \
             /d:sonar.exclusions="img/**" \
-            /d:sonar.cs.vscoveragexml.reportsPaths="coverage.xml"
+            /d:sonar.cs.vscoveragexml.reportsPaths="coverage.xml" \
+            /d:sonar.qualitygate.wait=true
           dotnet build --no-incremental
           ./.sonar/scanner/dotnet-coverage collect -f xml -o coverage.xml -- dotnet test --no-build
-          ./.sonar/scanner/dotnet-sonarscanner end
+          # qualitygate.wait makes `end` block until the gate is computed and exit non-zero if it is
+          # red (on ANY condition, including coverage). We do NOT let that fail the job here — the
+          # policy step below is the single authority that decides coverage-only vs. a real failure.
+          ./.sonar/scanner/dotnet-sonarscanner end || true
+      - name: Enforce the quality gate (coverage-only failures allowed, free-plan policy)
+        if: steps.gate.outputs.is_scan == 'true'
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ -n "${PR_NUMBER:-}" ]; then
+            scope="pullRequest=${PR_NUMBER}"
+          else
+            scope="branch=main"
+          fi
+          # Public project: the token authenticates as the user (token:'' basic auth) so this also
+          # works before the analysis is public. The scan step's qualitygate.wait guarantees the gate
+          # is already computed by the time we read it — no polling race.
+          status=$(curl -sf -u "${SONAR_TOKEN}:" \
+            "https://sonarcloud.io/api/qualitygates/project_status?projectKey=iderex_jellyfin-plugin-sso&${scope}")
+          gate=$(printf '%s' "$status" | jq -r '.projectStatus.status')
+          # A red gate is acceptable ONLY when new-coverage is the sole failing condition (the free
+          # plan hard-gates new_coverage<80 and cannot be reconfigured). Any OTHER failing condition —
+          # rating, duplication, hotspots — blocks the merge and must be fixed.
+          blocking=$(printf '%s' "$status" | jq -r \
+            '[.projectStatus.conditions[] | select(.status=="ERROR") | select(.metricKey | test("coverage") | not) | .metricKey] | join(", ")')
+          echo "SonarCloud quality gate: ${gate}"
+          if [ -n "$blocking" ]; then
+            echo "::error::Quality gate failed on non-coverage conditions: ${blocking}"
+            exit 1
+          fi
+          if [ "$gate" != "OK" ]; then
+            echo "::warning::Gate is ${gate} but only new-coverage conditions are failing — accepted per the documented free-plan policy (coverage is a goal, not a blocker)."
+          fi
