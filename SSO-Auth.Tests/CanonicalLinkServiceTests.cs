@@ -40,6 +40,7 @@ public class CanonicalLinkServiceTests
     {
         var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
         {
+            Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
         });
         users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
@@ -53,7 +54,7 @@ public class CanonicalLinkServiceTests
     [Fact]
     public async Task ResolveOrCreateAsync_NoLinkNoAccount_CreatesAndLinksOnTheSubjectKey()
     {
-        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
         var created = UserNamed("alice", Other);
         users.GetUserByName("alice").Returns((User?)null);
         users.CreateUserAsync("alice").Returns(created);
@@ -69,7 +70,7 @@ public class CanonicalLinkServiceTests
     [Fact]
     public async Task ResolveOrCreateAsync_ExistingAccountAndAdoptionAllowed_AdoptsAndLinks()
     {
-        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
         users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
         users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
 
@@ -86,7 +87,7 @@ public class CanonicalLinkServiceTests
         // The account-takeover guard (#95): a login whose name matches a pre-existing unlinked account,
         // with adoption off, must be refused — not silently take the account over. No controller test
         // reached this path before the extraction; this pins it directly.
-        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
         users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
@@ -105,7 +106,7 @@ public class CanonicalLinkServiceTests
     {
         // Fail-closed belt (#95/#155): a blank identity key or username must never create, adopt, or
         // look up an account, even if a caller forgets its own guard.
-        var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+        var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
             service.ResolveOrCreateAsync("oid", "kc", canonicalKey, username, allowExistingAccountLink: true));
@@ -121,6 +122,7 @@ public class CanonicalLinkServiceTests
         // mutable username, so this name-based hand-off requires AllowExistingAccountLink (#354).
         var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
         {
+            Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
         });
         users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
@@ -143,6 +145,7 @@ public class CanonicalLinkServiceTests
         // The entry stays untouched: no migration, no link under the attacker's sub.
         var (service, cfg, users, log) = Build(c => c.OidConfigs["kc"] = new OidConfig
         {
+            Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
         });
         users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
@@ -173,6 +176,7 @@ public class CanonicalLinkServiceTests
         // account and the foreign entry survives for its real owner to migrate later (#354).
         var (service, cfg, users, log) = Build(c => c.OidConfigs["kc"] = new OidConfig
         {
+            Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
         });
         users.GetUserById(Existing).Returns(UserNamed("renamed-alice", Existing));
@@ -208,6 +212,7 @@ public class CanonicalLinkServiceTests
         // re-keys it. This pins the current behavior empirically; the #361 fix will flip it.
         var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
         {
+            Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["oldname"] = Existing },
         });
         users.GetUserById(Existing).Returns(UserNamed("newname", Existing));
@@ -230,6 +235,7 @@ public class CanonicalLinkServiceTests
         // independent of AllowExistingAccountLink, proving no name trust is involved.
         var (service, cfg, users, log) = Build(c => c.OidConfigs["kc"] = new OidConfig
         {
+            Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["opaque-sub-123"] = Existing },
         });
         users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
@@ -265,7 +271,7 @@ public class CanonicalLinkServiceTests
         // no-op and let the already-resolved legacy user through UseExistingLink for a gone provider
         // (#373). Simulated deterministically: drop the provider right before the migrate transaction.
         var cfg = new PluginConfiguration();
-        cfg.OidConfigs["kc"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing } };
+        cfg.OidConfigs["kc"] = new OidConfig { Enabled = true, CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing } };
         var users = Substitute.For<IUserManager>();
         users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
         users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
@@ -302,7 +308,7 @@ public class CanonicalLinkServiceTests
     [Fact]
     public void TryCreateLink_KnownProvider_WritesTheLinkAndReturnsCreated()
     {
-        var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+        var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
 
         var result = service.TryCreateLink("oid", "kc", "sub-1", Existing);
 
@@ -315,7 +321,7 @@ public class CanonicalLinkServiceTests
     [InlineData("   ")]
     public void TryCreateLink_EmptyKey_ReturnsEmptyKey_WithoutWriting(string providerUserId)
     {
-        var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+        var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
 
         var result = service.TryCreateLink("oid", "kc", providerUserId, Existing);
 
@@ -326,7 +332,7 @@ public class CanonicalLinkServiceTests
     [Fact]
     public void TryCreateLink_UnknownProvider_ReturnsUnknownProvider()
     {
-        var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+        var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
 
         var result = service.TryCreateLink("oid", "does-not-exist", "sub-1", Existing);
 
@@ -339,7 +345,7 @@ public class CanonicalLinkServiceTests
         // The two refusals map to DIFFERENT response bodies, so the order is observable: an unresolved
         // identity is reported as EmptyKey even when the provider is also unknown (the empty-key guard
         // runs first). Locks the check ordering the controller's distinct 400 bodies depend on.
-        var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+        var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
 
         var result = service.TryCreateLink("oid", "does-not-exist", "   ", Existing);
 
@@ -354,6 +360,7 @@ public class CanonicalLinkServiceTests
         // silently overwrites the prior binding — an admin correcting a mis-link, not a defect.
         var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
         {
+            Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
         });
 
@@ -397,7 +404,7 @@ public class CanonicalLinkServiceTests
         // a user's links cannot NRE into a 500 on the #350 state.
         var (service, _, _, _) = Build(c =>
         {
-            c.OidConfigs["kc"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing } };
+            c.OidConfigs["kc"] = new OidConfig { Enabled = true, CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing } };
             c.OidConfigs["broken"] = null;
         });
 
@@ -412,6 +419,7 @@ public class CanonicalLinkServiceTests
     {
         var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
         {
+            Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
         });
 
@@ -428,6 +436,7 @@ public class CanonicalLinkServiceTests
         // directly, since TryGetLinks dispatches saml vs oid to different config dictionaries.
         var (service, cfg, _, _) = Build(c => c.SamlConfigs["adfs"] = new SamlConfig
         {
+            Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
         });
 
@@ -440,7 +449,7 @@ public class CanonicalLinkServiceTests
     [Fact]
     public void TryRemoveLink_UnknownCanonicalName_ReturnsNotFound()
     {
-        var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+        var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
 
         var result = service.TryRemoveLink("oid", "kc", "does-not-exist", Existing);
 
@@ -452,6 +461,7 @@ public class CanonicalLinkServiceTests
     {
         var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
         {
+            Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
         });
 
@@ -464,7 +474,7 @@ public class CanonicalLinkServiceTests
     [Fact]
     public void TryRemoveLink_UnknownProvider_ReturnsUnknownProvider()
     {
-        var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig());
+        var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
 
         var result = service.TryRemoveLink("oid", "does-not-exist", "sub-1", Existing);
 
@@ -476,9 +486,9 @@ public class CanonicalLinkServiceTests
     {
         var (service, cfg, _, _) = Build(c =>
         {
-            c.OidConfigs["kc"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing, ["sub-2"] = Other } };
-            c.OidConfigs["authelia"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-3"] = Existing } };
-            c.SamlConfigs["adfs"] = new SamlConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing } };
+            c.OidConfigs["kc"] = new OidConfig { Enabled = true, CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing, ["sub-2"] = Other } };
+            c.OidConfigs["authelia"] = new OidConfig { Enabled = true, CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-3"] = Existing } };
+            c.SamlConfigs["adfs"] = new SamlConfig { Enabled = true, CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing } };
         });
 
         var oid = service.LinksByUser("oid", Existing);
@@ -501,8 +511,8 @@ public class CanonicalLinkServiceTests
         // providers — the mirror of the OID test above, pinning the saml branch directly.
         var (service, _, _, _) = Build(c =>
         {
-            c.SamlConfigs["adfs"] = new SamlConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing, ["bob"] = Other } };
-            c.OidConfigs["kc"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing } };
+            c.SamlConfigs["adfs"] = new SamlConfig { Enabled = true, CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing, ["bob"] = Other } };
+            c.OidConfigs["kc"] = new OidConfig { Enabled = true, CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing } };
         });
 
         var saml = service.LinksByUser("saml", Existing);
@@ -516,8 +526,8 @@ public class CanonicalLinkServiceTests
     {
         var (service, cfg, _, _) = Build(c =>
         {
-            c.OidConfigs["kc"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing, ["sub-2"] = Other } };
-            c.SamlConfigs["adfs"] = new SamlConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing } };
+            c.OidConfigs["kc"] = new OidConfig { Enabled = true, CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing, ["sub-2"] = Other } };
+            c.SamlConfigs["adfs"] = new SamlConfig { Enabled = true, CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing } };
         });
 
         var removed = service.RemoveUserEverywhere(Existing);
@@ -526,5 +536,102 @@ public class CanonicalLinkServiceTests
         Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("sub-1"));
         Assert.True(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("sub-2")); // the other user's link survives
         Assert.False(cfg.SamlConfigs["adfs"].CanonicalLinks.ContainsKey("alice"));
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_ProviderDisabled_RefusesLikeADeletedOne()
+    {
+        // #380: a provider disabled between the controller's Enabled gate and the service's read must be
+        // rejected exactly like a deleted one — even a live subject link must not resolve, because the
+        // mint would run with the provider's pre-disable settings.
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = false,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+
+        await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
+            service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true));
+
+        await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
+        Assert.Equal(Existing, cfg.OidConfigs["kc"].CanonicalLinks["sub-1"]); // link untouched
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_ProviderDisabledBetweenResolveAndLinkWrite_RefusesWithoutLinking()
+    {
+        // #380, the race the issue names: the provider passes the resolve-read enabled, then is disabled
+        // before the link-write transaction of the adopt arm. The write-side guard must reject rather
+        // than persist a link (and mint) with the pre-disable settings. The flip runs inside the
+        // GetUserByName stub, which the flow consults exactly between the two transactions.
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
+        users.GetUserByName("alice").Returns(_ =>
+        {
+            cfg.OidConfigs["kc"].Enabled = false;
+            return UserNamed("alice", Existing);
+        });
+
+        await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
+            service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true));
+
+        Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("sub-1")); // no link written
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_ProviderDisabledBeforeLegacyMigration_RefusesInsteadOfMinting()
+    {
+        // #380 on the #155 legacy path: the candidate-resolving read passes enabled, then the provider
+        // is disabled before the migration transaction. Without the guard the caller would still return
+        // UseExistingLink and mint with pre-disable settings; with it the migration rejects and the
+        // legacy key stays un-migrated. The flip runs inside the GetUserById stub, which the read
+        // consults after its own guard has already passed.
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
+        });
+        users.GetUserById(Existing).Returns(_ =>
+        {
+            cfg.OidConfigs["kc"].Enabled = false;
+            return UserNamed("alice", Existing);
+        });
+
+        await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
+            service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true));
+
+        Assert.True(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("alice")); // not re-keyed
+        Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("sub-1"));
+    }
+
+    [Fact]
+    public void TryCreateLink_ProviderDisabled_ReturnsUnknownProviderWithoutWriting()
+    {
+        // Link creation is a GRANT of future login capability, so it takes the same disabled-is-absent
+        // treatment as the login-path guards (#380): a provider disabled between the controller's Enabled
+        // gate and this transaction must not gain a dormant link that would mint on re-enable.
+        var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = false });
+
+        var result = service.TryCreateLink("oid", "kc", "sub-1", Existing);
+
+        Assert.Equal(CanonicalLinkWriteResult.UnknownProvider, result);
+        Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("sub-1"));
+    }
+
+    [Fact]
+    public void TryRemoveLink_ProviderDisabled_StillRemoves()
+    {
+        // The admin paths deliberately keep working on a disabled provider (#380): disable-then-clean-up
+        // is the normal workflow, so only absence maps to UnknownProvider there.
+        var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = false,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+
+        var result = service.TryRemoveLink("oid", "kc", "sub-1", Existing);
+
+        Assert.Equal(CanonicalLinkRemoveResult.Removed, result);
+        Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("sub-1"));
     }
 }
