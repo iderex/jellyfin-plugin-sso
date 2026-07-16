@@ -32,6 +32,11 @@ public class SSOControllerLinkTests
     private static readonly Guid Target = Guid.Parse("55555555-5555-5555-5555-555555555555");
     private static readonly Guid Other = Guid.Parse("66666666-6666-6666-6666-666666666666");
 
+    // The browser-binding id (#326) recorded on the seeded OID states; ForCaller presents the matching
+    // binding cookie so the OID link redeems (the SAML paths ignore it). Without the match the redeem
+    // would be refused as a wrong-browser callback.
+    private const string Binding = "link-browser-binding";
+
     [Fact]
     public async Task AddCanonicalLink_NonAdminEditingAnotherUser_Returns403()
     {
@@ -185,6 +190,7 @@ public class SSOControllerLinkTests
             Provider = "keycloak",
             Valid = true,
             Subject = "sub-1",
+            BindingId = Binding,
         });
 
         var result = await harness.Controller.AddCanonicalLink("oid", "keycloak", Target, new AuthResponse { Data = "state-1" });
@@ -207,6 +213,7 @@ public class SSOControllerLinkTests
             Provider = "keycloak",
             Valid = true,
             Subject = "sub-1",
+            BindingId = Binding,
         });
 
         var rejected = await harness.Controller.AddCanonicalLink("oid", "keycloak", Target, new AuthResponse { Data = "state-1" });
@@ -301,6 +308,11 @@ public class SSOControllerLinkTests
         // AuthorizationInfo.UserId is derived from User.Id, so setting the user fixes the caller identity.
         var authInfo = new AuthorizationInfo { User = user };
         harness.AuthContext.GetAuthorizationInfo(Arg.Any<HttpRequest>()).Returns(Task.FromResult(authInfo));
+
+        // Present the browser-binding cookie (#326) so the OID link redeem sees the id the seeded state
+        // records; the Cookie header is how a DefaultHttpContext exposes Request.Cookies. Harmless for the
+        // SAML and non-redeem paths, which never read it.
+        harness.Controller.HttpContext.Request.Headers["Cookie"] = $"{AuthorizeStateBinding.CookieName}={Binding}";
         return harness;
     }
 }

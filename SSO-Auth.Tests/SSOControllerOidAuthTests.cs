@@ -23,6 +23,10 @@ public class SSOControllerOidAuthTests
 {
     private static readonly Guid UserId = Guid.Parse("77777777-7777-7777-7777-777777777777");
 
+    // The browser-binding id (#326) the challenge recorded on the state; the redeem leg must present the
+    // same value (via the binding cookie) or the state is refused without being consumed.
+    private const string Binding = "oidauth-browser-binding";
+
     [Fact]
     public async Task OidAuth_MissingData_ReturnsBadRequest()
     {
@@ -71,6 +75,7 @@ public class SSOControllerOidAuthTests
             AllowExistingAccountLink = false,
         });
         SeedValidState(harness, "state-token");
+        SetBindingCookie(harness, Binding);
 
         var result = await harness.Controller.OidAuth("kc", new AuthResponse
         {
@@ -94,8 +99,52 @@ public class SSOControllerOidAuthTests
         await harness.UserManager.Received(1).CreateUserAsync("alice");
     }
 
+    [Fact]
+    public async Task OidAuth_MissingBindingCookie_RejectsAsInvalidState_WithoutConsumingTheState()
+    {
+        var harness = new SsoControllerHarness(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            EnableAuthorization = false,
+            AllowExistingAccountLink = false,
+        });
+        SeedValidState(harness, "state-token");
+        // No binding cookie is set: the redeem arrives from a different browser than started the flow.
+
+        var rejected = await harness.Controller.OidAuth("kc", new AuthResponse
+        {
+            Data = "state-token",
+            DeviceID = "device-1",
+            DeviceName = "Test Device",
+            AppName = "Jellyfin Web",
+            AppVersion = "1.0",
+        });
+
+        // #326: refused with the uniform invalid-state body, and — crucially — the state was NOT consumed
+        // (the binding check precedes the atomic remove), so a wrong-browser attempt cannot burn a
+        // legitimate user's in-flight state, and nothing was provisioned.
+        var content = Assert.IsType<ContentResult>(rejected);
+        Assert.Equal(400, content.StatusCode);
+        Assert.Equal("Invalid or expired state", content.Content);
+        await harness.UserManager.DidNotReceive().CreateUserAsync(Arg.Any<string>());
+
+        // The state survived the wrong-browser hit: presenting the correct binding cookie still redeems it.
+        SetBindingCookie(harness, Binding);
+        var accepted = await harness.Controller.OidAuth("kc", new AuthResponse
+        {
+            Data = "state-token",
+            DeviceID = "device-1",
+            DeviceName = "Test Device",
+            AppName = "Jellyfin Web",
+            AppVersion = "1.0",
+        });
+        Assert.IsType<OkObjectResult>(accepted);
+        await harness.UserManager.Received(1).CreateUserAsync("alice");
+    }
+
     // Seeds a valid, redeemable login state for provider "kc" bound to a new user "alice", and mocks the
-    // user provisioning + session lookup the happy path drives.
+    // user provisioning + session lookup the happy path drives. BindingId records the browser-binding id
+    // the challenge would have set; the redeem leg must present the matching cookie (see SetBindingCookie).
     private static void SeedValidState(SsoControllerHarness harness, string token)
     {
         var state = new TimedAuthorizeState(new AuthorizeState { State = token }, DateTime.Now)
@@ -105,6 +154,7 @@ public class SSOControllerOidAuthTests
             Subject = "sub-1",
             Username = "alice",
             Folders = new List<string>(),
+            BindingId = Binding,
         };
         SSOController.SeedOidStateForTests(token, state);
 
@@ -112,4 +162,9 @@ public class SSOControllerOidAuthTests
         harness.UserManager.CreateUserAsync("alice").Returns(user);
         harness.UserManager.GetUserById(UserId).Returns(user);
     }
+
+    // Presents the browser-binding cookie on the controller's request (#326). Populating the Cookie header
+    // is how a DefaultHttpContext exposes Request.Cookies, which the callback reads.
+    private static void SetBindingCookie(SsoControllerHarness harness, string value) =>
+        harness.Controller.HttpContext.Request.Headers["Cookie"] = $"{AuthorizeStateBinding.CookieName}={value}";
 }

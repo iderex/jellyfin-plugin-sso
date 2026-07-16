@@ -186,6 +186,24 @@ config so a save does not reset them.
   single Jellyfin instance or sticky sessions: behind a load balancer without session affinity, the
   challenge and the response can land on different instances and every solicited login is rejected.
 
+## OpenID login browser binding
+
+Every OpenID login is bound to the browser that started it. When the login begins, the plugin sets a
+short-lived `HttpOnly`, `SameSite=Lax` cookie (`sso_oid_state_binding`, `Secure` on HTTPS) carrying a
+random id, and records the same id on the in-flight authorize state; the callback is only honored when
+the cookie matches. This ties the OAuth `state` to the initiating user-agent as the OAuth 2.0 Security
+BCP requires, so a login started in one browser cannot be completed in another — closing a forced-login
+/ session-fixation vector where an attacker lures a victim to the callback with the attacker's own code.
+It is automatic, with no configuration. Two consequences worth knowing:
+
+- **Complete the login in the same browser that started it.** A callback opened in a different browser
+  (or after clearing cookies mid-flow) is rejected with the uniform "invalid or expired state" message;
+  just start the login again. Two OpenID logins running at once in the _same_ browser share the one
+  cookie, so the later one wins and the earlier tab must be retried.
+- **Serve the whole flow from one origin.** If `BaseUrlOverride` points at a host your users do not
+  actually browse, the binding cookie will not travel with them; keep the challenge and callback on the
+  same origin (which a working setup already does).
+
 ## Authelia
 
 Authelia is simple to configure, and RBAC is straightforward.

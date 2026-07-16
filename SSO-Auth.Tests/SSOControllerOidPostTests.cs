@@ -27,6 +27,10 @@ public class SSOControllerOidPostTests
 {
     private const string Authority = "https://idp-oidpost.example.com";
 
+    // The browser-binding id (#326) the challenge would have recorded on the state and handed to the
+    // browser as a cookie; the callback must present the same value or the state is refused.
+    private const string Binding = "oidpost-browser-binding";
+
     [Fact]
     public async Task OidPost_ValidCallback_RendersTheAuthPage()
     {
@@ -40,6 +44,21 @@ public class SSOControllerOidPostTests
         var page = Assert.IsType<ContentResult>(result);
         Assert.Equal("text/html", page.ContentType);
         Assert.False(string.IsNullOrEmpty(page.Content));
+    }
+
+    [Fact]
+    public async Task OidPost_MissingBindingCookie_RejectsAsInvalidState()
+    {
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        // #326: the state was started in another browser (no matching binding cookie is presented), so the
+        // callback is refused before any token exchange — the forced-login / session-fixation defense. The
+        // body is the uniform invalid-state message, so a wrong-browser hit is indistinguishable from an
+        // expiry.
+        var harness = ArrangeCallback(fixture, query: "?code=test-code&state=state-1", bindingCookie: null);
+
+        var result = await harness.Controller.OidPost("kc", "state-1");
+
+        Assert.Equal("Invalid or expired state", Assert.IsType<BadRequestObjectResult>(result).Value);
     }
 
     [Fact]
@@ -89,7 +108,8 @@ public class SSOControllerOidPostTests
         OidcTokenFixture fixture,
         string query,
         string? idToken = null,
-        bool tokenEndpointFails = false)
+        bool tokenEndpointFails = false,
+        string? bindingCookie = Binding)
     {
         idToken ??= fixture.IdToken(subject: "sub-1", username: "alice");
 
@@ -129,15 +149,24 @@ public class SSOControllerOidPostTests
         harness.Controller.HttpContext.Request.Path = "/sso/OID/redirect/kc";
         harness.Controller.HttpContext.Request.QueryString = new QueryString(query);
 
+        // The browser-binding cookie the challenge leg set (#326). Populating the Cookie header is how a
+        // DefaultHttpContext exposes Request.Cookies; a null bindingCookie models a callback arriving in a
+        // different browser (no cookie), which the binding gate must refuse.
+        if (bindingCookie is not null)
+        {
+            harness.Controller.HttpContext.Request.Headers["Cookie"] = $"{AuthorizeStateBinding.CookieName}={bindingCookie}";
+        }
+
         // The authorize state the redirect leg would have created. The code flow is protected by the PKCE
-        // code_verifier here; OidcClient 7.x carries no nonce on the AuthorizeState.
+        // code_verifier here; OidcClient 7.x carries no nonce on the AuthorizeState. BindingId is the id the
+        // challenge recorded and the cookie above presents.
         var authState = new AuthorizeState
         {
             State = "state-1",
             CodeVerifier = "test-code-verifier",
             RedirectUri = "https://jf.example.com/sso/OID/redirect/kc",
         };
-        SSOController.SeedOidStateForTests("state-1", new TimedAuthorizeState(authState, DateTime.Now) { Provider = "kc" });
+        SSOController.SeedOidStateForTests("state-1", new TimedAuthorizeState(authState, DateTime.Now) { Provider = "kc", BindingId = Binding });
 
         return harness;
     }
