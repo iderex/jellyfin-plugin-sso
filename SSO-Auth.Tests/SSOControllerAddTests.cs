@@ -42,6 +42,27 @@ public class SSOControllerAddTests
     }
 
     [Fact]
+    public void OidAdd_NullBody_Throws_AndDoesNotPersist()
+    {
+        var harness = new SsoControllerHarness();
+
+        Assert.Throws<ArgumentException>(() => harness.Controller.OidAdd("keycloak", null));
+
+        // Fail-closed: a null [FromBody] is rejected at the door, so no null entry is stored (#350).
+        Assert.False(SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs.ContainsKey("keycloak")));
+    }
+
+    [Fact]
+    public void SamlAdd_NullBody_Throws_AndDoesNotPersist()
+    {
+        var harness = new SsoControllerHarness();
+
+        Assert.Throws<ArgumentException>(() => harness.Controller.SamlAdd("adfs", null));
+
+        Assert.False(SSOPlugin.Instance.ReadConfiguration(c => c.SamlConfigs.ContainsKey("adfs")));
+    }
+
+    [Fact]
     public void OidAdd_ReSaveOfExisting_PreservesCanonicalLinks()
     {
         var harness = new SsoControllerHarness(c =>
