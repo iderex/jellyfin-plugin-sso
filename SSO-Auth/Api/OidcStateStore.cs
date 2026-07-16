@@ -77,12 +77,13 @@ internal sealed class OidcStateStore
     /// <param name="provider">The provider the state is minted for.</param>
     /// <param name="isLinking">Whether this flow is a linking request rather than a login.</param>
     /// <param name="now">The current time, recorded as the entry's creation instant.</param>
+    /// <param name="bindingId">The browser-binding id to record on the entry, matched at the callback (#326).</param>
     /// <param name="shouldWarnCapacity">True when the caller should emit the throttled capacity warning.</param>
     /// <returns>True if the state was registered; false if refused (cap, or the key already existed).</returns>
-    internal bool TryAdd(AuthorizeState state, string provider, bool isLinking, DateTime now, out bool shouldWarnCapacity)
+    internal bool TryAdd(AuthorizeState state, string provider, bool isLinking, DateTime now, string bindingId, out bool shouldWarnCapacity)
     {
         if ((_states.Count >= _maxEntries && !_states.ContainsKey(state.State))
-            || !_states.TryAdd(state.State, new TimedAuthorizeState(state, now) { IsLinking = isLinking, Provider = provider }))
+            || !_states.TryAdd(state.State, new TimedAuthorizeState(state, now) { IsLinking = isLinking, Provider = provider, BindingId = bindingId }))
         {
             shouldWarnCapacity = _capWarnGate.TryEnter(now);
             return false;
@@ -102,12 +103,14 @@ internal sealed class OidcStateStore
     /// <param name="token">The state token the callback presented.</param>
     /// <param name="provider">The provider named in the consuming request's route.</param>
     /// <param name="now">The current time.</param>
-    /// <returns>The pending state, or null when unknown, expired, or provider-mismatched.</returns>
-    internal PendingState PeekCurrent(string token, string provider, DateTime now)
+    /// <param name="presentedBindingId">The browser-binding id the callback presented (its cookie value) (#326).</param>
+    /// <returns>The pending state, or null when unknown, expired, provider-mismatched, or binding-mismatched.</returns>
+    internal PendingState PeekCurrent(string token, string provider, DateTime now, string presentedBindingId)
     {
         return !string.IsNullOrEmpty(token)
             && _states.TryGetValue(token, out var state)
             && IsCurrentFor(state, provider, now)
+            && AuthorizeStateBinding.Matches(state.BindingId, presentedBindingId)
             ? new PendingState(state)
             : null;
     }
@@ -122,12 +125,14 @@ internal sealed class OidcStateStore
     /// <param name="responseData">The authorization-response value the caller presented.</param>
     /// <param name="provider">The provider named in the consuming request's route.</param>
     /// <param name="now">The current time.</param>
-    /// <returns>The redeemed snapshot, or null when the state is not redeemable or already claimed.</returns>
-    internal RedeemedState TryRedeem(string responseData, string provider, DateTime now)
+    /// <param name="presentedBindingId">The browser-binding id the caller presented (its cookie value) (#326).</param>
+    /// <returns>The redeemed snapshot, or null when not redeemable, already claimed, or binding-mismatched.</returns>
+    internal RedeemedState TryRedeem(string responseData, string provider, DateTime now, string presentedBindingId)
     {
         return !string.IsNullOrEmpty(responseData)
             && _states.TryGetValue(responseData, out var state)
             && IsRedeemableBy(state, responseData, provider, now)
+            && AuthorizeStateBinding.Matches(state.BindingId, presentedBindingId)
             && _states.TryRemove(new KeyValuePair<string, TimedAuthorizeState>(responseData, state))
             ? new RedeemedState(state)
             : null;

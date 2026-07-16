@@ -16,13 +16,23 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 /// predecessor AuthStateStore tests: provider-bound peek (#289), the single-use atomic claim
 /// (#138/#133 — the upstream replay fix), the clock-anomaly expiry, the cap that refuses new states
 /// instead of evicting in-flight ones (#246), and the concurrency regression that motivated the
-/// ConcurrentDictionary (adds racing the prune sweep threw on a plain Dictionary).
+/// ConcurrentDictionary (adds racing the prune sweep threw on a plain Dictionary). Since #326 every
+/// peek/redeem also carries the browser-binding gate: the presented binding id (the callback's cookie
+/// value) must match the id recorded on the state, so a state started in one browser cannot be
+/// completed in another (forced-login / session-fixation defense). The pre-#326 semantics tests pass
+/// a matching <see cref="Binding"/> so the binding gate is transparent to them; the dedicated
+/// mismatch/absent tests below prove the gate itself.
 /// </summary>
 public class OidcStateStoreTests
 {
     private static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan PruneInterval = TimeSpan.FromMinutes(1);
     private static readonly DateTime Now = new DateTime(2026, 7, 11, 12, 0, 0, DateTimeKind.Utc);
+
+    // The browser-binding id every Entry() records and the pre-#326 semantics tests present; a matching
+    // value keeps the binding gate transparent so those tests pin only the provider/expiry/replay/cap
+    // behavior they were written for.
+    private const string Binding = "browser-A-binding";
 
     private static OidcStateStore Store(int maxEntries = 100, TimeSpan? pruneInterval = null) =>
         new(maxEntries, Lifetime, pruneInterval ?? PruneInterval);
@@ -32,6 +42,7 @@ public class OidcStateStoreTests
         {
             Provider = provider,
             Valid = valid,
+            BindingId = Binding,
         };
 
     // --- PeekCurrent (OidPost precondition): provider-bound + unexpired, non-consuming ---
@@ -42,7 +53,7 @@ public class OidcStateStoreTests
         var store = Store();
         store.Seed("s", Entry("p", "s", false, Now));
 
-        Assert.NotNull(store.PeekCurrent("s", "p", Now));
+        Assert.NotNull(store.PeekCurrent("s", "p", Now, Binding));
         Assert.Equal(1, store.Count); // non-consuming: the entry stays for the redeem leg
     }
 
@@ -52,7 +63,7 @@ public class OidcStateStoreTests
         var store = Store();
         store.Seed("s", Entry("p", "s", false, Now));
 
-        Assert.Null(store.PeekCurrent("s", "other", Now));
+        Assert.Null(store.PeekCurrent("s", "other", Now, Binding));
     }
 
     [Fact]
@@ -61,7 +72,7 @@ public class OidcStateStoreTests
         var store = Store();
         store.Seed("s", Entry("p", "s", false, Now.AddMinutes(-2)));
 
-        Assert.Null(store.PeekCurrent("s", "p", Now));
+        Assert.Null(store.PeekCurrent("s", "p", Now, Binding));
     }
 
     [Fact]
@@ -71,8 +82,8 @@ public class OidcStateStoreTests
         var store = Store();
         store.Seed("t", null);
 
-        Assert.Null(store.PeekCurrent("t", "p", Now));
-        Assert.Null(store.TryRedeem("t", "p", Now));
+        Assert.Null(store.PeekCurrent("t", "p", Now, Binding));
+        Assert.Null(store.TryRedeem("t", "p", Now, Binding));
     }
 
     [Fact]
@@ -82,7 +93,90 @@ public class OidcStateStoreTests
         var store = Store();
         store.Seed("s", Entry("p", "s", false, Now.AddMinutes(5)));
 
-        Assert.Null(store.PeekCurrent("s", "p", Now));
+        Assert.Null(store.PeekCurrent("s", "p", Now, Binding));
+    }
+
+    // --- Browser-binding gate (#326): the callback must present the id recorded at challenge ---
+
+    [Fact]
+    public void PeekCurrent_MismatchedBinding_ReturnsNull()
+    {
+        // A state started in browser A cannot be peeked from browser B: the presented binding id does
+        // not match the recorded one, so the forced-login callback is refused before any token exchange.
+        var store = Store();
+        var entry = Entry("p", "s", false, Now);
+        entry.BindingId = "browser-A";
+        store.Seed("s", entry);
+
+        Assert.Null(store.PeekCurrent("s", "p", Now, "browser-B"));
+        Assert.Equal(1, store.Count); // non-consuming: a wrong-browser peek must not drop the entry
+    }
+
+    [Fact]
+    public void TryRedeem_MismatchedBinding_ReturnsNull_AndDoesNotConsume()
+    {
+        // The key property of #326: a wrong-browser redeem is refused BEFORE the atomic remove, so an
+        // attacker (or a lured victim) cannot burn a legitimate user's in-flight state — the right
+        // browser can still complete the login afterward.
+        var store = Store();
+        var entry = Entry("p", "tok", true, Now);
+        entry.BindingId = "browser-A";
+        store.Seed("tok", entry);
+
+        Assert.Null(store.TryRedeem("tok", "p", Now, "browser-B"));
+        Assert.Equal(1, store.Count); // the mismatched attempt did not consume the state
+
+        // The browser that started the flow still redeems it: the state survived the wrong-browser hit.
+        var redeemed = store.TryRedeem("tok", "p", Now, "browser-A");
+        Assert.NotNull(redeemed);
+        Assert.Equal(0, store.Count);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void PeekCurrent_AbsentPresentedBinding_ReturnsNull(string? presentedBindingId)
+    {
+        // Fail closed: a callback with no binding cookie (missing or empty) never matches a bound state,
+        // even though the token and provider are correct.
+        var store = Store();
+        store.Seed("s", Entry("p", "s", false, Now));
+
+        Assert.Null(store.PeekCurrent("s", "p", Now, presentedBindingId));
+        Assert.Equal(1, store.Count);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void TryRedeem_AbsentPresentedBinding_ReturnsNull(string? presentedBindingId)
+    {
+        // Fail closed on the redeem leg too, and without consuming: a missing/empty cookie must not
+        // burn the state either.
+        var store = Store();
+        store.Seed("tok", Entry("p", "tok", true, Now));
+
+        Assert.Null(store.TryRedeem("tok", "p", Now, presentedBindingId));
+        Assert.Equal(1, store.Count);
+    }
+
+    [Fact]
+    public void TryRedeem_EntryWithNoBindingId_ReturnsNull()
+    {
+        // Fail closed on the stored side: a state that recorded no binding id (e.g. a legacy or
+        // hand-seeded entry) is never redeemable — not even by presenting an empty or arbitrary id, so
+        // an unbound state cannot be a bypass.
+        var store = Store();
+        store.Seed("tok", new TimedAuthorizeState(new AuthorizeState { State = "tok" }, Now)
+        {
+            Provider = "p",
+            Valid = true,
+            // BindingId deliberately left null.
+        });
+
+        Assert.Null(store.TryRedeem("tok", "p", Now, "anything"));
+        Assert.Null(store.TryRedeem("tok", "p", Now, null));
+        Assert.Equal(1, store.Count); // none of the fail-closed attempts consumed the entry
     }
 
     // --- TryRedeem (OidAuth/OidLink): valid + response match + provider + unexpired, one-time ---
@@ -101,7 +195,7 @@ public class OidcStateStoreTests
         entry.AvatarURL = "https://idp.example.com/a.png";
         store.Seed("tok", entry);
 
-        var redeemed = store.TryRedeem("tok", "p", Now);
+        var redeemed = store.TryRedeem("tok", "p", Now, Binding);
 
         Assert.NotNull(redeemed);
         Assert.Equal("sub-1", redeemed.Subject);
@@ -121,7 +215,7 @@ public class OidcStateStoreTests
         var store = Store();
         store.Seed("tok", Entry("p", "tok", false, Now));
 
-        Assert.Null(store.TryRedeem("tok", "p", Now));
+        Assert.Null(store.TryRedeem("tok", "p", Now, Binding));
         Assert.Equal(1, store.Count);
     }
 
@@ -133,7 +227,7 @@ public class OidcStateStoreTests
         var store = Store();
         store.Seed("tok", Entry("low-trust", "tok", true, Now));
 
-        Assert.Null(store.TryRedeem("tok", "high-trust", Now));
+        Assert.Null(store.TryRedeem("tok", "high-trust", Now, Binding));
         Assert.Equal(1, store.Count);
     }
 
@@ -144,7 +238,7 @@ public class OidcStateStoreTests
         var store = Store();
         store.Seed("a", Entry("p", "b", true, Now));
 
-        Assert.Null(store.TryRedeem("a", "p", Now));
+        Assert.Null(store.TryRedeem("a", "p", Now, Binding));
     }
 
     [Fact]
@@ -153,7 +247,7 @@ public class OidcStateStoreTests
         var store = Store();
         store.Seed("tok", Entry("p", "tok", true, Now.AddMinutes(-2)));
 
-        Assert.Null(store.TryRedeem("tok", "p", Now));
+        Assert.Null(store.TryRedeem("tok", "p", Now, Binding));
     }
 
     // --- Single-use / invalidate-immediately (#138: upstream 9p4 v4.0.0.4 fix) ---
@@ -169,8 +263,8 @@ public class OidcStateStoreTests
         var store = Store();
         store.Seed("tok", Entry("p", "tok", true, Now));
 
-        Assert.NotNull(store.TryRedeem("tok", "p", Now)); // the redeeming request wins the claim
-        Assert.Null(store.TryRedeem("tok", "p", Now));    // a replay finds it already consumed
+        Assert.NotNull(store.TryRedeem("tok", "p", Now, Binding)); // the redeeming request wins the claim
+        Assert.Null(store.TryRedeem("tok", "p", Now, Binding));    // a replay finds it already consumed
         Assert.Equal(0, store.Count);
     }
 
@@ -179,9 +273,9 @@ public class OidcStateStoreTests
     {
         var store = Store();
         store.Seed("tok", Entry("p", "tok", true, Now));
-        Assert.NotNull(store.TryRedeem("tok", "p", Now));
+        Assert.NotNull(store.TryRedeem("tok", "p", Now, Binding));
 
-        Assert.Null(store.PeekCurrent("tok", "p", Now));
+        Assert.Null(store.PeekCurrent("tok", "p", Now, Binding));
         Assert.Equal(0, store.Count);
     }
 
@@ -193,8 +287,8 @@ public class OidcStateStoreTests
         var store = Store();
         store.Seed("tok", Entry("p", "tok", true, Now));
 
-        var a = Task.Run(() => store.TryRedeem("tok", "p", Now), TestContext.Current.CancellationToken);
-        var b = Task.Run(() => store.TryRedeem("tok", "p", Now), TestContext.Current.CancellationToken);
+        var a = Task.Run(() => store.TryRedeem("tok", "p", Now, Binding), TestContext.Current.CancellationToken);
+        var b = Task.Run(() => store.TryRedeem("tok", "p", Now, Binding), TestContext.Current.CancellationToken);
         var results = await Task.WhenAll(a, b);
 
         Assert.Single(results, redeemed => redeemed != null); // exactly one request claimed the state
@@ -213,7 +307,7 @@ public class OidcStateStoreTests
         store.PruneExpired(Now);
 
         Assert.Equal(1, store.Count);
-        Assert.NotNull(store.PeekCurrent("fresh", "p", Now));
+        Assert.NotNull(store.PeekCurrent("fresh", "p", Now, Binding));
     }
 
     [Fact]
@@ -228,7 +322,7 @@ public class OidcStateStoreTests
         store.PruneExpired(Now);
 
         Assert.Equal(1, store.Count);
-        Assert.NotNull(store.PeekCurrent("at-boundary", "p", Now));
+        Assert.NotNull(store.PeekCurrent("at-boundary", "p", Now, Binding));
     }
 
     [Fact]
@@ -242,8 +336,8 @@ public class OidcStateStoreTests
 
         store.PruneExpired(Now.AddSeconds(1)); // inside the interval: suppressed, no sweep
         Assert.Equal(1, store.Count);
-        Assert.Null(store.PeekCurrent("expired", "p", Now.AddSeconds(1)));
-        Assert.Null(store.TryRedeem("expired", "p", Now.AddSeconds(1)));
+        Assert.Null(store.PeekCurrent("expired", "p", Now.AddSeconds(1), Binding));
+        Assert.Null(store.TryRedeem("expired", "p", Now.AddSeconds(1), Binding));
 
         store.PruneExpired(Now + PruneInterval + TimeSpan.FromSeconds(1)); // next interval: swept
         Assert.Equal(0, store.Count);
@@ -265,7 +359,7 @@ public class OidcStateStoreTests
             {
                 for (var i = 0; i < 5000; i++)
                 {
-                    store.TryAdd(new AuthorizeState { State = "fresh-" + i }, "p", false, Now, out _);
+                    store.TryAdd(new AuthorizeState { State = "fresh-" + i }, "p", false, Now, Binding, out _);
                 }
             },
             TestContext.Current.CancellationToken);
@@ -283,7 +377,7 @@ public class OidcStateStoreTests
         store.PruneExpired(Now.AddTicks(201)); // one final guaranteed sweep for the seed entry
 
         Assert.Equal(5000, store.Count);
-        Assert.Null(store.PeekCurrent("seed-expired", "p", Now));
+        Assert.Null(store.PeekCurrent("seed-expired", "p", Now, Binding));
     }
 
     // --- TryAdd cap (#246): bound the store; refuse a new state at capacity, never evict in-flight ---
@@ -293,8 +387,8 @@ public class OidcStateStoreTests
     {
         var store = Store(maxEntries: 2);
 
-        Assert.True(store.TryAdd(new AuthorizeState { State = "a" }, "p", false, Now, out var warnA));
-        Assert.True(store.TryAdd(new AuthorizeState { State = "b" }, "p", false, Now, out var warnB));
+        Assert.True(store.TryAdd(new AuthorizeState { State = "a" }, "p", false, Now, Binding, out var warnA));
+        Assert.True(store.TryAdd(new AuthorizeState { State = "b" }, "p", false, Now, Binding, out var warnB));
         Assert.False(warnA);
         Assert.False(warnB);
         Assert.Equal(2, store.Count);
@@ -304,20 +398,20 @@ public class OidcStateStoreTests
     public void TryAdd_AtCap_RefusesANewKeyAndKeepsTheInFlightState()
     {
         var store = Store(maxEntries: 1);
-        Assert.True(store.TryAdd(new AuthorizeState { State = "in-flight" }, "p", false, Now, out _));
+        Assert.True(store.TryAdd(new AuthorizeState { State = "in-flight" }, "p", false, Now, Binding, out _));
 
         // At the cap, a fresh challenge is refused rather than evicting the user already mid-login.
-        Assert.False(store.TryAdd(new AuthorizeState { State = "new" }, "p", false, Now, out _));
+        Assert.False(store.TryAdd(new AuthorizeState { State = "new" }, "p", false, Now, Binding, out _));
         Assert.Equal(1, store.Count);
-        Assert.NotNull(store.PeekCurrent("in-flight", "p", Now));
+        Assert.NotNull(store.PeekCurrent("in-flight", "p", Now, Binding));
     }
 
     [Fact]
     public void TryAdd_DuplicateKey_ReturnsFalse()
     {
         var store = Store(maxEntries: 10);
-        Assert.True(store.TryAdd(new AuthorizeState { State = "a" }, "p", false, Now, out _));
-        Assert.False(store.TryAdd(new AuthorizeState { State = "a" }, "p", false, Now, out _));
+        Assert.True(store.TryAdd(new AuthorizeState { State = "a" }, "p", false, Now, Binding, out _));
+        Assert.False(store.TryAdd(new AuthorizeState { State = "a" }, "p", false, Now, Binding, out _));
     }
 
     [Fact]
@@ -326,15 +420,15 @@ public class OidcStateStoreTests
         // The warning signal is bounded exactly like the sweeps: the first refusal signals, further
         // refusals inside the interval stay silent, so a flood cannot amplify into log volume.
         var store = Store(maxEntries: 1);
-        Assert.True(store.TryAdd(new AuthorizeState { State = "a" }, "p", false, Now, out _));
+        Assert.True(store.TryAdd(new AuthorizeState { State = "a" }, "p", false, Now, Binding, out _));
 
-        Assert.False(store.TryAdd(new AuthorizeState { State = "b" }, "p", false, Now, out var firstWarn));
+        Assert.False(store.TryAdd(new AuthorizeState { State = "b" }, "p", false, Now, Binding, out var firstWarn));
         Assert.True(firstWarn);
 
-        Assert.False(store.TryAdd(new AuthorizeState { State = "c" }, "p", false, Now.AddSeconds(1), out var secondWarn));
+        Assert.False(store.TryAdd(new AuthorizeState { State = "c" }, "p", false, Now.AddSeconds(1), Binding, out var secondWarn));
         Assert.False(secondWarn);
 
-        Assert.False(store.TryAdd(new AuthorizeState { State = "d" }, "p", false, Now + PruneInterval, out var nextIntervalWarn));
+        Assert.False(store.TryAdd(new AuthorizeState { State = "d" }, "p", false, Now + PruneInterval, Binding, out var nextIntervalWarn));
         Assert.True(nextIntervalWarn);
     }
 
@@ -356,7 +450,7 @@ public class OidcStateStoreTests
                 {
                     for (var i = 0; i < perTask; i++)
                     {
-                        if (!store.TryAdd(new AuthorizeState { State = $"t{id}-k{i}" }, "p", false, Now, out _))
+                        if (!store.TryAdd(new AuthorizeState { State = $"t{id}-k{i}" }, "p", false, Now, Binding, out _))
                         {
                             Interlocked.Increment(ref rejected);
                         }
@@ -386,7 +480,7 @@ public class OidcStateStoreTests
         // promotion an atomic single-winner swap is #341, and this pin documents what it will change.
         var store = Store();
         store.Seed("tok", Entry("p", "tok", false, Now));
-        var pending = store.PeekCurrent("tok", "p", Now);
+        var pending = store.PeekCurrent("tok", "p", Now, Binding);
         Assert.NotNull(pending);
 
         pending.Complete(new OidcAuthorizeStateBuilder.OidcAuthorizeState(
@@ -396,7 +490,7 @@ public class OidcStateStoreTests
             Username: "bob", Subject: "sub-2", Valid: true, Admin: true,
             EnableLiveTv: true, EnableLiveTvManagement: true, Folders: new List<string> { "all" }, AvatarUrl: null));
 
-        var redeemed = store.TryRedeem("tok", "p", Now);
+        var redeemed = store.TryRedeem("tok", "p", Now, Binding);
         Assert.NotNull(redeemed);
         Assert.Equal("bob", redeemed.Username);
         Assert.Equal("sub-2", redeemed.Subject);
@@ -411,7 +505,7 @@ public class OidcStateStoreTests
         // swap is the follow-up).
         var store = Store();
         store.Seed("tok", Entry("p", "tok", false, Now));
-        var pending = store.PeekCurrent("tok", "p", Now);
+        var pending = store.PeekCurrent("tok", "p", Now, Binding);
         Assert.NotNull(pending);
 
         pending.Complete(new OidcAuthorizeStateBuilder.OidcAuthorizeState(
@@ -424,7 +518,7 @@ public class OidcStateStoreTests
             Folders: new List<string> { "movies" },
             AvatarUrl: "https://idp.example.com/a.png"));
 
-        var redeemed = store.TryRedeem("tok", "p", Now);
+        var redeemed = store.TryRedeem("tok", "p", Now, Binding);
         Assert.NotNull(redeemed);
         Assert.Equal("alice", redeemed.Username);
         Assert.Equal("sub-1", redeemed.Subject);

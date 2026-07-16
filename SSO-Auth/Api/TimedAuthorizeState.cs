@@ -34,6 +34,13 @@ internal sealed class TimedAuthorizeState
     public string Provider { get; set; }
 
     /// <summary>
+    /// Gets or sets the browser-binding id (#326). The challenge records a fresh random id here and
+    /// hands the same value to the browser as a cookie; the callbacks require the cookie to match this
+    /// before honoring the state, so a state started in one browser cannot be completed in another.
+    /// </summary>
+    public string BindingId { get; set; }
+
+    /// <summary>
     /// Gets or sets when this object was created to time it out.
     /// </summary>
     public DateTime Created { get; set; }

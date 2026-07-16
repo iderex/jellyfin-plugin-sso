@@ -148,9 +148,10 @@ public class SSOController : ControllerBase
                 return BadRequest("Missing state");
             }
 
-            if (StateStore.PeekCurrent(state, provider, DateTime.Now) is not { } pending)
+            if (StateStore.PeekCurrent(state, provider, DateTime.Now, Request.Cookies[AuthorizeStateBinding.CookieName]) is not { } pending)
             {
-                // Unknown, expired, or minted for a different provider — reject (details on PeekCurrent).
+                // Unknown, expired, minted for a different provider, or from a different browser than the
+                // one that started the flow (#326) — reject (details on PeekCurrent / AuthorizeStateBinding).
                 return BadRequest("Invalid or expired state");
             }
 
@@ -271,10 +272,16 @@ public class SSOController : ControllerBase
             return ReturnError(StatusCodes.Status400BadRequest, $"Error preparing login: {state.Error} - {state.ErrorDescription}");
         }
 
+        // Bind this authorize state to the browser that started it (#326): record a fresh random id on
+        // the state and hand the same value to the browser as a cookie. The callbacks require the cookie
+        // to match before honoring the state, so a state started in one browser cannot be completed in
+        // another (the forced-login / session-fixation defense).
+        var bindingId = AuthorizeStateBinding.NewId();
+
         // IsLinking tracks whether this is a linking request rather than a login. The state value
         // is a fresh CSPRNG token, so a collision is effectively impossible; a refusal is almost
         // always the capacity backstop under a flood, and the store throttles its warning signal.
-        if (!StateStore.TryAdd(state, provider, isLinking, DateTime.Now, out var shouldWarnCapacity))
+        if (!StateStore.TryAdd(state, provider, isLinking, DateTime.Now, bindingId, out var shouldWarnCapacity))
         {
             if (shouldWarnCapacity)
             {
@@ -283,6 +290,9 @@ public class SSOController : ControllerBase
 
             return ReturnError(StatusCodes.Status500InternalServerError, "Could not start login; please retry.");
         }
+
+        // Set the cookie only after the state is registered, so a refused challenge leaves no cookie.
+        Response.Cookies.Append(AuthorizeStateBinding.CookieName, bindingId, AuthorizeStateBinding.CookieOptions(OidcStateStore.DefaultLifetime));
 
         return Redirect(state.StartUrl);
     }
@@ -625,9 +635,11 @@ public class SSOController : ControllerBase
         }
 
         // One-time atomic claim — details on OidcStateStore.TryRedeem. A miss (unknown, expired,
-        // provider-mismatched, or already-redeemed) is a client-caused rejection, not a server fault:
-        // one uniform body, so a replay is indistinguishable from an expiry and replay stays hidden.
-        if (StateStore.TryRedeem(response.Data, provider, DateTime.Now) is not { } redeemed)
+        // provider-mismatched, already-redeemed, or from a different browser than started the flow, #326)
+        // is a client-caused rejection, not a server fault: one uniform body, so a replay is
+        // indistinguishable from an expiry and replay stays hidden. A binding mismatch does not consume
+        // the state (the check precedes the atomic remove), so it cannot burn a legitimate user's state.
+        if (StateStore.TryRedeem(response.Data, provider, DateTime.Now, Request.Cookies[AuthorizeStateBinding.CookieName]) is not { } redeemed)
         {
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.InvalidState));
         }
@@ -1178,9 +1190,10 @@ public class SSOController : ControllerBase
 
         // One-time atomic claim (see OidcStateStore.TryRedeem): consume the state so one verified
         // identity cannot be linked repeatedly and cannot then be reused to mint a session. A miss
-        // (unknown, expired, provider-mismatched, or already-redeemed) is a client-caused 400 in the
-        // same uniform body as the login path, not a 500.
-        if (StateStore.TryRedeem(response.Data, provider, DateTime.Now) is not { } redeemed)
+        // (unknown, expired, provider-mismatched, already-redeemed, or from a different browser than
+        // started the flow, #326) is a client-caused 400 in the same uniform body as the login path,
+        // not a 500. The linking challenge sets the same binding cookie, carried on this same-origin POST.
+        if (StateStore.TryRedeem(response.Data, provider, DateTime.Now, Request.Cookies[AuthorizeStateBinding.CookieName]) is not { } redeemed)
         {
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.InvalidState));
         }
