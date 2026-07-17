@@ -165,6 +165,26 @@ Exact redirect-URI matching at the provider is the backstop, but it only helps i
   an explicit `:443`/`:80` `redirect_uri` to work around the old port-in-URL behavior, switch it to the
   no-port form.
 
+## SAML audience validation
+
+By default a SAML response is accepted only if its assertion carries an `AudienceRestriction` that
+names **this** service provider; an assertion minted for a different audience is rejected (fail
+closed). This is what stops a response issued for another service that trusts the same identity
+provider from being replayed here. Two per-provider options tune it:
+
+- **`SamlAudience`** sets the SP entity id the `AudienceRestriction` must contain. Leave it blank to
+  use the `SamlClientId` (the value the plugin sends as the request `Issuer`), which is what most
+  deployments want; set it only when your identity provider is configured to address the assertion
+  to an entity id that differs from the client id. The value is compared trimmed.
+- **`DoNotValidateAudience`** (off by default) skips the audience check entirely. Enable it **only**
+  for a provider that cannot emit an `AudienceRestriction` matching this service provider — it
+  removes a fail-closed check, so prefer setting `SamlAudience` correctly over turning validation
+  off.
+
+Both are set through the SAML provider configuration (the `SAML/Add` API, like the other SAML
+options — there is no admin-UI toggle yet); include them whenever you re-post a provider's config so
+a save does not reset them.
+
 ## SAML response binding (optional hardening)
 
 Two per-provider SAML options, both **off by default**, tie a response more tightly to this service
