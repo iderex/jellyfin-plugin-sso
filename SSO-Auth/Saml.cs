@@ -31,6 +31,15 @@ internal sealed class SamlResponse
     private const string SignatureXPath =
         "/samlp:Response/ds:Signature | /samlp:Response/saml:Assertion/ds:Signature";
 
+    // The bearer SubjectConfirmationData required by the SAML 2.0 Web Browser SSO profile: the data
+    // element under a SubjectConfirmation whose Method is the bearer URN. Every SubjectConfirmationData
+    // read is scoped to it so a non-bearer confirmation (e.g. holder-of-key, which the profile pairs with
+    // a key-possession proof this SP does not verify) is never consumed as if it were the bearer token
+    // (#238). Kept as one constant shared by IsValid's presence check and every reader so they cannot
+    // diverge.
+    private const string BearerSubjectConfirmationDataXPath =
+        "/samlp:Response/saml:Assertion[1]/saml:Subject/saml:SubjectConfirmation[@Method='urn:oasis:names:tc:SAML:2.0:cm:bearer']/saml:SubjectConfirmationData";
+
     private readonly X509Certificate2 _certificate;
     private readonly XmlDocument _xmlDoc;
     private readonly XmlNamespaceManager _xmlNameSpaceManager; // we need this one to run our XPath queries on the SAML XML
@@ -119,17 +128,29 @@ internal sealed class SamlResponse
             return false;
         }
 
-        var signatureElement = (XmlElement)signatureNodes[0];
-
         try
         {
-            var signedXml = new SignedXml(_xmlDoc);
-            signedXml.LoadXml(signatureElement);
+            // EVERY position-bound signature must independently validate — its reference must cover the
+            // Response root or the single Assertion, its algorithms must be allowed, and it must verify
+            // against the pinned certificate (#238). The Web Browser SSO profile permits signing the
+            // Response, the Assertion, or BOTH; validating all of them (rather than only the first in
+            // document order) removes the "which signature is authoritative" ambiguity without rejecting
+            // a conformant IdP that signs both — a second, non-verifying signature rejects the whole
+            // response, so an attacker cannot slip a decoy alongside a valid one.
+            foreach (XmlElement signatureElement in signatureNodes)
+            {
+                var signedXml = new SignedXml(_xmlDoc);
+                signedXml.LoadXml(signatureElement);
 
-            return ValidateSignatureReference(signedXml, signatureElement)
-                && IsSignatureAlgorithmAllowed(signedXml)
-                && signedXml.CheckSignature(_certificate, true)
-                && IsWithinTimeBounds();
+                if (!ValidateSignatureReference(signedXml, signatureElement)
+                    || !IsSignatureAlgorithmAllowed(signedXml)
+                    || !signedXml.CheckSignature(_certificate, true))
+                {
+                    return false;
+                }
+            }
+
+            return IsWithinTimeBounds() && HasBearerSubjectConfirmation();
         }
         catch (Exception ex) when (ex is CryptographicException or ArgumentException or FormatException or XmlException)
         {
@@ -196,7 +217,7 @@ internal sealed class SamlResponse
             return false;
         }
 
-        return GetAudiences().Any(audience => string.Equals(audience, expectedAudience, StringComparison.Ordinal));
+        return IsAddressedTo(expectedAudience);
     }
 
     /// <summary>
@@ -231,26 +252,34 @@ internal sealed class SamlResponse
         }
     }
 
-    private List<string> GetAudiences()
+    // Whether the assertion is addressed to us: SAML 2.0 requires the SP to appear in EVERY
+    // <AudienceRestriction> (AND across restrictions, OR within one). Accepting on a match in ANY single
+    // restriction (the old .Any over the flattened union) would honor an assertion whose first restriction
+    // names a different SP and whose second names us — one not strictly addressed to this service provider
+    // (#238). Fail closed on no restriction at all: an assertion carrying no AudienceRestriction is not
+    // addressed to anyone in particular and must not pass the audience check.
+    private bool IsAddressedTo(string expectedAudience)
     {
-        var output = new List<string>();
-        var nodes = _xmlDoc.SelectNodes("/samlp:Response/saml:Assertion[1]/saml:Conditions/saml:AudienceRestriction/saml:Audience", _xmlNameSpaceManager);
-        if (nodes != null)
+        var restrictions = _xmlDoc.SelectNodes("/samlp:Response/saml:Assertion[1]/saml:Conditions/saml:AudienceRestriction", _xmlNameSpaceManager);
+        if (restrictions == null || restrictions.Count == 0)
         {
-            foreach (XmlNode node in nodes)
+            return false;
+        }
+
+        foreach (XmlNode restriction in restrictions)
+        {
+            var audiences = restriction.SelectNodes("saml:Audience", _xmlNameSpaceManager);
+            // Trim so a pretty-printed assertion (indentation/newlines around the value) still compares
+            // equal; the assertion is signed, so trimming does not weaken the check.
+            var present = audiences != null && audiences.Cast<XmlNode>()
+                .Any(node => string.Equals(node?.InnerText?.Trim(), expectedAudience, StringComparison.Ordinal));
+            if (!present)
             {
-                // Trim so a pretty-printed assertion (indentation/newlines around the value) still
-                // compares equal; skip whitespace-only audiences. The assertion is signed, so
-                // trimming does not weaken the check.
-                var value = node?.InnerText?.Trim();
-                if (!string.IsNullOrEmpty(value))
-                {
-                    output.Add(value);
-                }
+                return false;
             }
         }
 
-        return output;
+        return true;
     }
 
     /// <summary>
@@ -276,7 +305,7 @@ internal sealed class SamlResponse
         var xpaths = new[]
         {
             "/samlp:Response/saml:Assertion[1]/saml:Conditions",
-            "/samlp:Response/saml:Assertion[1]/saml:Subject/saml:SubjectConfirmation/saml:SubjectConfirmationData",
+            BearerSubjectConfirmationDataXPath,
         };
 
         foreach (var xpath in xpaths)
@@ -349,7 +378,7 @@ internal sealed class SamlResponse
     // A missing or unparseable upper bound is a rejection, not an accept-forever (the old behavior).
     private bool IsWithinTimeBounds()
     {
-        var subjectConfirmationData = _xmlDoc.SelectSingleNode("/samlp:Response/saml:Assertion[1]/saml:Subject/saml:SubjectConfirmation/saml:SubjectConfirmationData", _xmlNameSpaceManager);
+        var subjectConfirmationData = _xmlDoc.SelectSingleNode(BearerSubjectConfirmationDataXPath, _xmlNameSpaceManager);
         var conditions = _xmlDoc.SelectSingleNode("/samlp:Response/saml:Assertion[1]/saml:Conditions", _xmlNameSpaceManager);
 
         return SamlAssertionTime.IsWithinValidity(
@@ -358,6 +387,15 @@ internal sealed class SamlResponse
             conditions?.Attributes?["NotOnOrAfter"]?.Value,
             DateTime.UtcNow,
             SamlAssertionTime.ClockSkew);
+    }
+
+    // The Web Browser SSO profile is a bearer profile: the (signed) assertion must carry a bearer
+    // SubjectConfirmation with its confirmation data. Asserting its presence — after the signature is
+    // verified — rejects an assertion that offers only a non-bearer confirmation (e.g. holder-of-key),
+    // which would otherwise be consumed with no key-possession proof (#238).
+    private bool HasBearerSubjectConfirmation()
+    {
+        return _xmlDoc.SelectSingleNode(BearerSubjectConfirmationDataXPath, _xmlNameSpaceManager) != null;
     }
 
     /// <summary>
@@ -380,7 +418,7 @@ internal sealed class SamlResponse
     /// <returns>The Recipient attribute, or null when absent.</returns>
     public string GetRecipient()
     {
-        var node = _xmlDoc.SelectSingleNode("/samlp:Response/saml:Assertion[1]/saml:Subject/saml:SubjectConfirmation/saml:SubjectConfirmationData", _xmlNameSpaceManager) as XmlElement;
+        var node = _xmlDoc.SelectSingleNode(BearerSubjectConfirmationDataXPath, _xmlNameSpaceManager) as XmlElement;
         var recipient = node?.GetAttribute("Recipient");
         return string.IsNullOrEmpty(recipient) ? null : recipient;
     }
@@ -394,7 +432,7 @@ internal sealed class SamlResponse
     /// <returns>The InResponseTo attribute, or null when absent.</returns>
     public string GetInResponseTo()
     {
-        var node = _xmlDoc.SelectSingleNode("/samlp:Response/saml:Assertion[1]/saml:Subject/saml:SubjectConfirmation/saml:SubjectConfirmationData", _xmlNameSpaceManager) as XmlElement;
+        var node = _xmlDoc.SelectSingleNode(BearerSubjectConfirmationDataXPath, _xmlNameSpaceManager) as XmlElement;
         var inResponseTo = node?.GetAttribute("InResponseTo");
         return string.IsNullOrEmpty(inResponseTo) ? null : inResponseTo;
     }
