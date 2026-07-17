@@ -152,7 +152,10 @@ public abstract class ProviderConfigBase
     public List<FolderRoleMap> FolderRoleMapping { get; set; }
 
     /// <summary>
-    /// Gets or sets the default provider the user after logging in with SSO.
+    /// Gets or sets the authentication provider id written to the user's Jellyfin account
+    /// (<c>User.AuthenticationProviderId</c>) after a successful SSO login. This is a Jellyfin-native
+    /// user attribute; SSO logins themselves always resolve through the per-provider canonical-link maps,
+    /// not this field. Blank leaves the account's existing provider id untouched.
     /// </summary>
     public string DefaultProvider { get; set; }
 
