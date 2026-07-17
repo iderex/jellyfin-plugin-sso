@@ -690,7 +690,7 @@ public class SSOController : ControllerBase
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.AccountLinkForbidden));
         }
 
-        var authenticationResult = await Authenticate(new SessionParameters
+        var sessionParameters = new SessionParameters
         {
             UserId = userId,
             IsAdmin = redeemed.Admin,
@@ -702,7 +702,10 @@ public class SSOController : ControllerBase
             AuthResponse = response,
             DefaultProvider = config.DefaultProvider?.Trim(),
             AvatarUrl = redeemed.AvatarUrl,
-        }).ConfigureAwait(false);
+        };
+        var authenticationResult = await Authenticate(
+            sessionParameters,
+            () => _canonicalLinks.IsIdentityStillLinked("oid", provider, redeemed.Subject, userId)).ConfigureAwait(false);
         SsoAudit.LoginSucceeded(_logger, OpenIdProtocol, provider, redeemed.Username, redeemed.Admin);
         return LoginStatusMapper.ToActionResult(new LoginOutcome.Success(authenticationResult));
     }
@@ -1043,7 +1046,7 @@ public class SSOController : ControllerBase
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.AccountLinkForbidden));
         }
 
-        var authenticationResult = await Authenticate(new SessionParameters
+        var sessionParameters = new SessionParameters
         {
             UserId = userId,
             IsAdmin = derived.Admin,
@@ -1055,7 +1058,10 @@ public class SSOController : ControllerBase
             AuthResponse = response,
             DefaultProvider = config.DefaultProvider?.Trim(),
             AvatarUrl = null,
-        }).ConfigureAwait(false);
+        };
+        var authenticationResult = await Authenticate(
+            sessionParameters,
+            () => _canonicalLinks.IsIdentityStillLinked("saml", provider, nameId, userId)).ConfigureAwait(false);
         SsoAudit.LoginSucceeded(_logger, SamlProtocol, provider, nameId, derived.Admin);
         return LoginStatusMapper.ToActionResult(new LoginOutcome.Success(authenticationResult));
     }
@@ -1312,8 +1318,8 @@ public class SSOController : ControllerBase
     // logic of its own) to the SessionMinter flow. The resolver is passed rather than the value so the
     // flow evaluates it at the exact original point (after avatar/persistence, and NOT at all on the
     // fail-closed deleted-user path) — the pre-extraction Authenticate read it inline there.
-    private Task<AuthenticationResult> Authenticate(SessionParameters parameters) =>
-        _sessionMinter.MintAsync(parameters, () => HttpContext.GetNormalizedRemoteIP().ToString());
+    private Task<AuthenticationResult> Authenticate(SessionParameters parameters, Func<bool> identityStillLinked) =>
+        _sessionMinter.MintAsync(parameters, () => HttpContext.GetNormalizedRemoteIP().ToString(), identityStillLinked);
 
     // Applies the opt-in per-client rate limit (#128) on an anonymous flow endpoint: null when the
     // request may proceed, else a 429 carrying Retry-After. Reads the settings under the config

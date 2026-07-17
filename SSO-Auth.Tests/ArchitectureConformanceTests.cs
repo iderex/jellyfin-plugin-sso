@@ -202,6 +202,36 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void SessionMinter_RechecksRevocationImmediatelyBeforeTheMint()
+    {
+        // Locked in by the in-flight revocation gate (#232): MintAsync must evaluate the caller-supplied
+        // revocation predicate (identityStillLinked) as the last gate before it authenticates the session,
+        // so a refactor cannot silently drop it or reorder it after the mint and reopen the TOCTOU between
+        // link-resolution (under the config lock) and AuthenticateDirect (outside it). Call-level property,
+        // so it is a source scan like the controller rules above. The invocation "identityStillLinked()"
+        // is distinct from the parameter declaration/param-doc (no parentheses), so it matches only a gate.
+        // The FINAL gate is what closes the race, so this pins the LAST invocation before the mint (an
+        // earlier pre-mutation gate must not satisfy the rule) AND that no user-mutating side effect sits
+        // between that final gate and AuthenticateDirect — otherwise a revocation during that work would go
+        // unre-checked.
+        var minterSource = File.ReadAllLines(Path.Combine(RepoRoot(), "SSO-Auth", "Api", "SessionMinter.cs"));
+        var mintLine = Array.FindIndex(minterSource, l => l.Contains("AuthenticateDirect(", StringComparison.Ordinal));
+        Assert.True(mintLine >= 0, "SessionMinter.MintAsync must call AuthenticateDirect to mint the session.");
+
+        var finalGate = Array.FindLastIndex(minterSource, mintLine - 1, l => l.Contains("identityStillLinked()", StringComparison.Ordinal));
+        Assert.True(finalGate >= 0, "SessionMinter.MintAsync must invoke the identityStillLinked revocation re-check before AuthenticateDirect (#232).");
+
+        var mutationMarkers = new[] { "UpdateUserAsync", "SetPermission", "SetPreference", "TrySetAsync", "AuthenticationProviderId =" };
+        var interveningMutation = minterSource
+            .Skip(finalGate + 1)
+            .Take(mintLine - finalGate - 1)
+            .Any(l => mutationMarkers.Any(m => l.Contains(m, StringComparison.Ordinal)));
+        Assert.False(
+            interveningMutation,
+            "No user-mutating side effect may sit between the final #232 revocation re-check and AuthenticateDirect — the re-check must be the last gate before the mint.");
+    }
+
+    [Fact]
     public void SSOPlugin_DeclaresNoConfigurationLogicBeyondTheStoreFacade()
     {
         // Locked in by the ProviderConfigStore extraction (#318): SSOPlugin is bootstrap + page

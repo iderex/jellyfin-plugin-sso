@@ -398,6 +398,44 @@ internal sealed class CanonicalLinkService
         });
     }
 
+    /// <summary>
+    /// Whether the SSO identity may still mint a session for the given user: the provider exists and is
+    /// enabled, its canonical-links map still holds <paramref name="canonicalKey"/> pointing at
+    /// <paramref name="userId"/>, and that user still exists. Read under the config lock, so it is
+    /// linearized against a concurrent revocation (<see cref="RemoveUserEverywhere"/> /
+    /// <see cref="TryRemoveLink"/>) or a mid-flight provider disable.
+    /// </summary>
+    /// <remarks>
+    /// The in-flight revocation gate (#232): a login resolves the account under the config lock but the
+    /// session mint runs after the lock is released, so an admin Unregister (or a link delete, or a
+    /// provider disable) that lands in that gap would otherwise still mint a session for the just-revoked
+    /// identity. The mint flow re-reads this predicate twice — before applying the user side effects (so a
+    /// revoked login persists no grants) and again as the last check before the mint (so a revocation
+    /// landing mid-mint still yields no session). The final check does not close the race outright — a
+    /// revocation committing between it and the mint call still mints once — but it shrinks the window to
+    /// that single unavoidable gap (the mint cannot be held under the lock, which is async). Every unknown
+    /// resolves to false (missing/whitespace key, missing or disabled provider, missing/mismatched link,
+    /// deleted target), so it is fail closed.
+    /// </remarks>
+    /// <param name="mode">The protocol mode token, "oid" or "saml".</param>
+    /// <param name="provider">The provider the login authenticated against.</param>
+    /// <param name="canonicalKey">The stable identity key the link is stored under (OpenID sub / SAML NameID).</param>
+    /// <param name="userId">The Jellyfin user the login resolved to.</param>
+    /// <returns>True only when a live, enabled link for this identity still points at the user.</returns>
+    internal bool IsIdentityStillLinked(string mode, string provider, string canonicalKey, Guid userId)
+    {
+        if (string.IsNullOrWhiteSpace(canonicalKey))
+        {
+            return false;
+        }
+
+        return _configStore.Read(configuration =>
+            TryGetLinks(configuration, mode, provider, requireEnabled: true, out var links)
+            && links.TryGetValue(canonicalKey, out var linkedId)
+            && linkedId == userId
+            && _userManager.GetUserById(linkedId) != null);
+    }
+
     // Atomically links canonicalKey to candidateUserId unless a live link already exists for it (#133).
     // The existence check and the write are ONE Mutate read-modify-write, so two concurrent first-logins
     // for the same identity cannot both write or both adopt: the loser observes the winner's link and
