@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Jellyfin.Data;
 using Jellyfin.Database.Implementations.Entities;
+using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using MediaBrowser.Controller.Library;
@@ -23,6 +25,13 @@ public class CanonicalLinkServiceTests
     private static readonly Guid Other = Guid.Parse("22222222-2222-2222-2222-222222222222");
 
     private static User UserNamed(string name, Guid id) => new User(name, "SSO-Auth", "Default") { Id = id };
+
+    private static User AdminUserNamed(string name, Guid id)
+    {
+        var user = UserNamed(name, id);
+        user.SetPermission(PermissionKind.IsAdministrator, true);
+        return user;
+    }
 
     private static (CanonicalLinkService Service, PluginConfiguration Config, IUserManager Users, CapturingLogger Log) Build(Action<PluginConfiguration>? seed = null)
     {
@@ -794,5 +803,107 @@ public class CanonicalLinkServiceTests
 
         Assert.Equal(CanonicalLinkRemoveResult.Removed, result);
         Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("sub-1"));
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_AdoptionAllowed_AdminTarget_RefusedWithoutLinking()
+    {
+        // #218: an administrator account is the highest-value takeover target, so a name-based adoption
+        // of one is always refused regardless of the verified-email gate — even with adoption enabled and
+        // a fully verified login. The operator links an admin account explicitly via the admin endpoints.
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
+        users.GetUserByName("admin").Returns(AdminUserNamed("admin", Existing));
+
+        await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
+            service.ResolveOrCreateAsync("oid", "kc", "attacker-sub", "admin", allowExistingAccountLink: true, new AdoptionGate(RequireVerifiedEmail: true, EmailVerified: true)));
+
+        await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
+        Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("attacker-sub"));
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_SamlAdoptionAllowed_AdminTarget_RefusedWithoutLinking()
+    {
+        // #218: the admin-adoption refusal is protocol-agnostic. SAML carries no email_verified claim
+        // (AdoptionGate.None), but adopting an admin account by NameID is still refused.
+        var (service, cfg, users, _) = Build(c => c.SamlConfigs["idp"] = new SamlConfig { Enabled = true });
+        users.GetUserByName("admin").Returns(AdminUserNamed("admin", Existing));
+
+        await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
+            service.ResolveOrCreateAsync("saml", "idp", "admin", "admin", allowExistingAccountLink: true, AdoptionGate.None));
+
+        await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
+        Assert.False(cfg.SamlConfigs["idp"].CanonicalLinks.ContainsKey("admin"));
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_RequireVerifiedEmail_ClaimTrue_AdoptsNonAdmin()
+    {
+        // #218: with the verified-email gate on, a non-admin login carrying email_verified == true clears
+        // it and adopts, keying the link on the stable subject as usual.
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
+        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+
+        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true, new AdoptionGate(RequireVerifiedEmail: true, EmailVerified: true));
+
+        Assert.Equal(Existing, resolved);
+        Assert.Equal(Existing, cfg.OidConfigs["kc"].CanonicalLinks["sub-1"]);
+    }
+
+    [Theory]
+    [InlineData(false)] // email_verified == false
+    [InlineData(null)]  // claim absent
+    public async Task ResolveOrCreateAsync_RequireVerifiedEmail_ClaimFalseOrAbsent_RefusesWithoutLinking(bool? emailVerified)
+    {
+        // #218: with the gate on, an absent or false email_verified claim fails closed — no link, no
+        // account, and the takeover-blocking 403 (AccountLinkForbiddenException) is thrown.
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
+        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
+
+        await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
+            service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true, new AdoptionGate(RequireVerifiedEmail: true, EmailVerified: emailVerified)));
+
+        await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
+        Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("sub-1"));
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_LegacyLinkToAdminAccount_RefusesInsteadOfMigrating()
+    {
+        // #218: the admin-adoption refusal also covers the #155 legacy re-key path — an attacker
+        // presenting a NEW subject with an admin's preferred_username must not migrate the admin's legacy
+        // username-keyed link onto their subject. Fail closed: no re-key, 403, legacy key untouched.
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["admin"] = Existing },
+        });
+        users.GetUserById(Existing).Returns(AdminUserNamed("admin", Existing));
+        users.GetUserByName("admin").Returns(AdminUserNamed("admin", Existing));
+
+        await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
+            service.ResolveOrCreateAsync("oid", "kc", "attacker-sub", "admin", allowExistingAccountLink: true));
+
+        var links = cfg.OidConfigs["kc"].CanonicalLinks;
+        Assert.True(links.ContainsKey("admin"));       // legacy key not re-keyed
+        Assert.False(links.ContainsKey("attacker-sub")); // attacker's subject not linked
+        await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_RequireVerifiedEmailOff_NonAdmin_AdoptsRegardlessOfClaim()
+    {
+        // #218: the default posture (gate off) is unchanged — a non-admin adoption proceeds with no
+        // email_verified claim, so a conformant deployment already using AllowExistingAccountLink is not
+        // silently locked out on upgrade.
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
+        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+
+        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true, new AdoptionGate(RequireVerifiedEmail: false, EmailVerified: null));
+
+        Assert.Equal(Existing, resolved);
+        Assert.Equal(Existing, cfg.OidConfigs["kc"].CanonicalLinks["sub-1"]);
     }
 }

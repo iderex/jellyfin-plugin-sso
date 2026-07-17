@@ -574,10 +574,10 @@ public class OidcStateStoreTests
         Assert.NotNull(pending);
 
         pending.Complete(new OidcAuthorizeStateBuilder.OidcAuthorizeState(
-            Username: "alice", Subject: "sub-1", Valid: true, Admin: false,
+            Username: "alice", Subject: "sub-1", EmailVerified: null, Valid: true, Admin: false,
             EnableLiveTv: false, EnableLiveTvManagement: false, Folders: new List<string>(), AvatarUrl: null));
         pending.Complete(new OidcAuthorizeStateBuilder.OidcAuthorizeState(
-            Username: "bob", Subject: "sub-2", Valid: true, Admin: true,
+            Username: "bob", Subject: "sub-2", EmailVerified: null, Valid: true, Admin: true,
             EnableLiveTv: true, EnableLiveTvManagement: true, Folders: new List<string> { "all" }, AvatarUrl: null));
 
         var redeemed = store.TryRedeem("tok", "p", Now, Binding);
@@ -601,6 +601,7 @@ public class OidcStateStoreTests
         pending.Complete(new OidcAuthorizeStateBuilder.OidcAuthorizeState(
             Username: "alice",
             Subject: "sub-1",
+            EmailVerified: null,
             Valid: true,
             Admin: true,
             EnableLiveTv: true,
@@ -657,7 +658,7 @@ public class OidcStateStoreTests
     // so TryRedeem — which requires a validated state — can exercise the per-client release.
     private static void Validate(OidcStateStore store, string token) =>
         store.PeekCurrent(token, "p", Now, Binding)!.Complete(
-            new OidcAuthorizeStateBuilder.OidcAuthorizeState("u", "sub", true, false, false, false, new System.Collections.Generic.List<string>(), null));
+            new OidcAuthorizeStateBuilder.OidcAuthorizeState("u", "sub", null, true, false, false, false, new System.Collections.Generic.List<string>(), null));
 
     [Fact]
     public void TryAdd_FloodFromOneKey_DoesNotRefuseADifferentKey()

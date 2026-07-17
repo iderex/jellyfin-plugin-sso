@@ -43,6 +43,7 @@ internal sealed class PendingState
     {
         _entry.Username = derived.Username;
         _entry.Subject = derived.Subject;
+        _entry.EmailVerified = derived.EmailVerified;
         _entry.Valid = derived.Valid;
         _entry.Admin = derived.Admin;
         _entry.EnableLiveTv = derived.EnableLiveTv;

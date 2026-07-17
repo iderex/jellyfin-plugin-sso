@@ -282,6 +282,18 @@ public class OidConfig : ProviderConfigBase
     public string OidSecret { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether adopting a same-named pre-existing account additionally
+    /// requires the login to carry <c>email_verified == true</c> (#218). Only meaningful when
+    /// <see cref="ProviderConfigBase.AllowExistingAccountLink"/> is on. Off by default (fail closed for
+    /// availability, not for the takeover threat): name-based adoption of an administrator account is
+    /// always refused regardless of this flag, so the headline takeover is closed without it; this flag
+    /// hardens the residual non-admin, name-based adoption. Enabling it needs the <c>email</c> scope so
+    /// the provider actually returns <c>email_verified</c>; an absent or false claim then refuses
+    /// adoption. XML-only, like <see cref="ProviderConfigBase.AllowExistingAccountLink"/>.
+    /// </summary>
+    public bool RequireVerifiedEmailForAdoption { get; set; }
+
+    /// <summary>
     /// Gets or sets the claim to check roles against. Separated by "."s.
     /// </summary>
     public string RoleClaim { get; set; }

@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
+using Jellyfin.Data;
+using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Cryptography;
@@ -83,8 +85,13 @@ internal sealed class CanonicalLinkService
     /// <param name="canonicalKey">The stable identity key (OpenID sub / SAML NameID).</param>
     /// <param name="username">The display name the account is provisioned/adopted under.</param>
     /// <param name="allowExistingAccountLink">Whether adopting a pre-existing unlinked account is permitted.</param>
+    /// <param name="adoptionGate">
+    /// The extra proof a same-named adoption must clear (#218): a privileged target is always refused, and
+    /// when the gate requires a verified email the login must carry <c>email_verified == true</c>. Default
+    /// (<see cref="AdoptionGate.None"/>) is the SAML/legacy posture: admin refusal only.
+    /// </param>
     /// <returns>The resolved Jellyfin user id.</returns>
-    internal async Task<Guid> ResolveOrCreateAsync(string mode, string provider, string canonicalKey, string username, bool allowExistingAccountLink)
+    internal async Task<Guid> ResolveOrCreateAsync(string mode, string provider, string canonicalKey, string username, bool allowExistingAccountLink, AdoptionGate adoptionGate = default)
     {
         // Defense in depth (#95, #155): a login that resolved no stable identity key (OpenID sub /
         // SAML NameID) or no username must never create, adopt, or look up an account. Both callbacks
@@ -142,12 +149,31 @@ internal sealed class CanonicalLinkService
         // username key is still true same-name matching rather than handing over an account that was
         // renamed away from this name (#361). A legacy link whose target no longer holds the name is left
         // for the terminal branches to label (a fresh-account orphan, or a reject), never followed.
-        Guid? existingAccountUserId = _userManager.GetUserByName(username)?.Id;
+        var existingAccount = _userManager.GetUserByName(username);
+        Guid? existingAccountUserId = existingAccount?.Id;
         bool legacyNameStillHeldByTarget = legacyLink.HasValue && existingAccountUserId == legacyLink;
 
         var (linkedUserId, migrateLegacy) = AccountLinkResolver.ResolveCanonicalLink(subjectLink, legacyLink, legacyNameStillHeldByTarget, allowExistingAccountLink);
         if (migrateLegacy)
         {
+            // The legacy re-key is name-based account matching too (#218): migration fires only when the
+            // account currently bearing the name IS the legacy target (legacyNameStillHeldByTarget), so
+            // that target is exactly existingAccount. Apply the admin refusal here as well — an attacker
+            // presenting a new subject with a victim admin's preferred_username would otherwise re-key the
+            // admin's legacy link onto their own subject and take the account over. Admin-only gate
+            // (AdoptionGate.None): the verified-email requirement is deliberately not applied to the
+            // re-key, which continues a relationship established under the pre-#155 scheme rather than
+            // forming a new one. Link an admin account explicitly via the admin endpoint instead.
+            if (AdoptionEligibilityResolver.Resolve(existingAccount!.HasPermission(PermissionKind.IsAdministrator), AdoptionGate.None) != AdoptionVerdict.Allow)
+            {
+                _logger.LogWarning(
+                    "SSO login for {Name} via {Mode}/{Provider} refused: a legacy username-keyed link points at an administrator account, which is not adopted by name. Link it explicitly via the admin endpoints.",
+                    username?.ReplaceLineEndings(string.Empty),
+                    mode,
+                    provider?.ReplaceLineEndings(string.Empty));
+                throw new AccountLinkForbiddenException();
+            }
+
             MigrateCanonicalLinkKey(mode, provider, username, canonicalKey);
             _logger.LogInformation(
                 "Migrated {Mode}/{Provider} canonical link from the legacy username key to the stable subject key.",
@@ -175,6 +201,28 @@ internal sealed class CanonicalLinkService
 
             case AccountLinkAction.AdoptExistingAccount:
             {
+                // Same-name adoption trusts the identity provider to make usernames unique and
+                // non-reassignable (#218): a new principal asserting an existing user's name is otherwise
+                // routed straight to that account. Before writing the link, clear the eligibility gate —
+                // an administrator target is never adopted by name (link it explicitly via the admin
+                // endpoint), and a provider that requires a verified email must have carried
+                // email_verified == true. Fail closed: a refusal writes no link and emits no adoption
+                // audit. existingAccount is non-null here (adoption is only chosen when a named account
+                // resolved), so the admin read cannot NRE.
+                var verdict = AdoptionEligibilityResolver.Resolve(
+                    existingAccount!.HasPermission(PermissionKind.IsAdministrator),
+                    adoptionGate);
+                if (verdict != AdoptionVerdict.Allow)
+                {
+                    _logger.LogWarning(
+                        "SSO login for {Name} via {Mode}/{Provider} refused adoption of a pre-existing account: {Reason}.",
+                        username?.ReplaceLineEndings(string.Empty),
+                        mode,
+                        provider?.ReplaceLineEndings(string.Empty),
+                        verdict);
+                    throw new AccountLinkForbiddenException();
+                }
+
                 // Atomic check-then-link (#133): if a concurrent first-login already linked this
                 // identity, that winner is used and no second write or duplicate audit occurs.
                 var (adoptedUserId, wrote) = LinkCanonicalIfAbsent(mode, provider, canonicalKey, decision.UserId);

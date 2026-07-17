@@ -88,6 +88,13 @@ internal sealed class TimedAuthorizeState
     public string Subject { get; set; }
 
     /// <summary>
+    /// Gets or sets the login's <c>email_verified</c> claim (true/false), or null when the claim is
+    /// absent. Carried to the adoption gate (#218) so a provider that requires a verified email can
+    /// refuse a name-based adoption without one. Null for SAML, which has no such claim.
+    /// </summary>
+    public bool? EmailVerified { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether the user is an administrator.
     /// </summary>
     public bool Admin { get; set; }

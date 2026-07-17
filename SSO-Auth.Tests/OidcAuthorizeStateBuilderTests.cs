@@ -77,6 +77,54 @@ public class OidcAuthorizeStateBuilderTests
     }
 
     [Fact]
+    public void EmailVerified_Absent_IsNull()
+    {
+        // No email_verified claim (the IdP omits it, or the "email" scope was not requested) surfaces as
+        // null, which the adoption gate (#218) fails closed on when a verified email is required.
+        var result = OidcAuthorizeStateBuilder.Build(Claims(("preferred_username", "alice")), Config(_ => { }));
+
+        Assert.Null(result.EmailVerified);
+    }
+
+    [Theory]
+    [InlineData("true", true)]
+    [InlineData("false", false)]
+    [InlineData("True", true)]   // bool.TryParse is case-insensitive
+    [InlineData("FALSE", false)]
+    public void EmailVerified_BooleanClaim_IsParsed(string claimValue, bool expected)
+    {
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(("preferred_username", "alice"), ("email_verified", claimValue)),
+            Config(_ => { }));
+
+        Assert.Equal(expected, result.EmailVerified);
+    }
+
+    [Theory]
+    [InlineData("yes")]
+    [InlineData("1")]
+    [InlineData("")]
+    public void EmailVerified_NonBooleanClaim_IsNull(string claimValue)
+    {
+        // A non-boolean value is treated as absent (null) rather than coerced to true — fail closed.
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(("preferred_username", "alice"), ("email_verified", claimValue)),
+            Config(_ => { }));
+
+        Assert.Null(result.EmailVerified);
+    }
+
+    [Fact]
+    public void EmailVerified_LastBooleanClaimWins()
+    {
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(("preferred_username", "alice"), ("email_verified", "false"), ("email_verified", "true")),
+            Config(_ => { }));
+
+        Assert.True(result.EmailVerified);
+    }
+
+    [Fact]
     public void AllowListConfigured_MatchingRole_IsValid()
     {
         var config = Config(c =>

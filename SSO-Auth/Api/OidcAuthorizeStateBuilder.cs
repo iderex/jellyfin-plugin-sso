@@ -57,6 +57,13 @@ internal static class OidcAuthorizeStateBuilder
         // login that resolved no subject (fail closed).
         var subject = ResolveSubject(claimList);
 
+        // The provider's assertion that the login's email is verified (#218), carried to the adoption
+        // gate so a provider that requires it can refuse a name-based adoption without one. Null when the
+        // claim is absent (the IdP does not emit it, or the "email" scope was not requested); the gate
+        // treats absent exactly like false — fail closed — when the requirement is on. Independent of
+        // validity and of the username, like the subject above.
+        var emailVerified = ResolveEmailVerified(claimList);
+
         // Map the collected roles to privileges and merge (monotonic: only ever grants).
         var grants = RolePrivilegeMapper.Evaluate(roles, config);
         valid |= grants.Valid;
@@ -85,7 +92,7 @@ internal static class OidcAuthorizeStateBuilder
         // validation rejects it anyway, so no legitimate login can carry one.
         valid = valid && !string.IsNullOrWhiteSpace(username);
 
-        return new OidcAuthorizeState(username, subject, valid, admin, enableLiveTv, enableLiveTvManagement, folders, avatarUrl);
+        return new OidcAuthorizeState(username, subject, emailVerified, valid, admin, enableLiveTv, enableLiveTvManagement, folders, avatarUrl);
     }
 
     // The last "sub" claim value, or null when none is present. Kept separate from the username
@@ -102,6 +109,25 @@ internal static class OidcAuthorizeStateBuilder
         }
 
         return subject;
+    }
+
+    // The last "email_verified" claim parsed as a boolean, or null when the claim is absent or carries a
+    // non-boolean value. OIDC serializes it as a JSON boolean, which surfaces here as the string "true"/
+    // "false"; anything else is treated as absent (null), which the adoption gate fails closed on when a
+    // verified email is required. Last wins, matching the subject/username derivations.
+    private static bool? ResolveEmailVerified(IReadOnlyList<Claim> claims)
+    {
+        bool? emailVerified = null;
+        foreach (var claim in claims)
+        {
+            if (string.Equals(claim.Type, "email_verified", StringComparison.Ordinal)
+                && bool.TryParse(claim.Value, out var parsed))
+            {
+                emailVerified = parsed;
+            }
+        }
+
+        return emailVerified;
     }
 
     // Resolves the avatar URL by substituting @{claimType} tokens in the configured format, or null
@@ -168,6 +194,7 @@ internal static class OidcAuthorizeStateBuilder
     /// </summary>
     /// <param name="Username">The resolved username (last matching preferred-username or sub claim), or null when none is present.</param>
     /// <param name="Subject">The stable subject identifier (the "sub" claim) used to key the account link, or null when absent.</param>
+    /// <param name="EmailVerified">The login's "email_verified" claim (true/false), or null when the claim is absent, used by the adoption gate (#218).</param>
     /// <param name="Valid">Whether the login is permitted (no allow-list, or a role matched the allow-list).</param>
     /// <param name="Admin">Whether the login grants administrator rights.</param>
     /// <param name="EnableLiveTv">Whether the login grants Live TV access.</param>
@@ -177,6 +204,7 @@ internal static class OidcAuthorizeStateBuilder
     internal readonly record struct OidcAuthorizeState(
         string? Username,
         string? Subject,
+        bool? EmailVerified,
         bool Valid,
         bool Admin,
         bool EnableLiveTv,
