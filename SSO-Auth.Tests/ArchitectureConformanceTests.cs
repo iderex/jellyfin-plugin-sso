@@ -26,7 +26,11 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 /// link-map access to CanonicalLinkService (the login/admin workflow) and ServerManagedFields.Preserve
 /// (the #157 server-managed re-injection the config tier owns), a boundary worth failing CI on, not just
 /// review; #383 retired the controller's last two inline re-injection sites into that shared Preserve, so
-/// the scan is now a plain zero-occurrence invariant on the controller.
+/// the scan is now a plain zero-occurrence invariant on the controller. Both source scans discover EVERY
+/// controller source file from reflection (<see cref="ControllerSourceFiles"/>) rather than one hardcoded
+/// path, so the planned #318 controller split — into partial-class files or several controllers — cannot
+/// hide an endpoint from them, and each is sentinel-guarded against a vacuous pass: the file set must be
+/// non-empty, and the link-map scan pins its target property by reflection so a rename fails loudly (#388).
 /// </summary>
 public class ArchitectureConformanceTests
 {
@@ -158,20 +162,30 @@ public class ArchitectureConformanceTests
         // legitimate homes for provider-CanonicalLinks access are CanonicalLinkService (the login/admin
         // link workflow, under the config lock) and ServerManagedFields.Preserve (the #157 re-injection
         // the config tier owns) — and the controller's two former inline re-injection statements now route
-        // through that shared Preserve, so the CONTROLLER has ZERO direct CanonicalLinks access and the
-        // earlier re-injection exemption is retired. This is a call-level property, so it is a source scan
-        // rather than a reflection rule (the one exception to the "call-level invariants stay with
-        // CodeQL" note in the class summary); a missing source file fails the test loudly.
-        var controllerSource = File.ReadAllLines(Path.Combine(RepoRoot(), "SSO-Auth", "Api", "SSOController.cs"));
-        var linkMapLines = controllerSource
-            .Select((line, index) => (Text: line.Trim(), Number: index + 1))
-            .Where(l => l.Text.Contains(".CanonicalLinks", StringComparison.Ordinal))
-            .Select(l => $"line {l.Number}: {l.Text}")
+        // through that shared Preserve, so a CONTROLLER has ZERO direct CanonicalLinks access. This is a
+        // call-level property, so it is a source scan rather than a reflection rule (the one exception to
+        // the "call-level invariants stay with CodeQL" note in the class summary).
+        //
+        // Sentinel against a vacuous pass (#388): a zero-occurrence scan only means something while its
+        // target token still names the link map. A property rename (CanonicalLinks -> anything) would make
+        // the scan match nothing and pass for the wrong reason, so pin the property by reflection — a rename
+        // fails HERE and forces a conscious update of `linkMapProperty` (and the scanned token with it).
+        const string linkMapProperty = "CanonicalLinks";
+        Assert.True(
+            typeof(ProviderConfigBase).GetProperty(linkMapProperty, BindingFlags.Public | BindingFlags.Instance) is not null,
+            $"ProviderConfigBase.{linkMapProperty} was renamed or removed; point this rule at the new provider link-map property so the scan keeps guarding it (#388).");
+
+        var token = "." + linkMapProperty;
+        var linkMapLines = ControllerSourceFiles()
+            .SelectMany(path => File.ReadAllLines(path)
+                .Select((line, index) => (File: Path.GetFileName(path), Text: line.Trim(), Number: index + 1)))
+            .Where(l => l.Text.Contains(token, StringComparison.Ordinal))
+            .Select(l => $"{l.File} line {l.Number}: {l.Text}")
             .ToList();
 
         Assert.True(
             linkMapLines.Count == 0,
-            "SSOController must not access a provider CanonicalLinks map directly; route link-map access through CanonicalLinkService and server-managed re-injection through ServerManagedFields.Preserve. Found: " + string.Join(" | ", linkMapLines));
+            "A controller must not access a provider CanonicalLinks map directly; route link-map access through CanonicalLinkService and server-managed re-injection through ServerManagedFields.Preserve. Found: " + string.Join(" | ", linkMapLines));
     }
 
     [Fact]
@@ -179,26 +193,26 @@ public class ArchitectureConformanceTests
     {
         // Locked in by the AvatarService extraction (#375): the raw-socket/DNS surface lives only in the
         // avatar tier (AvatarService, AvatarUrlValidator) and SsoRateLimiter — the controller orchestrates
-        // flows over injected collaborators and never opens a network primitive itself. Same plain source
-        // scan as the link-map rule above. Marker choice: any Socket/NetworkStream use needs the
-        // System.Net.Sockets namespace in the file (using directive, alias, or full qualification), so
-        // that one marker subsumes those type names; "NetworkStream" is the belt-and-braces type-name
-        // catch on top; "SocketsHttpHandler" lives in System.Net.Http, which the controller legitimately
-        // imports, so the namespace marker cannot cover it and it gets its own; "Dns." catches
-        // System.Net.Dns call sites (which need no Sockets using) and "System.Net.Dns" the static-import
-        // form. Bare "Socket"/"Dns" are deliberately NOT markers — they would false-positive on prose in
-        // comments.
+        // flows over injected collaborators and never opens a network primitive itself. Same source scan as
+        // the link-map rule above, over every controller source file (#388). Marker choice: any
+        // Socket/NetworkStream use needs the System.Net.Sockets namespace in the file (using directive,
+        // alias, or full qualification), so that one marker subsumes those type names; "NetworkStream" is
+        // the belt-and-braces type-name catch on top; "SocketsHttpHandler" lives in System.Net.Http, which
+        // the controller legitimately imports, so the namespace marker cannot cover it and it gets its own;
+        // "Dns." catches System.Net.Dns call sites (which need no Sockets using) and "System.Net.Dns" the
+        // static-import form. Bare "Socket"/"Dns" are deliberately NOT markers — they would false-positive
+        // on prose in comments.
         var markers = new[] { "System.Net.Sockets", "SocketsHttpHandler", "NetworkStream", "Dns.", "System.Net.Dns" };
-        var controllerSource = File.ReadAllLines(Path.Combine(RepoRoot(), "SSO-Auth", "Api", "SSOController.cs"));
-        var socketLines = controllerSource
-            .Select((line, index) => (Text: line.Trim(), Number: index + 1))
+        var socketLines = ControllerSourceFiles()
+            .SelectMany(path => File.ReadAllLines(path)
+                .Select((line, index) => (File: Path.GetFileName(path), Text: line.Trim(), Number: index + 1)))
             .Where(l => markers.Any(m => l.Text.Contains(m, StringComparison.Ordinal)))
-            .Select(l => $"line {l.Number}: {l.Text}")
+            .Select(l => $"{l.File} line {l.Number}: {l.Text}")
             .ToList();
 
         Assert.True(
             socketLines.Count == 0,
-            "SSOController must not touch the raw socket/DNS surface (System.Net.Sockets, Socket, NetworkStream, Dns); outbound network primitives belong to AvatarService/AvatarUrlValidator and SsoRateLimiter. Found: " + string.Join(" | ", socketLines));
+            "A controller must not touch the raw socket/DNS surface (System.Net.Sockets, Socket, NetworkStream, Dns); outbound network primitives belong to AvatarService/AvatarUrlValidator and SsoRateLimiter. Found: " + string.Join(" | ", socketLines));
     }
 
     [Fact]
@@ -387,6 +401,42 @@ public class ArchitectureConformanceTests
     private static bool IsCompilerGenerated(Type t) =>
         t.Name.Contains('<', StringComparison.Ordinal)
         || t.GetCustomAttribute<CompilerGeneratedAttribute>() is not null;
+
+    // Every source file that declares a controller type, discovered from reflection so the controller
+    // source scans follow the planned #318 controller split automatically (#388): reflection names the
+    // controller TYPES (deriving from ControllerBase); the files are those declaring them — a partial-class
+    // split declares one type across several files, a multi-controller split adds more types, and both are
+    // found. Matching the declaration in the file body, not the file name, also survives a controller file
+    // rename. The set must be non-empty: a scan reading no file would pass every controller rule vacuously,
+    // so a controller reflection can no longer find (removed base type, moved out of the source tree) fails
+    // loudly here rather than turning the rules into silent no-ops.
+    private static IReadOnlyList<string> ControllerSourceFiles()
+    {
+        var declarations = PluginClasses
+            .Where(t => typeof(ControllerBase).IsAssignableFrom(t))
+            .Select(t => new Regex($@"\bclass\s+{Regex.Escape(SimpleName(t))}\b"))
+            .ToList();
+
+        var files = Directory
+            .EnumerateFiles(Path.Combine(RepoRoot(), "SSO-Auth"), "*.cs", SearchOption.AllDirectories)
+            .Where(path => !IsBuildOutput(path))
+            .Where(path =>
+            {
+                var text = File.ReadAllText(path);
+                return declarations.Any(d => d.IsMatch(text));
+            })
+            .ToList();
+
+        Assert.True(
+            files.Count > 0,
+            "No controller source file was found to scan; a controller was renamed, moved out of SSO-Auth, or lost its ControllerBase base, so the controller source scans would pass vacuously — update ControllerSourceFiles (#388).");
+        return files;
+    }
+
+    // obj/bin hold generated and compiled output; the source scans read hand-written source only.
+    private static bool IsBuildOutput(string path) =>
+        path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+        || path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal);
 
     // The repository root, derived from this test file's compile-time path (<root>/SSO-Auth.Tests/<file>).
     // CallerFilePath is baked in at build, and CI builds on the same checkout it tests, so the source tree
