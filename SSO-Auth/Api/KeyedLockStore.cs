@@ -95,6 +95,9 @@ internal sealed class KeyedLockStore
     // global contention), the same per-key lock idiom SsoRateLimiter.Counter uses.
     private sealed class Holder
     {
+        // Never Dispose()d: SemaphoreSlim allocates an OS wait handle only if AvailableWaitHandle is
+        // accessed (it never is here), so a retired/GC'd holder is pure managed garbage — the same
+        // reason SsoRateLimiter.Counter needs no disposal.
         internal SemaphoreSlim Gate { get; } = new SemaphoreSlim(1, 1);
 
         internal int Waiters { get; set; }
