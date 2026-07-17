@@ -116,13 +116,76 @@ public class SSOControllerOidPostTests
     public async Task OidPost_ResponseIssuerMismatch_Returns400()
     {
         using var fixture = new OidcTokenFixture(Authority, "jf");
-        // RFC 9207 (#125): the authorization-response `iss` names a different issuer than the id_token's,
-        // which is an authorization-server mix-up and must be rejected even though the token itself is valid.
+        // RFC 9207 (#125, hardened #210): the authorization-response `iss` names a different issuer than
+        // the authorization server's discovery issuer, which is an authorization-server mix-up and must be
+        // rejected even though the token itself is valid.
         var harness = ArrangeCallback(fixture, query: "?code=test-code&state=state-1&iss=https://attacker.example.com");
 
         var result = await harness.Controller.OidPost("kc", "state-1");
 
         Assert.Equal(400, Assert.IsType<ContentResult>(result).StatusCode);
+    }
+
+    [Fact]
+    public async Task OidPost_TemplatedIssuerUnderDoNotValidateIssuerName_ResponseIssMatchesIdToken_RendersTheAuthPage()
+    {
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        // Availability regression guard (#210 review): with DoNotValidateIssuerName the id_token issuer
+        // legitimately differs from the discovery issuer (templated / multi-tenant). The RFC 9207 response
+        // `iss` equals the concrete id_token issuer, NOT the templated discovery issuer — comparing to the
+        // discovery issuer alone would lock this supported config out, so the id_token issuer is an
+        // accepted anchor and the login must proceed.
+        const string concreteIssuer = Authority + "/tenant-42";
+        var harness = ArrangeCallback(
+            fixture,
+            query: $"?code=test-code&state=state-1&iss={concreteIssuer}",
+            idToken: fixture.IdToken(subject: "sub-1", username: "alice", issuer: concreteIssuer),
+            doNotValidateIssuerName: true);
+
+        var result = await harness.Controller.OidPost("kc", "state-1");
+
+        Assert.Equal("text/html", Assert.IsType<ContentResult>(result).ContentType);
+    }
+
+    [Fact]
+    public async Task OidPost_ResponseIssuerRequiredButAbsent_Returns400()
+    {
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        // RFC 9207 §2.4 (#210): the challenge saw the AS advertise the response-iss parameter, so a
+        // callback that omits `iss` is a downgrade and must be rejected — even though the id_token is valid.
+        var harness = ArrangeCallback(fixture, query: "?code=test-code&state=state-1", responseIssuerRequired: true);
+
+        var result = await harness.Controller.OidPost("kc", "state-1");
+
+        Assert.Equal(400, Assert.IsType<ContentResult>(result).StatusCode);
+    }
+
+    [Fact]
+    public async Task OidPost_ResponseIssuerRequiredAndPresentMatchingDiscovery_RendersTheAuthPage()
+    {
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        // The complement of the downgrade case: when the AS advertised the parameter AND the response
+        // carries an `iss` equal to the discovery issuer, the login proceeds. Proves the requirement is
+        // satisfied by a correct value, not merely by the flag being set.
+        var harness = ArrangeCallback(fixture, query: $"?code=test-code&state=state-1&iss={Authority}", responseIssuerRequired: true);
+
+        var result = await harness.Controller.OidPost("kc", "state-1");
+
+        Assert.Equal("text/html", Assert.IsType<ContentResult>(result).ContentType);
+    }
+
+    [Fact]
+    public async Task OidPost_ResponseIssuerNotAdvertisedAndAbsent_RendersTheAuthPage()
+    {
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        // No lockout of older IdPs (#210): a provider whose discovery did not advertise the parameter
+        // (ResponseIssuerRequired defaults false) and that omits `iss` must still log in — the tolerant
+        // path RFC 9207 §2.4 preserves.
+        var harness = ArrangeCallback(fixture, query: "?code=test-code&state=state-1");
+
+        var result = await harness.Controller.OidPost("kc", "state-1");
+
+        Assert.Equal("text/html", Assert.IsType<ContentResult>(result).ContentType);
     }
 
     [Fact]
@@ -151,6 +214,125 @@ public class SSOControllerOidPostTests
         Assert.Equal(401, Assert.IsType<ContentResult>(result).StatusCode);
     }
 
+    [Fact]
+    public async Task OidChallengeToCallback_ResponseIssuerAdvertisedThenAbsent_Returns400()
+    {
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        // End-to-end (#210): a real challenge whose discovery advertises the RFC 9207 response-iss
+        // parameter must capture the requirement onto the authorize state, so the callback that omits
+        // `iss` is rejected — pinning the challenge-side capture the seeded callback tests above assume.
+        var (harness, state) = await DriveAdvertisedChallenge(fixture);
+        harness.Controller.HttpContext.Request.QueryString = new QueryString($"?code=test-code&state={state}");
+
+        var result = await harness.Controller.OidPost("kc", state);
+
+        // Pin the 400 to the RFC 9207 reject specifically, not the shared token-exchange-error 400: assert
+        // the SsoResponseInvalid body so a 400 from a different source cannot satisfy this test.
+        var content = Assert.IsType<ContentResult>(result);
+        Assert.Equal(400, content.StatusCode);
+        Assert.Equal("SSO response validation failed", content.Content);
+    }
+
+    [Fact]
+    public async Task OidChallengeToCallback_ResponseIssuerAdvertisedThenPresent_RendersTheAuthPage()
+    {
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        // The positive end-to-end: with the same advertised challenge, a callback carrying `iss` equal to
+        // the discovery issuer satisfies the captured requirement and the login proceeds.
+        var (harness, state) = await DriveAdvertisedChallenge(fixture);
+        harness.Controller.HttpContext.Request.QueryString = new QueryString($"?code=test-code&state={state}&iss={Authority}");
+
+        var result = await harness.Controller.OidPost("kc", state);
+
+        Assert.Equal("text/html", Assert.IsType<ContentResult>(result).ContentType);
+    }
+
+    // Drives a real OidChallenge whose served discovery advertises the RFC 9207 response-iss parameter, so
+    // the challenge captures the requirement onto its authorize state; returns the harness (its context
+    // re-pointed at the callback route, browser-binding cookie attached) plus the state token the callback
+    // must present. The token endpoint returns a valid signed id_token, leaving the response-iss
+    // requirement as the only thing left to decide at the callback.
+    private static async Task<(SsoControllerHarness Harness, string State)> DriveAdvertisedChallenge(OidcTokenFixture fixture)
+    {
+        var idToken = fixture.IdToken(subject: "sub-1", username: "alice");
+        var harness = new SsoControllerHarness(
+            c => c.OidConfigs["kc"] = new OidConfig
+            {
+                Enabled = true,
+                OidEndpoint = Authority,
+                OidClientId = "jf",
+                OidScopes = Array.Empty<string>(),
+                DisablePushedAuthorization = true,
+                DoNotLoadProfile = true,
+            },
+            httpResponder: request =>
+            {
+                var url = request.RequestUri!.AbsoluteUri;
+                if (url == fixture.DiscoveryUrl)
+                {
+                    return Json(fixture.Discovery(advertiseResponseIssuer: true));
+                }
+
+                if (url == fixture.JwksUrl)
+                {
+                    return Json(fixture.Jwks());
+                }
+
+                if (url == fixture.TokenUrl)
+                {
+                    return Json(fixture.TokenEndpointJson(idToken));
+                }
+
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+            });
+
+        harness.Controller.HttpContext.Request.Path = "/sso/OID/start/kc";
+        var challenge = Assert.IsType<RedirectResult>(await harness.Controller.OidChallenge("kc"));
+
+        var state = QueryValue(challenge.Url, "state");
+        Assert.False(string.IsNullOrEmpty(state));
+        var binding = BindingCookie(harness.Controller.Response);
+        Assert.False(string.IsNullOrEmpty(binding));
+
+        // Re-point the same context at the callback route the IdP returns to, carrying the browser-binding
+        // cookie the challenge set (#326) so the state's binding gate is satisfied.
+        harness.Controller.HttpContext.Request.Path = "/sso/OID/redirect/kc";
+        harness.Controller.HttpContext.Request.Headers.Cookie = $"{AuthorizeStateBinding.CookieName}={binding}";
+        return (harness, state);
+    }
+
+    // Reads a single query-parameter value out of the challenge's authorization redirect URL.
+    private static string QueryValue(string url, string key)
+    {
+        foreach (var pair in new Uri(url).Query.TrimStart('?').Split('&'))
+        {
+            var kv = pair.Split('=', 2);
+            if (kv.Length == 2 && kv[0] == key)
+            {
+                return Uri.UnescapeDataString(kv[1]);
+            }
+        }
+
+        return string.Empty;
+    }
+
+    // Extracts the browser-binding cookie value the challenge wrote to the response's Set-Cookie header.
+    private static string BindingCookie(Microsoft.AspNetCore.Http.HttpResponse response)
+    {
+        var prefix = AuthorizeStateBinding.CookieName + "=";
+        foreach (var header in response.Headers.SetCookie)
+        {
+            if (header is not null && header.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                var value = header.Substring(prefix.Length);
+                var end = value.IndexOf(';');
+                return end >= 0 ? value.Substring(0, end) : value;
+            }
+        }
+
+        return string.Empty;
+    }
+
     // Builds a harness whose HTTP responder serves the fixture's discovery/JWKS/token endpoints, seeds the
     // matching authorize state, and sets the callback request path and query. The token endpoint returns
     // <paramref name="idToken"/> (a valid signed token by default), or a 400 when
@@ -161,7 +343,9 @@ public class SSOControllerOidPostTests
         string? idToken = null,
         bool tokenEndpointFails = false,
         string? bindingCookie = Binding,
-        string? secondProvider = null)
+        string? secondProvider = null,
+        bool responseIssuerRequired = false,
+        bool doNotValidateIssuerName = false)
     {
         idToken ??= fixture.IdToken(subject: "sub-1", username: "alice");
 
@@ -173,6 +357,7 @@ public class SSOControllerOidPostTests
             OidScopes = Array.Empty<string>(),
             DisablePushedAuthorization = true,
             DoNotLoadProfile = true, // the id_token carries sub + preferred_username; skip the userinfo fetch
+            DoNotValidateIssuerName = doNotValidateIssuerName,
         };
 
         var harness = new SsoControllerHarness(
@@ -230,7 +415,10 @@ public class SSOControllerOidPostTests
             CodeVerifier = "test-code-verifier",
             RedirectUri = "https://jf.example.com/sso/OID/redirect/kc",
         };
-        SSOController.SeedOidStateForTests("state-1", new TimedAuthorizeState(authState, DateTime.Now) { Provider = "kc", BindingId = Binding });
+        // ResponseIssuerRequired models a challenge whose discovery advertised the RFC 9207 response-iss
+        // parameter (#210), so the callback must require iss; false is the tolerant default (the challenge
+        // capture path itself is pinned end-to-end by OidChallengeToCallback_* below).
+        SSOController.SeedOidStateForTests("state-1", new TimedAuthorizeState(authState, DateTime.Now) { Provider = "kc", BindingId = Binding, ResponseIssuerRequired = responseIssuerRequired });
 
         return harness;
     }

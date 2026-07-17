@@ -192,6 +192,50 @@ public class OidcStateStoreTests
         Assert.Null(pending.ProviderInformation);
     }
 
+    // --- RFC 9207 response-iss requirement (#210): carry the "advertised" flag to the callback ---
+
+    [Fact]
+    public void MarkResponseIssuerRequired_CarriesTheFlagToThePeekForTheCallback()
+    {
+        // The challenge marks a state (via MarkResponseIssuerRequired, after TryAdd) when discovery
+        // advertises the RFC 9207 response-iss parameter; the store must round-trip the flag to the
+        // PendingState the OidPost callback reads so it requires iss to be present.
+        var store = Store();
+        Assert.True(store.TryAdd(new AuthorizeState { State = "s" }, "p", false, Now, Binding, clientKey: null, out _));
+
+        store.MarkResponseIssuerRequired("s");
+
+        var pending = store.PeekCurrent("s", "p", Now, Binding);
+        Assert.NotNull(pending);
+        Assert.True(pending.ResponseIssuerRequired);
+    }
+
+    [Fact]
+    public void ResponseIssuerRequired_DefaultsFalse_WhenNotMarked()
+    {
+        // The tolerant default: a state whose provider did not advertise the parameter (never marked)
+        // exposes false, so the callback keeps tolerating an absent iss — no lockout of older IdPs.
+        var store = Store();
+        Assert.True(store.TryAdd(new AuthorizeState { State = "s" }, "p", false, Now, Binding, clientKey: null, out _));
+
+        var pending = store.PeekCurrent("s", "p", Now, Binding);
+        Assert.NotNull(pending);
+        Assert.False(pending.ResponseIssuerRequired);
+    }
+
+    [Fact]
+    public void MarkResponseIssuerRequired_UnknownToken_IsANoOp()
+    {
+        // Defensive: if the entry expired in the gap between TryAdd and this call, marking is a no-op —
+        // no throw, no resurrected entry.
+        var store = Store();
+
+        store.MarkResponseIssuerRequired("never-added");
+
+        Assert.Equal(0, store.Count);
+        Assert.Null(store.PeekCurrent("never-added", "p", Now, Binding));
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]

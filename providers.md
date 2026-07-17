@@ -57,10 +57,15 @@ expiry). A few provider settings must therefore match, or login is refused (fail
   issuer (some templated or multi-tenant setups), set `DoNotValidateIssuerName: true` for that
   provider — this relaxes only the issuer check; signature, audience and expiry stay enforced.
 - **Authorization-response issuer (RFC 9207).** When the provider adds an `iss` parameter to the
-  authorization response (a mix-up defense), it is checked against the id_token issuer and a mismatch
-  is rejected. Providers that do not send `iss` are unaffected. If a provider legitimately sends a
-  different `iss` there, set `DoNotValidateResponseIssuer: true` for that provider to relax only this
-  check.
+  authorization response (a mix-up defense), it is checked against the authorization server's issuer —
+  its discovery issuer (RFC 9207 §2.4) or the id_token issuer — and a value matching neither is
+  rejected. Accepting the id_token issuer too keeps templated / multi-tenant providers working under
+  `DoNotValidateIssuerName`, where the response `iss` equals the concrete id_token issuer rather than
+  the templated discovery issuer. If the provider's discovery document advertises
+  `authorization_response_iss_parameter_supported` (RFC 9207 §2.4), a missing `iss` is treated as a
+  downgrade and rejected too; providers that do not advertise it and omit `iss` are unaffected. If a
+  provider legitimately sends a different `iss` there, set `DoNotValidateResponseIssuer: true` for that
+  provider to relax only this check.
 - **PKCE (RFC 9700 §2.1.1).** The plugin always sends a PKCE `code_challenge` (S256), but a server that
   ignores PKCE would silently downgrade cross-session authorization-code-injection protection. On login
   the provider's discovery document is checked for `S256` in `code_challenge_methods_supported`; if it is

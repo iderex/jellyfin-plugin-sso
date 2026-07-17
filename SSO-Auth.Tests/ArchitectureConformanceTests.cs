@@ -134,14 +134,15 @@ public class ArchitectureConformanceTests
         // Locked in by the OidcStateStore consolidation (#318): a raw dictionary holding runtime state
         // outside a *Store/*Cache/*Limiter type is how the pre-consolidation controller accumulated its
         // scattered cap/lifetime/sweep conventions. Two documented exemptions:
-        // - SSOController.PkceSupportCache: the PKCE-discovery cache still lives on the controller and
-        //   moves into its own probe type in a later #318 step; naming the exact field keeps anything
-        //   new from hiding behind the exemption.
+        // - SSOController.DiscoveryFactsCache: the per-discovery-URL facts cache (PKCE-S256 support #141 +
+        //   the RFC 9207 response-iss advertisement #210) still lives on the controller and moves into its
+        //   own probe type in a later #318 step; naming the exact field keeps anything new from hiding
+        //   behind the exemption.
         // - ProviderConfigBase._canonicalLinks: the persisted account-link map — serialized plugin
         //   configuration mutated only under the config lock, so a runtime store type would be the
         //   wrong home; it is config state, not in-flight state.
         var storeLike = new[] { "Store", "Cache", "Limiter" };
-        var exemptions = new[] { "SSOController.PkceSupportCache", "ProviderConfigBase._canonicalLinks" };
+        var exemptions = new[] { "SSOController.DiscoveryFactsCache", "ProviderConfigBase._canonicalLinks" };
 
         var offenders = PluginClasses
             .Where(t => !storeLike.Any(s => SimpleName(t).EndsWith(s, StringComparison.Ordinal)))

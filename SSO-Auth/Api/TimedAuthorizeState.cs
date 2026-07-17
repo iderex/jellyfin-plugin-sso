@@ -37,6 +37,15 @@ internal sealed class TimedAuthorizeState
     public ProviderInformation ProviderInformation { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the authorization server advertised the RFC 9207
+    /// authorization-response <c>iss</c> parameter (<c>authorization_response_iss_parameter_supported</c>,
+    /// §2.4) in the discovery document the challenge read (#210). When true the callback requires
+    /// <c>iss</c> to be present; captured at challenge so the callback needs no second discovery fetch.
+    /// Default false keeps IdPs that never advertise it (or whose discovery could not be read) working.
+    /// </summary>
+    public bool ResponseIssuerRequired { get; set; }
+
+    /// <summary>
     /// Gets or sets the provider that minted this state. A state may only be consumed on the same
     /// provider's endpoints, so it cannot be replayed against another provider's login/role gate.
     /// </summary>

@@ -38,9 +38,12 @@ internal sealed class OidcTokenFixture : IDisposable
 
     /// <summary>
     /// Produces a signed id_token for the given username. A non-empty <paramref name="subject"/> is
-    /// emitted as the "sub" claim; passing null/empty omits it (for the missing-sub rejection path).
+    /// emitted as the "sub" claim; passing null/empty omits it (for the missing-sub rejection path). A
+    /// non-null <paramref name="issuer"/> overrides the token's <c>iss</c> (defaults to the fixture
+    /// issuer) so a test can model a provider whose id_token issuer differs from its discovery issuer
+    /// (templated / <c>DoNotValidateIssuerName</c> setups, #210).
     /// </summary>
-    internal string IdToken(string? subject, string username)
+    internal string IdToken(string? subject, string username, string? issuer = null)
     {
         var now = DateTime.UtcNow;
         var claims = new Dictionary<string, object> { ["preferred_username"] = username };
@@ -51,7 +54,7 @@ internal sealed class OidcTokenFixture : IDisposable
 
         var descriptor = new SecurityTokenDescriptor
         {
-            Issuer = Issuer,
+            Issuer = issuer ?? Issuer,
             Audience = ClientId,
             IssuedAt = now - TimeSpan.FromMinutes(1),
             NotBefore = now - TimeSpan.FromMinutes(1),
@@ -66,8 +69,13 @@ internal sealed class OidcTokenFixture : IDisposable
     internal string TokenEndpointJson(string idToken) =>
         "{\"access_token\":\"test-access-token\",\"token_type\":\"Bearer\",\"expires_in\":3600,\"id_token\":\"" + idToken + "\"}";
 
-    /// <summary>The discovery document advertising this fixture's issuer and endpoints (all on the issuer).</summary>
-    internal string Discovery() =>
+    /// <summary>
+    /// The discovery document advertising this fixture's issuer and endpoints (all on the issuer). When
+    /// <paramref name="advertiseResponseIssuer"/> is set it also advertises the RFC 9207
+    /// <c>authorization_response_iss_parameter_supported</c> flag (§2.4, #210), so a challenge captures
+    /// the requirement onto its authorize state.
+    /// </summary>
+    internal string Discovery(bool advertiseResponseIssuer = false) =>
         "{\"issuer\":\"" + Issuer + "\","
         + "\"authorization_endpoint\":\"" + Issuer + "/authorize\","
         + "\"token_endpoint\":\"" + Issuer + "/token\","
@@ -77,6 +85,7 @@ internal sealed class OidcTokenFixture : IDisposable
         + "\"subject_types_supported\":[\"public\"],"
         + "\"id_token_signing_alg_values_supported\":[\"RS256\"],"
         + "\"grant_types_supported\":[\"authorization_code\"],"
+        + (advertiseResponseIssuer ? "\"authorization_response_iss_parameter_supported\":true," : string.Empty)
         + "\"code_challenge_methods_supported\":[\"S256\"]}";
 
     /// <summary>The URL the fixture serves each document at.</summary>

@@ -22,6 +22,12 @@ internal sealed class PendingState
     /// </summary>
     internal ProviderInformation ProviderInformation => _entry.ProviderInformation;
 
+    /// <summary>
+    /// Gets a value indicating whether the authorization server advertised the RFC 9207
+    /// authorization-response <c>iss</c> parameter, so the callback must require <c>iss</c> (#210).
+    /// </summary>
+    internal bool ResponseIssuerRequired => _entry.ResponseIssuerRequired;
+
     /// <summary>Gets a value indicating whether this flow is a linking request rather than a login.</summary>
     internal bool IsLinking => _entry.IsLinking;
 
