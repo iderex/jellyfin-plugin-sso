@@ -250,6 +250,28 @@ public class SamlConfig : ProviderConfigBase
     /// enabling it rejects IdP-initiated (unsolicited) SSO, which carries no InResponseTo. Refs #156.
     /// </summary>
     public bool ValidateInResponseTo { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the outgoing AuthnRequest is signed with this service
+    /// provider's signing key, for identity providers that require signed requests (#167). Opt-in
+    /// (default off): with it off the request is sent exactly as before (unsigned), so existing
+    /// deployments are unaffected. When on, a valid <see cref="SamlSigningKeyPfx"/> must be configured —
+    /// the challenge fails closed (rather than silently sending an unsigned request) if the key is
+    /// missing or unloadable.
+    /// </summary>
+    public bool SignAuthnRequests { get; set; }
+
+    /// <summary>
+    /// Gets or sets the service-provider signing key used when <see cref="SignAuthnRequests"/> is on,
+    /// as a Base64-encoded, unencrypted PKCS#12 (PFX) blob carrying the certificate and its RSA private
+    /// key (#167). Supply the keypair whose public certificate the identity provider is configured to
+    /// trust. Treated as a secret: write-only across the JSON boundary (deserialized from a save so it
+    /// can be set and rotated, but serialized back as null so the private key never reaches the admin
+    /// browser or a config export), and preserved on a save that leaves it blank. It is still persisted
+    /// to the config XML.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonConverter(typeof(WriteOnlySecretConverter))]
+    public string SamlSigningKeyPfx { get; set; }
 }
 
 /// <summary>

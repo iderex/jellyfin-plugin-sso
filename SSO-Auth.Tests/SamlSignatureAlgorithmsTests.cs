@@ -91,6 +91,26 @@ public class SamlSignatureAlgorithmsTests
         Assert.False(SamlSignatureAlgorithms.IsAllowed("urn:made:up", null!));
     }
 
+    // --- Signature-method allowlist shared with the outgoing-request signer (#167) ---
+
+    [Theory]
+    [InlineData(RsaSha256)]
+    [InlineData(RsaSha512)]
+    [InlineData(EcdsaSha384)]
+    public void IsSignatureMethodAllowed_StrongMethods_ReturnTrue(string method)
+    {
+        Assert.True(SamlSignatureAlgorithms.IsSignatureMethodAllowed(method));
+    }
+
+    [Theory]
+    [InlineData(RsaSha1)]
+    [InlineData("urn:made:up")]
+    [InlineData(null)]
+    public void IsSignatureMethodAllowed_WeakOrUnknownOrNull_ReturnFalse(string? method)
+    {
+        Assert.False(SamlSignatureAlgorithms.IsSignatureMethodAllowed(method!));
+    }
+
     // --- Canonicalization allowlist (#137) ---
 
     private const string ExcC14n = "http://www.w3.org/2001/10/xml-exc-c14n#";

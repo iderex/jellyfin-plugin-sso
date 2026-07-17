@@ -235,6 +235,93 @@ public class ConfigPreservationTests
         Assert.True(string.IsNullOrEmpty(ServerManagedFields.ResolveUpdatedSecret(incoming, live)));
     }
 
+    // --- SAML signing key: write-only secret + preserve-on-blank (#167) ---
+
+    [Fact]
+    public void SamlSigningKey_SerializedValueIsHidden_ButStaysDeserializableAndInXml()
+    {
+        var config = new SamlConfig { SamlClientId = "sp", SamlSigningKeyPfx = "pfx-secret-blob" };
+
+        // JSON responses must not leak the private-key blob; the property is emitted as null (write-only).
+        var json = System.Text.Json.JsonSerializer.Serialize(config);
+        Assert.DoesNotContain("pfx-secret-blob", json, StringComparison.Ordinal);
+        Assert.Contains("\"SamlSigningKeyPfx\":null", json, StringComparison.Ordinal);
+
+        // Core serializes with a camelCase policy; the value must stay hidden there too.
+        var camel = System.Text.Json.JsonSerializer.Serialize(
+            config,
+            new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
+        Assert.DoesNotContain("pfx-secret-blob", camel, StringComparison.Ordinal);
+
+        // XML (on-disk config) must still persist it, so signing survives a restart.
+        var serializer = new XmlSerializer(typeof(SamlConfig));
+        using var writer = new System.IO.StringWriter();
+        serializer.Serialize(writer, config);
+        var xml = writer.ToString();
+        Assert.Contains("SamlSigningKeyPfx", xml, StringComparison.Ordinal);
+        Assert.Contains("pfx-secret-blob", xml, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SamlSigningKey_IsDeserializedFromJson_SoItCanBeSetAndRotated()
+    {
+        const string body = "{\"SamlClientId\":\"sp\",\"SamlSigningKeyPfx\":\"typed-pfx\"}";
+        var parsed = System.Text.Json.JsonSerializer.Deserialize<SamlConfig>(body);
+        Assert.Equal("typed-pfx", parsed!.SamlSigningKeyPfx);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Preserve_BlankIncomingSigningKey_KeepsLiveKey(string? incomingKey)
+    {
+        // A config-page save arrives with the key blank (withheld from JSON) and must keep the stored one.
+        var live = new PluginConfiguration();
+        live.SamlConfigs["adfs"] = new SamlConfig { SamlSigningKeyPfx = "live-pfx" };
+        var incoming = new PluginConfiguration();
+        incoming.SamlConfigs["adfs"] = new SamlConfig { SamlSigningKeyPfx = incomingKey };
+
+        ServerManagedFields.Preserve(incoming, live);
+
+        Assert.Equal("live-pfx", incoming.SamlConfigs["adfs"].SamlSigningKeyPfx);
+    }
+
+    [Fact]
+    public void Preserve_NonBlankIncomingSigningKey_IsKeptAsRotation()
+    {
+        var live = new PluginConfiguration();
+        live.SamlConfigs["adfs"] = new SamlConfig { SamlSigningKeyPfx = "old-pfx" };
+        var incoming = new PluginConfiguration();
+        incoming.SamlConfigs["adfs"] = new SamlConfig { SamlSigningKeyPfx = "rotated-pfx" };
+
+        ServerManagedFields.Preserve(incoming, live);
+
+        Assert.Equal("rotated-pfx", incoming.SamlConfigs["adfs"].SamlSigningKeyPfx);
+    }
+
+    [Fact]
+    public void Preserve_NewSamlProviderWithBlankSigningKey_StaysBlank()
+    {
+        var live = new PluginConfiguration();
+        var incoming = new PluginConfiguration();
+        incoming.SamlConfigs["fresh"] = new SamlConfig { SamlSigningKeyPfx = null };
+
+        ServerManagedFields.Preserve(incoming, live);
+
+        Assert.True(string.IsNullOrEmpty(incoming.SamlConfigs["fresh"].SamlSigningKeyPfx));
+    }
+
+    [Fact]
+    public void ValidateSamlSigningKey_GarbageKey_ThrowsNamingProvider()
+    {
+        var incoming = new PluginConfiguration();
+        incoming.SamlConfigs["idp"] = new SamlConfig { SamlSigningKeyPfx = "QUJD" }; // valid base64, not a PKCS#12
+
+        var ex = Assert.Throws<ArgumentException>(() => ProviderConfigValidator.Validate(incoming, new PluginConfiguration()));
+        Assert.Contains("idp", ex.Message, StringComparison.Ordinal);
+    }
+
     // --- Base-URL override validation on save (#139) ---
 
     [Fact]
@@ -407,6 +494,8 @@ public class ConfigPreservationTests
             DoNotValidateAudience = true,
             ValidateRecipient = true,
             ValidateInResponseTo = true,
+            SignAuthnRequests = true,
+            SamlSigningKeyPfx = "pfx-blob",
         };
 
         var back = RoundTripXml(original);
@@ -439,6 +528,8 @@ public class ConfigPreservationTests
         Assert.True(back.DoNotValidateAudience);
         Assert.True(back.ValidateRecipient);
         Assert.True(back.ValidateInResponseTo);
+        Assert.True(back.SignAuthnRequests);
+        Assert.Equal("pfx-blob", back.SamlSigningKeyPfx);
     }
 
     [Fact]
