@@ -12,7 +12,7 @@
          CA53xx crypto) that Recommended leaves off. CodeAnalysisTreatWarningsAsErrors
          selects the SDK's error-severity configs for the CA rules, so every
          Security-category finding fails EVERY build (local, JPRM package,
-         SonarCloud) — not only the CI job that passes warnaserror; the mode's
+         any downstream analysis) — not only the CI job that passes warnaserror; the mode's
          per-rule severities outrank any .editorconfig category-bulk entry, which
          makes this property the load-bearing fail-closed mechanism. Third-party
          analyzer findings (Meziantou/Roslynator/StyleCop) are not covered by it
