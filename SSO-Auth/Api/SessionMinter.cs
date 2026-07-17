@@ -36,8 +36,9 @@ internal sealed class SessionMinter
     /// </summary>
     /// <param name="parameters">The resolved user, granted privileges, and client identity.</param>
     /// <param name="remoteEndPointResolver">Resolves the normalized client IP for the activity log (the controller reads it from <c>HttpContext</c>, #177). Invoked at the original point below — after avatar/persistence, and not at all on the fail-closed path — to preserve evaluation order.</param>
+    /// <param name="identityStillLinked">The in-flight revocation gate (#232): re-checks, under the config lock, that the resolved identity is still linked. Evaluated as the last act before the session mint; false fails closed. Required (no default) so a mint path cannot silently omit it and fail open.</param>
     /// <returns>The authenticated session result.</returns>
-    internal async Task<AuthenticationResult> MintAsync(SessionParameters parameters, Func<string> remoteEndPointResolver)
+    internal async Task<AuthenticationResult> MintAsync(SessionParameters parameters, Func<string> remoteEndPointResolver, Func<bool> identityStillLinked)
     {
         User user = _userManager.GetUserById(parameters.UserId);
         if (user is null)
@@ -93,6 +94,15 @@ internal sealed class SessionMinter
         // client byte-for-byte.
         authRequest.RemoteEndPoint = remoteEndPointResolver();
         _logger.LogInformation("Auth request created...");
+
+        // Last gate before the mint (#232): resolution ran under the config lock but everything since —
+        // permissions, avatar, the user write — has not, so an admin revocation (Unregister / link delete
+        // / provider disable) that landed in that gap must still stop the session. Fail closed exactly like
+        // the deleted-user guard above; the same AuthenticationException, no new error contract.
+        if (!identityStillLinked())
+        {
+            throw new AuthenticationException("SSO authentication aborted: the identity is no longer linked (revoked in flight).");
+        }
 
         return await _sessionManager.AuthenticateDirect(authRequest).ConfigureAwait(false);
     }

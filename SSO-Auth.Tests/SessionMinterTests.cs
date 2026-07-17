@@ -66,11 +66,14 @@ public class SessionMinterTests
         users.GetUserById(UserId).Returns((User?)null);
         var resolverInvoked = false;
 
-        await Assert.ThrowsAsync<AuthenticationException>(() => minter.MintAsync(Params(), () =>
-        {
-            resolverInvoked = true;
-            return "203.0.113.7";
-        }));
+        await Assert.ThrowsAsync<AuthenticationException>(() => minter.MintAsync(
+            Params(),
+            () =>
+            {
+                resolverInvoked = true;
+                return "203.0.113.7";
+            },
+            () => true));
 
         await sessions.DidNotReceive().AuthenticateDirect(Arg.Any<AuthenticationRequest>());
         // The deferred-evaluation contract of the resolver (the reason it is a Func): the fail-closed
@@ -89,7 +92,7 @@ public class SessionMinterTests
         AuthenticationRequest? captured = null;
         sessions.AuthenticateDirect(Arg.Do<AuthenticationRequest>(r => captured = r)).Returns(new AuthenticationResult());
 
-        await minter.MintAsync(Params(), () => "203.0.113.7");
+        await minter.MintAsync(Params(), () => "203.0.113.7", () => true);
 
         Assert.NotNull(captured);
         Assert.Equal("203.0.113.7", captured!.RemoteEndPoint);
@@ -113,7 +116,8 @@ public class SessionMinterTests
 
         await minter.MintAsync(
             Params(enableAuthorization: true, isAdmin: true, enableAllFolders: false, enabledFolders: new[] { "lib-1" }, enableLiveTv: true, enableLiveTvManagement: true),
-            () => "203.0.113.7");
+            () => "203.0.113.7",
+            () => true);
 
         Assert.Contains(user.Permissions, perm => perm.Kind == PermissionKind.IsAdministrator && perm.Value);
         Assert.DoesNotContain(user.Permissions, perm => perm.Kind == PermissionKind.EnableAllFolders && perm.Value); // flipped from the seeded true
@@ -133,7 +137,7 @@ public class SessionMinterTests
         users.GetUserById(UserId).Returns(user);
         sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
 
-        await minter.MintAsync(Params(enableAuthorization: true, enableAllFolders: true), () => "203.0.113.7");
+        await minter.MintAsync(Params(enableAuthorization: true, enableAllFolders: true), () => "203.0.113.7", () => true);
 
         Assert.Contains(user.Permissions, perm => perm.Kind == PermissionKind.EnableAllFolders && perm.Value); // flipped from the seeded restriction
     }
@@ -151,7 +155,7 @@ public class SessionMinterTests
         users.GetUserById(UserId).Returns(user);
         sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
 
-        await minter.MintAsync(Params(enableAuthorization: false, isAdmin: false), () => "203.0.113.7");
+        await minter.MintAsync(Params(enableAuthorization: false, isAdmin: false), () => "203.0.113.7", () => true);
 
         Assert.Contains(user.Permissions, perm => perm.Kind == PermissionKind.IsAdministrator && perm.Value); // seeded admin left untouched
     }
@@ -172,9 +176,57 @@ public class SessionMinterTests
         string? providerAtWrite = null;
         users.UpdateUserAsync(Arg.Do<User>(u => providerAtWrite = u.AuthenticationProviderId)).Returns(Task.CompletedTask);
 
-        await minter.MintAsync(Params(defaultProvider: "SSO-Auth"), () => "203.0.113.7");
+        await minter.MintAsync(Params(defaultProvider: "SSO-Auth"), () => "203.0.113.7", () => true);
 
         Assert.Equal("SSO-Auth", providerAtWrite);
         await users.Received(1).UpdateUserAsync(user);
+    }
+
+    [Fact]
+    public async Task MintAsync_IdentityRevokedInFlight_ThrowsAndMintsNoSession()
+    {
+        // #232: the account resolved under the config lock, but an admin revocation (Unregister / link
+        // delete / provider disable) committed before the mint, so the revocation re-check returns false
+        // and the mint is refused — fail closed exactly like the deleted-user guard, no session minted.
+        var (minter, users, sessions) = Build();
+        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        users.GetUserById(UserId).Returns(user);
+
+        await Assert.ThrowsAsync<AuthenticationException>(() => minter.MintAsync(Params(), () => "203.0.113.7", () => false));
+
+        await sessions.DidNotReceive().AuthenticateDirect(Arg.Any<AuthenticationRequest>());
+    }
+
+    [Fact]
+    public async Task MintAsync_RevocationRecheck_RunsAfterTheUserWrite_AndImmediatelyBeforeTheMint()
+    {
+        // Pins the placement that makes the #232 window as small as possible: the re-check is the LAST
+        // gate — it runs after the permission/avatar/default-provider user write and immediately before
+        // AuthenticateDirect. A recording predicate captures the order: UpdateUserAsync must have happened
+        // before it fires, and AuthenticateDirect must not have happened yet.
+        var (minter, users, sessions) = Build();
+        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        users.GetUserById(UserId).Returns(user);
+
+        var userWritten = false;
+        var mintCalled = false;
+        users.UpdateUserAsync(Arg.Any<User>()).Returns(_ => { userWritten = true; return Task.CompletedTask; });
+        sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(_ => { mintCalled = true; return new AuthenticationResult(); });
+
+        var writtenAtRecheck = false;
+        var mintedAtRecheck = false;
+        await minter.MintAsync(
+            Params(),
+            () => "203.0.113.7",
+            () =>
+            {
+                writtenAtRecheck = userWritten;
+                mintedAtRecheck = mintCalled;
+                return true;
+            });
+
+        Assert.True(writtenAtRecheck); // the user write already happened when the re-check ran
+        Assert.False(mintedAtRecheck); // the mint had not happened yet
+        Assert.True(mintCalled); // and with a true re-check the mint did proceed
     }
 }

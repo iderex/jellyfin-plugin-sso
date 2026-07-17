@@ -574,6 +574,128 @@ public class CanonicalLinkServiceTests
         Assert.False(cfg.SamlConfigs["adfs"].CanonicalLinks.ContainsKey("alice"));
     }
 
+    // --- IsIdentityStillLinked (#232): the in-flight revocation gate re-checked just before the mint ---
+
+    [Fact]
+    public void IsIdentityStillLinked_LiveEnabledLink_ReturnsTrue()
+    {
+        var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+
+        Assert.True(service.IsIdentityStillLinked("oid", "kc", "sub-1", Existing));
+    }
+
+    [Fact]
+    public void IsIdentityStillLinked_SamlLiveEnabledLink_ReturnsTrue()
+    {
+        // Both protocols share the gate; SAML keys on the NameID.
+        var (service, _, users, _) = Build(c => c.SamlConfigs["adfs"] = new SamlConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
+        });
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+
+        Assert.True(service.IsIdentityStillLinked("saml", "adfs", "alice", Existing));
+    }
+
+    [Fact]
+    public void IsIdentityStillLinked_AfterRevocation_ReturnsFalse()
+    {
+        // The #232 scenario: the link was resolved, then RemoveUserEverywhere (Unregister) removed it, so
+        // the mint-time re-check now fails closed even though the user still exists.
+        var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+
+        service.RemoveUserEverywhere(Existing);
+
+        Assert.False(service.IsIdentityStillLinked("oid", "kc", "sub-1", Existing));
+    }
+
+    [Fact]
+    public void IsIdentityStillLinked_ProviderDisabledMidFlight_ReturnsFalse()
+    {
+        // #380: a provider disabled between resolution and the mint fails the re-check, so the login
+        // cannot mint with the provider's pre-disable settings.
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        cfg.OidConfigs["kc"].Enabled = false;
+
+        Assert.False(service.IsIdentityStillLinked("oid", "kc", "sub-1", Existing));
+    }
+
+    [Fact]
+    public void IsIdentityStillLinked_UnknownProvider_ReturnsFalse()
+    {
+        var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
+
+        Assert.False(service.IsIdentityStillLinked("oid", "does-not-exist", "sub-1", Existing));
+    }
+
+    [Fact]
+    public void IsIdentityStillLinked_UnknownKey_ReturnsFalse()
+    {
+        var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+
+        Assert.False(service.IsIdentityStillLinked("oid", "kc", "sub-unknown", Existing));
+    }
+
+    [Fact]
+    public void IsIdentityStillLinked_LinkedToADifferentUser_ReturnsFalse()
+    {
+        // Fail closed if the link now points at another user (e.g. the identity was re-linked): the
+        // resolved user must still be the one the link names.
+        var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Other },
+        });
+        users.GetUserById(Other).Returns(UserNamed("bob", Other));
+
+        Assert.False(service.IsIdentityStillLinked("oid", "kc", "sub-1", Existing));
+    }
+
+    [Fact]
+    public void IsIdentityStillLinked_DanglingLinkTargetDeleted_ReturnsFalse()
+    {
+        // A link whose target user was deleted is dead, not an identity — GetUserById returns null.
+        var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+        users.GetUserById(Existing).Returns((User?)null);
+
+        Assert.False(service.IsIdentityStillLinked("oid", "kc", "sub-1", Existing));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void IsIdentityStillLinked_EmptyOrWhitespaceKey_ReturnsFalse(string? canonicalKey)
+    {
+        var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
+
+        Assert.False(service.IsIdentityStillLinked("oid", "kc", canonicalKey, Existing));
+    }
+
     [Fact]
     public async Task ResolveOrCreateAsync_ProviderDisabled_RefusesLikeADeletedOne()
     {

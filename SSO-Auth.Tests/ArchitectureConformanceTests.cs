@@ -202,6 +202,27 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void SessionMinter_RechecksRevocationImmediatelyBeforeTheMint()
+    {
+        // Locked in by the in-flight revocation gate (#232): MintAsync must evaluate the caller-supplied
+        // revocation predicate (identityStillLinked) as the last gate before it authenticates the session,
+        // so a refactor cannot silently drop it or reorder it after the mint and reopen the TOCTOU between
+        // link-resolution (under the config lock) and AuthenticateDirect (outside it). Call-level property,
+        // so it is a source scan like the controller rules above: the predicate INVOCATION must appear and
+        // its line must precede the single AuthenticateDirect call. The invocation "identityStillLinked()"
+        // is distinct from the parameter declaration/param-doc (no parentheses), so it matches only the gate.
+        var minterSource = File.ReadAllLines(Path.Combine(RepoRoot(), "SSO-Auth", "Api", "SessionMinter.cs"));
+        var recheckLine = Array.FindIndex(minterSource, l => l.Contains("identityStillLinked()", StringComparison.Ordinal));
+        var mintLine = Array.FindIndex(minterSource, l => l.Contains("AuthenticateDirect(", StringComparison.Ordinal));
+
+        Assert.True(recheckLine >= 0, "SessionMinter.MintAsync must invoke the identityStillLinked revocation re-check (#232).");
+        Assert.True(mintLine >= 0, "SessionMinter.MintAsync must call AuthenticateDirect to mint the session.");
+        Assert.True(
+            recheckLine < mintLine,
+            "The #232 revocation re-check must run BEFORE AuthenticateDirect — it is the last fail-closed gate before the session mint.");
+    }
+
+    [Fact]
     public void SSOPlugin_DeclaresNoConfigurationLogicBeyondTheStoreFacade()
     {
         // Locked in by the ProviderConfigStore extraction (#318): SSOPlugin is bootstrap + page
