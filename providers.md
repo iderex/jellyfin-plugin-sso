@@ -225,6 +225,14 @@ Both are set through the SAML provider configuration (the `SAML/Add` API, like t
 options — there is no admin-UI toggle yet); include them whenever you re-post a provider's config so
 a save does not reset them.
 
+**Multiple `AudienceRestriction` blocks:** SAML 2.0 core §2.5.1.4 permits an assertion to carry more
+than one `<AudienceRestriction>` element, and the plugin requires this service provider's audience to
+be named in **every** block (AND across blocks), while a single matching `Audience` anywhere inside
+one block is enough for that block (OR within a block). An assertion whose first restriction names a
+different service provider and whose second names this one is therefore rejected, even though it
+matched one of the blocks — it is not strictly addressed to this service provider. An assertion
+carrying no `AudienceRestriction` at all fails closed the same way (rejected).
+
 ## SAML response binding (optional hardening)
 
 Two per-provider SAML options, both **off by default**, tie a response more tightly to this service
@@ -303,6 +311,27 @@ It is automatic, with no configuration. Two consequences worth knowing:
 - **Serve the whole flow from one origin.** If `BaseUrlOverride` points at a host your users do not
   actually browse, the binding cookie will not travel with them; keep the challenge and callback on the
   same origin (which a working setup already does).
+
+## Other OpenID options
+
+A few remaining per-provider OpenID settings, set through the config XML (no admin-UI toggle yet):
+
+- **`DisableHttps`** (off by default) turns off the requirement that the discovery document — and the
+  endpoints it points at (JWKS, token) — be fetched over HTTPS
+  (`options.Policy.Discovery.RequireHttps` in `SSOController.cs`). With it on, the id_token's signing
+  keys are fetched over a channel a network attacker can intercept, so only turn it on for a
+  local/testing identity provider that genuinely has no TLS — never for a production deployment.
+  Enabling it is recorded in the `[SSO Audit]` log alongside the other insecure toggles (see
+  [OpenID Connect id_token requirements](#openid-connect-id_token-requirements)).
+- **`DoNotLoadProfile`** (off by default) skips the UserInfo endpoint call after token exchange
+  (`LoadProfile` on the `OidcClient`). Some providers only return certain claims from UserInfo, not
+  the id_token, so turning this on can leave role/username/avatar mapping without data it expects —
+  set it only for a provider whose id_token alone already carries every claim you map.
+- **`DefaultProvider`** sets the value the plugin writes into Jellyfin's own `AuthenticationProviderId`
+  field on the user record after a successful login through this provider (`SessionMinter`). This is a
+  Jellyfin-native user attribute, not something the SSO plugin reads back to resolve SSO logins —
+  those always resolve through the per-provider canonical-link maps regardless of this value. Leave it
+  blank to leave the field untouched.
 
 ## In-flight login capacity (per-client)
 
