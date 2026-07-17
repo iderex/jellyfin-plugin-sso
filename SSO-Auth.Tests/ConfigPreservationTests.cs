@@ -68,6 +68,9 @@ public class ConfigPreservationTests
         var exception = Record.Exception(() => ServerManagedFields.Preserve(incoming, live));
 
         Assert.Null(exception);
+        // Nothing to preserve from, so the null maps are left exactly as they arrived.
+        Assert.Null(incoming.OidConfigs);
+        Assert.Null(incoming.SamlConfigs);
     }
 
     [Fact]
