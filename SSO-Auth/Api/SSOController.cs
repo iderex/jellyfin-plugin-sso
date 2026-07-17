@@ -909,11 +909,14 @@ public class SSOController : ControllerBase
         {
             redirectUrl = BuildChallengeRedirectUrl(config, request, relayState);
         }
-        catch (InvalidOperationException ex)
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or CryptographicException)
         {
-            // Signing is enabled for this provider but its signing key is missing or unusable. Fail closed
-            // with a clean 500 (never a silent unsigned request), and log the reason for the operator — the
-            // key material itself is not part of the message, so nothing sensitive is logged.
+            // Signing is enabled for this provider but the request could not be signed: the key is
+            // missing/unusable (InvalidOperationException), the endpoint is empty (ArgumentException from
+            // the signer), or the platform key store refused the signing operation (CryptographicException).
+            // ANY of these fails closed with a clean 500 — never a silent unsigned request — rather than
+            // escaping as a raw host 500. The key material is not part of the message, so nothing sensitive
+            // is logged.
             _logger.LogError("SAML challenge for provider {Provider} could not sign the AuthnRequest: {Reason}", provider?.ReplaceLineEndings(string.Empty), ex.Message);
             return ReturnError(StatusCodes.Status500InternalServerError, "Could not start login; the SAML request signing key is misconfigured.");
         }

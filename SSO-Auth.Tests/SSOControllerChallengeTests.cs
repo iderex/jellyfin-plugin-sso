@@ -142,6 +142,26 @@ public class SSOControllerChallengeTests
         Assert.Equal(500, Assert.IsType<ContentResult>(result).StatusCode);
     }
 
+    [Fact]
+    public void SamlChallenge_SigningEnabledWithValidKeyButEmptyEndpoint_FailsClosedWith500()
+    {
+        // Signing on + a good key but a misconfigured (empty) endpoint must still fail closed with a clean
+        // handled 500, not a raw host 500 and not an unsigned request.
+        var harness = new SsoControllerHarness(c =>
+        {
+            var config = EnabledProvider();
+            config.SamlEndpoint = string.Empty;
+            config.SignAuthnRequests = true;
+            config.SamlSigningKeyPfx = SamlSigningKeyFactory.CreatePfxBase64();
+            c.SamlConfigs["adfs"] = config;
+        });
+
+        var result = harness.Controller.SamlChallenge("adfs");
+
+        Assert.IsNotType<RedirectResult>(result);
+        Assert.Equal(500, Assert.IsType<ContentResult>(result).StatusCode);
+    }
+
     private static bool RedirectSignatureVerifies(string url, RSA publicKey)
     {
         var samlRequest = QueryValue(url, "SAMLRequest");
