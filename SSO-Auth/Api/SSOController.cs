@@ -714,40 +714,13 @@ public class SSOController : ControllerBase
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.InvalidState));
         }
 
-        Guid userId;
-        try
-        {
-            userId = await _canonicalLinks.ResolveOrCreateAsync(
-                "oid",
-                provider,
-                redeemed.Subject,
-                redeemed.Username,
-                config.AllowExistingAccountLink,
-                new AdoptionGate(config.RequireVerifiedEmailForAdoption, redeemed.EmailVerified)).ConfigureAwait(false);
-        }
-        catch (AccountLinkForbiddenException)
-        {
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.AccountLinkForbidden));
-        }
-
-        var sessionParameters = new SessionParameters
-        {
-            UserId = userId,
-            IsAdmin = redeemed.Admin,
-            EnableAuthorization = config.EnableAuthorization,
-            EnableAllFolders = config.EnableAllFolders,
-            EnabledFolders = redeemed.Folders.ToArray(),
-            EnableLiveTv = redeemed.EnableLiveTv,
-            EnableLiveTvManagement = redeemed.EnableLiveTvManagement,
-            AuthResponse = response,
-            DefaultProvider = config.DefaultProvider?.Trim(),
-            AvatarUrl = redeemed.AvatarUrl,
-        };
-        var authenticationResult = await Authenticate(
-            sessionParameters,
-            () => _canonicalLinks.IsIdentityStillLinked("oid", provider, redeemed.Subject, userId)).ConfigureAwait(false);
-        SsoAudit.LoginSucceeded(_logger, OpenIdProtocol, provider, redeemed.Username, redeemed.Admin);
-        return LoginStatusMapper.ToActionResult(new LoginOutcome.Success(authenticationResult));
+        // The redeemed state carries the fully-verified identity (#473); the OpenID adoption gate applies
+        // the provider's verified-email requirement (#218). From here the OpenID and SAML paths are one.
+        return await CompleteLoginAsync(
+            redeemed.Identity,
+            response,
+            config,
+            new AdoptionGate(config.RequireVerifiedEmailForAdoption, redeemed.Identity.EmailVerified)).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1121,38 +1094,18 @@ public class SSOController : ControllerBase
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
         }
 
-        Guid userId;
-        try
-        {
-            // SAML keys the link directly on the NameID, which is already the stable subject
-            // identifier — key and account name are the same value (no migration path needed). SAML has
-            // no email_verified claim, so the verified-email gate is not applicable (AdoptionGate.None);
-            // the resolver's unconditional admin-adoption refusal (#218) still applies.
-            userId = await _canonicalLinks.ResolveOrCreateAsync("saml", provider, nameId, nameId, config.AllowExistingAccountLink, AdoptionGate.None).ConfigureAwait(false);
-        }
-        catch (AccountLinkForbiddenException)
-        {
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.AccountLinkForbidden));
-        }
-
-        var sessionParameters = new SessionParameters
-        {
-            UserId = userId,
-            IsAdmin = derived.Admin,
-            EnableAuthorization = config.EnableAuthorization,
-            EnableAllFolders = config.EnableAllFolders,
-            EnabledFolders = derived.Folders.ToArray(),
-            EnableLiveTv = derived.EnableLiveTv,
-            EnableLiveTvManagement = derived.EnableLiveTvManagement,
-            AuthResponse = response,
-            DefaultProvider = config.DefaultProvider?.Trim(),
-            AvatarUrl = null,
-        };
-        var authenticationResult = await Authenticate(
-            sessionParameters,
-            () => _canonicalLinks.IsIdentityStillLinked("saml", provider, nameId, userId)).ConfigureAwait(false);
-        SsoAudit.LoginSucceeded(_logger, SamlProtocol, provider, nameId, derived.Admin);
-        return LoginStatusMapper.ToActionResult(new LoginOutcome.Success(authenticationResult));
+        // All SAML validation has now passed — signature, time bounds, audience, recipient, InResponseTo
+        // correlation, the login allow-list, replay one-time-use, and the non-empty-NameID guard — so this
+        // is the point at which the response becomes a fully-verified SAML identity (#473). SAML keys the
+        // link directly on the NameID (subject and username are the same value; no migration path needed)
+        // and carries no email_verified claim, so the verified-email gate is not applicable
+        // (AdoptionGate.None); the resolver's unconditional admin-adoption refusal (#218) still applies.
+        // From here the SAML and OpenID paths are one.
+        return await CompleteLoginAsync(
+            VerifiedIdentity.FromValidatedSaml(provider, nameId, derived),
+            response,
+            config,
+            AdoptionGate.None).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1397,7 +1350,7 @@ public class SSOController : ControllerBase
 
         // Manual linking keys on the stable subject (#155), matching the auto-login path, so a
         // later provider-side rename does not orphan the link the user just created.
-        return MapWrite(_canonicalLinks.TryCreateLink("oid", provider, redeemed.Subject, jellyfinUserId));
+        return MapWrite(_canonicalLinks.TryCreateLink("oid", provider, redeemed.Identity.Subject, jellyfinUserId));
     }
 
     // The HTTP boundary for a manual link creation: maps the service's closed write result to a response.
@@ -1410,6 +1363,56 @@ public class SSOController : ControllerBase
         CanonicalLinkWriteResult.UnknownProvider => BadRequest(NoMatchingProviderMessage),
         _ => throw new InvalidOperationException($"Unhandled canonical-link write result: {result}"),
     };
+
+    // The one shared completion path both protocols funnel into once their validation has produced a
+    // VerifiedIdentity (#473): resolve-or-create the account, build the session parameters, and mint the
+    // session under the in-flight revocation gate. Taking a VerifiedIdentity — the only type either
+    // protocol can produce, and only after full validation — is what makes minting from a raw, unvalidated
+    // response a compile error: there is no overload that accepts anything else. The only per-protocol
+    // input left is the adoption gate (OpenID may require a verified email #218; SAML passes
+    // AdoptionGate.None), so it is a parameter; every other divergence collapsed into the identity's own
+    // fields (its link namespace, audit label, subject, username, privileges).
+    private async Task<ActionResult> CompleteLoginAsync(
+        VerifiedIdentity identity,
+        AuthResponse response,
+        ProviderConfigBase config,
+        AdoptionGate adoptionGate)
+    {
+        Guid userId;
+        try
+        {
+            userId = await _canonicalLinks.ResolveOrCreateAsync(
+                identity.LinkMode,
+                identity.Provider,
+                identity.Subject,
+                identity.Username,
+                config.AllowExistingAccountLink,
+                adoptionGate).ConfigureAwait(false);
+        }
+        catch (AccountLinkForbiddenException)
+        {
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.AccountLinkForbidden));
+        }
+
+        var sessionParameters = new SessionParameters
+        {
+            UserId = userId,
+            IsAdmin = identity.Admin,
+            EnableAuthorization = config.EnableAuthorization,
+            EnableAllFolders = config.EnableAllFolders,
+            EnabledFolders = identity.Folders.ToArray(),
+            EnableLiveTv = identity.EnableLiveTv,
+            EnableLiveTvManagement = identity.EnableLiveTvManagement,
+            AuthResponse = response,
+            DefaultProvider = config.DefaultProvider?.Trim(),
+            AvatarUrl = identity.AvatarUrl,
+        };
+        var authenticationResult = await Authenticate(
+            sessionParameters,
+            () => _canonicalLinks.IsIdentityStillLinked(identity.LinkMode, identity.Provider, identity.Subject, userId)).ConfigureAwait(false);
+        SsoAudit.LoginSucceeded(_logger, identity.AuditProtocol, identity.Provider, identity.Username, identity.Admin);
+        return LoginStatusMapper.ToActionResult(new LoginOutcome.Success(authenticationResult));
+    }
 
     // The HTTP boundary for session minting: hand the resolved parameters and a resolver for the client's
     // normalized remote IP (#177 — Jellyfin's own GetNormalizedRemoteIP, so the plugin adds no proxy-trust

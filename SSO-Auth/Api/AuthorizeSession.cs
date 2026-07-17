@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using Duende.IdentityModel.OidcClient;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api;
@@ -106,38 +105,19 @@ internal abstract class AuthorizeSession
         internal Ready(Pending pending, OidcAuthorizeStateBuilder.OidcAuthorizeState derived)
             : base(pending.Token, pending.Provider, pending.IsLinking, pending.BindingId, pending.ClientKey, pending.Created)
         {
-            Subject = derived.Subject;
-            Username = derived.Username;
-            EmailVerified = derived.EmailVerified;
-            Admin = derived.Admin;
-            Folders = derived.Folders;
-            EnableLiveTv = derived.EnableLiveTv;
-            EnableLiveTvManagement = derived.EnableLiveTvManagement;
-            AvatarUrl = derived.AvatarUrl;
+            // The role gate has passed, so this is exactly the point at which an OpenID login becomes a
+            // fully-verified identity (#473): fold the derived result into the one protocol-agnostic
+            // VerifiedIdentity the mint path is keyed on. Building it here — inside the variant the store
+            // only ever produces for a promoted state and only hands out through the one-time atomic
+            // redeem — is what makes this the OpenID construction site the keystone's contract names.
+            Identity = VerifiedIdentity.FromOidcRedemption(pending.Provider, derived);
         }
 
-        /// <summary>Gets the stable subject identifier keying the account link (#155).</summary>
-        internal string Subject { get; }
-
-        /// <summary>Gets the username resolved by the verified login.</summary>
-        internal string Username { get; }
-
-        /// <summary>Gets the login's <c>email_verified</c> claim (true/false), or null when absent (#218).</summary>
-        internal bool? EmailVerified { get; }
-
-        /// <summary>Gets a value indicating whether the login grants administrator rights.</summary>
-        internal bool Admin { get; }
-
-        /// <summary>Gets the folders the login grants access to.</summary>
-        internal List<string> Folders { get; }
-
-        /// <summary>Gets a value indicating whether the login may view live TV.</summary>
-        internal bool EnableLiveTv { get; }
-
-        /// <summary>Gets a value indicating whether the login may manage live TV.</summary>
-        internal bool EnableLiveTvManagement { get; }
-
-        /// <summary>Gets the avatar URL resolved by the verified login.</summary>
-        internal string AvatarUrl { get; }
+        /// <summary>
+        /// Gets the fully-verified identity and privileges of the redeemed OpenID login (#473). This is
+        /// the sole payload of a <see cref="Ready"/>: holding one is the evidence the login passed the role
+        /// gate, and it is what <see cref="OidcStateStore.TryRedeem"/> feeds into the shared mint path.
+        /// </summary>
+        internal VerifiedIdentity Identity { get; }
     }
 }

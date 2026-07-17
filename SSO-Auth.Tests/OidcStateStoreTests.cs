@@ -260,11 +260,11 @@ public class OidcStateStoreTests
 
         var redeemed = store.TryRedeem("tok", "p", Now, Binding);
         Assert.NotNull(redeemed);
-        Assert.Equal("alice", redeemed.Username);
-        Assert.Equal("sub-full", redeemed.Subject);
-        Assert.True(redeemed.Admin);
-        Assert.Equal(new[] { "movies" }, redeemed.Folders);
-        Assert.Equal("https://idp.example/a.png", redeemed.AvatarUrl);
+        Assert.Equal("alice", redeemed.Identity.Username);
+        Assert.Equal("sub-full", redeemed.Identity.Subject);
+        Assert.True(redeemed.Identity.Admin);
+        Assert.Equal(new[] { "movies" }, redeemed.Identity.Folders);
+        Assert.Equal("https://idp.example/a.png", redeemed.Identity.AvatarUrl);
     }
 
     [Fact]
@@ -340,11 +340,11 @@ public class OidcStateStoreTests
             var redeemed = await redeem;
             if (redeemed != null)
             {
-                Assert.Equal("alice", redeemed.Username);
-                Assert.Equal("sub-full", redeemed.Subject);
-                Assert.True(redeemed.Admin);
-                Assert.Equal(new[] { "movies" }, redeemed.Folders);
-                Assert.Equal("https://idp.example/a.png", redeemed.AvatarUrl);
+                Assert.Equal("alice", redeemed.Identity.Username);
+                Assert.Equal("sub-full", redeemed.Identity.Subject);
+                Assert.True(redeemed.Identity.Admin);
+                Assert.Equal(new[] { "movies" }, redeemed.Identity.Folders);
+                Assert.Equal("https://idp.example/a.png", redeemed.Identity.AvatarUrl);
             }
         }
     }
@@ -364,13 +364,13 @@ public class OidcStateStoreTests
         var redeemed = store.TryRedeem("tok", "p", Now, Binding);
 
         Assert.NotNull(redeemed);
-        Assert.Equal("sub-1", redeemed.Subject);
-        Assert.Equal("alice", redeemed.Username);
-        Assert.True(redeemed.Admin);
-        Assert.Equal(new[] { "movies" }, redeemed.Folders);
-        Assert.True(redeemed.EnableLiveTv);
-        Assert.False(redeemed.EnableLiveTvManagement);
-        Assert.Equal("https://idp.example.com/a.png", redeemed.AvatarUrl);
+        Assert.Equal("sub-1", redeemed.Identity.Subject);
+        Assert.Equal("alice", redeemed.Identity.Username);
+        Assert.True(redeemed.Identity.Admin);
+        Assert.Equal(new[] { "movies" }, redeemed.Identity.Folders);
+        Assert.True(redeemed.Identity.EnableLiveTv);
+        Assert.False(redeemed.Identity.EnableLiveTvManagement);
+        Assert.Equal("https://idp.example.com/a.png", redeemed.Identity.AvatarUrl);
     }
 
     [Theory]

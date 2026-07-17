@@ -224,6 +224,87 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void VerifiedIdentity_IsConstructedOnlyByProtocolValidators()
+    {
+        // Locked in by #473: VerifiedIdentity is the keystone the session-minting path is keyed on, and it
+        // is unforgeable — its constructor is PRIVATE, so the only way to obtain one is a named factory that
+        // stands for "this protocol's validation has completed". Two properties are pinned:
+        //
+        // 1. Reflection: NO declared instance constructor is reachable from outside the type — none is
+        //    public, internal, or protected-internal. A sealed record's own compiler-generated copy
+        //    constructor is emitted PRIVATE (protected only for unsealed records), so it too is excluded by
+        //    this filter; the accessibility test is written to also exclude a plain `protected` ctor, which
+        //    is unreachable on a sealed type anyway (no derived type could invoke it). The C# compiler
+        //    guarantees such a constructor cannot be invoked outside the declaring type, so this alone
+        //    proves `new VerifiedIdentity(...)` can appear only inside VerifiedIdentity.cs (the two
+        //    factories) — no third construction path can compile. (An empty `with { }` on an existing
+        //    instance clones a valid identity verbatim; every property is get-only, so it can neither
+        //    mutate nor forge one.) A future `public`/`internal` ctor added to the type would reopen that
+        //    hole and fail HERE.
+        // 2. Source scan: each factory is INVOKED only from its protocol's validator. FromOidcRedemption
+        //    belongs to the OpenID redeem path — built inside AuthorizeSession.Ready, which the store hands
+        //    out only through the one-time atomic redeem — and FromValidatedSaml only at the SAML
+        //    session-minting endpoint after full response validation. A call from anywhere else (a link
+        //    endpoint, a new controller action) would mean an identity minted from something other than a
+        //    completed validation, so it fails the scan.
+        var ctors = typeof(VerifiedIdentity)
+            .GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+        Assert.True(ctors.Length > 0, "VerifiedIdentity must declare an instance constructor to pin (it was removed or the type was renamed).");
+        var reachable = ctors
+            .Where(c => c.IsPublic || c.IsAssembly || c.IsFamilyOrAssembly)
+            .Select(c => c.ToString())
+            .ToList();
+        Assert.True(
+            reachable.Count == 0,
+            "VerifiedIdentity's constructor(s) must not be reachable from outside the type (no public/internal/protected-internal ctor) so it is constructible only through its validation factories (#473): " + string.Join(", ", reachable));
+
+        // Sentinel + call-site pins. The factory NAMES are the contract; require both to exist (a rename
+        // must consciously update this rule), then confine each factory's invocation to the file(s) that own
+        // its protocol's validation. AuthorizeSession is where the OpenID identity is built (from the
+        // role-gate result); the SAML factory is invoked from the controller's SAML endpoint until a later
+        // #318 step extracts a dedicated SAML validator — at which point this allow-list moves with it.
+        const string oidcFactory = "FromOidcRedemption";
+        const string samlFactory = "FromValidatedSaml";
+        var factoryMethods = typeof(VerifiedIdentity)
+            .GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
+            .Where(m => m.ReturnType == typeof(VerifiedIdentity))
+            .Select(m => m.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.True(
+            factoryMethods.Contains(oidcFactory) && factoryMethods.Contains(samlFactory),
+            $"VerifiedIdentity must expose the two named validation factories ({oidcFactory}, {samlFactory}); one was renamed, so update this rule and the source-scan allow-list with it (#473).");
+
+        var oidcHome = SourceFilesDeclaring(new[] { typeof(AuthorizeSession) });
+        var samlHome = ControllerSourceFiles();
+        AssertFactoryInvocationsConfinedTo("VerifiedIdentity." + oidcFactory + "(", oidcHome, "the OpenID redeem path (AuthorizeSession.Ready)");
+        AssertFactoryInvocationsConfinedTo("VerifiedIdentity." + samlFactory + "(", samlHome, "the SAML session-minting endpoint");
+    }
+
+    // Fails if the given factory-invocation token appears in any SSO-Auth source file outside the allowed
+    // homes. Shared by the two #473 call-site pins; the allowed set is matched by absolute path so a file
+    // rename that the reflection-driven home discovery already tracks flows through unchanged. This is a
+    // qualified-call substring scan (belt-and-braces): the AIRTIGHT construction lock is the private-ctor
+    // reflection assertion above — nothing outside VerifiedIdentity.cs can construct one at all, so a call
+    // that this scan's substring might miss (a `using static` unqualified spelling, a line-split call) still
+    // cannot forge an identity; this scan adds the sharper "constructed only by the RIGHT validator" signal
+    // on top, keying on the qualified spelling the codebase actually uses.
+    private static void AssertFactoryInvocationsConfinedTo(string invocationToken, IEnumerable<string> allowedFiles, string homeDescription)
+    {
+        var allowed = allowedFiles.Select(Path.GetFullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var strays = Directory
+            .EnumerateFiles(Path.Combine(RepoRoot(), "SSO-Auth"), "*.cs", SearchOption.AllDirectories)
+            .Where(path => !IsBuildOutput(path))
+            .Where(path => !allowed.Contains(Path.GetFullPath(path)))
+            .Where(path => File.ReadAllText(path).Contains(invocationToken, StringComparison.Ordinal))
+            .Select(Path.GetFileName)
+            .ToList();
+
+        Assert.True(
+            strays.Count == 0,
+            $"{invocationToken}...) may be invoked only from {homeDescription}; found outside it in: " + string.Join(", ", strays));
+    }
+
+    [Fact]
     public void Controller_NeverTouchesProviderLinkMaps()
     {
         // Locked in by the link/unlink admin-surface extraction (#372) and completed by #383: the two
