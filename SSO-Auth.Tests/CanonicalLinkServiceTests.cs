@@ -348,6 +348,93 @@ public class CanonicalLinkServiceTests
         Assert.Contains("refusing to migrate the account link", ex.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ResolveOrCreateAsync_LiveSubjectLink_PersistsNothing()
+    {
+        // #363 guard: an ordinary login that resolves an existing subject-keyed link must stay a pure
+        // read. Folding the legacy migration into the resolution must NOT turn every login into a config
+        // persist — the common (no-migration) path writes nothing, so the fold cannot regress the hot
+        // path into an always-mutate.
+        var cfg = new PluginConfiguration();
+        cfg.OidConfigs["kc"] = new OidConfig { Enabled = true, CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing } };
+        var users = Substitute.For<IUserManager>();
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        var persists = 0;
+        var store = new ProviderConfigStore(() => cfg, _ => persists++, new CapturingLogger());
+        var service = new CanonicalLinkService(users, new FakeCryptoProvider(), store, new CapturingLogger());
+
+        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: false);
+
+        Assert.Equal(Existing, resolved);
+        Assert.Equal(0, persists); // no write on the hot path
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_LegacyMigration_PersistsExactlyOnce()
+    {
+        // #363: the legacy re-key is folded into a SINGLE config transaction, so a migrating login
+        // persists exactly once — not the two write-capable lock acquisitions the pre-fold read-then-
+        // migrate pattern implied. The link ends up subject-keyed and the login binds to the migrated user.
+        var cfg = new PluginConfiguration();
+        cfg.OidConfigs["kc"] = new OidConfig { Enabled = true, CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing } };
+        var users = Substitute.For<IUserManager>();
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
+        var persists = 0;
+        var store = new ProviderConfigStore(() => cfg, _ => persists++, new CapturingLogger());
+        var service = new CanonicalLinkService(users, new FakeCryptoProvider(), store, new CapturingLogger());
+
+        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true);
+
+        Assert.Equal(Existing, resolved);
+        Assert.Equal(1, persists); // one mutation for the migration, not two
+        var links = cfg.OidConfigs["kc"].CanonicalLinks;
+        Assert.Equal(Existing, links["sub-1"]);
+        Assert.False(links.ContainsKey("alice"));
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_ConcurrentLoginMigratedBeforeReKey_BindsToTheWinnerWithoutOverwriting()
+    {
+        // #363, the window the fold closes: the candidate-resolving read sees only the legacy key, but a
+        // concurrent login for the SAME identity commits its migration (subject key now live, legacy key
+        // gone) before this login's re-key transaction runs. The re-key transaction re-resolves the
+        // candidates authoritatively and binds to the winner's live subject link WITHOUT overwriting it —
+        // one winner, no double-write, and no stale pre-migration snapshot driving the outcome.
+        var cfg = new PluginConfiguration();
+        cfg.OidConfigs["kc"] = new OidConfig { Enabled = true, CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing } };
+        var users = Substitute.For<IUserManager>();
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
+
+        // Access 1 is the candidate-resolving Read; access 2 is the migrate Mutate. Interposing the
+        // concurrent winner's committed migration right before the second access reproduces the race
+        // deterministically — exactly the interpose the two former separate lock acquisitions allowed.
+        var access = 0;
+        var store = new ProviderConfigStore(
+            () =>
+            {
+                if (++access == 2)
+                {
+                    var live = cfg.OidConfigs["kc"].CanonicalLinks;
+                    live.Remove("alice");
+                    live["sub-1"] = Existing; // the concurrent winner already re-keyed to the subject
+                }
+
+                return cfg;
+            },
+            _ => { },
+            new CapturingLogger());
+        var service = new CanonicalLinkService(users, new FakeCryptoProvider(), store, new CapturingLogger());
+
+        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true);
+
+        Assert.Equal(Existing, resolved); // bound to the winner's live subject link
+        var final = cfg.OidConfigs["kc"].CanonicalLinks;
+        Assert.Equal(Existing, final["sub-1"]); // not overwritten
+        Assert.False(final.ContainsKey("alice")); // the winner's re-key stands
+    }
+
     // --- Admin surface: TryCreateLink / TryRemoveLink / LinksByUser (#372, finishing #241) ---
 
     [Fact]

@@ -298,6 +298,38 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void LegacyLinkMigration_ReturnsTheAuthoritativeMapping_NotAVoidReKey()
+    {
+        // Locked in by #363: the #155 legacy-link re-key runs as a SECOND lock acquisition after the
+        // candidate-resolving read, so a concurrent login could migrate the same identity between the two.
+        // The fix folds the re-key and the re-resolution into one config transaction that RETURNS the
+        // authoritative user id, and the caller binds the login to that returned id rather than the
+        // pre-migration snapshot. Structurally that means the migration helper must be a value-returning
+        // mutation (Guid?), never a fire-and-forget void re-key whose result the caller ignores — a
+        // revert to void would silently reopen the window. Reflection over the service's own private
+        // methods pins it: any migration helper (name contains "Migrate") must return Guid?.
+        var migrationHelpers = typeof(CanonicalLinkService)
+            .GetMethods(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
+            .Where(m => m.Name.Contains("Migrate", StringComparison.Ordinal))
+            .ToList();
+
+        // Sentinel against a vacuous pass: a rename that drops "Migrate" from the helper's name would make
+        // the scan match nothing and pass for the wrong reason, so require at least one to exist and force
+        // a conscious update of this rule if the naming changes.
+        Assert.True(
+            migrationHelpers.Count > 0,
+            "No legacy-link migration helper (a private method whose name contains \"Migrate\") was found on CanonicalLinkService; it was renamed, so point this rule at the new name so the return-type invariant keeps guarding #363.");
+
+        var voidReKeys = migrationHelpers
+            .Where(m => m.ReturnType != typeof(Guid?))
+            .Select(m => $"{m.Name} -> {m.ReturnType.Name}")
+            .ToList();
+        Assert.True(
+            voidReKeys.Count == 0,
+            "The legacy-link migration must return the authoritative mapping (Guid?) so the login binds to the post-migration state, not a pre-migration snapshot (#363); these do not: " + string.Join(", ", voidReKeys));
+    }
+
+    [Fact]
     public void SSOPlugin_DeclaresNoConfigurationLogicBeyondTheStoreFacade()
     {
         // Locked in by the ProviderConfigStore extraction (#318): SSOPlugin is bootstrap + page
