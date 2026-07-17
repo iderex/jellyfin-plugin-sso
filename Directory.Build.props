@@ -1,6 +1,11 @@
 <Project>
 
   <PropertyGroup>
+    <!-- CI's dotnet.yml already builds with the warnaserror flag; setting the project property too
+         makes a plain local `dotnet build` (no flag) match CI instead of silently passing on
+         warnings a contributor's machine would otherwise hide until the PR build. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
     <!-- Generate and honor a packages.lock.json per project so the restored dependency graph is
          pinned and reproducible. Locally, updating a package regenerates the lock file (or run a
          restore with the force-evaluate switch). -->
