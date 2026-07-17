@@ -174,7 +174,15 @@ internal sealed class CanonicalLinkService
                 throw new AccountLinkForbiddenException();
             }
 
-            MigrateCanonicalLinkKey(mode, provider, username, canonicalKey);
+            // Re-key the legacy link AND re-resolve the identity in ONE config transaction (#363), then
+            // bind the login to the value that transaction returns. The candidate resolution above was a
+            // separate lock acquisition, so a concurrent login could migrate this same identity between
+            // that snapshot and the re-key; taking the authoritative mapping from inside the re-key
+            // transaction — rather than the pre-migration snapshot's linkedUserId — closes that window
+            // instead of reasoning about its (previously argued-benign) safety. A concurrent winner's live
+            // subject link is used as-is; the deleted-target edge resolves to null so the login falls
+            // through to the create/adopt gate rather than binding to a dead account.
+            linkedUserId = MigrateAndResolveCanonicalLink(mode, provider, canonicalKey, username);
             _logger.LogInformation(
                 "Migrated {Mode}/{Provider} canonical link from the legacy username key to the stable subject key.",
                 mode,
@@ -517,33 +525,48 @@ internal sealed class CanonicalLinkService
         });
     }
 
-    // Re-keys a canonical link from oldKey to newKey inside the config lock (#155 legacy migration).
-    // Idempotent under concurrency: if oldKey is already gone (a concurrent login migrated first) the
-    // move is a no-op, and a LIVE newKey entry is never overwritten — only a dangling one (its target
-    // user deleted), which would otherwise block the hand-off on every subsequent login.
-    private void MigrateCanonicalLinkKey(string mode, string provider, string oldKey, string newKey)
+    // Re-keys a canonical link from the legacy username key to the stable subject key (#155) AND returns
+    // the authoritative user id the identity now resolves to, in ONE config transaction (#363). The
+    // caller resolved the candidates in an earlier lock acquisition, so folding the re-key and the
+    // re-resolution into this single transaction — and having the caller bind to the returned id rather
+    // than that earlier snapshot — removes the window a concurrent login could interpose in between the
+    // snapshot and the re-key. Idempotent under concurrency: if the legacy key is already gone (a
+    // concurrent login migrated first) the move is a no-op, and a LIVE subject key is never overwritten —
+    // only a dangling one (its target user deleted), which would otherwise block the hand-off on every
+    // subsequent login. Returns null only when neither key resolves a live account (the dangling edge), so
+    // the login fails closed into the create/adopt gate rather than binding to a dead account.
+    private Guid? MigrateAndResolveCanonicalLink(string mode, string provider, string canonicalKey, string legacyKey)
     {
-        _configStore.Mutate(configuration =>
+        return _configStore.Mutate<Guid?>(configuration =>
         {
-            // Migration is a SECOND transaction after the candidate-resolving read. If the provider was
-            // deleted or disabled in that window, fail CLOSED: throw rather than no-op, because the
-            // caller still holds the legacy user id from the pre-deletion snapshot and would otherwise
-            // return UseExistingLink, minting a session for a provider that no longer exists or was just
-            // switched off (#373, #380).
+            // The candidate-resolving read passed the provider enabled; if it was deleted or disabled in
+            // the window since, fail CLOSED: throw rather than no-op, because the caller would otherwise
+            // bind to the pre-window legacy id and mint a session for a provider that no longer exists or
+            // was just switched off (#373, #380).
             if (!TryGetLinks(configuration, mode, provider, requireEnabled: true, out var links))
             {
                 throw new AccountLinkForbiddenException("The SSO provider is no longer configured or is disabled; refusing to migrate the account link.");
             }
 
-            // A no-op here (unlike the throwing miss above) is the GOOD idempotent case: the provider
-            // still exists but oldKey was already re-keyed by a concurrent login, or newKey is live. The
-            // never-overwrite-a-live-newKey rule is on the method summary.
-            if (links.TryGetValue(oldKey, out var userId)
-                && (!links.TryGetValue(newKey, out var existing) || _userManager.GetUserById(existing) == null))
+            // Re-key only a legacy entry that still needs it: the subject key must be absent or dangling
+            // (never overwrite a live subject link a concurrent login already established). When we re-key,
+            // the identity now resolves subject-keyed to the legacy target, so that IS the authoritative id
+            // — returning the moved value (rather than re-reading and filtering) preserves the prior
+            // behaviour on the deleted-mid-migration race, where the caller bound to the legacy id and
+            // failed closed downstream.
+            if (links.TryGetValue(legacyKey, out var legacyUserId)
+                && (!links.TryGetValue(canonicalKey, out var subjectUserId) || _userManager.GetUserById(subjectUserId) == null))
             {
-                links.Remove(oldKey);
-                links[newKey] = userId;
+                links.Remove(legacyKey);
+                links[canonicalKey] = legacyUserId;
+                return legacyUserId;
             }
+
+            // Nothing to migrate: a concurrent login already re-keyed, or the legacy key is gone. Bind to
+            // the authoritative subject link, treating a dangling one (target deleted) as absent.
+            return links.TryGetValue(canonicalKey, out var live) && _userManager.GetUserById(live) != null
+                ? live
+                : (Guid?)null;
         });
     }
 
