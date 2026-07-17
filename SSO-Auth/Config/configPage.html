@@ -771,6 +771,32 @@
                   </div>
                 </div>
 
+                <div
+                  class="checkboxContainer checkboxContainer-withDescription"
+                >
+                  <label>
+                    <input
+                      is="emby-checkbox"
+                      id="RequireVerifiedEmailForAdoption"
+                      name="RequireVerifiedEmailForAdoption"
+                      type="checkbox"
+                      class="sso-toggle"
+                    />
+                    <span>Require Verified Email For Adoption (Sensitive)</span>
+                  </label>
+                  <div class="fieldDescription checkboxFieldDescription">
+                    ⚠ Sensitive: only meaningful with Allow Adopting Existing
+                    Accounts above. Additionally requires the login to carry a
+                    provider-verified email (email_verified == true) before
+                    adopting a same-named account, narrowing who can exploit the
+                    name-based match. Needs the email scope so the provider
+                    actually returns email_verified; without it, every adoption
+                    is refused. Off by default so an existing deployment relying
+                    on adoption is not silently locked out. An administrator
+                    account is never adopted regardless of this setting.
+                  </div>
+                </div>
+
                 <div class="inputContainer">
                   <label
                     class="inputLabel inputLabelUnfocused"
