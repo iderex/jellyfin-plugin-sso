@@ -179,10 +179,24 @@ internal sealed class AvatarService
     // reads as one guarded block and the write -> transition ordering (#377) stays a single unit.
     private async Task StoreLockedAsync(User user, Stream image, string mediaType, string extension)
     {
-        var newPath = Path.Combine(
-            _serverConfigurationManager.ApplicationPaths.UserConfigurationDirectoryPath,
-            user.Username,
-            "profile" + extension);
+        var root = _serverConfigurationManager.ApplicationPaths.UserConfigurationDirectoryPath;
+
+        // The profile path's middle component is user.Username, which for an SSO login is IdP-controlled
+        // (OIDC preferred_username / SAML NameID). The only host-side check is CreateUserAsync's username
+        // regex ^(?!\s)[\w \-'._@+]+(?<!\s)$ — which the plugin cannot even reference (it lives in the
+        // server, off the Controller/Model surface) and which ADMITS '.' and '..' (#447). A username of
+        // ".." makes Path.Combine write the fetched image into the PARENT of the user-config directory.
+        // Treat the username as untrusted and fail closed: an unsafe component skips the avatar entirely.
+        // The store is best-effort, so login still succeeds with no avatar — we never throw from here.
+        if (!IsUsernameSafeForProfilePath(root, user.Username))
+        {
+            _logger.LogWarning(
+                "Refusing to store the SSO avatar: username is not a safe path component: {Username}",
+                user.Username?.ReplaceLineEndings(string.Empty));
+            return;
+        }
+
+        var newPath = Path.Combine(root, user.Username, "profile" + extension);
 
         // The write comes FIRST: if it throws, nothing below runs, so the user keeps the previous
         // profile-image record instead of a cleared record plus a dangling path to a file that was
@@ -210,6 +224,49 @@ internal sealed class AvatarService
             await _userManager.ClearProfileImageAsync(user).ConfigureAwait(false);
             user.ProfileImage = new ImageInfo(newPath);
         }
+    }
+
+    // Fail-closed guard for the IdP-controlled profile-path component (#447). The username must be a single
+    // safe path component that resolves to exactly the intended per-user directory. Two independent layers:
+    // (1) a character check that rejects '.'/'..', either separator, and any invalid file-name char on every
+    // platform (GetInvalidFileNameChars excludes '\' on Linux, so both separators are rejected explicitly);
+    // (2) belt-and-suspenders, an exact round-trip check — Path.GetFullPath(root/username) must equal
+    // root/username with nothing normalized away. That keeps the write under the root AND rejects platform
+    // tricks the character check can't see: Windows silently strips trailing dots/spaces, so "victim." would
+    // otherwise fold onto another user's "victim" directory (an in-root cross-user overwrite), and an
+    // absolute/drive-relative/device form would resolve elsewhere. Returns false (skip the avatar) rather
+    // than throwing, so the best-effort store never affects login.
+    private static bool IsUsernameSafeForProfilePath(string root, string username)
+    {
+        if (string.IsNullOrEmpty(username)
+            || string.Equals(username, ".", StringComparison.Ordinal)
+            || string.Equals(username, "..", StringComparison.Ordinal)
+            || username.Contains('/')
+            || username.Contains('\\')
+            || username.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            return false;
+        }
+
+        string fullRoot;
+        string fullCandidate;
+        try
+        {
+            fullRoot = Path.GetFullPath(root);
+            fullCandidate = Path.GetFullPath(Path.Combine(root, username));
+        }
+        catch (Exception e) when (e is ArgumentException or IOException or NotSupportedException)
+        {
+            // The path could not be resolved (e.g. an over-long component) — not provably the intended
+            // directory, so fail closed rather than trust it. Never let this bubble into the login path.
+            return false;
+        }
+
+        // Require the resolved path to be EXACTLY <root>/<username> (case-insensitively on Windows, where
+        // the filesystem is): any normalization the OS applied means the on-disk target is not the literal
+        // per-user directory we intended, so reject it.
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        return string.Equals(fullCandidate, Path.Combine(fullRoot, username), comparison);
     }
 
     // The production handler: routes every connection (including redirect targets) through a callback
