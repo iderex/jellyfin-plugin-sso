@@ -12,8 +12,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 /// <c>Contains("/start/")</c> substring test, which a provider literally named <c>start</c> on the
 /// legacy route (<c>.../OID/p/start/</c>) would trip, flipping the spelling and breaking the login at
 /// the IdP's redirect_uri check (#337). Same fix family as <see cref="OidcCallbackPath.RedirectSegment"/>
-/// (#98); that one still scans for the first protocol token and should be moved to the same
-/// suffix-anchored form (#411).
+/// (#98), which now shares this suffix-anchored form (#411).
 /// </summary>
 internal static class ChallengePath
 {
