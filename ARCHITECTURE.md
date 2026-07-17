@@ -84,13 +84,13 @@ A handful of state stores live as `private static readonly` fields on
 `IPluginServiceRegistrator` in source, so a `static readonly` field is today's
 only way to get one process-wide instance):
 
-| Store                 | Guards                                                                                     |
-| --------------------- | ------------------------------------------------------------------------------------------ |
-| `OidcStateStore`      | in-flight OIDC authorize state; capacity cap, lifetime, throttled-sweep via `IntervalGate` |
-| `SamlReplayCache`     | one-time-use SAML assertion IDs (replay protection)                                        |
-| `SamlRequestCache`    | outstanding SAML `AuthnRequest` IDs for `InResponseTo` correlation                         |
-| `DiscoveryFactsCache` | per-discovery-URL PKCE-S256 / RFC 9207 `iss` facts, 15-minute TTL                          |
-| `SsoRateLimiter`      | opt-in per-client rate limiting on the anonymous login endpoints                           |
+| Store                | Guards                                                                                      |
+| -------------------- | ------------------------------------------------------------------------------------------- |
+| `OidcStateStore`     | in-flight OIDC authorize state; capacity cap, lifetime, throttled-sweep via `IntervalGate`  |
+| `SamlReplayCache`    | one-time-use SAML assertion IDs (replay protection)                                         |
+| `SamlRequestCache`   | outstanding SAML `AuthnRequest` IDs for `InResponseTo` correlation                          |
+| `OidcDiscoveryCache` | per-discovery-URL PKCE-S256 / RFC 9207 `iss` facts, 15-minute TTL; owns the fetch/parse too |
+| `SsoRateLimiter`     | opt-in per-client rate limiting on the anonymous login endpoints                            |
 
 ### The uniform outcome
 
