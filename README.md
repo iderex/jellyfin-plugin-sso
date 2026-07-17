@@ -38,6 +38,10 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 > This is a **security-sensitive login path**, so every change — even a one-liner — runs the same gated flow: a GitHub **issue** first, then a short-lived work branch, an implementation with **tests** (a negative test for every fail-closed branch), an **adversarial security review** for anything touching the login path or crypto, and a pull request that must pass **CI** (build with warnings-as-errors, the full test suite, format and conformance checks) and **CodeQL** — before it merges. We review and quality-gate our own work; no external review service is a merge gate. Security work always outranks feature work, and the code stays minimal and self-documenting.
 >
 > If you contribute, please work the same way: understand and own every line you propose, and be ready to explain what it does and why. 🙂
+>
+> ### 🤝 AI-assisted, human-owned
+>
+> Development here is **AI-assisted**. Claude (Anthropic) helps with individual **process steps** — generating and analysing code, running the adversarial security reviews, and translating documentation and comments into English. It never hands over finished, unreviewed work: each step is only a proposal. **A human maintainer reviews, understands, edits where needed, and signs off on every one** — the AI proposes, a person decides, and **a human stays responsible for every line that ships, at all times.** The review discipline is modelled, as far as is practical for a volunteer project, on the change-control expected of TÜV/BSI-certified software in a critical sector such as healthcare — with **no claim to actual certification**. In short: nothing lands because a tool suggested it; it lands because a person verified it.
 
 ## Features
 
