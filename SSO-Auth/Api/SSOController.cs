@@ -69,11 +69,13 @@ public class SSOController : ControllerBase
     // Outstanding SAML AuthnRequest IDs, for InResponseTo correlation of solicited responses (#156).
     private static readonly SamlRequestCache SamlRequests = new SamlRequestCache();
 
-    // Cache of per-discovery-URL PKCE-S256 support (#141), so a login does not fetch discovery every time
-    // (the document changes rarely). Only definitive results are cached; a fetch failure is not cached, so
-    // it retries on the next login. The short TTL bounds how long a provider's changed support is stale.
-    private static readonly ConcurrentDictionary<string, (bool Supported, DateTime FetchedAt)> PkceSupportCache = new();
-    private static readonly TimeSpan PkceSupportCacheTtl = TimeSpan.FromMinutes(15);
+    // Cache of the two per-discovery-URL facts the challenge reads in one fetch — PKCE-S256 support (#141)
+    // and whether the AS advertises the RFC 9207 response-`iss` parameter (#210) — so a login does not
+    // fetch discovery every time (the document changes rarely). Only definitive results are cached; a
+    // fetch failure is not cached, so it retries on the next login. The short TTL bounds how long a
+    // provider's changed metadata is stale.
+    private static readonly ConcurrentDictionary<string, (bool PkceS256, bool ResponseIssuerAdvertised, DateTime FetchedAt)> DiscoveryFactsCache = new();
+    private static readonly TimeSpan DiscoveryFactsCacheTtl = TimeSpan.FromMinutes(15);
 
     // How long an issued SAML AuthnRequest ID stays valid for correlation — the interactive leg
     // (challenge -> IdP login/MFA -> POST back -> mint), matching OidcStateStore.DefaultLifetime.
@@ -163,14 +165,19 @@ public class SSOController : ControllerBase
             return ReturnError(StatusCodes.Status400BadRequest, $"Error logging in: {result.Error} - {result.ErrorDescription}");
         }
 
-        // RFC 9207 (#125): the library parses the authorization-response `iss` but never checks it.
-        // When present it must name the same issuer as the redeemed id_token (which OidcIdTokenValidator
-        // already validated against the discovery issuer); a mismatch means the response came from a
-        // different authorization server than the one we hold a token for — a mix-up — so reject.
+        // RFC 9207 (#125, hardened #210): the library parses the authorization-response `iss` but never
+        // checks it. When present it must match the authorization server this callback is bound to — its
+        // discovery issuer (§2.4's canonical anchor, from the reused #247 or freshly-discovered
+        // ProviderInformation) OR the redeemed id_token's issuer. Both are accepted so a provider whose
+        // issuer legitimately differs from its discovery location (DoNotValidateIssuerName / templated /
+        // multi-tenant) is not locked out — there the response iss equals the concrete id_token iss, not
+        // the templated discovery iss. A response iss matching neither is a mix-up, so reject. When the
+        // server advertised the parameter (captured at challenge), a missing iss is a downgrade and is
+        // likewise rejected; otherwise absence is tolerated so IdPs that never emit `iss` keep working.
         if (!config.DoNotValidateResponseIssuer
-            && OidcResponseIssuer.IsMismatch(Request.Query["iss"], result.IdentityToken))
+            && OidcResponseIssuer.IsRejected(Request.Query["iss"], oidcClient.Options.ProviderInformation?.IssuerName, result.IdentityToken, pending.ResponseIssuerRequired))
         {
-            _logger.LogWarning("OpenID login denied for provider {Provider}: the authorization-response issuer did not match the id_token issuer (RFC 9207 mix-up check).", provider?.ReplaceLineEndings(string.Empty));
+            _logger.LogWarning("OpenID login denied for provider {Provider}: the authorization-response issuer was absent-but-required or matched neither the discovery issuer nor the id_token issuer (RFC 9207 mix-up check).", provider?.ReplaceLineEndings(string.Empty));
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SsoResponseInvalid));
         }
 
@@ -237,7 +244,11 @@ public class SSOController : ControllerBase
         // it. OidcClient sends code_challenge unconditionally but never checks this, so a server that
         // ignores PKCE would silently downgrade authorization-code-injection protection (#141). Fail
         // closed when the provider is marked RequirePkce; otherwise emit an audit warning and proceed.
-        var pkceSupported = await ProviderAdvertisesPkceS256Async(config, provider).ConfigureAwait(false);
+        // One discovery read yields both facts the challenge needs: PKCE-S256 support (gated below) and
+        // whether the AS advertises the RFC 9207 response-`iss` parameter (persisted on the state below,
+        // so the callback can require `iss` without a second fetch) (#210).
+        var discoveryFacts = await ReadDiscoveryFactsAsync(config, provider).ConfigureAwait(false);
+        var pkceSupported = discoveryFacts.PkceS256;
         if (pkceSupported == false)
         {
             if (config.RequirePkce)
@@ -294,6 +305,15 @@ public class SSOController : ControllerBase
         // by this state's lifetime.
         StateStore.SetProviderInformation(state.State, oidcClient.Options.ProviderInformation);
 
+        // RFC 9207 §2.4 (#210): if this provider's discovery advertises the response-`iss` parameter,
+        // carry that on the state so the callback requires `iss` to be present (its absence would be a
+        // downgrade). Only set when advertised; the state's tolerant default keeps providers that never
+        // advertise it working. Read from the same discovery fetch above, so the callback needs no second.
+        if (discoveryFacts.ResponseIssuerAdvertised)
+        {
+            StateStore.MarkResponseIssuerRequired(state.State);
+        }
+
         // Set the cookie only after the state is registered, so a refused challenge leaves no cookie.
         Response.Cookies.Append(AuthorizeStateBinding.CookieName, bindingId, AuthorizeStateBinding.CookieOptions(OidcStateStore.DefaultLifetime));
 
@@ -301,7 +321,7 @@ public class SSOController : ControllerBase
     }
 
     // Test-only reset of the process-wide OpenID caches this controller keeps as private statics: the
-    // in-flight authorize-state store and the PKCE-discovery cache. A test that drives the login flow
+    // in-flight authorize-state store and the discovery-facts cache. A test that drives the login flow
     // mutates these, so without a reset the state leaks into a sibling test in the same non-parallel
     // collection. The other static caches are deliberately not cleared here: the SAML replay/request
     // caches key on random IDs and the rate limiter is isolated by per-test client IP, so they cannot
@@ -311,7 +331,7 @@ public class SSOController : ControllerBase
     internal static void ResetOidStateForTests()
     {
         StateStore.Clear();
-        PkceSupportCache.Clear();
+        DiscoveryFactsCache.Clear();
     }
 
     // Test-only: clears the outstanding-SAML-request cache so a prior test's seeded or in-flight entry
@@ -426,18 +446,17 @@ public class SSOController : ControllerBase
         return new OidcClient(options);
     }
 
-    // Fetches the provider's OpenID discovery document and reports whether it advertises PKCE S256 (#141):
-    // true when advertised, false when the document was read but does not advertise it, null when it could
-    // not be fetched/read. The discovery URL is the admin-configured authority + the well-known path (the
-    // same document OidcClient uses); the fetch is bounded by a timeout and never throws — a transient
-    // failure returns null so the caller decides (fail closed only under RequirePkce). Best-effort: this
-    // does not replace OidcClient's own discovery, which fails the login if the provider is truly down.
-    private async Task<bool?> ProviderAdvertisesPkceS256Async(OidConfig config, string provider)
+    // Fetches the provider's OpenID discovery document and reports the discovery facts. The discovery URL is
+    // the admin-configured authority + the well-known path (the same document OidcClient uses); the fetch
+    // is bounded by a timeout and never throws — a transient failure returns the tolerant default so the
+    // caller decides (PKCE fails closed only under RequirePkce; response-`iss` stays optional). Best-effort:
+    // this does not replace OidcClient's own discovery, which fails the login if the provider is truly down.
+    private async Task<DiscoveryFacts> ReadDiscoveryFactsAsync(OidConfig config, string provider)
     {
         var authority = config.OidEndpoint?.Trim();
         if (string.IsNullOrEmpty(authority) || !Uri.TryCreate(authority, UriKind.Absolute, out _))
         {
-            return null;
+            return new DiscoveryFacts(null, false);
         }
 
         // OidEndpoint is usually the issuer/authority, but some providers (e.g. PocketID) configure the
@@ -448,9 +467,9 @@ public class SSOController : ControllerBase
             ? trimmed
             : trimmed + "/.well-known/openid-configuration";
 
-        if (PkceSupportCache.TryGetValue(discoveryUrl, out var cached) && DateTime.UtcNow - cached.FetchedAt < PkceSupportCacheTtl)
+        if (DiscoveryFactsCache.TryGetValue(discoveryUrl, out var cached) && DateTime.UtcNow - cached.FetchedAt < DiscoveryFactsCacheTtl)
         {
-            return cached.Supported;
+            return new DiscoveryFacts(cached.PkceS256, cached.ResponseIssuerAdvertised);
         }
 
         try
@@ -458,9 +477,10 @@ public class SSOController : ControllerBase
             using var client = SsoHttp.CreateClient(_httpClientFactory);
             client.Timeout = TimeSpan.FromSeconds(10);
             var json = await client.GetStringAsync(discoveryUrl).ConfigureAwait(false);
-            var supported = PkceDiscovery.SupportsS256(json);
-            PkceSupportCache[discoveryUrl] = (supported, DateTime.UtcNow);
-            return supported;
+            var pkceS256 = PkceDiscovery.SupportsS256(json);
+            var responseIssuerAdvertised = OidcResponseIssuer.DiscoveryAdvertisesResponseIssuer(json);
+            DiscoveryFactsCache[discoveryUrl] = (pkceS256, responseIssuerAdvertised, DateTime.UtcNow);
+            return new DiscoveryFacts(pkceS256, responseIssuerAdvertised);
         }
         catch (Exception e)
         {
@@ -468,7 +488,7 @@ public class SSOController : ControllerBase
                 e,
                 "Could not fetch the OpenID discovery document for provider {Provider} to verify PKCE support; proceeding unless RequirePkce is set.",
                 provider?.ReplaceLineEndings(string.Empty));
-            return null;
+            return new DiscoveryFacts(null, false);
         }
     }
 
@@ -1474,4 +1494,11 @@ public class SSOController : ControllerBase
         Response.Headers.CacheControl = "no-store";
         return Content(render(nonce), MediaTypeNames.Text.Html);
     }
+
+    // The two discovery-document facts the challenge reads in one fetch: PKCE-S256 support (#141) — true
+    // when advertised, false when the document was read but does not advertise it, null when it could not
+    // be fetched/read — and whether the AS advertises the RFC 9207 response-`iss` parameter (#210), which
+    // is tolerant (false) whenever the document could not be read so an unreadable flag never locks out a
+    // provider that omits `iss`.
+    private readonly record struct DiscoveryFacts(bool? PkceS256, bool ResponseIssuerAdvertised);
 }

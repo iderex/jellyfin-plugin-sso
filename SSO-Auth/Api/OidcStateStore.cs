@@ -132,6 +132,24 @@ internal sealed class OidcStateStore
     }
 
     /// <summary>
+    /// Marks an entry <see cref="TryAdd"/> just registered as one whose authorization server advertises
+    /// the RFC 9207 response-<c>iss</c> parameter, so the callback requires <c>iss</c> to be present
+    /// (#210). Captured at challenge from the discovery document the PKCE probe already fetched, so the
+    /// callback needs no second fetch. Only ever called when discovery advertised the parameter, so the
+    /// tolerant default (false, set on absence/unreadable discovery) never has to be written back. A
+    /// no-op if the entry is already gone (same sub-millisecond race as
+    /// <see cref="SetProviderInformation"/>), which only tightens a login that is already dead.
+    /// </summary>
+    /// <param name="token">The authorize-state token the entry is keyed by (the challenge's state value).</param>
+    internal void MarkResponseIssuerRequired(string token)
+    {
+        if (_states.TryGetValue(token, out var state))
+        {
+            state.ResponseIssuerRequired = true;
+        }
+    }
+
+    /// <summary>
     /// The callback's non-consuming check: returns the pending state only when it exists, was minted
     /// for this provider, and is within its lifetime; null otherwise, so a state issued for one
     /// provider cannot be validated on another's callback. No removal: the value is an unguessable
