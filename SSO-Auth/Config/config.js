@@ -274,12 +274,9 @@ const ssoConfigurationPage = {
     ) {
       return;
     }
-    return new Promise((resolve) => {
-      ApiClient.getPluginConfiguration(
-        ssoConfigurationPage.pluginUniqueId,
-      ).then((config) => {
+    ApiClient.getPluginConfiguration(ssoConfigurationPage.pluginUniqueId).then(
+      (config) => {
         if (!config.OidConfigs.hasOwnProperty(provider_name)) {
-          resolve();
           return;
         }
 
@@ -293,8 +290,6 @@ const ssoConfigurationPage = {
             ssoConfigurationPage.loadConfiguration(page);
 
             Dashboard.alert("Provider removed");
-
-            resolve();
           },
           // Report a genuine save failure rather than swallowing it. The delete
           // re-posts the whole configuration, so the server can now reject it for
@@ -308,11 +303,10 @@ const ssoConfigurationPage = {
               message:
                 "Could not remove the provider. The saved configuration was rejected by the server; reload the page and try again.",
             });
-            resolve();
           },
         );
-      });
-    });
+      },
+    );
   },
   saveProvider: (page, provider_name) => {
     return new Promise((resolve, reject) => {
@@ -327,12 +321,7 @@ const ssoConfigurationPage = {
         }
 
         form_elements.text_fields.forEach((id) => {
-          const value = page.querySelector("#" + id).value;
-          if (value) {
-            current_config[id] = page.querySelector("#" + id).value;
-          } else {
-            current_config[id] = null;
-          }
+          current_config[id] = page.querySelector("#" + id).value || null;
         });
 
         form_elements.check_fields.forEach((id) => {
