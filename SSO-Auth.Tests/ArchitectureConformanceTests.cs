@@ -448,7 +448,7 @@ public class ArchitectureConformanceTests
         {
             "EnableAuthorization", "OidSecret", "DisableHttps", "DisablePushedAuthorization",
             "DoNotValidateEndpoints", "DoNotValidateIssuerName", "DoNotValidateResponseIssuer",
-            "DoNotLoadProfile", "RequirePkce",
+            "DoNotLoadProfile", "RequirePkce", "AllowExistingAccountLink",
         };
         var unsaved = securityCritical.Where(p => !matchedIds.Contains(p)).ToList();
         Assert.True(
