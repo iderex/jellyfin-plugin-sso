@@ -62,7 +62,9 @@ internal static class SamlTestFactory
         bool includeAdviceAssertion = false,
         string? recipient = null,
         string? inResponseTo = null,
-        string? destination = null)
+        string? destination = null,
+        string? subjectConfirmationMethod = "urn:oasis:names:tc:SAML:2.0:cm:bearer",
+        string[][]? audienceRestrictions = null)
     {
         var audienceList = audiences ?? (audience == null ? null : new[] { audience });
         const string TimeFormat = "yyyy-MM-ddTHH:mm:ssZ";
@@ -93,8 +95,26 @@ internal static class SamlTestFactory
 
         var subjectConfirmationData = "<saml:SubjectConfirmationData" + subjectConfirmationAttributes + " />";
 
+        // One <AudienceRestriction> per inner array when audienceRestrictions is set (for the multi-block
+        // AND tests), else a single restriction from audienceList as before.
+        var restrictionBlocks = new StringBuilder();
+        var effectiveRestrictions = audienceRestrictions ?? (audienceList == null ? null : new[] { audienceList });
+        if (effectiveRestrictions != null)
+        {
+            foreach (var block in effectiveRestrictions)
+            {
+                var audienceElements = new StringBuilder();
+                foreach (var a in block)
+                {
+                    audienceElements.Append("<saml:Audience>" + a + "</saml:Audience>");
+                }
+
+                restrictionBlocks.Append("<saml:AudienceRestriction>" + audienceElements + "</saml:AudienceRestriction>");
+            }
+        }
+
         var conditions = string.Empty;
-        if (conditionsNotBefore.HasValue || conditionsNotOnOrAfter.HasValue || audienceList != null)
+        if (conditionsNotBefore.HasValue || conditionsNotOnOrAfter.HasValue || restrictionBlocks.Length > 0)
         {
             var attributes = new StringBuilder();
             if (conditionsNotBefore.HasValue)
@@ -107,21 +127,9 @@ internal static class SamlTestFactory
                 attributes.Append(" NotOnOrAfter=\"" + conditionsNotOnOrAfter.Value.ToUniversalTime().ToString(TimeFormat, CultureInfo.InvariantCulture) + "\"");
             }
 
-            var body = string.Empty;
-            if (audienceList != null)
-            {
-                var audienceElements = new StringBuilder();
-                foreach (var a in audienceList)
-                {
-                    audienceElements.Append("<saml:Audience>" + a + "</saml:Audience>");
-                }
-
-                body = "<saml:AudienceRestriction>" + audienceElements + "</saml:AudienceRestriction>";
-            }
-
-            conditions = body.Length == 0
+            conditions = restrictionBlocks.Length == 0
                 ? "<saml:Conditions" + attributes + " />"
-                : "<saml:Conditions" + attributes + ">" + body + "</saml:Conditions>";
+                : "<saml:Conditions" + attributes + ">" + restrictionBlocks + "</saml:Conditions>";
         }
 
         var destinationAttribute = destination == null ? string.Empty : " Destination=\"" + SecurityElement.Escape(destination) + "\"";
@@ -140,7 +148,7 @@ internal static class SamlTestFactory
                     advice +
                     "<saml:Subject>" +
                         (includeNameId ? "<saml:NameID>" + SecurityElement.Escape(nameId) + "</saml:NameID>" : string.Empty) +
-                        "<saml:SubjectConfirmation Method=\"urn:oasis:names:tc:SAML:2.0:cm:bearer\">" +
+                        "<saml:SubjectConfirmation" + (subjectConfirmationMethod == null ? string.Empty : " Method=\"" + SecurityElement.Escape(subjectConfirmationMethod) + "\"") + ">" +
                             subjectConfirmationData +
                         "</saml:SubjectConfirmation>" +
                     "</saml:Subject>" +
@@ -204,6 +212,50 @@ internal static class SamlTestFactory
         var document = new XmlDocument { PreserveWhitespace = true };
         document.LoadXml(xml);
 
+        SignElement(document, responseId, rsa, certificate, useSha1: false, useWithCommentsC14n: false, useInclusiveC14n: false);
+
+        return new SamlFixture(certificate, document, responseId, assertionId);
+    }
+
+    /// <summary>
+    /// Produces a response signed on BOTH the Response element AND the Assertion element (with the same
+    /// key/cert), the ambiguous "two signatures" shape the single-signature invariant (#238) rejects.
+    /// The assertion is signed first, then the response, so the response signature covers the already-signed
+    /// assertion and both verify individually.
+    /// </summary>
+    /// <returns>A fixture whose document carries a Response-level and an Assertion-level signature.</returns>
+    internal static SamlFixture CreateDoublySigned()
+    {
+        const string TimeFormat = "yyyy-MM-ddTHH:mm:ssZ";
+        var notOnOrAfter = DateTime.UtcNow.AddMinutes(5).ToString(TimeFormat, CultureInfo.InvariantCulture);
+
+        using var rsa = RSA.Create(2048);
+        var request = new CertificateRequest("CN=Test SAML IdP", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(10));
+
+        var responseId = "_" + Guid.NewGuid().ToString("N");
+        var assertionId = "_" + Guid.NewGuid().ToString("N");
+
+        var xml =
+            "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" ID=\"" + responseId + "\" Version=\"2.0\">" +
+                "<saml:Assertion ID=\"" + assertionId + "\" Version=\"2.0\">" +
+                    "<saml:Issuer>https://idp.example.com</saml:Issuer>" +
+                    "<saml:Subject>" +
+                        "<saml:NameID>alice</saml:NameID>" +
+                        "<saml:SubjectConfirmation Method=\"urn:oasis:names:tc:SAML:2.0:cm:bearer\">" +
+                            "<saml:SubjectConfirmationData NotOnOrAfter=\"" + notOnOrAfter + "\" />" +
+                        "</saml:SubjectConfirmation>" +
+                    "</saml:Subject>" +
+                    "<saml:AttributeStatement>" +
+                        "<saml:Attribute Name=\"Role\"><saml:AttributeValue>jellyfin-users</saml:AttributeValue></saml:Attribute>" +
+                    "</saml:AttributeStatement>" +
+                "</saml:Assertion>" +
+            "</samlp:Response>";
+
+        var document = new XmlDocument { PreserveWhitespace = true };
+        document.LoadXml(xml);
+
+        SignElement(document, assertionId, rsa, certificate, useSha1: false, useWithCommentsC14n: false, useInclusiveC14n: false);
         SignElement(document, responseId, rsa, certificate, useSha1: false, useWithCommentsC14n: false, useInclusiveC14n: false);
 
         return new SamlFixture(certificate, document, responseId, assertionId);

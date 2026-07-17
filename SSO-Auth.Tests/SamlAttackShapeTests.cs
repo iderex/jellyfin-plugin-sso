@@ -1,3 +1,4 @@
+using System;
 using System.Xml;
 using Jellyfin.Plugin.SSO_Auth;
 using Xunit;
@@ -215,6 +216,110 @@ public class SamlAttackShapeTests
         Assert.False(response.IsValid());
         Assert.NotEqual("attacker", response.GetNameID());
         Assert.Equal("alice", response.GetNameID());
+    }
+
+    // --- Strict-conformance shapes (#238): single signature, per-restriction audience, bearer method ---
+
+    [Fact]
+    public void IsValid_HonestlySignedOnBothResponseAndAssertion_ReturnsTrue()
+    {
+        // #238 (1): the Web Browser SSO profile permits signing BOTH the Response and the Assertion
+        // (Keycloak "Sign Documents" + "Sign Assertions", Azure AD "Sign response and assertion", ADFS
+        // MessageAndAssertion), so a doubly-signed honest response must be ACCEPTED — every position-bound
+        // signature validates, which is what the validator now requires.
+        Assert.True(Load(SamlTestFactory.CreateDoublySigned()).IsValid());
+    }
+
+    [Fact]
+    public void IsValid_DoublySignedButOneSignatureInvalid_ReturnsFalse()
+    {
+        // #238 (1): with two position-bound signatures EVERY one must validate — not just the first in
+        // document order. The Assertion-level signature stays honest (it is first in document order, so a
+        // first-wins reading would accept the response), but the Response-level signature is corrupted, so
+        // the response is rejected. This pins "validate all, not first-wins" and closes the ambiguity of
+        // multiple signatures without rejecting the honest doubly-signed case above.
+        var fixture = SamlTestFactory.CreateDoublySigned();
+        var doc = fixture.Document;
+        foreach (XmlElement signature in doc.GetElementsByTagName("Signature", DsNs))
+        {
+            // The Response-level signature is the one whose parent is the Response root (the
+            // Assertion-level one's parent is the Assertion). Corrupt only its SignatureValue.
+            if (signature.ParentNode == doc.DocumentElement)
+            {
+                var signatureValue = (XmlElement)signature.GetElementsByTagName("SignatureValue", DsNs)[0]!;
+                // Flip one signature byte and re-encode: still valid base64 (so it is not rejected merely
+                // as malformed at load time) but a wrong signature, so the Response-level signature fails
+                // the actual cryptographic CheckSignature against the pinned cert.
+                var bytes = Convert.FromBase64String(signatureValue.InnerText.Trim());
+                bytes[0] ^= 0xFF;
+                signatureValue.InnerText = Convert.ToBase64String(bytes);
+                break;
+            }
+        }
+
+        Assert.False(Load(fixture).IsValid());
+    }
+
+    [Fact]
+    public void IsValidAudience_PresentInEveryRestriction_ReturnsTrue()
+    {
+        // Positive control for #238 (2): SAML 2.0 allows multiple <AudienceRestriction> blocks; the SP is
+        // addressed when it appears in EVERY one. Our audience is in both, so the response is accepted.
+        var fixture = SamlTestFactory.Create(
+            scope: SamlTestFactory.SignatureScope.Response,
+            audienceRestrictions: new[] { new[] { "https://sp.example.com" }, new[] { "https://sp.example.com", "https://other.example.com" } });
+
+        Assert.True(Load(fixture).IsValid("https://sp.example.com"));
+    }
+
+    [Fact]
+    public void IsValidAudience_PresentInOnlyOneOfTwoRestrictions_ReturnsFalse()
+    {
+        // #238 (2): the first <AudienceRestriction> names ANOTHER SP and only the second names us. SAML
+        // 2.0 requires the SP in every restriction (AND across blocks), so this is not strictly addressed
+        // to us; the old OR-over-the-union accepted it, the AND rejects it.
+        var fixture = SamlTestFactory.Create(
+            scope: SamlTestFactory.SignatureScope.Response,
+            audienceRestrictions: new[] { new[] { "https://other.example.com" }, new[] { "https://sp.example.com" } });
+
+        Assert.False(Load(fixture).IsValid("https://sp.example.com"));
+    }
+
+    [Fact]
+    public void IsValid_NonBearerSubjectConfirmationMethod_ReturnsFalse()
+    {
+        // #238 (3): a holder-of-key confirmation carries no bearer token (its key-possession proof is not
+        // verified here). The Web Browser SSO profile is a bearer profile, so an assertion offering only a
+        // non-bearer confirmation is rejected. A Conditions upper bound is set so the time check is not
+        // what rejects — this isolates the bearer-method check.
+        var fixture = SamlTestFactory.Create(
+            subjectConfirmationMethod: "urn:oasis:names:tc:SAML:2.0:cm:holder-of-key",
+            conditionsNotOnOrAfter: DateTime.UtcNow.AddMinutes(5));
+
+        Assert.False(Load(fixture).IsValid());
+    }
+
+    [Fact]
+    public void IsValid_SubjectConfirmationWithNoMethod_ReturnsFalse()
+    {
+        // A SubjectConfirmation with no Method at all is likewise not a bearer confirmation. Same
+        // Conditions-bound isolation as above.
+        var fixture = SamlTestFactory.Create(
+            subjectConfirmationMethod: null,
+            conditionsNotOnOrAfter: DateTime.UtcNow.AddMinutes(5));
+
+        Assert.False(Load(fixture).IsValid());
+    }
+
+    [Fact]
+    public void IsValid_BearerConfirmationWithConditionsBound_ReturnsTrue()
+    {
+        // Positive control isolating the bearer-method check: identical to the two rejects above except
+        // the confirmation Method IS bearer, so the response is accepted — proving the method value is
+        // what flips those cases, not the time bound or another guard.
+        var fixture = SamlTestFactory.Create(conditionsNotOnOrAfter: DateTime.UtcNow.AddMinutes(5));
+
+        Assert.True(Load(fixture).IsValid());
     }
 
     // Builds an unsigned attacker-controlled assertion with the given NameID, shaped like a real one
