@@ -262,6 +262,43 @@ config so a save does not reset them.
   binding cannot cover — so together they close the vector for an identity provider that can issue
   unsolicited responses.
 
+## SAML request signing (optional)
+
+Some identity providers require the service provider to **sign its outgoing `AuthnRequest`** ("signed
+authentication requests" / "client signature required"). This is **off by default** — with it off the
+request is sent exactly as before (unsigned), so existing deployments are unaffected. Enable it only
+for a provider that demands it.
+
+The plugin sends its `AuthnRequest` over the SAML **HTTP-Redirect binding**, so the signature is the
+detached query-string signature the binding mandates (SAML Bindings §3.4.4.1): the `SigAlg` and
+`Signature` parameters are appended to the redirect, computed over the URL-encoded
+`SAMLRequest`/`RelayState`/`SigAlg` string with **RSA-SHA256** (the same no-SHA-1 allowlist the inbound
+response path enforces). An enveloped XML signature is _not_ used, because identity providers ignore one
+on a redirect-binding message.
+
+Two per-provider SAML options control it (set through the `SAML/Add` API, like the other SAML options —
+there is no admin-UI toggle yet; include them whenever you re-post a provider's config so a save does
+not reset them):
+
+- **`SignAuthnRequests`** — turn request signing on for this provider.
+- **`SamlSigningKeyPfx`** — the service-provider signing key, as a **Base64-encoded, unencrypted
+  PKCS#12 (PFX)** blob containing the certificate and its RSA private key. Supply the keypair whose
+  **public certificate you have registered with the identity provider** as the SP's request-signing
+  certificate. For example, from an existing key and cert:
+  `openssl pkcs12 -export -inkey sp-key.pem -in sp-cert.pem -passout pass: -out sp.pfx`, then Base64 the
+  file (`base64 -w0 sp.pfx`). Treated as a secret: it is withheld from every config response (a `SAML`
+  provider fetch returns it as `null`) so the private key never reaches the admin browser, and a save
+  that leaves it blank keeps the stored key. It is persisted only to the server's on-disk config.
+
+**Fail-closed:** if `SignAuthnRequests` is on but the signing key is missing or unloadable, the login
+challenge is refused with an error — it never silently falls back to sending an unsigned request, so an
+operator who turned signing on cannot get a silent downgrade. A garbage key is also rejected when the
+provider is saved.
+
+> Signing with more than one certificate (primary + rollover) for zero-downtime key rotation, and
+> accepting multiple inbound IdP verification certificates during a rotation window, are tracked
+> separately and not yet implemented.
+
 ## SAML login browser binding
 
 Every SP-initiated SAML login (one started from Jellyfin, i.e. `SAML/start/...`) is bound to the

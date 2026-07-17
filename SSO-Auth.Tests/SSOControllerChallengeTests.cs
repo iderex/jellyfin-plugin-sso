@@ -1,5 +1,7 @@
 using System;
 using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.SSO_Auth;
 using Jellyfin.Plugin.SSO_Auth.Api;
@@ -66,6 +68,102 @@ public class SSOControllerChallengeTests
         // cookie is minted for it (#415).
         var setCookie = harness.Controller.HttpContext.Response.Headers.SetCookie.ToString();
         Assert.DoesNotContain(AuthorizeStateBinding.SamlCookieName, setCookie);
+    }
+
+    [Fact]
+    public void SamlChallenge_SigningDisabled_RedirectCarriesNoSignature()
+    {
+        // Default off (#167): existing deployments are unaffected — the redirect carries the unsigned
+        // AuthnRequest exactly as before, with no SigAlg/Signature parameters.
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = EnabledProvider());
+
+        var result = Assert.IsType<RedirectResult>(harness.Controller.SamlChallenge("adfs"));
+
+        Assert.Contains("SAMLRequest=", result.Url);
+        Assert.DoesNotContain("SigAlg=", result.Url);
+        Assert.DoesNotContain("Signature=", result.Url);
+    }
+
+    [Fact]
+    public void SamlChallenge_SigningEnabledWithValidKey_RedirectCarriesAVerifiableSignature()
+    {
+        var (pfx, publicKey) = SamlSigningKeyFactory.CreatePair();
+        using (publicKey)
+        {
+            var harness = new SsoControllerHarness(c =>
+            {
+                var config = EnabledProvider();
+                config.SignAuthnRequests = true;
+                config.SamlSigningKeyPfx = pfx;
+                c.SamlConfigs["adfs"] = config;
+            });
+
+            var result = Assert.IsType<RedirectResult>(harness.Controller.SamlChallenge("adfs"));
+
+            Assert.Contains("SigAlg=", result.Url);
+            Assert.Contains("Signature=", result.Url);
+            Assert.True(RedirectSignatureVerifies(result.Url, publicKey));
+        }
+    }
+
+    [Fact]
+    public void SamlChallenge_SigningEnabledButKeyMissing_FailsClosedWith500_AndNoRedirect()
+    {
+        // An operator who turned signing on but has no key must NOT get a silent unsigned request: fail
+        // closed with a 500, never a RedirectResult.
+        var harness = new SsoControllerHarness(c =>
+        {
+            var config = EnabledProvider();
+            config.SignAuthnRequests = true;
+            config.SamlSigningKeyPfx = null;
+            c.SamlConfigs["adfs"] = config;
+        });
+
+        var result = harness.Controller.SamlChallenge("adfs");
+
+        Assert.IsNotType<RedirectResult>(result);
+        Assert.Equal(500, Assert.IsType<ContentResult>(result).StatusCode);
+    }
+
+    [Fact]
+    public void SamlChallenge_SigningEnabledWithGarbageKey_FailsClosedWith500()
+    {
+        var harness = new SsoControllerHarness(c =>
+        {
+            var config = EnabledProvider();
+            config.SignAuthnRequests = true;
+            config.SamlSigningKeyPfx = "QUJD"; // valid base64, not a PKCS#12
+            c.SamlConfigs["adfs"] = config;
+        });
+
+        var result = harness.Controller.SamlChallenge("adfs");
+
+        Assert.IsNotType<RedirectResult>(result);
+        Assert.Equal(500, Assert.IsType<ContentResult>(result).StatusCode);
+    }
+
+    private static bool RedirectSignatureVerifies(string url, RSA publicKey)
+    {
+        var samlRequest = QueryValue(url, "SAMLRequest");
+        var sigAlg = QueryValue(url, "SigAlg");
+        var signature = Convert.FromBase64String(QueryValue(url, "Signature"));
+
+        var signedQuery = "SAMLRequest=" + Uri.EscapeDataString(samlRequest) + "&SigAlg=" + Uri.EscapeDataString(sigAlg);
+        return publicKey.VerifyData(Encoding.UTF8.GetBytes(signedQuery), signature, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+    }
+
+    private static string QueryValue(string url, string name)
+    {
+        foreach (var pair in url[(url.IndexOf('?') + 1)..].Split('&'))
+        {
+            var eq = pair.IndexOf('=');
+            if (eq > 0 && pair[..eq] == name)
+            {
+                return Uri.UnescapeDataString(pair[(eq + 1)..]);
+            }
+        }
+
+        throw new InvalidOperationException($"Query parameter '{name}' not found in {url}.");
     }
 
     [Fact]

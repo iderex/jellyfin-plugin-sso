@@ -6,6 +6,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Net.Mime;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
 using Duende.IdentityModel.OidcClient;
@@ -531,6 +532,18 @@ public class SSOController : ControllerBase
         }
     }
 
+    // Rejects a non-loadable service-provider signing key at the SAML/Add endpoint (#167), the same
+    // fail-closed door as the inbound certificate guard above: a garbage or private-key-less PKCS#12 set
+    // here would persist and then fail every signed challenge. Blank is valid (signing simply stays off,
+    // or the stored key is preserved on save).
+    internal static void RejectInvalidSamlSigningKey(string signingKeyPfx)
+    {
+        if (SamlSigningKey.IsInvalid(signingKeyPfx))
+        {
+            throw new ArgumentException("The SAML request signing key must be a Base64-encoded, unencrypted PKCS#12 (PFX) blob containing an RSA private key, or left blank.");
+        }
+    }
+
     // Rejects a null provider body at the Add endpoints (#350). ASP.NET model binding hands a null
     // [FromBody] object for an empty or literal "null" JSON payload; storing it would put a null entry
     // in the config map that then NREs the config-page save (ServerManagedFields.Preserve). Reject at
@@ -891,7 +904,50 @@ public class SSOController : ControllerBase
                 AuthorizeStateBinding.CookieOptions(SamlRequestLifetime));
         }
 
-        return Redirect(request.GetRedirectUrl(config.SamlEndpoint.Trim(), relayState));
+        string redirectUrl;
+        try
+        {
+            redirectUrl = BuildChallengeRedirectUrl(config, request, relayState);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Signing is enabled for this provider but its signing key is missing or unusable. Fail closed
+            // with a clean 500 (never a silent unsigned request), and log the reason for the operator — the
+            // key material itself is not part of the message, so nothing sensitive is logged.
+            _logger.LogError("SAML challenge for provider {Provider} could not sign the AuthnRequest: {Reason}", provider?.ReplaceLineEndings(string.Empty), ex.Message);
+            return ReturnError(StatusCodes.Status500InternalServerError, "Could not start login; the SAML request signing key is misconfigured.");
+        }
+
+        return Redirect(redirectUrl);
+    }
+
+    // Builds the redirect URL to the identity provider, signing the outgoing AuthnRequest when the provider
+    // opts in (#167). Fail-closed: signing enabled but the signing key missing/unloadable throws, so the
+    // caller returns an error rather than silently sending an unsigned request — an operator who turned
+    // signing on never gets a silent downgrade. Default off is byte-for-byte the previous unsigned URL.
+    private static string BuildChallengeRedirectUrl(SamlConfig config, SamlAuthnRequest request, string relayState)
+    {
+        var endpoint = config.SamlEndpoint.Trim();
+        if (!config.SignAuthnRequests)
+        {
+            return request.GetRedirectUrl(endpoint, relayState);
+        }
+
+        if (!SamlSigningKey.TryLoad(config.SamlSigningKeyPfx, out var signingCertificate))
+        {
+            throw new InvalidOperationException("Outgoing SAML request signing is enabled but the signing key could not be loaded.");
+        }
+
+        using (signingCertificate)
+        using (var signingKey = signingCertificate.GetRSAPrivateKey())
+        {
+            if (signingKey is null)
+            {
+                throw new InvalidOperationException("Outgoing SAML request signing is enabled but the signing key has no RSA private key.");
+            }
+
+            return request.GetSignedRedirectUrl(endpoint, relayState, signingKey);
+        }
     }
 
     /// <summary>
@@ -907,6 +963,7 @@ public class SSOController : ControllerBase
         RejectNullProviderBody(newConfig);
         RejectInvalidBaseUrlOverride(newConfig.BaseUrlOverride);
         RejectInvalidSamlCertificate(newConfig.SamlCertificate);
+        RejectInvalidSamlSigningKey(newConfig.SamlSigningKeyPfx);
         SSOPlugin.Instance.MutateConfiguration(configuration =>
         {
             // The name guard needs the under-lock existence check (#336) and runs before any mutation,

@@ -584,4 +584,22 @@ internal sealed class SamlAuthnRequest
 
         return url;
     }
+
+    /// <summary>
+    /// Gets the redirect URL with the AuthnRequest SIGNED for the HTTP-Redirect binding (#167): the same
+    /// DEFLATE/Base64 request, carrying a detached query-string signature (SigAlg + Signature) over the
+    /// URL-encoded parameters, for identity providers that require signed AuthnRequests. Distinct from the
+    /// unsigned <see cref="GetRedirectUrl"/> — which is byte-for-byte unchanged for deployments that do not
+    /// sign — because the signed path must encode the query consistently with the octets it signs.
+    /// </summary>
+    /// <param name="samlEndpoint">The SAML endpoint.</param>
+    /// <param name="relayState">The relay state, omitted when null or empty.</param>
+    /// <param name="signingKey">The service-provider RSA private key.</param>
+    /// <returns>The signed redirect url.</returns>
+    public string GetSignedRedirectUrl(string samlEndpoint, string relayState, RSA signingKey)
+    {
+        ArgumentNullException.ThrowIfNull(samlEndpoint);
+
+        return Api.SamlRedirectSigner.BuildSignedRedirectUrl(samlEndpoint, "SAMLRequest", GetRequest(), relayState, signingKey);
+    }
 }

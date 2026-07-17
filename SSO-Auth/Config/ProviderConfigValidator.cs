@@ -45,6 +45,7 @@ internal static class ProviderConfigValidator
                 ValidateProviderName("SAML", kvp.Key, isNew: live?.SamlConfigs?.ContainsKey(kvp.Key) != true);
                 ValidateBaseUrlOverride("SAML", kvp.Key, kvp.Value?.BaseUrlOverride);
                 ValidateSamlCertificate(kvp.Key, kvp.Value?.SamlCertificate);
+                ValidateSamlSigningKey(kvp.Key, kvp.Value?.SamlSigningKeyPfx);
             }
         }
     }
@@ -89,6 +90,19 @@ internal static class ProviderConfigValidator
         {
             throw new ArgumentException(
                 $"SAML provider '{provider?.ReplaceLineEndings(string.Empty)}' has an invalid signing certificate; it must be a Base64-encoded (DER) X.509 certificate.");
+        }
+    }
+
+    // A garbage service-provider signing key (#167) would be persisted and then fail every signed
+    // challenge. On the config-page save the key is withheld from JSON so it arrives blank (valid) and the
+    // stored one is re-injected afterwards; this rejects the case where a non-blank, unloadable key is
+    // posted. Same inline line-ending strip as above.
+    internal static void ValidateSamlSigningKey(string provider, string signingKeyPfx)
+    {
+        if (SamlSigningKey.IsInvalid(signingKeyPfx))
+        {
+            throw new ArgumentException(
+                $"SAML provider '{provider?.ReplaceLineEndings(string.Empty)}' has an invalid request signing key; it must be a Base64-encoded, unencrypted PKCS#12 (PFX) blob containing an RSA private key.");
         }
     }
 }

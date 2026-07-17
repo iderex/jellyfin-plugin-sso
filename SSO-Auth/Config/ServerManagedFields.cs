@@ -18,10 +18,10 @@ internal static class ServerManagedFields
     /// so a save built from a stale client snapshot cannot clear them. Only providers present in
     /// <paramref name="incoming"/> are touched (a deleted provider stays deleted; a newly added one
     /// keeps its own empty map). Two kinds of field are preserved: the per-provider canonical links
-    /// (always server-owned, #157), and the OpenID client secret (#189) — the latter only when the
-    /// incoming value is blank, since the secret is withheld from JSON responses so a save that did
-    /// not set a new one arrives empty and must keep the stored value (a non-blank incoming value is
-    /// an intentional rotation and is left as-is).
+    /// (always server-owned, #157), and the write-only secrets (the OpenID client secret #189, the SAML
+    /// signing key #167) — the latter only when the incoming value is blank, since a secret is withheld
+    /// from JSON responses so a save that did not set a new one arrives empty and must keep the stored
+    /// value (a non-blank incoming value is an intentional rotation and is left as-is).
     /// </summary>
     /// <param name="incoming">The configuration about to be persisted.</param>
     /// <param name="live">The current live configuration to read server-managed values from.</param>
@@ -66,7 +66,9 @@ internal static class ServerManagedFields
         incoming.OidSecret = ResolveUpdatedSecret(incoming, live);
     }
 
-    // Links only: a SAML provider has no write-only secret (#157).
+    // Links + the write-only signing key: a SAML provider carries the server-managed link map (#157) and,
+    // since #167, an optional service-provider signing key that is withheld from JSON like the OpenID
+    // secret, so a save that did not rotate it arrives blank and must keep the stored value.
     internal static void Preserve(SamlConfig incoming, SamlConfig live)
     {
         if (incoming is null || live is null)
@@ -75,7 +77,22 @@ internal static class ServerManagedFields
         }
 
         incoming.CanonicalLinks = live.CanonicalLinks;
+        incoming.SamlSigningKeyPfx = ResolveUpdatedSigningKey(incoming, live);
     }
+
+    /// <summary>
+    /// Decides which service-provider signing key an updated SAML provider should keep (#167). A non-blank
+    /// incoming key is an explicit rotation and wins; a blank one keeps the stored key, so a config-page
+    /// save (which never carries the withheld key) does not wipe it. Unlike the OpenID client secret this
+    /// has no provider-identity guard: the key is never transmitted anywhere — it is used only to sign a
+    /// public AuthnRequest locally — so repointing the endpoint cannot exfiltrate it, and carrying it over
+    /// keeps a working signed-login provider from breaking on an unrelated edit.
+    /// </summary>
+    /// <param name="incoming">The provider config about to be persisted.</param>
+    /// <param name="live">The current live provider config.</param>
+    /// <returns>The signing key to persist for the updated provider.</returns>
+    internal static string ResolveUpdatedSigningKey(SamlConfig incoming, SamlConfig live)
+        => string.IsNullOrWhiteSpace(incoming.SamlSigningKeyPfx) ? live.SamlSigningKeyPfx : incoming.SamlSigningKeyPfx;
 
     /// <summary>
     /// Decides which OpenID client secret an updated provider should keep (#189), the single rule

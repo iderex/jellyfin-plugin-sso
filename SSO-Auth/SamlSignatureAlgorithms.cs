@@ -68,13 +68,23 @@ internal static class SamlSignatureAlgorithms
         => AllOnList(AllowedTransforms, transforms);
 
     /// <summary>
+    /// Whether a signature-method URI is on the allowlist (RSA/ECDSA SHA-256 or stronger; no SHA-1).
+    /// Shared by the inbound-response check below and the outgoing-request signer, so the SP never signs
+    /// with an algorithm weaker than the one it demands of the identity provider.
+    /// </summary>
+    /// <param name="signatureMethod">The signature-method URI.</param>
+    /// <returns>True only if the method is on the allowlist.</returns>
+    internal static bool IsSignatureMethodAllowed(string signatureMethod)
+        => AllowedSignatureMethods.Contains(signatureMethod ?? string.Empty);
+
+    /// <summary>
     /// Whether the signature method and every reference digest method are on the allowlist.
     /// </summary>
     /// <param name="signatureMethod">The SignedInfo signature-method URI.</param>
     /// <param name="digestMethods">The digest-method URI of every reference.</param>
     /// <returns>True only if the signature method is allowed and there is at least one reference, all of whose digests are allowed.</returns>
     internal static bool IsAllowed(string signatureMethod, IEnumerable<string> digestMethods)
-        => AllowedSignatureMethods.Contains(signatureMethod ?? string.Empty)
+        => IsSignatureMethodAllowed(signatureMethod)
            && AllOnList(AllowedDigestMethods, digestMethods);
 
     // The fail-closed shape both the transform chain and the reference digests require: a non-null
