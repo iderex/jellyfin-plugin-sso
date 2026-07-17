@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using Jellyfin.Plugin.SSO_Auth;
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Api.Flows;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using MediaBrowser.Model.Plugins;
 using Microsoft.AspNetCore.Mvc;
@@ -432,6 +433,44 @@ public class ArchitectureConformanceTests
         Assert.False(
             interveningMutation,
             "No user-mutating side effect may sit between the final #232 revocation re-check and AuthenticateDirect — the re-check must be the last gate before the mint.");
+    }
+
+    [Fact]
+    public void Controller_DelegatesLoginCompletionToTheFlowService()
+    {
+        // Locked in by the login-completion extraction (#160, #318 step 11): the one shared completion tail —
+        // resolve/adopt the link, build the SessionParameters, mint the session under the revocation gate,
+        // audit, map to a LoginOutcome — moved wholesale into LoginCompletionService. The controller's two
+        // callbacks now hand a VerifiedIdentity to that service and return its result, so a CONTROLLER neither
+        // builds SessionParameters nor mints a session itself. Call-level property, so it is a source scan
+        // like the other controller rules above.
+        //
+        // The scanned tokens are derived from the moved types via nameof, so a rename of SessionParameters or
+        // SessionMinter.MintAsync fails to COMPILE this rule (the strongest pin) rather than passing
+        // vacuously. Constructing the minter to inject it (new SessionMinter(...)) is wiring, not the tail, so
+        // it is deliberately not a scanned token — only building the parameters and minting are.
+        var paramsToken = "new " + nameof(SessionParameters);
+        var mintToken = nameof(SessionMinter.MintAsync) + "(";
+
+        var controllerHits = ControllerSourceFiles()
+            .SelectMany(path => File.ReadAllLines(path)
+                .Select((line, index) => (File: Path.GetFileName(path), Text: line.Trim(), Number: index + 1)))
+            .Where(l => l.Text.Contains(paramsToken, StringComparison.Ordinal) || l.Text.Contains(mintToken, StringComparison.Ordinal))
+            .Select(l => $"{l.File} line {l.Number}: {l.Text}")
+            .ToList();
+
+        Assert.True(
+            controllerHits.Count == 0,
+            "A controller must not build SessionParameters or mint a session directly; the shared login-completion tail lives in LoginCompletionService (#160). Found: " + string.Join(" | ", controllerHits));
+
+        // Liveness against a vacuous pass: the tail must actually live in the flow service — a move, not a
+        // silent removal — so LoginCompletionService's own source must contain both moved tokens.
+        var completionSource = string.Join(
+            "\n",
+            SourceFilesDeclaring(new[] { typeof(LoginCompletionService) }).Select(File.ReadAllText));
+        Assert.True(
+            completionSource.Contains(paramsToken, StringComparison.Ordinal) && completionSource.Contains(mintToken, StringComparison.Ordinal),
+            "LoginCompletionService must own the login-completion tail (build SessionParameters and mint the session); otherwise the controller scan passes vacuously (#160).");
     }
 
     [Fact]

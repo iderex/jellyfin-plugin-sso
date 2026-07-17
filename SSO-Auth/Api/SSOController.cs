@@ -13,11 +13,11 @@ using Duende.IdentityModel.OidcClient;
 using Jellyfin.Data;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
+using Jellyfin.Plugin.SSO_Auth.Api.Flows;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Jellyfin.Plugin.SSO_Auth.Helpers;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Common.Extensions;
-using MediaBrowser.Controller.Authentication;
 using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Net;
@@ -48,9 +48,10 @@ public class SSOController : ControllerBase
     private const string SamlProtocol = "SAML";
 
     private readonly IUserManager _userManager;
-    // The session-minting flow (#318): permissions + avatar + default-provider, then AuthenticateDirect.
-    // The controller passes the HttpContext-derived remote endpoint in and keeps no session/avatar field.
-    private readonly SessionMinter _sessionMinter;
+    // The shared login-completion tail (#160, #318): resolve/adopt the link, build the session parameters,
+    // mint under the revocation gate, audit, map to a LoginOutcome. The controller passes the
+    // HttpContext-derived remote endpoint in and keeps no session/avatar field.
+    private readonly LoginCompletionService _loginCompletion;
     // Kept so a hard revoke (Unregister) can also terminate the user's already-issued tokens (#440); the
     // minter takes its own reference for the login path.
     private readonly ISessionManager _sessionManager;
@@ -120,7 +121,8 @@ public class SSOController : ControllerBase
         _sessionManager = sessionManager;
         _canonicalLinks = new CanonicalLinkService(userManager, cryptoProvider, SSOPlugin.Instance.ConfigStore, logger);
         var avatarService = new AvatarService(userManager, providerManager, serverConfigurationManager, logger, SsoHttp.UserAgent);
-        _sessionMinter = new SessionMinter(userManager, avatarService, sessionManager, logger);
+        var sessionMinter = new SessionMinter(userManager, avatarService, sessionManager, logger);
+        _loginCompletion = new LoginCompletionService(_canonicalLinks, sessionMinter, logger);
         _logger.LogInformation("SSO Controller initialized");
     }
 
@@ -716,11 +718,12 @@ public class SSOController : ControllerBase
 
         // The redeemed state carries the fully-verified identity (#473); the OpenID adoption gate applies
         // the provider's verified-email requirement (#218). From here the OpenID and SAML paths are one.
-        return await CompleteLoginAsync(
+        return await _loginCompletion.CompleteAsync(
             redeemed.Identity,
             response,
             config,
-            new AdoptionGate(config.RequireVerifiedEmailForAdoption, redeemed.Identity.EmailVerified)).ConfigureAwait(false);
+            new AdoptionGate(config.RequireVerifiedEmailForAdoption, redeemed.Identity.EmailVerified),
+            () => HttpContext.GetNormalizedRemoteIP().ToString()).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1101,11 +1104,12 @@ public class SSOController : ControllerBase
         // and carries no email_verified claim, so the verified-email gate is not applicable
         // (AdoptionGate.None); the resolver's unconditional admin-adoption refusal (#218) still applies.
         // From here the SAML and OpenID paths are one.
-        return await CompleteLoginAsync(
+        return await _loginCompletion.CompleteAsync(
             VerifiedIdentity.FromValidatedSaml(provider, nameId, derived),
             response,
             config,
-            AdoptionGate.None).ConfigureAwait(false);
+            AdoptionGate.None,
+            () => HttpContext.GetNormalizedRemoteIP().ToString()).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1363,64 +1367,6 @@ public class SSOController : ControllerBase
         CanonicalLinkWriteResult.UnknownProvider => BadRequest(NoMatchingProviderMessage),
         _ => throw new InvalidOperationException($"Unhandled canonical-link write result: {result}"),
     };
-
-    // The one shared completion path both protocols funnel into once their validation has produced a
-    // VerifiedIdentity (#473): resolve-or-create the account, build the session parameters, and mint the
-    // session under the in-flight revocation gate. Taking a VerifiedIdentity — the only type either
-    // protocol can produce, and only after full validation — is what makes minting from a raw, unvalidated
-    // response a compile error: there is no overload that accepts anything else. The only per-protocol
-    // input left is the adoption gate (OpenID may require a verified email #218; SAML passes
-    // AdoptionGate.None), so it is a parameter; every other divergence collapsed into the identity's own
-    // fields (its link namespace, audit label, subject, username, privileges).
-    private async Task<ActionResult> CompleteLoginAsync(
-        VerifiedIdentity identity,
-        AuthResponse response,
-        ProviderConfigBase config,
-        AdoptionGate adoptionGate)
-    {
-        Guid userId;
-        try
-        {
-            userId = await _canonicalLinks.ResolveOrCreateAsync(
-                identity.LinkMode,
-                identity.Provider,
-                identity.Subject,
-                identity.Username,
-                config.AllowExistingAccountLink,
-                adoptionGate).ConfigureAwait(false);
-        }
-        catch (AccountLinkForbiddenException)
-        {
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.AccountLinkForbidden));
-        }
-
-        var sessionParameters = new SessionParameters
-        {
-            UserId = userId,
-            IsAdmin = identity.Admin,
-            EnableAuthorization = config.EnableAuthorization,
-            EnableAllFolders = config.EnableAllFolders,
-            EnabledFolders = identity.Folders.ToArray(),
-            EnableLiveTv = identity.EnableLiveTv,
-            EnableLiveTvManagement = identity.EnableLiveTvManagement,
-            AuthResponse = response,
-            DefaultProvider = config.DefaultProvider?.Trim(),
-            AvatarUrl = identity.AvatarUrl,
-        };
-        var authenticationResult = await Authenticate(
-            sessionParameters,
-            () => _canonicalLinks.IsIdentityStillLinked(identity.LinkMode, identity.Provider, identity.Subject, userId)).ConfigureAwait(false);
-        SsoAudit.LoginSucceeded(_logger, identity.AuditProtocol, identity.Provider, identity.Username, identity.Admin);
-        return LoginStatusMapper.ToActionResult(new LoginOutcome.Success(authenticationResult));
-    }
-
-    // The HTTP boundary for session minting: hand the resolved parameters and a resolver for the client's
-    // normalized remote IP (#177 — Jellyfin's own GetNormalizedRemoteIP, so the plugin adds no proxy-trust
-    // logic of its own) to the SessionMinter flow. The resolver is passed rather than the value so the
-    // flow evaluates it at the exact original point (after avatar/persistence, and NOT at all on the
-    // fail-closed deleted-user path) — the pre-extraction Authenticate read it inline there.
-    private Task<AuthenticationResult> Authenticate(SessionParameters parameters, Func<bool> identityStillLinked) =>
-        _sessionMinter.MintAsync(parameters, () => HttpContext.GetNormalizedRemoteIP().ToString(), identityStillLinked);
 
     // Applies the opt-in per-client rate limit (#128) on an anonymous flow endpoint: null when the
     // request may proceed, else a 429 carrying Retry-After. Reads the settings under the config
