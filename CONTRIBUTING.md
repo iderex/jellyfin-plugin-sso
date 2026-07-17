@@ -140,7 +140,7 @@ Any code editor or IDE with .NET support will work out of the box with this prog
 - [VSCode](https://code.visualstudio.com/docs/languages/dotnet)
 - [N/Vim](https://github.com/OmniSharp/Omnisharp-vim)
 
-**Getting oriented.** Before diving into `SSOController.cs` and the SAML/OpenID helpers, read the [Login Flow](https://github.com/iderex/jellyfin-plugin-sso/wiki/Login-Flow) wiki page — it walks an OpenID and a SAML sign-in from challenge to session, so you can map a change onto the flow instead of reverse-engineering it.
+**Getting oriented.** Before diving into `SSOController.cs` and the SAML/OpenID helpers, read the [Login Flow](https://github.com/iderex/jellyfin-plugin-sso/wiki/Login-Flow) wiki page and the in-tree [ARCHITECTURE.md](ARCHITECTURE.md) — together they walk an OpenID and a SAML sign-in from challenge to session and map the code layout, so you can place a change onto the flow instead of reverse-engineering it. ARCHITECTURE.md also separates that current shape from the [#318](https://github.com/iderex/jellyfin-plugin-sso/issues/318) target architecture the codebase is migrating toward.
 
 **Building and testing.** CI runs these on every pull request and they must pass:
 
