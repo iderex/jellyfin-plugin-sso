@@ -14,6 +14,7 @@ internal sealed class RedeemedState
     {
         Subject = claimed.Subject;
         Username = claimed.Username;
+        EmailVerified = claimed.EmailVerified;
         Admin = claimed.Admin;
         Folders = claimed.Folders;
         EnableLiveTv = claimed.EnableLiveTv;
@@ -26,6 +27,9 @@ internal sealed class RedeemedState
 
     /// <summary>Gets the username resolved by the verified login.</summary>
     internal string Username { get; }
+
+    /// <summary>Gets the login's <c>email_verified</c> claim (true/false), or null when absent (#218).</summary>
+    internal bool? EmailVerified { get; }
 
     /// <summary>Gets a value indicating whether the login grants administrator rights.</summary>
     internal bool Admin { get; }

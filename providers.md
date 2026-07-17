@@ -80,6 +80,33 @@ expiry). A few provider settings must therefore match, or login is refused (fail
   that mints a _different_ `sub` for the same user on every login (a misconfigured pairwise-subject
   setup) will work exactly once and then be refused — fix the IdP configuration; there is nothing
   safe to anchor the identity to otherwise.
+- **Adopting a same-named pre-existing account is gated (`AllowExistingAccountLink`).** When a first
+  login finds no link but a Jellyfin account already bears the SSO name, the account is adopted only if
+  the provider has `AllowExistingAccountLink` set — otherwise the login is refused (HTTP 403). Adoption
+  matches on the mutable display name (`preferred_username` / SAML NameID), so enabling it trusts the
+  identity provider to make usernames **unique and non-reassignable**; a provider that lets a new
+  principal assert an existing user's name would otherwise hand that account over. Two fail-closed gates
+  narrow that trust (#218):
+  - **An administrator account is never adopted by name — regardless of any setting or protocol.** An
+    admin account is the highest-value takeover target, so name-based adoption of one is always refused
+    (a `WARNING` is logged). Link an admin account to its SSO identity explicitly instead, via the admin
+    linking endpoint (`AddCanonicalLink`), which needs no name trust.
+  - **`RequireVerifiedEmailForAdoption` (OpenID only, off by default).** Set it on a provider to
+    additionally require the login to carry `email_verified == true` before adopting a same-named
+    (non-admin) account; an absent or `false` claim is refused. This raises the bar from "asserts a
+    name" to "asserts a name **and** holds a provider-verified email". Jellyfin accounts store no email
+    to cross-check against, so this does not match the email to the target account — it does not replace
+    the unique-username assumption, it narrows who can exploit it. It is **off by default** so a
+    deployment already relying on `AllowExistingAccountLink` is not silently locked out on upgrade.
+    Enabling it needs the `email` scope in the provider's `OidScopes` so the IdP actually returns
+    `email_verified`; without that scope the claim is absent and every adoption is refused. **SAML** has
+    no `email_verified` claim, so this gate is not applicable there — only the admin refusal above
+    applies, and SAML operators relying on name-based adoption should ensure their IdP issues stable,
+    non-reassignable NameIDs. The transitional legacy re-key path below is **exempt** from the
+    verified-email requirement (it continues a relationship established under the old scheme, not a new
+    one), so on that one path the admin-takeover ceiling is still enforced but this verified-email
+    defense-in-depth is not. Both `AllowExistingAccountLink` and `RequireVerifiedEmailForAdoption` are
+    edited in the provider's `config.xml`, not on the config page.
 - **Upgrading from a username-keyed version — read this before you upgrade.** Links created by older
   plugin versions (up to and including 4.0.0.4) are keyed on the username. A username is something the
   identity provider can reassign, so following such a link is name-based account matching, governed by
@@ -97,6 +124,14 @@ expiry). A few provider settings must therefore match, or login is refused (fail
      password, so if your only admins sign in through OpenID they will be locked out by the 403 above
      with no way back in-band. **Before upgrading**, make sure at least one Jellyfin administrator has a
      normal password login (Dashboard → Users), or you will be left editing config on disk (next point).
+     Note the extra admin case (#218): a returning **administrator** who held a pre-#155 username-keyed
+     OpenID link is **refused on their first post-upgrade login even with `AllowExistingAccountLink` on**
+     — an admin account is never adopted or re-keyed by name — so re-link it explicitly with
+     `AddCanonicalLink` (from the break-glass admin) rather than expecting self-migration. If that admin
+     was itself originally plugin-**created** and is your _only_ admin (random password, signs in through
+     SSO), recover server-side: reset its password from the Jellyfin dashboard using another admin, or —
+     if truly locked out — link it by editing the provider's `<CanonicalLinks>` in `config.xml` to map
+     the current `sub` to that user id, then restart.
   2. **Fully locked out?** Stop Jellyfin, open the plugin's `config.xml` in its data directory, set
      `<AllowExistingAccountLink>true</AllowExistingAccountLink>` inside the affected provider's config
      block, restart, and complete the migration below; then set it back to `false`.

@@ -703,7 +703,13 @@ public class SSOController : ControllerBase
         Guid userId;
         try
         {
-            userId = await _canonicalLinks.ResolveOrCreateAsync("oid", provider, redeemed.Subject, redeemed.Username, config.AllowExistingAccountLink).ConfigureAwait(false);
+            userId = await _canonicalLinks.ResolveOrCreateAsync(
+                "oid",
+                provider,
+                redeemed.Subject,
+                redeemed.Username,
+                config.AllowExistingAccountLink,
+                new AdoptionGate(config.RequireVerifiedEmailForAdoption, redeemed.EmailVerified)).ConfigureAwait(false);
         }
         catch (AccountLinkForbiddenException)
         {
@@ -1058,8 +1064,10 @@ public class SSOController : ControllerBase
         try
         {
             // SAML keys the link directly on the NameID, which is already the stable subject
-            // identifier — key and account name are the same value (no migration path needed).
-            userId = await _canonicalLinks.ResolveOrCreateAsync("saml", provider, nameId, nameId, config.AllowExistingAccountLink).ConfigureAwait(false);
+            // identifier — key and account name are the same value (no migration path needed). SAML has
+            // no email_verified claim, so the verified-email gate is not applicable (AdoptionGate.None);
+            // the resolver's unconditional admin-adoption refusal (#218) still applies.
+            userId = await _canonicalLinks.ResolveOrCreateAsync("saml", provider, nameId, nameId, config.AllowExistingAccountLink, AdoptionGate.None).ConfigureAwait(false);
         }
         catch (AccountLinkForbiddenException)
         {
