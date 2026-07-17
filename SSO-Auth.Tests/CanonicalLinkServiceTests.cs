@@ -203,27 +203,63 @@ public class CanonicalLinkServiceTests
     }
 
     [Fact]
-    public async Task ResolveOrCreateAsync_FlagOnRenamedLegacyOwner_HandsOutTheRecordedAccount()
+    public async Task ResolveOrCreateAsync_FlagOnRenamedLegacyOwner_DoesNotHandOverTheRenamedAccount()
     {
-        // Characterization of the flag-ON residual (#361, surfaced on #358): the legacy arm resolves
-        // the RECORDED name key even when no live account bears that name anymore (the owner was
-        // renamed), a strict superset of same-name adoption — so during an enable-the-flag migration
-        // window, a login presenting a foreign sub and the pre-rename name is handed the account and
-        // re-keys it. This pins the current behavior empirically; the #361 fix will flip it.
-        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        // The #361 fix (residual surfaced on #358): with the flag on, a legacy name-keyed link whose
+        // target was renamed away from the presented name must NOT be followed — otherwise a login with a
+        // foreign sub and the pre-rename name is handed the renamed account and re-keys it (a stale-name
+        // superset of same-name adoption, CWE-287). No live account bears "oldname", so the login instead
+        // provisions a FRESH account under its own sub; the renamed victim's account and the legacy entry
+        // are left untouched, and the orphan warning fires.
+        var (service, cfg, users, log) = Build(c => c.OidConfigs["kc"] = new OidConfig
         {
             Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["oldname"] = Existing },
         });
         users.GetUserById(Existing).Returns(UserNamed("newname", Existing));
         users.GetUserByName("oldname").Returns((User?)null); // renamed: no live account bears the key
+        var created = UserNamed("oldname", Other);
+        users.CreateUserAsync("oldname").Returns(created);
+        users.GetUserById(Other).Returns(created);
 
         var resolved = await service.ResolveOrCreateAsync("oid", "kc", "attacker-sub", "oldname", allowExistingAccountLink: true);
 
-        Assert.Equal(Existing, resolved);
+        Assert.Equal(Other, resolved); // a fresh account, NOT the renamed victim (Existing)
+        await users.Received(1).CreateUserAsync("oldname");
         var links = cfg.OidConfigs["kc"].CanonicalLinks;
-        Assert.Equal(Existing, links["attacker-sub"]); // re-keyed to the presented sub
-        Assert.False(links.ContainsKey("oldname"));
+        Assert.Equal(Existing, links["oldname"]); // the legacy entry is untouched, not re-keyed
+        Assert.Equal(Other, links["attacker-sub"]); // the fresh account is linked under the login's own sub
+
+        // The orphan warning fires (the legacy link is now stale), not mislabeled a "refused" login.
+        var warnings = log.Entries.FindAll(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning);
+        Assert.Single(warnings);
+        Assert.Contains("orphaned", warnings[0].Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("refused", warnings[0].Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_FlagOnRenamedLegacyOwner_NameNowHeldByAnother_AdoptsTheCurrentHolderNotTheVictim()
+    {
+        // The #361 fix, the case where a DIFFERENT account has since taken the pre-rename name: the legacy
+        // link still points at the renamed victim (Existing), but the account currently named "oldname" is
+        // a third party (Other). The stale legacy key must not be followed; the login falls through to
+        // ordinary same-name adoption of the CURRENT holder (Other), never the renamed victim (Existing).
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["oldname"] = Existing },
+        });
+        users.GetUserById(Existing).Returns(UserNamed("newname", Existing)); // the victim, renamed away
+        users.GetUserByName("oldname").Returns(UserNamed("oldname", Other)); // a different account now holds the name
+        users.GetUserById(Other).Returns(UserNamed("oldname", Other));
+
+        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "attacker-sub", "oldname", allowExistingAccountLink: true);
+
+        Assert.Equal(Other, resolved); // adopts the current name-holder, NOT the renamed victim (Existing)
+        await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
+        var links = cfg.OidConfigs["kc"].CanonicalLinks;
+        Assert.Equal(Existing, links["oldname"]); // the victim's legacy entry is untouched
+        Assert.Equal(Other, links["attacker-sub"]); // the adopted (current-holder) account is linked under the sub
     }
 
     [Fact]
@@ -585,7 +621,9 @@ public class CanonicalLinkServiceTests
         // is disabled before the migration transaction. Without the guard the caller would still return
         // UseExistingLink and mint with pre-disable settings; with it the migration rejects and the
         // legacy key stays un-migrated. The flip runs inside the GetUserById stub, which the read
-        // consults after its own guard has already passed.
+        // consults after its own guard has already passed. The name is still held by the legacy target
+        // (GetUserByName -> Existing), so the #361 follow-gate lets the migrate be attempted — the point
+        // this test exercises — rather than short-circuiting to a fresh account.
         var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
         {
             Enabled = true,
@@ -596,6 +634,7 @@ public class CanonicalLinkServiceTests
             cfg.OidConfigs["kc"].Enabled = false;
             return UserNamed("alice", Existing);
         });
+        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
             service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true));

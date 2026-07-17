@@ -100,7 +100,9 @@ internal sealed class CanonicalLinkService
         // detach it. Because the legacy key is a name the identity provider controls, following it is
         // name-based account matching, so it honors AllowExistingAccountLink exactly like same-named
         // adoption below (#354): with the flag off, a login whose preferred_username points at another
-        // user's entry is refused by the adoption gate instead of being handed that account.
+        // user's entry is refused by the adoption gate instead of being handed that account. Even with
+        // the flag on it is followed ONLY while the recorded target still bears the name (#361 below);
+        // a target renamed away from it is not handed over on the strength of a stale name key.
         // Only OpenID differs key from name; SAML passes key == name.
         // Both candidates are read in ONE pass under the config lock: with separate reads, a
         // concurrent login's migration could commit between them, so this login would see the subject
@@ -134,7 +136,16 @@ internal sealed class CanonicalLinkService
             return (bySubject, byName);
         });
 
-        var (linkedUserId, migrateLegacy) = AccountLinkResolver.ResolveCanonicalLink(subjectLink, legacyLink, allowExistingAccountLink);
+        // The account currently bearing the display name, resolved once (outside the config lock — it is
+        // a user-manager read, not a config read). It is both the same-name adoption candidate for the
+        // Resolve gate below AND, when it IS the legacy link's target, the proof that following the legacy
+        // username key is still true same-name matching rather than handing over an account that was
+        // renamed away from this name (#361). A legacy link whose target no longer holds the name is left
+        // for the terminal branches to label (a fresh-account orphan, or a reject), never followed.
+        Guid? existingAccountUserId = _userManager.GetUserByName(username)?.Id;
+        bool legacyNameStillHeldByTarget = legacyLink.HasValue && existingAccountUserId == legacyLink;
+
+        var (linkedUserId, migrateLegacy) = AccountLinkResolver.ResolveCanonicalLink(subjectLink, legacyLink, legacyNameStillHeldByTarget, allowExistingAccountLink);
         if (migrateLegacy)
         {
             MigrateCanonicalLinkKey(mode, provider, username, canonicalKey);
@@ -144,9 +155,10 @@ internal sealed class CanonicalLinkService
                 provider?.ReplaceLineEndings(string.Empty));
         }
 
-        // A legacy link that survives here un-migrated (flag off, #354) is not logged at this point:
-        // its terminal outcome decides the right message. It splits into a refusal (the name is still
-        // taken) or a fresh-account creation (the name was freed by a rename), and only the outcome
+        // A legacy link that survives here un-migrated (flag off — or flag on but the name no longer
+        // resolves to the recorded target, #354/#361) is not logged at this point: its terminal outcome
+        // decides the right message. It splits into a refusal (the name is still taken) or a
+        // fresh-account creation (the name was freed by a rename), and only the outcome
         // branch below can label it accurately — the fresh-account case is a SUCCESSFUL login that
         // silently orphans the original account, not a "refused" one, so a single pre-gate line would
         // mislabel exactly the event an operator most needs to see. Each terminal branch emits one
@@ -154,9 +166,7 @@ internal sealed class CanonicalLinkService
         // per-request service, which would leak across tests), so during an upgrade window it is a
         // stream — enough to identify who still needs migrating, scanned expecting volume.
 
-        // Adoption of a pre-existing unlinked account still matches on the display name.
-        Guid? existingAccountUserId = _userManager.GetUserByName(username)?.Id;
-
+        // Adoption of a pre-existing unlinked account still matches on the display name resolved above.
         var decision = AccountLinkResolver.Resolve(linkedUserId, existingAccountUserId, allowExistingAccountLink);
         switch (decision.Action)
         {
@@ -180,16 +190,17 @@ internal sealed class CanonicalLinkService
             {
                 if (legacyLink.HasValue)
                 {
-                    // The dangerous, previously-silent case (#354): a legacy username-keyed link exists,
-                    // the flag is off so it was not followed, AND no live account bears the name anymore
-                    // (the account was renamed on the Jellyfin side). We are about to provision a FRESH
-                    // account under this subject, leaving the original — the one the legacy key points at
-                    // — permanently orphaned. This warning is the single observable signal of that
-                    // irreversible outcome; recover by linking the original account to this subject via
-                    // the admin endpoints, or enable AllowExistingAccountLink before the next login. See
-                    // the upgrade runbook in providers.md.
+                    // The dangerous, previously-silent case (#354/#361): a legacy username-keyed link
+                    // exists and its target still exists, but no live account bears the name anymore (the
+                    // account was renamed on the Jellyfin side), so the legacy link was NOT followed —
+                    // whether adoption is off, or on but the name no longer resolves to the recorded target
+                    // (#361, the stale-name superset the flag-on arm used to hand over). We are about to
+                    // provision a FRESH account under this subject, leaving the original — the one the
+                    // legacy key points at — orphaned from this identity. This warning is the single
+                    // observable signal of that outcome; recover by linking the original account to this
+                    // subject via the admin endpoints. See the upgrade runbook in providers.md.
                     _logger.LogWarning(
-                        "SSO login for {Name} via {Mode}/{Provider}: a legacy username-keyed link exists but AllowExistingAccountLink is off and no live account bears the name, so a fresh account is being provisioned and the original account is now orphaned. Re-link it to this subject via the admin endpoints (or enable AllowExistingAccountLink before the next login).",
+                        "SSO login for {Name} via {Mode}/{Provider}: a legacy username-keyed link exists but no live account bears the name (it was renamed on the Jellyfin side), so a fresh account is being provisioned and the original account is now orphaned. Re-link it to this subject via the admin endpoints.",
                         username?.ReplaceLineEndings(string.Empty),
                         mode,
                         provider?.ReplaceLineEndings(string.Empty));
