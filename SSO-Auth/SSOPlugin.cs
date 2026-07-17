@@ -112,76 +112,34 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
     /// Returns the available internal web pages of this plugin.
     /// </summary>
     /// <returns>A list of internal webpages in this application.</returns>
-    public IEnumerable<PluginPageInfo> GetPages()
-    {
-        return new[]
+    public IEnumerable<PluginPageInfo> GetPages() =>
+        new[]
         {
-            new PluginPageInfo
-            {
-                Name = Name,
-                EmbeddedResourcePath = $"{GetType().Namespace}.Config.configPage.html"
-            },
-            new PluginPageInfo
-            {
-                Name = Name + ".js",
-                EmbeddedResourcePath = $"{GetType().Namespace}.Config.config.js"
-            },
-            new PluginPageInfo
-            {
-                Name = Name + ".css",
-                EmbeddedResourcePath = $"{GetType().Namespace}.Config.style.css"
-            },
-            new PluginPageInfo
-            {
-                Name = Name + "-linking",
-                EmbeddedResourcePath = $"{GetType().Namespace}.Config.linking.html"
-            },
-            new PluginPageInfo
-            {
-                Name = Name + "-linking.js",
-                EmbeddedResourcePath = $"{GetType().Namespace}.Config.linking.js"
-            },
+            Page(Name, "Config.configPage.html"),
+            Page(Name + ".js", "Config.config.js"),
+            Page(Name + ".css", "Config.style.css"),
+            Page(Name + "-linking", "Config.linking.html"),
+            Page(Name + "-linking.js", "Config.linking.js"),
         };
-    }
 
     /// <summary>
     /// Returns the available user views for this plugin.
     /// </summary>
     /// <returns>A list of user views for this plugin.</returns>
-    public IEnumerable<PluginPageInfo> GetViews()
-    {
-        return new[]
+    public IEnumerable<PluginPageInfo> GetViews() =>
+        new[]
         {
-            new PluginPageInfo
-            {
-                Name = "style.css",
-                EmbeddedResourcePath = $"{GetType().Namespace}.Config.style.css"
-            },
-            new PluginPageInfo
-            {
-                Name = "linking",
-                EmbeddedResourcePath = $"{GetType().Namespace}.Config.linking.html"
-            },
-            new PluginPageInfo
-            {
-                Name = "linking.js",
-                EmbeddedResourcePath = $"{GetType().Namespace}.Config.linking.js"
-            },
-            new PluginPageInfo
-            {
-                Name = "ApiClient.js",
-                EmbeddedResourcePath = $"{GetType().Namespace}.Views.apiClient.js"
-            },
-            new PluginPageInfo
-            {
-                Name = "emby-restyle.css",
-                EmbeddedResourcePath = $"{GetType().Namespace}.Views.emby-restyle.css"
-            },
-            new PluginPageInfo
-            {
-                Name = "jellyfin-apiClient.esm.min.js",
-                EmbeddedResourcePath = $"{GetType().Namespace}.Views.jellyfin-apiClient.esm.min.js"
-            },
+            Page("style.css", "Config.style.css"),
+            Page("linking", "Config.linking.html"),
+            Page("linking.js", "Config.linking.js"),
+            Page("ApiClient.js", "Views.apiClient.js"),
+            Page("emby-restyle.css", "Views.emby-restyle.css"),
+            Page("jellyfin-apiClient.esm.min.js", "Views.jellyfin-apiClient.esm.min.js"),
         };
-    }
+
+    // Every GetPages/GetViews entry is a (registered name, embedded resource) pair under this
+    // plugin's namespace; this factory collapses the repeated PluginPageInfo construction to one
+    // call per entry.
+    private PluginPageInfo Page(string name, string resource) =>
+        new() { Name = name, EmbeddedResourcePath = $"{GetType().Namespace}.{resource}" };
 }
