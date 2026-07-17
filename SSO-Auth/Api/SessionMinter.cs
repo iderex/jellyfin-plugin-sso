@@ -36,7 +36,7 @@ internal sealed class SessionMinter
     /// </summary>
     /// <param name="parameters">The resolved user, granted privileges, and client identity.</param>
     /// <param name="remoteEndPointResolver">Resolves the normalized client IP for the activity log (the controller reads it from <c>HttpContext</c>, #177). Invoked at the original point below — after avatar/persistence, and not at all on the fail-closed path — to preserve evaluation order.</param>
-    /// <param name="identityStillLinked">The in-flight revocation gate (#232): re-checks, under the config lock, that the resolved identity is still linked. Evaluated as the last act before the session mint; false fails closed. Required (no default) so a mint path cannot silently omit it and fail open.</param>
+    /// <param name="identityStillLinked">The in-flight revocation gate (#232): re-checks, under the config lock, that the resolved identity is still linked. Evaluated twice — before any user side effect (so a revoked login persists no grants) and again as the last act before the session mint (so a revocation landing mid-method still yields no session); false fails closed. Required (no default) so a mint path cannot silently omit it and fail open.</param>
     /// <returns>The authenticated session result.</returns>
     internal async Task<AuthenticationResult> MintAsync(SessionParameters parameters, Func<string> remoteEndPointResolver, Func<bool> identityStillLinked)
     {
@@ -46,6 +46,16 @@ internal sealed class SessionMinter
             // Fail closed: the account resolved for this SSO login no longer exists (e.g. it was
             // deleted between resolution and this call), so no session may be minted for it.
             throw new AuthenticationException("SSO authentication aborted: the target user does not exist.");
+        }
+
+        // First revocation gate (#232), BEFORE any user side effect: a login already revoked between
+        // resolution (under the config lock) and here must not persist the SSO-derived permission,
+        // avatar, or default-provider changes onto the account an admin is locking down. The final gate
+        // below still catches a revocation that commits later in this method. Fail closed exactly like
+        // the deleted-user guard above; the same AuthenticationException, no new error contract.
+        if (!identityStillLinked())
+        {
+            throw new AuthenticationException("SSO authentication aborted: the identity is no longer linked (revoked in flight).");
         }
 
         if (parameters.EnableAuthorization)
@@ -95,10 +105,9 @@ internal sealed class SessionMinter
         authRequest.RemoteEndPoint = remoteEndPointResolver();
         _logger.LogInformation("Auth request created...");
 
-        // Last gate before the mint (#232): resolution ran under the config lock but everything since —
-        // permissions, avatar, the user write — has not, so an admin revocation (Unregister / link delete
-        // / provider disable) that landed in that gap must still stop the session. Fail closed exactly like
-        // the deleted-user guard above; the same AuthenticationException, no new error contract.
+        // Final revocation gate (#232), the LAST act before the mint: a revocation that committed during
+        // the permission/avatar/user-write work above must still stop the session. This is the gate that
+        // closes the login race; the earlier one only spares the side effects. Same fail-closed abort.
         if (!identityStillLinked())
         {
             throw new AuthenticationException("SSO authentication aborted: the identity is no longer linked (revoked in flight).");

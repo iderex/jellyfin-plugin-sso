@@ -183,27 +183,29 @@ public class SessionMinterTests
     }
 
     [Fact]
-    public async Task MintAsync_IdentityRevokedInFlight_ThrowsAndMintsNoSession()
+    public async Task MintAsync_IdentityRevokedInFlight_ThrowsWithoutWritingTheUserOrMintingASession()
     {
         // #232: the account resolved under the config lock, but an admin revocation (Unregister / link
-        // delete / provider disable) committed before the mint, so the revocation re-check returns false
-        // and the mint is refused — fail closed exactly like the deleted-user guard, no session minted.
+        // delete / provider disable) committed before the mint, so the revocation re-check returns false.
+        // The first gate refuses BEFORE any user side effect, so no grants are persisted and no session is
+        // minted — fail closed exactly like the deleted-user guard.
         var (minter, users, sessions) = Build();
         var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
         users.GetUserById(UserId).Returns(user);
 
         await Assert.ThrowsAsync<AuthenticationException>(() => minter.MintAsync(Params(), () => "203.0.113.7", () => false));
 
-        await sessions.DidNotReceive().AuthenticateDirect(Arg.Any<AuthenticationRequest>());
+        await users.DidNotReceive().UpdateUserAsync(Arg.Any<User>()); // no grants/avatar/provider persisted
+        await sessions.DidNotReceive().AuthenticateDirect(Arg.Any<AuthenticationRequest>()); // no session
     }
 
     [Fact]
-    public async Task MintAsync_RevocationRecheck_RunsAfterTheUserWrite_AndImmediatelyBeforeTheMint()
+    public async Task MintAsync_RevocationRecheck_RunsBeforeTheUserWrite_AndAgainImmediatelyBeforeTheMint()
     {
-        // Pins the placement that makes the #232 window as small as possible: the re-check is the LAST
-        // gate — it runs after the permission/avatar/default-provider user write and immediately before
-        // AuthenticateDirect. A recording predicate captures the order: UpdateUserAsync must have happened
-        // before it fires, and AuthenticateDirect must not have happened yet.
+        // Pins the two-gate placement (#232): the predicate is evaluated once BEFORE the user side
+        // effects (so a revoked login persists no grants) and once as the LAST gate after the write and
+        // immediately before AuthenticateDirect (so a revocation landing mid-mint still yields no session).
+        // A recording predicate captures the state at each firing.
         var (minter, users, sessions) = Build();
         var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
         users.GetUserById(UserId).Returns(user);
@@ -213,20 +215,20 @@ public class SessionMinterTests
         users.UpdateUserAsync(Arg.Any<User>()).Returns(_ => { userWritten = true; return Task.CompletedTask; });
         sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(_ => { mintCalled = true; return new AuthenticationResult(); });
 
-        var writtenAtRecheck = false;
-        var mintedAtRecheck = false;
+        var states = new System.Collections.Generic.List<(bool Written, bool Minted)>();
         await minter.MintAsync(
             Params(),
             () => "203.0.113.7",
             () =>
             {
-                writtenAtRecheck = userWritten;
-                mintedAtRecheck = mintCalled;
+                states.Add((userWritten, mintCalled));
                 return true;
             });
 
-        Assert.True(writtenAtRecheck); // the user write already happened when the re-check ran
-        Assert.False(mintedAtRecheck); // the mint had not happened yet
-        Assert.True(mintCalled); // and with a true re-check the mint did proceed
+        Assert.Equal(2, states.Count); // both gates fired
+        Assert.False(states[0].Written); // the first gate ran before the user write
+        Assert.True(states[^1].Written); // the final gate ran after the user write
+        Assert.False(states[^1].Minted); // and before the mint
+        Assert.True(mintCalled); // with both gates true, the mint proceeded
     }
 }

@@ -409,11 +409,13 @@ internal sealed class CanonicalLinkService
     /// The in-flight revocation gate (#232): a login resolves the account under the config lock but the
     /// session mint runs after the lock is released, so an admin Unregister (or a link delete, or a
     /// provider disable) that lands in that gap would otherwise still mint a session for the just-revoked
-    /// identity. Re-reading the authoritative link map here, as the last check before the mint, fails such
-    /// a login closed. It does not close the race outright — a revocation committing between this read and
-    /// the mint call still mints once — but it shrinks the window to that single unavoidable gap (the mint
-    /// cannot be held under the lock, which is async). Every unknown resolves to false (missing/whitespace
-    /// key, missing or disabled provider, missing/mismatched link, deleted target), so it is fail closed.
+    /// identity. The mint flow re-reads this predicate twice — before applying the user side effects (so a
+    /// revoked login persists no grants) and again as the last check before the mint (so a revocation
+    /// landing mid-mint still yields no session). The final check does not close the race outright — a
+    /// revocation committing between it and the mint call still mints once — but it shrinks the window to
+    /// that single unavoidable gap (the mint cannot be held under the lock, which is async). Every unknown
+    /// resolves to false (missing/whitespace key, missing or disabled provider, missing/mismatched link,
+    /// deleted target), so it is fail closed.
     /// </remarks>
     /// <param name="mode">The protocol mode token, "oid" or "saml".</param>
     /// <param name="provider">The provider the login authenticated against.</param>
