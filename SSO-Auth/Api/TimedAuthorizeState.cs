@@ -28,6 +28,15 @@ internal sealed class TimedAuthorizeState
     public AuthorizeState State { get; set; }
 
     /// <summary>
+    /// Gets or sets the OpenID provider metadata (discovery document + JWKS) that the challenge already
+    /// fetched and the library validated against the provider's DiscoveryPolicy (#247). The callback
+    /// pre-assigns it so <c>ProcessResponseAsync</c> skips the redundant per-login discovery + JWKS
+    /// round trips. Bounded by this state's own lifetime, so it is never older than the entry; null on a
+    /// state that predates the capture, in which case the callback falls back to a fresh discovery.
+    /// </summary>
+    public ProviderInformation ProviderInformation { get; set; }
+
+    /// <summary>
     /// Gets or sets the provider that minted this state. A state may only be consumed on the same
     /// provider's endpoints, so it cannot be replayed against another provider's login/role gate.
     /// </summary>

@@ -146,6 +146,38 @@ public class OidcStateStoreTests
         Assert.Equal(1, store.Count);
     }
 
+    // --- ProviderInformation reuse (#247): carry the challenge's validated discovery to the callback ---
+
+    [Fact]
+    public void TryAdd_CarriesProviderInformation_ReusedAtThePeekForTheCallback()
+    {
+        // The challenge stashes the discovery metadata it already fetched and validated; the store must
+        // round-trip it to the PendingState the OidPost callback reads, so ProcessResponseAsync can reuse
+        // it instead of re-running discovery + JWKS.
+        var store = Store();
+        var info = new ProviderInformation { IssuerName = "https://idp.example" };
+
+        Assert.True(store.TryAdd(new AuthorizeState { State = "s" }, "p", false, Now, Binding, clientKey: null, providerInformation: info, out _));
+
+        var pending = store.PeekCurrent("s", "p", Now, Binding);
+        Assert.NotNull(pending);
+        Assert.Same(info, pending.ProviderInformation);
+    }
+
+    [Fact]
+    public void TryAdd_NullProviderInformation_PeekExposesNull_SoTheCallbackFallsBackToDiscovery()
+    {
+        // A state added without stashed metadata (a flow that predates the capture) exposes null, so the
+        // callback's CreateOidcClient runs a fresh discovery — the pre-#247 behavior, never a broken login.
+        var store = Store();
+
+        Assert.True(store.TryAdd(new AuthorizeState { State = "s" }, "p", false, Now, Binding, clientKey: null, providerInformation: null, out _));
+
+        var pending = store.PeekCurrent("s", "p", Now, Binding);
+        Assert.NotNull(pending);
+        Assert.Null(pending.ProviderInformation);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
@@ -359,7 +391,7 @@ public class OidcStateStoreTests
             {
                 for (var i = 0; i < 5000; i++)
                 {
-                    store.TryAdd(new AuthorizeState { State = "fresh-" + i }, "p", false, Now, Binding, clientKey: null, out _);
+                    store.TryAdd(new AuthorizeState { State = "fresh-" + i }, "p", false, Now, Binding, clientKey: null, providerInformation: null, out _);
                 }
             },
             TestContext.Current.CancellationToken);
@@ -387,8 +419,8 @@ public class OidcStateStoreTests
     {
         var store = Store(maxEntries: 2);
 
-        Assert.True(store.TryAdd(new AuthorizeState { State = "a" }, "p", false, Now, Binding, clientKey: null, out var warnA));
-        Assert.True(store.TryAdd(new AuthorizeState { State = "b" }, "p", false, Now, Binding, clientKey: null, out var warnB));
+        Assert.True(store.TryAdd(new AuthorizeState { State = "a" }, "p", false, Now, Binding, clientKey: null, providerInformation: null, out var warnA));
+        Assert.True(store.TryAdd(new AuthorizeState { State = "b" }, "p", false, Now, Binding, clientKey: null, providerInformation: null, out var warnB));
         Assert.False(warnA);
         Assert.False(warnB);
         Assert.Equal(2, store.Count);
@@ -398,10 +430,10 @@ public class OidcStateStoreTests
     public void TryAdd_AtCap_RefusesANewKeyAndKeepsTheInFlightState()
     {
         var store = Store(maxEntries: 1);
-        Assert.True(store.TryAdd(new AuthorizeState { State = "in-flight" }, "p", false, Now, Binding, clientKey: null, out _));
+        Assert.True(store.TryAdd(new AuthorizeState { State = "in-flight" }, "p", false, Now, Binding, clientKey: null, providerInformation: null, out _));
 
         // At the cap, a fresh challenge is refused rather than evicting the user already mid-login.
-        Assert.False(store.TryAdd(new AuthorizeState { State = "new" }, "p", false, Now, Binding, clientKey: null, out _));
+        Assert.False(store.TryAdd(new AuthorizeState { State = "new" }, "p", false, Now, Binding, clientKey: null, providerInformation: null, out _));
         Assert.Equal(1, store.Count);
         Assert.NotNull(store.PeekCurrent("in-flight", "p", Now, Binding));
     }
@@ -410,8 +442,8 @@ public class OidcStateStoreTests
     public void TryAdd_DuplicateKey_ReturnsFalse()
     {
         var store = Store(maxEntries: 10);
-        Assert.True(store.TryAdd(new AuthorizeState { State = "a" }, "p", false, Now, Binding, clientKey: null, out _));
-        Assert.False(store.TryAdd(new AuthorizeState { State = "a" }, "p", false, Now, Binding, clientKey: null, out _));
+        Assert.True(store.TryAdd(new AuthorizeState { State = "a" }, "p", false, Now, Binding, clientKey: null, providerInformation: null, out _));
+        Assert.False(store.TryAdd(new AuthorizeState { State = "a" }, "p", false, Now, Binding, clientKey: null, providerInformation: null, out _));
     }
 
     [Fact]
@@ -420,15 +452,15 @@ public class OidcStateStoreTests
         // The warning signal is bounded exactly like the sweeps: the first refusal signals, further
         // refusals inside the interval stay silent, so a flood cannot amplify into log volume.
         var store = Store(maxEntries: 1);
-        Assert.True(store.TryAdd(new AuthorizeState { State = "a" }, "p", false, Now, Binding, clientKey: null, out _));
+        Assert.True(store.TryAdd(new AuthorizeState { State = "a" }, "p", false, Now, Binding, clientKey: null, providerInformation: null, out _));
 
-        Assert.False(store.TryAdd(new AuthorizeState { State = "b" }, "p", false, Now, Binding, clientKey: null, out var firstWarn));
+        Assert.False(store.TryAdd(new AuthorizeState { State = "b" }, "p", false, Now, Binding, clientKey: null, providerInformation: null, out var firstWarn));
         Assert.True(firstWarn);
 
-        Assert.False(store.TryAdd(new AuthorizeState { State = "c" }, "p", false, Now.AddSeconds(1), Binding, clientKey: null, out var secondWarn));
+        Assert.False(store.TryAdd(new AuthorizeState { State = "c" }, "p", false, Now.AddSeconds(1), Binding, clientKey: null, providerInformation: null, out var secondWarn));
         Assert.False(secondWarn);
 
-        Assert.False(store.TryAdd(new AuthorizeState { State = "d" }, "p", false, Now + PruneInterval, Binding, clientKey: null, out var nextIntervalWarn));
+        Assert.False(store.TryAdd(new AuthorizeState { State = "d" }, "p", false, Now + PruneInterval, Binding, clientKey: null, providerInformation: null, out var nextIntervalWarn));
         Assert.True(nextIntervalWarn);
     }
 
@@ -450,7 +482,7 @@ public class OidcStateStoreTests
                 {
                     for (var i = 0; i < perTask; i++)
                     {
-                        if (!store.TryAdd(new AuthorizeState { State = $"t{id}-k{i}" }, "p", false, Now, Binding, clientKey: null, out _))
+                        if (!store.TryAdd(new AuthorizeState { State = $"t{id}-k{i}" }, "p", false, Now, Binding, clientKey: null, providerInformation: null, out _))
                         {
                             Interlocked.Increment(ref rejected);
                         }
@@ -574,39 +606,39 @@ public class OidcStateStoreTests
     {
         // The core fairness property: filling client "A" to its per-key share must not deny "B".
         var store = Store(maxEntries: 200); // per-key cap 2
-        Assert.True(store.TryAdd(State("a1"), "p", false, Now, Binding, clientKey: "A", out _));
-        Assert.True(store.TryAdd(State("a2"), "p", false, Now, Binding, clientKey: "A", out _));
-        Assert.False(store.TryAdd(State("a3"), "p", false, Now, Binding, clientKey: "A", out var warn)); // A at share
+        Assert.True(store.TryAdd(State("a1"), "p", false, Now, Binding, clientKey: "A", providerInformation: null, out _));
+        Assert.True(store.TryAdd(State("a2"), "p", false, Now, Binding, clientKey: "A", providerInformation: null, out _));
+        Assert.False(store.TryAdd(State("a3"), "p", false, Now, Binding, clientKey: "A", providerInformation: null, out var warn)); // A at share
         Assert.True(warn); // the throttled capacity warning fires for the first per-client refusal
 
-        Assert.True(store.TryAdd(State("b1"), "p", false, Now, Binding, clientKey: "B", out _)); // B unaffected
+        Assert.True(store.TryAdd(State("b1"), "p", false, Now, Binding, clientKey: "B", providerInformation: null, out _)); // B unaffected
     }
 
     [Fact]
     public void TryAdd_ReleaseOnRedeem_ReadmitsTheSameKey()
     {
         var store = Store(maxEntries: 200); // per-key cap 2
-        store.TryAdd(State("a1"), "p", false, Now, Binding, clientKey: "A", out _);
-        store.TryAdd(State("a2"), "p", false, Now, Binding, clientKey: "A", out _);
-        Assert.False(store.TryAdd(State("a3"), "p", false, Now, Binding, clientKey: "A", out _)); // full
+        store.TryAdd(State("a1"), "p", false, Now, Binding, clientKey: "A", providerInformation: null, out _);
+        store.TryAdd(State("a2"), "p", false, Now, Binding, clientKey: "A", providerInformation: null, out _);
+        Assert.False(store.TryAdd(State("a3"), "p", false, Now, Binding, clientKey: "A", providerInformation: null, out _)); // full
 
         Validate(store, "a1");
         Assert.NotNull(store.TryRedeem("a1", "p", Now, Binding)); // frees one A slot
-        Assert.True(store.TryAdd(State("a3"), "p", false, Now, Binding, clientKey: "A", out _));
+        Assert.True(store.TryAdd(State("a3"), "p", false, Now, Binding, clientKey: "A", providerInformation: null, out _));
     }
 
     [Fact]
     public void TryAdd_ReleaseOnExpirySweep_ReadmitsTheSameKey()
     {
         var store = Store(maxEntries: 200); // per-key cap 2
-        store.TryAdd(State("a1"), "p", false, Now, Binding, clientKey: "A", out _);
-        store.TryAdd(State("a2"), "p", false, Now, Binding, clientKey: "A", out _);
+        store.TryAdd(State("a1"), "p", false, Now, Binding, clientKey: "A", providerInformation: null, out _);
+        store.TryAdd(State("a2"), "p", false, Now, Binding, clientKey: "A", providerInformation: null, out _);
 
         // Past the lifetime and the prune interval, the sweep removes both A entries and releases their
         // slots, so A can add again. (Lifetime and PruneInterval are the test fixture's small values.)
         var later = Now + Lifetime + PruneInterval + TimeSpan.FromSeconds(1);
         store.PruneExpired(later);
-        Assert.True(store.TryAdd(State("a3"), "p", false, later, Binding, clientKey: "A", out _));
+        Assert.True(store.TryAdd(State("a3"), "p", false, later, Binding, clientKey: "A", providerInformation: null, out _));
     }
 
     [Fact]
@@ -616,13 +648,13 @@ public class OidcStateStoreTests
         // a "A" add reserves A's slot but is refused by the GLOBAL cap and must roll back. After a slot
         // frees, "A" must still admit — a leaked reservation would leave A at its cap of 1.
         var store = Store(maxEntries: 2);
-        Assert.True(store.TryAdd(State("n1"), "p", false, Now, Binding, clientKey: null, out _));
-        Assert.True(store.TryAdd(State("n2"), "p", false, Now, Binding, clientKey: null, out _));
+        Assert.True(store.TryAdd(State("n1"), "p", false, Now, Binding, clientKey: null, providerInformation: null, out _));
+        Assert.True(store.TryAdd(State("n2"), "p", false, Now, Binding, clientKey: null, providerInformation: null, out _));
 
-        Assert.False(store.TryAdd(State("a1"), "p", false, Now, Binding, clientKey: "A", out _)); // global cap
+        Assert.False(store.TryAdd(State("a1"), "p", false, Now, Binding, clientKey: "A", providerInformation: null, out _)); // global cap
         Validate(store, "n1");
         Assert.NotNull(store.TryRedeem("n1", "p", Now, Binding)); // free one global slot
-        Assert.True(store.TryAdd(State("a1"), "p", false, Now, Binding, clientKey: "A", out _)); // no leak
+        Assert.True(store.TryAdd(State("a1"), "p", false, Now, Binding, clientKey: "A", providerInformation: null, out _)); // no leak
     }
 
     [Fact]
@@ -631,9 +663,9 @@ public class OidcStateStoreTests
         // Global cap 2 -> per-key cap 1. A null (proxy/unattributable) key is never sub-capped: null adds
         // succeed past a per-key cap of 1 up to the GLOBAL cap, then are refused by the global cap.
         var store = Store(maxEntries: 2);
-        Assert.True(store.TryAdd(State("n1"), "p", false, Now, Binding, clientKey: null, out _));
-        Assert.True(store.TryAdd(State("n2"), "p", false, Now, Binding, clientKey: null, out _)); // past per-key 1
-        Assert.False(store.TryAdd(State("n3"), "p", false, Now, Binding, clientKey: null, out _)); // global cap
+        Assert.True(store.TryAdd(State("n1"), "p", false, Now, Binding, clientKey: null, providerInformation: null, out _));
+        Assert.True(store.TryAdd(State("n2"), "p", false, Now, Binding, clientKey: null, providerInformation: null, out _)); // past per-key 1
+        Assert.False(store.TryAdd(State("n3"), "p", false, Now, Binding, clientKey: null, providerInformation: null, out _)); // global cap
     }
 
     [Fact]
@@ -643,10 +675,10 @@ public class OidcStateStoreTests
         // each per distinct key, then a further distinct key is refused (global cap) and the existing
         // entries survive (refuse-not-evict).
         var store = Store(maxEntries: 3); // per-key cap 1
-        Assert.True(store.TryAdd(State("k1"), "p", false, Now, Binding, clientKey: "K1", out _));
-        Assert.True(store.TryAdd(State("k2"), "p", false, Now, Binding, clientKey: "K2", out _));
-        Assert.True(store.TryAdd(State("k3"), "p", false, Now, Binding, clientKey: "K3", out _));
-        Assert.False(store.TryAdd(State("k4"), "p", false, Now, Binding, clientKey: "K4", out _)); // global cap
+        Assert.True(store.TryAdd(State("k1"), "p", false, Now, Binding, clientKey: "K1", providerInformation: null, out _));
+        Assert.True(store.TryAdd(State("k2"), "p", false, Now, Binding, clientKey: "K2", providerInformation: null, out _));
+        Assert.True(store.TryAdd(State("k3"), "p", false, Now, Binding, clientKey: "K3", providerInformation: null, out _));
+        Assert.False(store.TryAdd(State("k4"), "p", false, Now, Binding, clientKey: "K4", providerInformation: null, out _)); // global cap
         Assert.NotNull(store.PeekCurrent("k1", "p", Now, Binding)); // not evicted
     }
 }

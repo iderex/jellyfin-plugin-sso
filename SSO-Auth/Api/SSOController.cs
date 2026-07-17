@@ -155,7 +155,7 @@ public class SSOController : ControllerBase
             return BadRequest("Invalid or expired state");
         }
 
-        var oidcClient = CreateCallbackOidcClient(config, provider);
+        var oidcClient = CreateCallbackOidcClient(config, provider, pending.ProviderInformation);
         var result = await oidcClient.ProcessResponseAsync(Request.QueryString.Value, pending.OidcState).ConfigureAwait(false);
 
         if (result.IsError)
@@ -278,7 +278,11 @@ public class SSOController : ControllerBase
         // The client key bounds how much of the store one source can occupy (#327); a proxy/private
         // source normalizes to null and is exempt.
         var clientKey = SsoRateLimiter.NormalizeClientKey(HttpContext.Connection.RemoteIpAddress);
-        if (!StateStore.TryAdd(state, provider, isLinking, DateTime.Now, bindingId, clientKey, out var shouldWarnCapacity))
+
+        // Carry the discovery metadata PrepareLoginAsync just fetched and validated (against this
+        // provider's DiscoveryPolicy) to the callback, so ProcessResponseAsync reuses it instead of
+        // re-running discovery + JWKS (#247). Reuse is bounded by this state's lifetime.
+        if (!StateStore.TryAdd(state, provider, isLinking, DateTime.Now, bindingId, clientKey, oidcClient.Options.ProviderInformation, out var shouldWarnCapacity))
         {
             if (shouldWarnCapacity)
             {
@@ -375,7 +379,7 @@ public class SSOController : ControllerBase
     // the redirect URI and the scope string are the only two inputs the endpoints derive differently,
     // so the caller supplies them. Constructed in the same order as before the extraction, so a null
     // OidEndpoint still fails at the same point (the Uri constructor, after the options object).
-    private OidcClient CreateOidcClient(OidConfig config, string redirectUri, string scope)
+    private OidcClient CreateOidcClient(OidConfig config, string redirectUri, string scope, ProviderInformation providerInformation = null)
     {
         var options = new OidcClientOptions
         {
@@ -400,6 +404,23 @@ public class SSOController : ControllerBase
         // config toggle: an unvalidated id_token is a forgeable login (#134).
         options.Policy.RequireIdentityTokenSignature = true;
         options.IdentityTokenValidator = new OidcIdTokenValidator();
+
+        // Reuse the challenge's already-fetched, policy-validated discovery metadata when the callback
+        // supplies it (#247), so ProcessResponseAsync does not re-run discovery + JWKS. Pre-assigning
+        // ProviderInformation sets the client's internal _useDiscovery = false, which also disables the
+        // library's invalid_signature JWKS-refresh-and-retry. Two directions of key change, both bounded
+        // by the authorize state's ~15-minute lifetime: a key rotated IN during the window (the id_token
+        // signed by a key the challenge did not capture) fails this callback closed and self-heals on
+        // retry (the next challenge fetches fresh keys); a key rotated OUT / revoked during the window
+        // stays accepted until the state expires, since the callback validates against the captured
+        // set — a far tighter exposure than the platform-default 24-hour JWKS cache, and never wider than
+        // the state lifetime. Populated only from a validated fetch (never hand-filled), so the
+        // DiscoveryPolicy (RequireHttps / ValidateIssuerName / ValidateEndpoints) is not bypassed.
+        if (providerInformation is not null)
+        {
+            options.ProviderInformation = providerInformation;
+        }
+
         return new OidcClient(options);
     }
 
@@ -454,10 +475,10 @@ public class SSOController : ControllerBase
     // redirect_uri matches the authorization request's as RFC 6749 requires (#98). The scope string
     // is normalized the same way as the challenge side (BuildScopeString) — both tolerate a null
     // OidScopes identically (#368).
-    private OidcClient CreateCallbackOidcClient(OidConfig config, string provider)
+    private OidcClient CreateCallbackOidcClient(OidConfig config, string provider, ProviderInformation providerInformation)
     {
         var redirectUri = SsoUrlBuilder.OidCallbackRedirectUri(GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), Request.Path.Value, provider);
-        return CreateOidcClient(config, redirectUri, BuildScopeString(config));
+        return CreateOidcClient(config, redirectUri, BuildScopeString(config), providerInformation);
     }
 
     // Rejects a malformed canonical base-URL override (#139) at the OID/SAML Add endpoints. These persist

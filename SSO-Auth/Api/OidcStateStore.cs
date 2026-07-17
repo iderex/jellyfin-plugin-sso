@@ -85,9 +85,10 @@ internal sealed class OidcStateStore
     /// <param name="now">The current time, recorded as the entry's creation instant.</param>
     /// <param name="bindingId">The browser-binding id to record on the entry, matched at the callback (#326).</param>
     /// <param name="clientKey">The normalized client key for the per-client sub-cap (#327), or null to exempt.</param>
+    /// <param name="providerInformation">The challenge's already-validated OpenID discovery metadata to carry to the callback (#247), or null.</param>
     /// <param name="shouldWarnCapacity">True when the caller should emit the throttled capacity warning.</param>
     /// <returns>True if the state was registered; false if refused (per-client sub-cap, global cap, or the key already existed).</returns>
-    internal bool TryAdd(AuthorizeState state, string provider, bool isLinking, DateTime now, string bindingId, string clientKey, out bool shouldWarnCapacity)
+    internal bool TryAdd(AuthorizeState state, string provider, bool isLinking, DateTime now, string bindingId, string clientKey, ProviderInformation providerInformation, out bool shouldWarnCapacity)
     {
         // Per-client sub-cap (#327): reserve this client's slot BEFORE the global insert so one source
         // cannot fill the whole budget and lock out every other login. A null key is exempt (the shared
@@ -99,7 +100,7 @@ internal sealed class OidcStateStore
         }
 
         if ((_states.Count >= _maxEntries && !_states.ContainsKey(state.State))
-            || !_states.TryAdd(state.State, new TimedAuthorizeState(state, now) { IsLinking = isLinking, Provider = provider, BindingId = bindingId, ClientKey = clientKey }))
+            || !_states.TryAdd(state.State, new TimedAuthorizeState(state, now) { IsLinking = isLinking, Provider = provider, BindingId = bindingId, ClientKey = clientKey, ProviderInformation = providerInformation }))
         {
             // The entry never entered the store (global cap, or a CSPRNG-token collision losing the
             // atomic add) — release the reservation so the client's bucket does not leak a slot.
