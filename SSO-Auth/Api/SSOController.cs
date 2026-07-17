@@ -50,6 +50,9 @@ public class SSOController : ControllerBase
     // The session-minting flow (#318): permissions + avatar + default-provider, then AuthenticateDirect.
     // The controller passes the HttpContext-derived remote endpoint in and keeps no session/avatar field.
     private readonly SessionMinter _sessionMinter;
+    // Kept so a hard revoke (Unregister) can also terminate the user's already-issued tokens (#440); the
+    // minter takes its own reference for the login path.
+    private readonly ISessionManager _sessionManager;
     private readonly IAuthorizationContext _authContext;
     private readonly ILogger<SSOController> _logger;
     private readonly ILoggerFactory _loggerFactory;
@@ -113,6 +116,7 @@ public class SSOController : ControllerBase
         _logger = logger;
         _loggerFactory = loggerFactory;
         _httpClientFactory = httpClientFactory;
+        _sessionManager = sessionManager;
         _canonicalLinks = new CanonicalLinkService(userManager, cryptoProvider, SSOPlugin.Instance.ConfigStore, logger);
         var avatarService = new AvatarService(userManager, providerManager, serverConfigurationManager, logger, SsoHttp.UserAgent);
         _sessionMinter = new SessionMinter(userManager, avatarService, sessionManager, logger);
@@ -1123,7 +1127,16 @@ public class SSOController : ControllerBase
         user.AuthenticationProviderId = provider;
         await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
 
-        _logger.LogInformation("Unregistered SSO for user {UserId}: removed {Count} canonical link(s).", user.Id, revoked);
+        // Terminate the user's already-established sessions so a hard revoke also invalidates tokens minted
+        // before it (#440). Removing the links only fails FUTURE logins closed; a token issued earlier stays
+        // valid until it expires. Scoped strictly to this one user's id; null revokes all of their tokens
+        // (including the caller's own, when an admin unregisters their own account — the durable revoke above
+        // is why that is safe). Runs LAST, after the link removal and provider switch are both persisted, so
+        // if the revoke throws the unregister is already complete rather than left half-done. Complement to
+        // the #232 in-flight re-check, not a substitute: this kills existing sessions, #232 closes the mint race.
+        await _sessionManager.RevokeUserTokens(user.Id, null).ConfigureAwait(false);
+
+        _logger.LogInformation("Unregistered SSO for user {UserId}: removed {Count} canonical link(s) and revoked active tokens.", user.Id, revoked);
 
         return Ok();
     }
