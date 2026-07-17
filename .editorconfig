@@ -82,6 +82,6 @@ dotnet_diagnostic.CA1308.severity = none
 
 [SSO-Auth.Tests/**.cs]
 # Inline constant arrays keep test cases readable; the standing decision for
-# test code (documented-accepted in SonarCloud) applies here too.
+# test code (documented-accepted) applies here too.
 dotnet_diagnostic.CA1861.severity = none
 dotnet_diagnostic.CA1825.severity = none
