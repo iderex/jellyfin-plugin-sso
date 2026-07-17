@@ -146,6 +146,52 @@ public class OidcStateStoreTests
         Assert.Equal(1, store.Count);
     }
 
+    // --- ProviderInformation reuse (#247): carry the challenge's validated discovery to the callback ---
+
+    [Fact]
+    public void SetProviderInformation_CarriesTheDiscoveryToThePeekForTheCallback()
+    {
+        // The challenge stashes (via SetProviderInformation, after TryAdd) the discovery metadata it
+        // already fetched and validated; the store must round-trip it to the PendingState the OidPost
+        // callback reads, so ProcessResponseAsync can reuse it instead of re-running discovery + JWKS.
+        var store = Store();
+        var info = new ProviderInformation { IssuerName = "https://idp.example" };
+
+        Assert.True(store.TryAdd(new AuthorizeState { State = "s" }, "p", false, Now, Binding, clientKey: null, out _));
+        store.SetProviderInformation("s", info);
+
+        var pending = store.PeekCurrent("s", "p", Now, Binding);
+        Assert.NotNull(pending);
+        Assert.Same(info, pending.ProviderInformation);
+    }
+
+    [Fact]
+    public void SetProviderInformation_UnknownToken_IsANoOp()
+    {
+        // Defensive: if the entry expired in the gap between TryAdd and this call, recording is a no-op —
+        // no throw, no resurrected entry — and the callback falls back to a fresh discovery.
+        var store = Store();
+
+        store.SetProviderInformation("never-added", new ProviderInformation { IssuerName = "https://idp.example" });
+
+        Assert.Equal(0, store.Count);
+        Assert.Null(store.PeekCurrent("never-added", "p", Now, Binding));
+    }
+
+    [Fact]
+    public void PeekWithoutSetProviderInformation_ExposesNull_SoTheCallbackFallsBackToDiscovery()
+    {
+        // A state added but never enriched (a flow that predates the capture) exposes null, so the
+        // callback's CreateOidcClient runs a fresh discovery — the pre-#247 behavior, never a broken login.
+        var store = Store();
+
+        Assert.True(store.TryAdd(new AuthorizeState { State = "s" }, "p", false, Now, Binding, clientKey: null, out _));
+
+        var pending = store.PeekCurrent("s", "p", Now, Binding);
+        Assert.NotNull(pending);
+        Assert.Null(pending.ProviderInformation);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]

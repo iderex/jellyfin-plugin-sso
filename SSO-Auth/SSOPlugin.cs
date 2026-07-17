@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Duende.IdentityModel.OidcClient.Infrastructure;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
@@ -16,6 +17,19 @@ namespace Jellyfin.Plugin.SSO_Auth;
 /// </summary>
 public class SSOPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
 {
+    /// <summary>
+    /// Initializes static members of the <see cref="SSOPlugin"/> class.
+    /// </summary>
+    static SSOPlugin()
+    {
+        // Stop the OidcClient trace serializer from JSON-serializing the full options object — the
+        // client secret included — into a transient string on every Prepare/Process call, which it does
+        // even with Trace logging off (#247). We never consume that trace output, so disabling it in the
+        // type initializer (runs once, before any login) keeps the secret out of transient heap strings
+        // (defense in depth). The flag is a process-global, so setting it here covers every login.
+        LogSerializer.Enabled = false;
+    }
+
     /// <summary>
     /// Initializes a new instance of the <see cref="SSOPlugin"/> class.
     /// </summary>

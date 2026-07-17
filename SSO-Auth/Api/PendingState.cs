@@ -16,6 +16,12 @@ internal sealed class PendingState
     /// <summary>Gets the OidcClient authorize state (code_verifier, redirect URI) for the token exchange.</summary>
     internal AuthorizeState OidcState => _entry.State;
 
+    /// <summary>
+    /// Gets the challenge's already-validated OpenID discovery metadata to reuse at the callback (#247),
+    /// or null when the state predates the capture (the callback then does a fresh discovery).
+    /// </summary>
+    internal ProviderInformation ProviderInformation => _entry.ProviderInformation;
+
     /// <summary>Gets a value indicating whether this flow is a linking request rather than a login.</summary>
     internal bool IsLinking => _entry.IsLinking;
 

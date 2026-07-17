@@ -113,6 +113,25 @@ internal sealed class OidcStateStore
     }
 
     /// <summary>
+    /// Records the challenge's already-fetched, policy-validated OpenID discovery metadata on an entry
+    /// <see cref="TryAdd"/> just registered, so the callback reuses it instead of re-running discovery +
+    /// JWKS (#247). Kept separate from TryAdd because it is a post-registration enrichment (a latency
+    /// optimization), not part of the entry's identity/capacity admission — and adding it as a TryAdd
+    /// parameter would push that hot-path method past the parameter-count limit. A no-op if the entry is
+    /// already gone (only reachable if it expired in the sub-millisecond gap since TryAdd, when the login
+    /// is dead anyway); the callback then falls back to a fresh discovery.
+    /// </summary>
+    /// <param name="token">The authorize-state token the entry is keyed by (the challenge's state value).</param>
+    /// <param name="providerInformation">The discovery metadata to record.</param>
+    internal void SetProviderInformation(string token, ProviderInformation providerInformation)
+    {
+        if (_states.TryGetValue(token, out var state))
+        {
+            state.ProviderInformation = providerInformation;
+        }
+    }
+
+    /// <summary>
     /// The callback's non-consuming check: returns the pending state only when it exists, was minted
     /// for this provider, and is within its lifetime; null otherwise, so a state issued for one
     /// provider cannot be validated on another's callback. No removal: the value is an unguessable
