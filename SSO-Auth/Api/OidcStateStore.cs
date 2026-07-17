@@ -43,7 +43,9 @@ internal sealed class OidcStateStore
 
     // Throttles the capacity-full warning (#246, CWE-400) to one signal per interval: under a flood
     // every refused challenge would otherwise emit a warning, amplifying the flood into unbounded log
-    // volume. The gate self-heals a backward wall-clock step.
+    // volume. The gate self-heals a backward wall-clock step of at least the interval (re-anchors); a
+    // sub-interval backward step is a stale sample, suppressed with the cursor untouched (#334) — still
+    // without stalling like the hand-rolled predecessor.
     private readonly IntervalGate _capWarnGate;
 
     // Per-client occupancy sub-cap (#327): bounds how much of the global budget one client key can hold,

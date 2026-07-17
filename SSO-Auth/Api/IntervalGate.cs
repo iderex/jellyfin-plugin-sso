@@ -38,10 +38,15 @@ internal sealed class IntervalGate
         var nowTicks = now.Ticks;
         var last = Interlocked.Read(ref _cursor);
 
-        // Suppress only when a non-negative, sub-interval span has elapsed. A backward wall-clock step
-        // (nowTicks < last) fails the first term, so it does NOT suppress — it enters and re-anchors the
-        // cursor below, so a clock correction can never stall the gate and leave a capped store refusing.
-        if (nowTicks >= last && nowTicks - last < _intervalTicks)
+        // Suppress a sub-interval span in EITHER direction: |now - last| < interval. A forward span shorter
+        // than the interval is the normal throttle. A backward span shorter than the interval is a stale
+        // sample — a thread descheduled between reading the clock and entering, landing just behind the
+        // cursor — and must NOT re-admit (#334): leaving the cursor untouched keeps the next admission at
+        // last + interval, so a stale blip opens no second admission yet can never stall the gate either
+        // (the wait is capped at one interval from the real entry). A backward span of at least the interval
+        // is a genuine wall-clock correction (DST fall-back, NTP step): it fails the guard, so it enters and
+        // re-anchors below, preserving the #246 self-heal that stops a correction from stranding a capped store.
+        if (Math.Abs(nowTicks - last) < _intervalTicks)
         {
             return false;
         }
