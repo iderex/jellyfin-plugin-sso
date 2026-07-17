@@ -162,6 +162,29 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void LoginPathCaches_ThrottleTheirExpiredEntrySweepThroughIntervalGate()
+    {
+        // Locked in by #452: the login-path caches converged on one bounding pattern — an
+        // IntervalGate-throttled expired-entry sweep plus a hard global cap — so none can regress to the
+        // unthrottled full-dictionary sweep (or the unbounded set) SamlReplayCache carried before #452.
+        // Each named cache must declare the PRUNE gate specifically (an IntervalGate field named
+        // "_pruneGate"), not merely some IntervalGate: the siblings also carry a "_capWarnGate", so keying
+        // on the field type alone would miss a sibling that dropped its prune gate but kept cap-warn.
+        // SamlRequestCache and OidcStateStore already had it (#246, #327); SamlReplayCache adopted it (#452).
+        const string pruneGateField = "_pruneGate";
+        var caches = new[] { typeof(SamlReplayCache), typeof(SamlRequestCache), typeof(OidcStateStore) };
+        var missing = caches
+            .Where(t => !t.GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.DeclaredOnly)
+                .Any(f => f.FieldType == typeof(IntervalGate) && f.Name == pruneGateField))
+            .Select(SimpleName)
+            .ToList();
+
+        Assert.True(
+            missing.Count == 0,
+            "Every login-path cache must throttle its expired-entry sweep through an IntervalGate field (#452): " + string.Join(", ", missing));
+    }
+
+    [Fact]
     public void Controller_NeverTouchesProviderLinkMaps()
     {
         // Locked in by the link/unlink admin-surface extraction (#372) and completed by #383: the two
