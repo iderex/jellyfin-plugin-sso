@@ -25,12 +25,20 @@ internal sealed class AvatarService
     /// <summary>The maximum avatar size accepted, enforced both against Content-Length and while streaming (#220).</summary>
     internal const long MaxAvatarBytes = 10 * 1024 * 1024;
 
+    // Serializes the store step per user across ALL logins (#400). Static because the controller builds a
+    // fresh AvatarService per request, so two concurrent same-user logins hold different instances — an
+    // instance lock would not serialize them. Keyed by user, so unrelated users never block each other,
+    // and collectible, so the map cannot leak a semaphore per username ever seen. Ordinal because the key
+    // is exactly the profile-path determinant (Path.Combine on user.Username below).
+    private static readonly KeyedLockStore SharedUserStoreLocks = new KeyedLockStore(StringComparer.Ordinal);
+
     private readonly IUserManager _userManager;
     private readonly IProviderManager _providerManager;
     private readonly IServerConfigurationManager _serverConfigurationManager;
     private readonly ILogger _logger;
     private readonly string _userAgent;
     private readonly Func<HttpMessageHandler> _handlerFactory;
+    private readonly KeyedLockStore _userStoreLocks;
 
     internal AvatarService(
         IUserManager userManager,
@@ -54,13 +62,15 @@ internal sealed class AvatarService
     /// <param name="logger">The logger.</param>
     /// <param name="userAgent">The outbound User-Agent.</param>
     /// <param name="handlerFactory">Builds the message handler used for each fetch; called once per fetch and disposed after.</param>
+    /// <param name="userStoreLocks">The per-user store lock (#400); null uses the process-wide shared one. A test injects its own so it can drive the serialization deterministically.</param>
     internal AvatarService(
         IUserManager userManager,
         IProviderManager providerManager,
         IServerConfigurationManager serverConfigurationManager,
         ILogger logger,
         string userAgent,
-        Func<HttpMessageHandler> handlerFactory)
+        Func<HttpMessageHandler> handlerFactory,
+        KeyedLockStore userStoreLocks = null)
     {
         _userManager = userManager ?? throw new ArgumentNullException(nameof(userManager));
         _providerManager = providerManager ?? throw new ArgumentNullException(nameof(providerManager));
@@ -68,6 +78,7 @@ internal sealed class AvatarService
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _userAgent = userAgent ?? throw new ArgumentNullException(nameof(userAgent));
         _handlerFactory = handlerFactory ?? throw new ArgumentNullException(nameof(handlerFactory));
+        _userStoreLocks = userStoreLocks ?? SharedUserStoreLocks;
     }
 
     /// <summary>
@@ -152,6 +163,21 @@ internal sealed class AvatarService
     /// <param name="extension">The stored extension resolved from the content-type allow-list.</param>
     /// <returns>A <see cref="Task"/> that completes when the avatar is stored and the user updated.</returns>
     internal async Task StoreAsync(User user, Stream image, string mediaType, string extension)
+    {
+        // Serialize the whole write-and-transition against other logins for THIS user (#400): two
+        // concurrent stores must not interleave the SaveImage + profile-image check/clear/assign, or one
+        // can clear or overwrite the other's record. The lock spans only the store; the HTTP fetch runs
+        // before this call (in TrySetAsync), so a slow endpoint never holds the per-user gate. Keyed by
+        // user, so unrelated users never wait on each other.
+        using (await _userStoreLocks.AcquireAsync(user.Username, CancellationToken.None).ConfigureAwait(false))
+        {
+            await StoreLockedAsync(user, image, mediaType, extension).ConfigureAwait(false);
+        }
+    }
+
+    // The store sequence proper, run under the per-user lock (#400). Extracted so the lock acquisition
+    // reads as one guarded block and the write -> transition ordering (#377) stays a single unit.
+    private async Task StoreLockedAsync(User user, Stream image, string mediaType, string extension)
     {
         var newPath = Path.Combine(
             _serverConfigurationManager.ApplicationPaths.UserConfigurationDirectoryPath,
