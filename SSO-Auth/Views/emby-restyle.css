@@ -1,3 +1,8 @@
+/*
+ * Vendored from jellyfin-web's theming to style the embedded SSO views to match Jellyfin.
+ * Update by re-copying from upstream rather than editing in place (see CONTRIBUTING.md → Styleguides).
+ */
+
 /* Material icons polyfills */
 
 .material-icons {
