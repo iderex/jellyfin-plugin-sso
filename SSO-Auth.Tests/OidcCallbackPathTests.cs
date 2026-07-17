@@ -42,6 +42,36 @@ public class OidcCallbackPathTests
         Assert.Equal("redirect", OidcCallbackPath.RedirectSegment("/sso/OID/redirect/redirect"));
     }
 
+    [Theory]
+    // A protocol-like reverse-proxy prefix that itself spells "OID/redirect" must not flip the
+    // classic route: only the {protocol}/{path-kind}/{provider} suffix decides, so the real "r"
+    // route stays "r" no matter what the mount prefix looks like (#411).
+    [InlineData("/OID/redirect/proxy/sso/OID/r/keycloak", "r")]
+    // The mirror: a prefix spelling "OID/r" must not flip a real new-path route away from "redirect".
+    [InlineData("/OID/r/proxy/sso/OID/redirect/keycloak", "redirect")]
+    public void RedirectSegment_ProtocolLikePrefix_LetsTheSuffixDecide(string path, string expected)
+    {
+        Assert.Equal(expected, OidcCallbackPath.RedirectSegment(path));
+    }
+
+    [Fact]
+    public void RedirectSegment_LegitReverseProxyBasePath_KeepsNewPathRoute()
+    {
+        // A benign reverse-proxy base path in front of a real new-path callback keeps the intact
+        // OID/redirect/{provider} suffix, so it is still correctly "redirect" — the suffix anchoring
+        // must not misclassify legitimate mounts.
+        Assert.Equal("redirect", OidcCallbackPath.RedirectSegment("/jellyfin/apps/sso/OID/redirect/keycloak"));
+    }
+
+    [Fact]
+    public void RedirectSegment_InternalDoubledSlash_FailsSafeToClassic()
+    {
+        // An internal doubled slash inserts an empty segment that shifts the suffix, so the malformed
+        // path no longer matches OID/redirect/{provider} and fails safe to the classic "r" spelling
+        // rather than being silently collapsed into a valid new-path route (#411).
+        Assert.Equal("r", OidcCallbackPath.RedirectSegment("/sso/OID/redirect//keycloak"));
+    }
+
     [Fact]
     public void RedirectSegment_EmptyPath_DefaultsToClassic()
     {
