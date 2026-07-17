@@ -283,6 +283,89 @@ public class AvatarServiceTests
         await providers.Received(1).SaveImage(Arg.Any<Stream>(), "image/png", ProfilePath("alice", ".png"));
     }
 
+    [Theory]
+    [InlineData("..")] // parent-directory escape: Path.Combine(root, "..", ...) writes into the PARENT of the user-config dir
+    [InlineData(".")] // current-directory component
+    [InlineData("../evil")] // separator + traversal
+    [InlineData("a/b")] // forward slash
+    [InlineData("a\\b")] // backslash
+    public async Task StoreAsync_UnsafeUsername_SkipsWriteWithoutThrowingOrEscaping(string username)
+    {
+        // #447: user.Username is IdP-controlled (OIDC preferred_username / SAML NameID) and only the host's
+        // own CreateUserAsync validates it — a regex that ADMITS '.' and '..'. A username of ".." would make
+        // Path.Combine write the fetched image into the PARENT of the user-config directory. The store must
+        // fail closed: no out-of-directory write (SaveImage is never called with any path), no throw (login
+        // is best-effort and must still complete), and no profile-image record.
+        var (service, providers, users, log) = Build();
+        var user = UserNamed(username);
+
+        await service.StoreAsync(user, new MemoryStream(new byte[] { 1 }), "image/png", ".png");
+
+        await providers.DidNotReceive().SaveImage(Arg.Any<Stream>(), Arg.Any<string>(), Arg.Any<string>());
+        await users.DidNotReceive().ClearProfileImageAsync(Arg.Any<User>());
+        Assert.Null(user.ProfileImage);
+        Assert.Contains(log.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("safe path component"));
+    }
+
+    [Fact]
+    public async Task StoreAsync_UnsafeUsername_LeavesAnExistingProfileImageUntouched()
+    {
+        // Fail-closed must not be destructive either: a rejected ".." username skips the write AND leaves
+        // any previously set profile-image record exactly as it was (no clear, no re-point).
+        var (service, providers, users, _) = Build();
+        var user = UserNamed("..");
+        var previous = new ImageInfo(ProfilePath("alice", ".jpg"));
+        user.ProfileImage = previous;
+
+        await service.StoreAsync(user, new MemoryStream(new byte[] { 1 }), "image/png", ".png");
+
+        Assert.Same(previous, user.ProfileImage);
+        await providers.DidNotReceive().SaveImage(Arg.Any<Stream>(), Arg.Any<string>(), Arg.Any<string>());
+        await users.DidNotReceive().ClearProfileImageAsync(Arg.Any<User>());
+    }
+
+    [Fact]
+    public async Task StoreAsync_WindowsTrailingDotUsername_DoesNotWriteIntoAnotherUsersDirectory()
+    {
+        // #447 layer-2 (the round-trip containment check, the branch the character check can't reach):
+        // the host username regex admits a trailing dot, and Windows strips it, so "victim." would fold
+        // onto another user's "victim" directory — an in-root cross-user avatar overwrite. The guard must
+        // reject any username whose resolved path is not exactly root/username. On POSIX nothing is
+        // stripped, so "victim." is a distinct literal directory and the avatar stores there normally.
+        // Either way there is no cross-user write and no escape.
+        var (service, providers, users, log) = Build();
+        var user = UserNamed("victim.");
+
+        await service.StoreAsync(user, new MemoryStream(new byte[] { 1 }), "image/png", ".png");
+
+        if (OperatingSystem.IsWindows())
+        {
+            await providers.DidNotReceive().SaveImage(Arg.Any<Stream>(), Arg.Any<string>(), Arg.Any<string>());
+            await users.DidNotReceive().ClearProfileImageAsync(Arg.Any<User>());
+            Assert.Null(user.ProfileImage);
+            Assert.Contains(log.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("safe path component"));
+        }
+        else
+        {
+            await providers.Received(1).SaveImage(Arg.Any<Stream>(), "image/png", ProfilePath("victim.", ".png"));
+            Assert.Equal(ProfilePath("victim.", ".png"), user.ProfileImage?.Path);
+        }
+    }
+
+    [Fact]
+    public async Task StoreAsync_LegitimateUsernameWithDotAndAt_StillStoresUnchanged()
+    {
+        // Behavior preserved for legitimate usernames the host allows (dots and '@' are valid — e.g. an
+        // email-style preferred_username): the store path is unchanged and the write happens as before.
+        var (service, providers, _, _) = Build();
+        var user = UserNamed("first.last@example.com");
+
+        await service.StoreAsync(user, new MemoryStream(new byte[] { 1 }), "image/png", ".png");
+
+        await providers.Received(1).SaveImage(Arg.Any<Stream>(), "image/png", ProfilePath("first.last@example.com", ".png"));
+        Assert.Equal(ProfilePath("first.last@example.com", ".png"), user.ProfileImage?.Path);
+    }
+
     [Fact]
     public async Task ReadCappedAsync_BodyOverTheCap_Throws()
     {
