@@ -32,12 +32,22 @@ internal sealed class AvatarService
     // is exactly the profile-path determinant (Path.Combine on user.Username below).
     private static readonly KeyedLockStore SharedUserStoreLocks = new KeyedLockStore(StringComparer.Ordinal);
 
+    // One process-wide HTTP stack reused across every login (#248). Static for the same reason the store
+    // lock is: the controller builds a fresh AvatarService per request, so a per-instance client would
+    // open a new connection pool — a full TCP+TLS handshake — on every login. The single shared client
+    // keeps its pool warm across logins while the hardened handler's guards (SSRF ConnectCallback, redirect
+    // bound, proxy-off) are unchanged; PooledConnectionLifetime bounds how long a pooled connection lives
+    // so DNS changes are still eventually honored despite the reuse. Thread-safe: concurrent logins call
+    // SendAsync with their own HttpRequestMessage (User-Agent and If-Modified-Since live on the request,
+    // not on the shared client's mutable DefaultRequestHeaders).
+    private static readonly HttpClient SharedClient = CreateHardenedClient();
+
     private readonly IUserManager _userManager;
     private readonly IProviderManager _providerManager;
     private readonly IServerConfigurationManager _serverConfigurationManager;
     private readonly ILogger _logger;
     private readonly string _userAgent;
-    private readonly Func<HttpMessageHandler> _handlerFactory;
+    private readonly HttpClient _httpClient;
     private readonly KeyedLockStore _userStoreLocks;
 
     internal AvatarService(
@@ -46,22 +56,23 @@ internal sealed class AvatarService
         IServerConfigurationManager serverConfigurationManager,
         ILogger logger,
         string userAgent)
-        : this(userManager, providerManager, serverConfigurationManager, logger, userAgent, CreateHardenedHandler)
+        : this(userManager, providerManager, serverConfigurationManager, logger, userAgent, SharedClient)
     {
     }
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="AvatarService"/> class with an injected HTTP message
-    /// handler factory. This is the test seam (#385): a stub handler makes the content-type gate, the
-    /// size cap, the happy path, and the timeout reachable without live HTTP. Production uses the
-    /// five-argument constructor, which supplies the hardened SSRF-safe <see cref="SocketsHttpHandler"/>.
+    /// Initializes a new instance of the <see cref="AvatarService"/> class with an injected
+    /// <see cref="HttpClient"/>. This is the test seam (#385): a client wrapping a stub handler makes the
+    /// content-type gate, the size cap, the happy path, the conditional 304, and the timeout reachable
+    /// without live HTTP. Production uses the five-argument constructor, which supplies the process-wide
+    /// shared client built on the hardened SSRF-safe <see cref="SocketsHttpHandler"/>.
     /// </summary>
     /// <param name="userManager">The Jellyfin user manager.</param>
     /// <param name="providerManager">The Jellyfin provider manager (image saving).</param>
     /// <param name="serverConfigurationManager">The server configuration manager (user data paths).</param>
     /// <param name="logger">The logger.</param>
     /// <param name="userAgent">The outbound User-Agent.</param>
-    /// <param name="handlerFactory">Builds the message handler used for each fetch; called once per fetch and disposed after.</param>
+    /// <param name="httpClient">The client used for every fetch; reused across calls (never disposed here).</param>
     /// <param name="userStoreLocks">The per-user store lock (#400); null uses the process-wide shared one. A test injects its own so it can drive the serialization deterministically.</param>
     internal AvatarService(
         IUserManager userManager,
@@ -69,7 +80,7 @@ internal sealed class AvatarService
         IServerConfigurationManager serverConfigurationManager,
         ILogger logger,
         string userAgent,
-        Func<HttpMessageHandler> handlerFactory,
+        HttpClient httpClient,
         KeyedLockStore userStoreLocks = null)
     {
         _userManager = userManager ?? throw new ArgumentNullException(nameof(userManager));
@@ -77,7 +88,7 @@ internal sealed class AvatarService
         _serverConfigurationManager = serverConfigurationManager ?? throw new ArgumentNullException(nameof(serverConfigurationManager));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _userAgent = userAgent ?? throw new ArgumentNullException(nameof(userAgent));
-        _handlerFactory = handlerFactory ?? throw new ArgumentNullException(nameof(handlerFactory));
+        _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _userStoreLocks = userStoreLocks ?? SharedUserStoreLocks;
     }
 
@@ -104,21 +115,42 @@ internal sealed class AvatarService
 
         try
         {
-            using var handler = _handlerFactory();
-            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
-
-            client.DefaultRequestHeaders.UserAgent.ParseAdd(_userAgent);
-
             // One deadline for the whole fetch: with ResponseHeadersRead the client Timeout stops
             // applying once the headers arrive, so a malicious endpoint could send headers immediately
-            // then trickle the body forever. A single 10s token passed into GetAsync AND every body
+            // then trickle the body forever. A single 10s token passed into SendAsync AND every body
             // ReadAsync bounds the header wait and the streamed read together, while keeping the
             // streaming size cap (#220).
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
+            using var request = new HttpRequestMessage(HttpMethod.Get, avatarUri);
+            request.Headers.UserAgent.ParseAdd(_userAgent);
+
+            // Conditional refresh (#248): when we already hold this user's avatar, ask the origin to send
+            // fresh bytes only if the image changed since we last stored it. If-Modified-Since carries the
+            // timestamp of our last store (ProfileImage.LastModified) — exactly "when we last fetched this
+            // representation" — so an unchanged avatar answers 304 and we skip the re-download AND the
+            // re-store entirely; only a changed image (200) is fetched and re-stored. An origin that ignores
+            // the header just answers 200 as before, so this degrades safely to the old always-download.
+            // SpecifyKind(Utc) makes the DateTimeOffset construction total regardless of the stored Kind;
+            // ProfileImage.LastModified is already written as DateTime.UtcNow, so no time is shifted.
+            if (user.ProfileImage?.LastModified is { } lastStored && lastStored > DateTime.MinValue)
+            {
+                request.Headers.IfModifiedSince = new DateTimeOffset(DateTime.SpecifyKind(lastStored, DateTimeKind.Utc));
+            }
+
             // ResponseHeadersRead so the body is streamed, not fully buffered, before ReadCappedAsync
             // enforces the size limit; otherwise the cap runs only after the whole download is in memory.
-            using var avatarResponse = await client.GetAsync(avatarUri, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
+            using var avatarResponse = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
+
+            // 304: the image is unchanged since our last store — keep the existing profile image, fetch and
+            // store nothing, and deliberately do NOT advance ProfileImage.LastModified (it stays the anchor
+            // for the next login's If-Modified-Since; refreshing it here would defeat the conditional). Checked
+            // before EnsureSuccessStatusCode, which treats 304 as a non-success throw.
+            if (avatarResponse.StatusCode == HttpStatusCode.NotModified)
+            {
+                return;
+            }
+
             avatarResponse.EnsureSuccessStatusCode();
 
             // Media types are case-insensitive (RFC 7231); use the parsed type with parameters stripped.
@@ -269,11 +301,19 @@ internal sealed class AvatarService
         return string.Equals(fullCandidate, Path.Combine(fullRoot, username), comparison);
     }
 
+    // The process-wide shared client (#248): one hardened handler + one connection pool for the whole
+    // process, reused across every login instead of rebuilt per fetch. Timeout stays 10s; because the
+    // fetch uses ResponseHeadersRead the per-request CancellationTokenSource is the real end-to-end
+    // deadline (see TrySetAsync), so this Timeout bounds only connect + header wait. Never disposed —
+    // it lives for the process, the intended lifetime of a shared HttpClient.
+    private static HttpClient CreateHardenedClient() =>
+        new HttpClient(CreateHardenedHandler(), disposeHandler: true) { Timeout = TimeSpan.FromSeconds(10) };
+
     // The production handler: routes every connection (including redirect targets) through a callback
     // that rejects private/loopback addresses, closing the SSRF and DNS-rebinding vectors. Redirects
     // stay enabled (many avatar URLs redirect) but are bounded, each hop is IP-validated, and both the
-    // request and the download are bounded. A fresh handler is built per fetch and disposed by the caller.
-    private static HttpMessageHandler CreateHardenedHandler() => new SocketsHttpHandler
+    // request and the download are bounded. Built once for the shared client above.
+    private static SocketsHttpHandler CreateHardenedHandler() => new SocketsHttpHandler
     {
         AllowAutoRedirect = true,
         MaxAutomaticRedirections = 5,
@@ -282,6 +322,10 @@ internal sealed class AvatarService
         // A system proxy would be the connection target, so the connect callback would validate the
         // proxy's address rather than the avatar host's - bypassing the guard.
         UseProxy = false,
+
+        // The handler is reused across logins, so bound how long a pooled connection lives — after this
+        // the connection is recycled and the host re-resolved, so DNS changes are honored despite reuse.
+        PooledConnectionLifetime = TimeSpan.FromMinutes(2),
     };
 
     // Resolves the target host and connects only to a non-blocked (public) address, so a hostname that

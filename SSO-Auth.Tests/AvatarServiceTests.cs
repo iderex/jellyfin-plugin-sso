@@ -39,7 +39,8 @@ public class AvatarServiceTests
     }
 
     // Builds a service whose HTTP fetch is served by a stub handler returning the given response, so the
-    // fetch path (content-type gate, size cap, happy path) runs without live HTTP (#385 seam).
+    // fetch path (content-type gate, size cap, happy path, conditional 304) runs without live HTTP (#385
+    // seam). The client wraps the stub and stands in for the process-wide shared client (#248).
     private static (AvatarService Service, IProviderManager Providers, IUserManager Users, CapturingLogger Log) Build(HttpResponseMessage response)
     {
         var users = Substitute.For<IUserManager>();
@@ -47,7 +48,7 @@ public class AvatarServiceTests
         var serverConfig = Substitute.For<IServerConfigurationManager>();
         serverConfig.ApplicationPaths.UserConfigurationDirectoryPath.Returns(UserDataRoot);
         var log = new CapturingLogger();
-        var service = new AvatarService(users, providers, serverConfig, log, "test-agent/1.0", () => new StubHandler(response));
+        var service = new AvatarService(users, providers, serverConfig, log, "test-agent/1.0", new HttpClient(new StubHandler(response)));
         return (service, providers, users, log);
     }
 
@@ -61,7 +62,7 @@ public class AvatarServiceTests
         var serverConfig = Substitute.For<IServerConfigurationManager>();
         serverConfig.ApplicationPaths.UserConfigurationDirectoryPath.Returns(UserDataRoot);
         var log = new CapturingLogger();
-        var service = new AvatarService(users, providers, serverConfig, log, "test-agent/1.0", () => new StubHandler(new HttpResponseMessage()), userStoreLocks);
+        var service = new AvatarService(users, providers, serverConfig, log, "test-agent/1.0", new HttpClient(new StubHandler(new HttpResponseMessage())), userStoreLocks);
         return (service, providers, users, log);
     }
 
@@ -81,16 +82,30 @@ public class AvatarServiceTests
         return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
     }
 
-    // Returns a single canned response for every request, standing in for the live HTTP fetch.
+    // Returns a single canned response for every request, standing in for the live HTTP fetch, and records
+    // what it was asked so a test can assert the conditional-fetch header (#248) and the reuse count.
     private sealed class StubHandler : HttpMessageHandler
     {
         private readonly HttpResponseMessage _response;
 
         public StubHandler(HttpResponseMessage response) => _response = response;
 
+        // How many requests this one handler served — proves the client/handler is reused across fetches
+        // (#248) rather than rebuilt per fetch.
+        public int Invocations { get; private set; }
+
+        // The If-Modified-Since sent on the most recent request, or null if the fetch was unconditional.
+        public DateTimeOffset? LastIfModifiedSince { get; private set; }
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-            => Task.FromResult(_response);
+        {
+            Invocations++;
+            LastIfModifiedSince = request.Headers.IfModifiedSince;
+            return Task.FromResult(_response);
+        }
     }
+
+    private static HttpResponseMessage NotModifiedResponse() => new HttpResponseMessage(HttpStatusCode.NotModified);
 
     private static string ProfilePath(string username, string extension)
         => Path.Combine(UserDataRoot, username, "profile" + extension);
@@ -428,5 +443,113 @@ public class AvatarServiceTests
         await service.TrySetAsync(UserNamed("alice"), AllowedUrl);
 
         await providers.Received(1).SaveImage(Arg.Any<Stream>(), "image/png", ProfilePath("alice", ".png"));
+    }
+
+    // Builds a service over a StubHandler the test keeps a handle to, so it can assert the conditional
+    // fetch header and the handler reuse count (#248). The logger is returned too, so a test can assert the
+    // 304 path took the early return rather than a swallowed error.
+    private static (AvatarService Service, IProviderManager Providers, IUserManager Users, StubHandler Handler, CapturingLogger Log) BuildWithHandler(HttpResponseMessage response)
+    {
+        var users = Substitute.For<IUserManager>();
+        var providers = Substitute.For<IProviderManager>();
+        var serverConfig = Substitute.For<IServerConfigurationManager>();
+        serverConfig.ApplicationPaths.UserConfigurationDirectoryPath.Returns(UserDataRoot);
+        var handler = new StubHandler(response);
+        var log = new CapturingLogger();
+        var service = new AvatarService(users, providers, serverConfig, log, "test-agent/1.0", new HttpClient(handler));
+        return (service, providers, users, handler, log);
+    }
+
+    [Fact]
+    public async Task TrySetAsync_NotModified_KeepsExistingAvatarAndDoesNotReStore()
+    {
+        // The decided cadence (#248): when the user already has an avatar, the fetch is conditional on
+        // If-Modified-Since, and a 304 means the image is unchanged — keep the existing profile image and
+        // download/store nothing. 304 must be handled BEFORE EnsureSuccessStatusCode (which throws on it).
+        using var response = NotModifiedResponse();
+        var (service, providers, users, handler, log) = BuildWithHandler(response);
+        var user = UserNamed("alice");
+        var previous = new ImageInfo(ProfilePath("alice", ".png")) { LastModified = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc) };
+        user.ProfileImage = previous;
+
+        await service.TrySetAsync(user, AllowedUrl);
+
+        // The conditional header was sent, carrying our last-store timestamp.
+        Assert.Equal(new DateTimeOffset(previous.LastModified, TimeSpan.Zero), handler.LastIfModifiedSince);
+        // Nothing re-downloaded/re-stored; the existing record is untouched.
+        Assert.Same(previous, user.ProfileImage);
+        await providers.DidNotReceive().SaveImage(Arg.Any<Stream>(), Arg.Any<string>(), Arg.Any<string>());
+        await users.DidNotReceive().ClearProfileImageAsync(Arg.Any<User>());
+        // The 304 was handled by the early return, not by EnsureSuccessStatusCode throwing into the
+        // best-effort catch: were the early return removed, 304 would raise, be swallowed, and log an error
+        // while leaving the assertions above unchanged. Asserting no error logged is what pins the early return.
+        Assert.DoesNotContain(log.Entries, e => e.Level == LogLevel.Error);
+    }
+
+    [Fact]
+    public async Task TrySetAsync_ExistingImageChanged_SendsConditionalHeaderAndRefreshes()
+    {
+        // The 200 side of the decided cadence: the origin reports the image changed (a 200, not a 304), so
+        // the new bytes are fetched and re-stored over the same path — the conditional header was still sent.
+        using var response = ImageResponse("image/png", new byte[] { 9 });
+        var (service, providers, _, handler, _) = BuildWithHandler(response);
+        var user = UserNamed("alice");
+        user.ProfileImage = new ImageInfo(ProfilePath("alice", ".png")) { LastModified = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc) };
+
+        await service.TrySetAsync(user, AllowedUrl);
+
+        Assert.NotNull(handler.LastIfModifiedSince);
+        await providers.Received(1).SaveImage(Arg.Any<Stream>(), "image/png", ProfilePath("alice", ".png"));
+    }
+
+    [Fact]
+    public async Task TrySetAsync_NoPreviousImage_FetchesUnconditionally()
+    {
+        // First login for this user: no stored image, so no If-Modified-Since — the fetch is unconditional
+        // and the avatar is stored, exactly as before the conditional-fetch change.
+        using var response = ImageResponse("image/png", new byte[] { 1, 2, 3 });
+        var (service, providers, _, handler, _) = BuildWithHandler(response);
+
+        await service.TrySetAsync(UserNamed("alice"), AllowedUrl);
+
+        Assert.Null(handler.LastIfModifiedSince);
+        await providers.Received(1).SaveImage(Arg.Any<Stream>(), "image/png", ProfilePath("alice", ".png"));
+    }
+
+    [Fact]
+    public void ProductionInstances_ShareOneHttpClient()
+    {
+        // #248 trim 1, cross-instance: the controller builds a fresh AvatarService per request (see
+        // SSOController), so reuse only helps if the client is process-wide. Two services built through the
+        // production constructor must reference the very same HttpClient instance — i.e. the static shared
+        // one — not a fresh per-instance client (which would reopen a connection pool each login).
+        var users = Substitute.For<IUserManager>();
+        var providers = Substitute.For<IProviderManager>();
+        var serverConfig = Substitute.For<IServerConfigurationManager>();
+        serverConfig.ApplicationPaths.UserConfigurationDirectoryPath.Returns(UserDataRoot);
+
+        var first = new AvatarService(users, providers, serverConfig, new CapturingLogger(), "test-agent/1.0");
+        var second = new AvatarService(users, providers, serverConfig, new CapturingLogger(), "test-agent/1.0");
+
+        var clientField = typeof(AvatarService).GetField("_httpClient", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(clientField);
+        Assert.Same(clientField!.GetValue(first), clientField.GetValue(second));
+    }
+
+    [Fact]
+    public async Task TrySetAsync_TwoFetches_ReuseTheSameHttpStack()
+    {
+        // #248 trim 1: TrySetAsync no longer builds its own HttpClient/handler per fetch — it uses the
+        // injected (in production: process-wide shared) client. Two fetches through one service are served
+        // by the one handler instance, proving the stack is reused rather than rebuilt per login. (The
+        // static-field structural guarantee that this reuse spans the controller's per-request AvatarService
+        // instances is locked in ArchitectureConformanceTests.)
+        using var response = ImageResponse("image/png", new byte[] { 1 });
+        var (service, _, _, handler, _) = BuildWithHandler(response);
+
+        await service.TrySetAsync(UserNamed("alice"), AllowedUrl);
+        await service.TrySetAsync(UserNamed("bob"), AllowedUrl);
+
+        Assert.Equal(2, handler.Invocations);
     }
 }

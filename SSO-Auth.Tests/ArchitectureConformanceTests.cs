@@ -268,6 +268,23 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void AvatarService_HoldsAStaticSharedHttpClient()
+    {
+        // Locked in by the per-login churn trim (#248): the controller builds a fresh AvatarService per
+        // request, so the outbound HTTP stack must be a STATIC shared client — one connection pool for the
+        // whole process — not a per-instance client that would open a new pool (a full TCP+TLS handshake)
+        // on every login. The reference field the constructor reads (_httpClient) points at this shared
+        // client in production; the reference-equality across two production instances is proven behaviorally
+        // in AvatarServiceTests, and this rule locks in that the shared field it points at exists at all.
+        var staticClient = typeof(AvatarService)
+            .GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
+            .Where(f => !f.Name.Contains('<', StringComparison.Ordinal))
+            .Any(f => typeof(System.Net.Http.HttpClient).IsAssignableFrom(f.FieldType));
+
+        Assert.True(staticClient, "AvatarService must hold a static HttpClient so the outbound stack is reused across the controller's per-request instances rather than rebuilt per login (#248).");
+    }
+
+    [Fact]
     public void SessionMinter_RechecksRevocationImmediatelyBeforeTheMint()
     {
         // Locked in by the in-flight revocation gate (#232): MintAsync must evaluate the caller-supplied
