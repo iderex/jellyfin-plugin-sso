@@ -44,8 +44,9 @@ internal sealed class SsoRateLimiter
     private readonly IntervalGate _signalGate = new(SignalInterval);
 
     // Throttles the stale-counter sweep to one run per PruneInterval; the gate owns the atomic cursor
-    // and self-heals a backward wall-clock step (the hand-rolled predecessor stalled until the clock
-    // re-passed its cursor). See PruneStale.
+    // and self-heals a backward wall-clock step of at least the interval (re-anchors), while a sub-interval
+    // backward step is a stale sample suppressed with the cursor untouched (#334) — either way it never
+    // stalls until the clock re-passes its cursor the way the hand-rolled predecessor did. See PruneStale.
     private readonly IntervalGate _pruneGate = new(PruneInterval);
 
     // Bounded observability signal (#195). Every refusal increments the tally; RecordThrottledHit drains it
@@ -221,8 +222,9 @@ internal sealed class SsoRateLimiter
         // Only the gate's single winner per interval drains the tally; everyone else returns 0 (suppressed).
         // An increment racing with the winner's drain lands either in that drain's returned count or in the
         // tally for a later drain — never erased, since increment and exchange on one location are serialized
-        // atomic operations (pinned by the conservation test). The gate self-heals a backward clock, so a
-        // correction cannot stall the signal; the first refusal (cursor at MinValue) signals the onset at once.
+        // atomic operations (pinned by the conservation test). The gate self-heals a backward clock step of
+        // at least the interval and suppresses a sub-interval stale sample (#334), so neither a correction nor
+        // a stale blip can stall the signal; the first refusal (cursor at MinValue) signals the onset at once.
         return _signalGate.TryEnter(nowUtc) ? Interlocked.Exchange(ref _throttledHits, 0) : 0;
     }
 

@@ -31,8 +31,9 @@ internal sealed class SamlRequestCache
     private readonly ConcurrentDictionary<string, Entry> _outstanding = new(StringComparer.Ordinal);
 
     // Throttles the sweep to one run per prune interval; the gate owns the atomic cursor and self-heals
-    // a backward wall-clock step (the hand-rolled predecessor stalled until the clock re-passed its
-    // cursor). See PruneExpired.
+    // a backward wall-clock step of at least the interval (re-anchors), while a sub-interval backward step
+    // is a stale sample suppressed with the cursor untouched (#334) — either way it never stalls until the
+    // clock re-passes its cursor the way the hand-rolled predecessor did. See PruneExpired.
     private readonly IntervalGate _pruneGate;
 
     // Throttles the capacity-full warning to one signal per interval (CWE-400): under a flood every
