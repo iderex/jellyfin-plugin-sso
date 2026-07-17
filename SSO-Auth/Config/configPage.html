@@ -740,6 +740,37 @@
                   </div>
                 </div>
 
+                <div
+                  class="checkboxContainer checkboxContainer-withDescription"
+                >
+                  <label>
+                    <input
+                      is="emby-checkbox"
+                      id="AllowExistingAccountLink"
+                      name="AllowExistingAccountLink"
+                      type="checkbox"
+                      class="sso-toggle"
+                    />
+                    <span>Allow Adopting Existing Accounts (Sensitive)</span>
+                  </label>
+                  <div class="fieldDescription checkboxFieldDescription">
+                    ⚠ Sensitive: lets a first SSO login adopt (take over) a
+                    pre-existing, unlinked Jellyfin account whose username
+                    matches the SSO name, instead of rejecting it. Off by
+                    default (fail closed). Enable only for the one-time
+                    legacy-link migration window described in the
+                    account-linking runbook on the
+                    <a
+                      is="emby-linkbutton"
+                      href="https://github.com/iderex/jellyfin-plugin-sso/wiki"
+                      class="button-link"
+                      >wiki</a
+                    >, then turn it back off. A name-matched administrator
+                    account is never adopted regardless of this setting, and
+                    each adoption is recorded as an audit event.
+                  </div>
+                </div>
+
                 <div class="inputContainer">
                   <label
                     class="inputLabel inputLabelUnfocused"
