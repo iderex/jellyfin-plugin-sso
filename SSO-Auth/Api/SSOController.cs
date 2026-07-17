@@ -278,11 +278,7 @@ public class SSOController : ControllerBase
         // The client key bounds how much of the store one source can occupy (#327); a proxy/private
         // source normalizes to null and is exempt.
         var clientKey = SsoRateLimiter.NormalizeClientKey(HttpContext.Connection.RemoteIpAddress);
-
-        // Carry the discovery metadata PrepareLoginAsync just fetched and validated (against this
-        // provider's DiscoveryPolicy) to the callback, so ProcessResponseAsync reuses it instead of
-        // re-running discovery + JWKS (#247). Reuse is bounded by this state's lifetime.
-        if (!StateStore.TryAdd(state, provider, isLinking, DateTime.Now, bindingId, clientKey, oidcClient.Options.ProviderInformation, out var shouldWarnCapacity))
+        if (!StateStore.TryAdd(state, provider, isLinking, DateTime.Now, bindingId, clientKey, out var shouldWarnCapacity))
         {
             if (shouldWarnCapacity)
             {
@@ -291,6 +287,12 @@ public class SSOController : ControllerBase
 
             return ReturnError(StatusCodes.Status500InternalServerError, "Could not start login; please retry.");
         }
+
+        // Carry the discovery metadata PrepareLoginAsync just fetched and validated (against this
+        // provider's DiscoveryPolicy) to the callback, so ProcessResponseAsync reuses it instead of
+        // re-running discovery + JWKS (#247). Recorded after the state is registered; reuse is bounded
+        // by this state's lifetime.
+        StateStore.SetProviderInformation(state.State, oidcClient.Options.ProviderInformation);
 
         // Set the cookie only after the state is registered, so a refused challenge leaves no cookie.
         Response.Cookies.Append(AuthorizeStateBinding.CookieName, bindingId, AuthorizeStateBinding.CookieOptions(OidcStateStore.DefaultLifetime));

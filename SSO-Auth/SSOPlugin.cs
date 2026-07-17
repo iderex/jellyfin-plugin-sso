@@ -18,6 +18,19 @@ namespace Jellyfin.Plugin.SSO_Auth;
 public class SSOPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
 {
     /// <summary>
+    /// Initializes static members of the <see cref="SSOPlugin"/> class.
+    /// </summary>
+    static SSOPlugin()
+    {
+        // Stop the OidcClient trace serializer from JSON-serializing the full options object — the
+        // client secret included — into a transient string on every Prepare/Process call, which it does
+        // even with Trace logging off (#247). We never consume that trace output, so disabling it in the
+        // type initializer (runs once, before any login) keeps the secret out of transient heap strings
+        // (defense in depth). The flag is a process-global, so setting it here covers every login.
+        LogSerializer.Enabled = false;
+    }
+
+    /// <summary>
     /// Initializes a new instance of the <see cref="SSOPlugin"/> class.
     /// </summary>
     /// <param name="applicationPaths">Internal Jellyfin interface for the ApplicationPath.</param>
@@ -26,13 +39,6 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
     public SSOPlugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer, ILogger<SSOPlugin> logger)
         : base(applicationPaths, xmlSerializer)
     {
-        // Stop the OidcClient trace serializer from JSON-serializing the full options object — the
-        // client secret included — into a transient string on every Prepare/Process call, which it does
-        // even with Trace logging off (#247). We never consume that trace output, so disabling it once
-        // at plugin load keeps the secret out of transient heap strings (defense in depth). Global and
-        // idempotent, so setting it here (the single plugin bootstrap) is sufficient.
-        LogSerializer.Enabled = false;
-
         // Handing out `() => Configuration` here is safe: BasePlugin's constructor only records the
         // config path and loads the configuration lazily on first access, so nothing calls back into
         // UpdateConfiguration (and thus ConfigStore) before this assignment completes.
