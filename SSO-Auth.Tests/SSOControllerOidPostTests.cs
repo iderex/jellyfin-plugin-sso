@@ -23,7 +23,8 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 /// <see cref="SSOControllerEndpointTests"/> / <see cref="SSOControllerAdminTests"/>.
 ///
 /// Two of the tests characterize the callback end-to-end against the OAuth 2.0 Security BCP update
-/// draft-ietf-oauth-security-topics-update-01 (2026-07) threat classes that apply to this RP (#176):
+/// (draft-ietf-oauth-security-topics-update, rev -03 dated 2026-07-06) threat classes that apply to
+/// this RP (#176):
 /// Cross-toolkit OAuth Account Takeover (COAT) — a state minted in one named provider's context cannot
 /// complete against another configured provider's callback — and cross-user session fixation — a state
 /// token observed by a party in a different browser cannot complete the flow. The store-level mechanisms
@@ -74,8 +75,8 @@ public class SSOControllerOidPostTests
     public async Task OidPost_StateMintedForAnotherProvider_RejectedOnThisProvidersCallback()
     {
         using var fixture = new OidcTokenFixture(Authority, "jf");
-        // COAT (draft-ietf-oauth-security-topics-update-01, 2026-07, #176): this plugin is a
-        // multi-provider OAuth client (OidConfigs is a dict of named providers), so a response minted in
+        // COAT (OAuth 2.0 Security BCP update, draft-ietf-oauth-security-topics-update, #176): this
+        // plugin is a multi-provider OAuth client (OidConfigs is a dict of named providers), so a response minted in
         // one provider's context must not complete against another's callback. The state is keyed by its
         // token, so the lookup FINDS it under "kc2" — but PeekCurrent rejects it because the route
         // provider does not match the provider recorded on the state, before any token exchange. Both
