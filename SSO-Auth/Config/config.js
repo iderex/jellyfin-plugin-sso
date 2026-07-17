@@ -166,8 +166,14 @@ const ssoConfigurationPage = {
     const targeted_mapping = evt.target.closest(".sso-role-mapping-container");
     targeted_mapping.remove();
   },
+  // The provider form's save contract, made explicit (#365): every input in #sso-new-oidc-provider
+  // that should persist carries an sso-* class AND an id spelled EXACTLY like the OidConfig property it
+  // writes to (saveProvider does current_config[element.id] = value). A field with the wrong id, a
+  // missing sso-* class, or placed outside this form renders fine but silently never saves — and the
+  // server drops unknown JSON members too. The ArchitectureConformanceTests
+  // ProviderFormFieldIds_MatchOidConfigProperties test locks this in: it fails the build if any
+  // sso-*-classed field id is not a real OidConfig property.
   listArgumentsByType: (page) => {
-    const json_class = ".sso-json";
     const toggle_class = ".sso-toggle";
     const text_class = ".sso-text";
     const text_list_class = ".sso-line-list";
@@ -181,10 +187,6 @@ const ssoConfigurationPage = {
       (e) => e.id,
     );
 
-    const json_fields = [...oidc_form.querySelectorAll(json_class)].map(
-      (e) => e.id,
-    );
-
     const text_list_fields = [
       ...oidc_form.querySelectorAll(text_list_class),
     ].map((e) => e.id);
@@ -194,7 +196,6 @@ const ssoConfigurationPage = {
     );
 
     const output = {
-      json_fields,
       text_list_fields,
       text_fields,
       check_fields,
@@ -229,11 +230,6 @@ const ssoConfigurationPage = {
 
         form_elements.text_fields.forEach((id) => {
           if (provider[id]) page.querySelector("#" + id).value = provider[id];
-        });
-
-        form_elements.json_fields.forEach((id) => {
-          if (provider[id])
-            page.querySelector("#" + id).value = JSON.stringify(provider[id]);
         });
 
         form_elements.text_list_fields.forEach((id) => {
@@ -334,15 +330,6 @@ const ssoConfigurationPage = {
           const value = page.querySelector("#" + id).value;
           if (value) {
             current_config[id] = page.querySelector("#" + id).value;
-          } else {
-            current_config[id] = null;
-          }
-        });
-
-        form_elements.json_fields.forEach((id) => {
-          const value = page.querySelector("#" + id).value;
-          if (value) {
-            current_config[id] = JSON.parse(value);
           } else {
             current_config[id] = null;
           }

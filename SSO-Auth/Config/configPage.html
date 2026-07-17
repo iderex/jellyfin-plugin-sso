@@ -113,6 +113,16 @@
             </div>
           </form>
 
+          <!--
+            Provider settings form — the save contract (#365). Each input here that must persist carries a
+            behavior-marker class (sso-text / sso-line-list / sso-toggle / sso-folder-list / sso-role-map)
+            AND an id spelled EXACTLY like the OidConfig property it writes to: config.js saveProvider does
+            current_config[element.id] = value, and the server drops JSON members that are not OidConfig
+            properties. A field with a mismatched id, a missing marker class, or placed outside this form
+            renders but silently never saves. The provider-name input is the one deliberate non-persisting
+            field — it supplies the OidConfigs dictionary key, not a property — so it carries no marker
+            class. Locked in by ArchitectureConformanceTests.ProviderFormFieldIds_MatchOidConfigProperties.
+          -->
           <form id="sso-new-oidc-provider" class="esqConfigurationForm">
             <div
               is="emby-collapse"
@@ -127,12 +137,17 @@
                     for="OidProviderName"
                     >Name of OpenID Provider:</label
                   >
+                  <!--
+                    No sso-* marker class: this input's value is the OidConfigs dictionary KEY (config.js
+                    reads it as the provider name and does config.OidConfigs[name] = current_config), not an
+                    OidConfig property. listArgumentsByType must not pick it up as a persisting field, and it
+                    is deliberately absent from the ProviderFormFieldIds_MatchOidConfigProperties contract.
+                  -->
                   <input
                     is="emby-input"
                     id="OidProviderName"
                     required=""
                     type="text"
-                    class="sso-text"
                   />
                   <div class="fieldDescription">
                     The name used by Jellyfin to identify the OpenID provider.
