@@ -147,16 +147,13 @@ public class SSOControllerOidAuthTests
     // the challenge would have set; the redeem leg must present the matching cookie (see SetBindingCookie).
     private static void SeedValidState(SsoControllerHarness harness, string token)
     {
-        var state = new TimedAuthorizeState(new AuthorizeState { State = token }, DateTime.Now)
-        {
-            Provider = "kc",
-            Valid = true,
-            Subject = "sub-1",
-            Username = "alice",
-            Folders = new List<string>(),
-            BindingId = Binding,
-        };
-        SSOController.SeedOidStateForTests(token, state);
+        var pending = new AuthorizeSession.Pending(new AuthorizeState { State = token }, "kc", isLinking: false, DateTime.Now, Binding, clientKey: null, providerInformation: null, responseIssuerRequired: false);
+        var ready = new AuthorizeSession.Ready(
+            pending,
+            new OidcAuthorizeStateBuilder.OidcAuthorizeState(
+                Username: "alice", Subject: "sub-1", EmailVerified: null, Valid: true, Admin: false,
+                EnableLiveTv: false, EnableLiveTvManagement: false, Folders: new List<string>(), AvatarUrl: null));
+        SSOController.SeedOidStateForTests(token, ready);
 
         var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
         harness.UserManager.CreateUserAsync("alice").Returns(user);

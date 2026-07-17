@@ -186,8 +186,7 @@ public class SSOController : ControllerBase
         }
 
         // Derive the authorize-state values (username, validity, admin, Live TV, folders, avatar)
-        // from the verified login's claims and the provider configuration; Complete applies them
-        // to the stored pending state.
+        // from the verified login's claims and the provider configuration.
         var derived = OidcAuthorizeStateBuilder.Build(result.User.Claims, config);
 
         // Fail closed (#155): a valid OpenID login must resolve a stable subject to key the account
@@ -200,23 +199,28 @@ public class SSOController : ControllerBase
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
         }
 
-        pending.Complete(derived);
-
-        bool isLinking = pending.IsLinking;
-
-        if (derived.Valid)
+        if (!derived.Valid)
         {
-            _logger.LogInformation("Is request linking: {IsLinking}", isLinking);
-            return HtmlAuthPage(nonce => WebResponse.Generator(data: state, provider: provider, baseUrl: GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), mode: "OID", nonce: nonce, isLinking: isLinking));
+            // The role gate did not pass: leave the Pending unpromoted (never redeemable — the redeem
+            // requires a Ready) so it simply expires. Checked before Promote so no Ready is ever created
+            // for a denied login.
+            _logger.LogWarning(
+                "OpenID login denied for {Username}: no role matched the allow-list, or the login resolved no username. Claims: {@Claims}. Roles expected (any one of): {@ExpectedClaims}",
+                derived.Username?.ReplaceLineEndings(string.Empty),
+                result.User.Claims.Select(o => new { Type = o.Type?.ReplaceLineEndings(string.Empty), Value = o.Value?.ReplaceLineEndings(string.Empty) }),
+                config.Roles);
+
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
         }
 
-        _logger.LogWarning(
-            "OpenID login denied for {Username}: no role matched the allow-list, or the login resolved no username. Claims: {@Claims}. Roles expected (any one of): {@ExpectedClaims}",
-            derived.Username?.ReplaceLineEndings(string.Empty),
-            result.User.Claims.Select(o => new { Type = o.Type?.ReplaceLineEndings(string.Empty), Value = o.Value?.ReplaceLineEndings(string.Empty) }),
-            config.Roles);
+        // Atomically swap the peeked Pending for a redeemable Ready (#341). A false return means a
+        // concurrent callback already promoted it, or it expired/was pruned since the peek — either way
+        // the browser's redeem is the real gate, which consumes the single Ready once (or cleanly rejects
+        // a state that is gone), so the auth page is returned regardless.
+        StateStore.Promote(pending, derived);
 
-        return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
+        _logger.LogInformation("Is request linking: {IsLinking}", pending.IsLinking);
+        return HtmlAuthPage(nonce => WebResponse.Generator(data: state, provider: provider, baseUrl: GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), mode: "OID", nonce: nonce, isLinking: pending.IsLinking));
     }
 
     /// <summary>
@@ -293,7 +297,15 @@ public class SSOController : ControllerBase
         // The client key bounds how much of the store one source can occupy (#327); a proxy/private
         // source normalizes to null and is exempt.
         var clientKey = SsoRateLimiter.NormalizeClientKey(HttpContext.Connection.RemoteIpAddress);
-        if (!StateStore.TryAdd(state, provider, isLinking, DateTime.Now, bindingId, clientKey, out var shouldWarnCapacity))
+
+        // Build the challenge's authorize state complete — the discovery metadata PrepareLoginAsync just
+        // fetched and validated against this provider's DiscoveryPolicy (reused at the callback so
+        // ProcessResponseAsync skips a second discovery + JWKS, #247), and whether that discovery
+        // advertised the RFC 9207 response-`iss` parameter (so the callback requires `iss`, its absence
+        // being a downgrade, #210). Folded in at construction so registration is one atomic insert and the
+        // stored Pending is never mutated after it enters the store (#341).
+        var pending = new AuthorizeSession.Pending(state, provider, isLinking, DateTime.Now, bindingId, clientKey, oidcClient.Options.ProviderInformation, discoveryFacts.ResponseIssuerAdvertised);
+        if (!StateStore.TryAdd(pending, out var shouldWarnCapacity))
         {
             if (shouldWarnCapacity)
             {
@@ -301,21 +313,6 @@ public class SSOController : ControllerBase
             }
 
             return ReturnError(StatusCodes.Status500InternalServerError, "Could not start login; please retry.");
-        }
-
-        // Carry the discovery metadata PrepareLoginAsync just fetched and validated (against this
-        // provider's DiscoveryPolicy) to the callback, so ProcessResponseAsync reuses it instead of
-        // re-running discovery + JWKS (#247). Recorded after the state is registered; reuse is bounded
-        // by this state's lifetime.
-        StateStore.SetProviderInformation(state.State, oidcClient.Options.ProviderInformation);
-
-        // RFC 9207 §2.4 (#210): if this provider's discovery advertises the response-`iss` parameter,
-        // carry that on the state so the callback requires `iss` to be present (its absence would be a
-        // downgrade). Only set when advertised; the state's tolerant default keeps providers that never
-        // advertise it working. Read from the same discovery fetch above, so the callback needs no second.
-        if (discoveryFacts.ResponseIssuerAdvertised)
-        {
-            StateStore.MarkResponseIssuerRequired(state.State);
         }
 
         // Set the cookie only after the state is registered, so a refused challenge leaves no cookie.
@@ -347,7 +344,7 @@ public class SSOController : ControllerBase
     // (which consumes an already-validated state that the browser redirect leg normally populates)
     // without standing up the full token-exchange flow. Same test-only surface as ResetOidStateForTests
     // (internal, InternalsVisibleTo, no endpoint/DI) — never reachable in production.
-    internal static void SeedOidStateForTests(string token, TimedAuthorizeState state)
+    internal static void SeedOidStateForTests(string token, AuthorizeSession state)
     {
         StateStore.Seed(token, state);
     }

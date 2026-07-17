@@ -198,13 +198,9 @@ public class SSOControllerLinkTests
     {
         var harness = ForCaller(isAdmin: true, callerId: Target, configure: c => c.OidConfigs["keycloak"] = new OidConfig { Enabled = true });
         // The OID link path redeems an authorize state the redirect leg validated; seed a redeemable one.
-        SSOController.SeedOidStateForTests("state-1", new TimedAuthorizeState(new AuthorizeState { State = "state-1" }, DateTime.Now)
-        {
-            Provider = "keycloak",
-            Valid = true,
-            Subject = "sub-1",
-            BindingId = Binding,
-        });
+        SSOController.SeedOidStateForTests("state-1", new AuthorizeSession.Ready(
+            new AuthorizeSession.Pending(new AuthorizeState { State = "state-1" }, "keycloak", isLinking: false, DateTime.Now, Binding, clientKey: null, providerInformation: null, responseIssuerRequired: false),
+            new OidcAuthorizeStateBuilder.OidcAuthorizeState("alice", "sub-1", null, true, false, false, false, new List<string>(), null)));
 
         var result = await harness.Controller.AddCanonicalLink("oid", "keycloak", Target, new AuthResponse { Data = "state-1" });
 
@@ -221,13 +217,9 @@ public class SSOControllerLinkTests
         // rejection mirrors OidAuth's short-circuit order and shares the unknown-provider response, so
         // the two cases cannot be probed apart.
         var harness = ForCaller(isAdmin: true, callerId: Target, configure: c => c.OidConfigs["keycloak"] = new OidConfig { Enabled = false });
-        SSOController.SeedOidStateForTests("state-1", new TimedAuthorizeState(new AuthorizeState { State = "state-1" }, DateTime.Now)
-        {
-            Provider = "keycloak",
-            Valid = true,
-            Subject = "sub-1",
-            BindingId = Binding,
-        });
+        SSOController.SeedOidStateForTests("state-1", new AuthorizeSession.Ready(
+            new AuthorizeSession.Pending(new AuthorizeState { State = "state-1" }, "keycloak", isLinking: false, DateTime.Now, Binding, clientKey: null, providerInformation: null, responseIssuerRequired: false),
+            new OidcAuthorizeStateBuilder.OidcAuthorizeState("alice", "sub-1", null, true, false, false, false, new List<string>(), null)));
 
         var rejected = await harness.Controller.AddCanonicalLink("oid", "keycloak", Target, new AuthResponse { Data = "state-1" });
 
@@ -248,13 +240,9 @@ public class SSOControllerLinkTests
         // different browser's binding cookie is refused, and — the binding check preceding the atomic
         // remove — the state is NOT consumed, so the browser that started the flow can still link.
         var harness = ForCaller(isAdmin: true, callerId: Target, configure: c => c.OidConfigs["keycloak"] = new OidConfig { Enabled = true });
-        SSOController.SeedOidStateForTests("state-1", new TimedAuthorizeState(new AuthorizeState { State = "state-1" }, DateTime.Now)
-        {
-            Provider = "keycloak",
-            Valid = true,
-            Subject = "sub-1",
-            BindingId = Binding,
-        });
+        SSOController.SeedOidStateForTests("state-1", new AuthorizeSession.Ready(
+            new AuthorizeSession.Pending(new AuthorizeState { State = "state-1" }, "keycloak", isLinking: false, DateTime.Now, Binding, clientKey: null, providerInformation: null, responseIssuerRequired: false),
+            new OidcAuthorizeStateBuilder.OidcAuthorizeState("alice", "sub-1", null, true, false, false, false, new List<string>(), null)));
         // A wrong-browser callback: overwrite the matching cookie ForCaller set with a different id.
         harness.Controller.HttpContext.Request.Headers.Cookie = $"{AuthorizeStateBinding.CookieName}=other-browser";
 
