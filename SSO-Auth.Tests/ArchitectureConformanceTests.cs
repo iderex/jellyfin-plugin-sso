@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
 using Jellyfin.Plugin.SSO_Auth;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using MediaBrowser.Model.Plugins;
@@ -228,6 +229,103 @@ public class ArchitectureConformanceTests
             .ToList();
 
         Assert.True(offenders.Count == 0, "SSOPlugin members touching configuration types must stay limited to the delegating facade (config logic lives in Config/): " + string.Join(", ", offenders));
+    }
+
+    [Fact]
+    public void ProviderFormFieldIds_MatchOidConfigProperties()
+    {
+        // The provider settings form's save contract (#365), locked in as a fitness function. config.js
+        // saveProvider persists each marked input as current_config[element.id] = value, so every input
+        // bearing a persisting behavior-marker class MUST have an id equal to a real OidConfig property —
+        // otherwise it renders but silently never saves, because the server drops JSON members that are not
+        // OidConfig properties. The five marker classes mirror config.js listArgumentsByType
+        // (sso-text/sso-line-list/sso-toggle) plus the two populate-helper widgets (sso-folder-list =
+        // EnabledFolders, sso-role-map = FolderRoleMapping). The provider-name input is deliberately
+        // unmarked — its value is the OidConfigs dictionary key, not a property — so it is not scanned.
+        // Matching is token-exact (so sso-role-map does not swallow sso-role-mapping-container), and the
+        // scan is scoped to #sso-new-oidc-provider so a future SAML form (whose fields map to SamlConfig)
+        // would not be checked against OidConfig. The forward check (every marked id is a real property) is
+        // paired below with a reverse pin (every security-critical property is still a marked field), so
+        // neither a mistyped id nor a dropped marker class can silently break a security setting's save.
+        var markerClasses = new[] { "sso-text", "sso-line-list", "sso-toggle", "sso-folder-list", "sso-role-map" };
+
+        var form = OidcProviderFormMarkup(
+            File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "configPage.html")));
+
+        var oidConfigProperties = typeof(OidConfig)
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Select(p => p.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var matchedIds = new HashSet<string>(StringComparer.Ordinal);
+        var offenders = new List<string>();
+        foreach (Match tag in Regex.Matches(form, "<[a-zA-Z][^>]*>", RegexOptions.Singleline))
+        {
+            var classAttr = Regex.Match(tag.Value, "class=\"([^\"]*)\"", RegexOptions.Singleline);
+            if (!classAttr.Success)
+            {
+                continue;
+            }
+
+            var classes = classAttr.Groups[1].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (!classes.Any(c => markerClasses.Contains(c, StringComparer.Ordinal)))
+            {
+                continue;
+            }
+
+            // (?<![-\w]) so an attribute whose name merely ends in "id" (a future data-id, gridid, …) is
+            // not misread as the element id; an id attribute is preceded by whitespace or the tag open.
+            var idMatch = Regex.Match(tag.Value, "(?<![-\\w])id=\"([^\"]*)\"", RegexOptions.Singleline);
+            var id = idMatch.Success ? idMatch.Groups[1].Value : "(no id)";
+            matchedIds.Add(id);
+            if (!oidConfigProperties.Contains(id))
+            {
+                offenders.Add($"{id} (classes: {classAttr.Groups[1].Value.Trim()})");
+            }
+        }
+
+        // Guard against a vacuous pass (a broken regex or a renamed form marker silently matching nothing):
+        // one sentinel id per marker class must have been scanned, proving the parser reached the form and
+        // every marker class is live.
+        var sentinels = new[] { "OidEndpoint", "Roles", "Enabled", "EnabledFolders", "FolderRoleMapping" };
+        var missingSentinels = sentinels.Where(s => !matchedIds.Contains(s)).ToList();
+        Assert.True(
+            missingSentinels.Count == 0,
+            "The provider-form scan did not reach expected fields (broken parse or renamed marker class?); missing sentinels: " + string.Join(", ", missingSentinels));
+
+        // Reverse direction: the forward check catches a mistyped id, but dropping a marker class entirely
+        // — the exact operation this contract change performs on the provider-name field — would silently
+        // stop a field persisting while leaving the forward check green. For a security setting that is
+        // fail-open (the server keeps the stored value; the admin can no longer harden it), so pin the
+        // security-critical settings: each MUST remain a marked, correctly-typed persisting field. Extend
+        // this roster in the same PR that adds a new security toggle.
+        var securityCritical = new[]
+        {
+            "EnableAuthorization", "OidSecret", "DisableHttps", "DisablePushedAuthorization",
+            "DoNotValidateEndpoints", "DoNotValidateIssuerName", "DoNotValidateResponseIssuer",
+            "DoNotLoadProfile", "RequirePkce",
+        };
+        var unsaved = securityCritical.Where(p => !matchedIds.Contains(p)).ToList();
+        Assert.True(
+            unsaved.Count == 0,
+            "These security-critical settings must remain persisting provider-form fields (a marked input whose id equals the OidConfig property); missing or unmarked: " + string.Join(", ", unsaved));
+
+        Assert.True(
+            offenders.Count == 0,
+            "Every persisting provider-form field (sso-text/sso-line-list/sso-toggle/sso-folder-list/sso-role-map) must have an id equal to an OidConfig property; these do not: " + string.Join(" | ", offenders));
+    }
+
+    // The markup of the #sso-new-oidc-provider settings form (from the opening tag's id attribute to its
+    // closing </form>). Forms are not nested here, so the first </form> after the id marker closes it; the
+    // preceding #sso-load-config form is left out because its </form> sits before the marker.
+    private static string OidcProviderFormMarkup(string html)
+    {
+        const string marker = "id=\"sso-new-oidc-provider\"";
+        var start = html.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(start >= 0, "The #sso-new-oidc-provider form was not found in configPage.html.");
+        var end = html.IndexOf("</form>", start, StringComparison.Ordinal);
+        Assert.True(end > start, "The #sso-new-oidc-provider form has no closing </form> tag.");
+        return html[start..end];
     }
 
     // A configuration type for the facade rule: the plugin configuration itself or any provider config
