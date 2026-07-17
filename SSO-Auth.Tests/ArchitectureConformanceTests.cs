@@ -185,6 +185,45 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void AuthorizeStates_AreImmutableVariants()
+    {
+        // Locked in by #341: the in-flight OpenID authorize state is a CLOSED, IMMUTABLE sum — an
+        // AuthorizeSession base with exactly the Pending and Ready variants, swapped atomically in the
+        // store rather than promoted in place. Immutable variants are what make the swap torn-read-free: a
+        // redeemer racing the promotion observes either the whole Pending (not redeemable) or the whole
+        // Ready, never a half-applied field set. A settable property or writable instance field on the base
+        // or a variant would reopen the in-place-promotion window #341 closed, so pin it structurally.
+        var baseType = typeof(AuthorizeSession);
+        var variants = new[] { typeof(AuthorizeSession.Pending), typeof(AuthorizeSession.Ready) };
+
+        // Closed sum: the base is abstract, every AuthorizeSession subtype in the assembly is one of the
+        // two known variants, and each variant is a sealed leaf — no third variant, no open inheritance
+        // point.
+        Assert.True(baseType.IsAbstract, "AuthorizeSession must be an abstract base (the root of the closed sum).");
+        var subtypes = AllPluginTypes.Where(t => t != baseType && baseType.IsAssignableFrom(t)).ToList();
+        Assert.Equal(variants.Length, subtypes.Count);
+        Assert.All(variants, v => Assert.Contains(v, subtypes));
+        Assert.All(variants, v => Assert.True(v.IsSealed, $"{SimpleName(v)} must be a sealed variant of the closed sum."));
+
+        // Immutable: no settable property and no writable instance field on the base or either variant.
+        // Get-only auto-properties compile to readonly (initonly) backing fields, so they pass; a
+        // `{ get; set; }` / `{ get; private set; }` or a plain writable field would be flagged.
+        const BindingFlags members = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+        var mutable = new[] { baseType }.Concat(variants)
+            .SelectMany(t => t.GetProperties(members)
+                .Where(p => p.SetMethod is not null)
+                .Select(p => $"{SimpleName(t)}.{p.Name} (settable property)")
+                .Concat(t.GetFields(members)
+                    .Where(f => !f.IsInitOnly && !f.IsLiteral && !f.Name.Contains('<', StringComparison.Ordinal))
+                    .Select(f => $"{SimpleName(t)}.{f.Name} (writable field)")))
+            .ToList();
+
+        Assert.True(
+            mutable.Count == 0,
+            "AuthorizeSession and its variants must be immutable (no settable property or writable instance field) so the store's Pending -> Ready swap stays torn-read-free (#341): " + string.Join(", ", mutable));
+    }
+
+    [Fact]
     public void Controller_NeverTouchesProviderLinkMaps()
     {
         // Locked in by the link/unlink admin-surface extraction (#372) and completed by #383: the two

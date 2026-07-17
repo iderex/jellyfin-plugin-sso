@@ -417,8 +417,9 @@ public class SSOControllerOidPostTests
         };
         // ResponseIssuerRequired models a challenge whose discovery advertised the RFC 9207 response-iss
         // parameter (#210), so the callback must require iss; false is the tolerant default (the challenge
-        // capture path itself is pinned end-to-end by OidChallengeToCallback_* below).
-        SSOController.SeedOidStateForTests("state-1", new TimedAuthorizeState(authState, DateTime.Now) { Provider = "kc", BindingId = Binding, ResponseIssuerRequired = responseIssuerRequired });
+        // capture path itself is pinned end-to-end by OidChallengeToCallback_* below). Seeded as a Pending:
+        // the callback derives the login and promotes it to a Ready (#341).
+        SSOController.SeedOidStateForTests("state-1", new AuthorizeSession.Pending(authState, "kc", isLinking: false, DateTime.Now, Binding, clientKey: null, providerInformation: null, responseIssuerRequired: responseIssuerRequired));
 
         return harness;
     }
