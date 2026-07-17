@@ -51,6 +51,20 @@ public class AvatarServiceTests
         return (service, providers, users, log);
     }
 
+    // Builds a service whose store step serializes on the supplied lock, so a test can drive the #400
+    // per-user serialization deterministically (hold the key, prove StoreAsync parks). The stub handler
+    // is never invoked — these tests call StoreAsync directly, not the fetch path.
+    private static (AvatarService Service, IProviderManager Providers, IUserManager Users, CapturingLogger Log) Build(KeyedLockStore userStoreLocks)
+    {
+        var users = Substitute.For<IUserManager>();
+        var providers = Substitute.For<IProviderManager>();
+        var serverConfig = Substitute.For<IServerConfigurationManager>();
+        serverConfig.ApplicationPaths.UserConfigurationDirectoryPath.Returns(UserDataRoot);
+        var log = new CapturingLogger();
+        var service = new AvatarService(users, providers, serverConfig, log, "test-agent/1.0", () => new StubHandler(new HttpResponseMessage()), userStoreLocks);
+        return (service, providers, users, log);
+    }
+
     // An allowed public URL: the stub handler answers before any connection, so the URL only needs to
     // clear the allow-list — the SSRF transport guard (ConnectCallback) is never reached here.
     private const string AllowedUrl = "https://cdn.example.com/avatar.png";
@@ -167,6 +181,93 @@ public class AvatarServiceTests
             users.ClearProfileImageAsync(user);
         });
         Assert.Equal(ProfilePath("alice", ".png"), user.ProfileImage?.Path);
+    }
+
+    [Fact]
+    public async Task StoreAsync_ConcurrentSameUser_IsSerializedAndLeavesAConsistentRecord()
+    {
+        // #400, a deterministic overlapping-call test via the injected per-user lock seam: we take the
+        // user's lock to stand in for a store already mid-flight for the SAME user, then start a real
+        // StoreAsync. While the lock is held it cannot reach SaveImage — it is serialized behind the
+        // in-flight store, proven by the held handle rather than by timing. Releasing the lock lets it run
+        // to a single consistent record. (Unrelated users never block each other — KeyedLockStoreTests.)
+        var locks = new KeyedLockStore(StringComparer.Ordinal);
+        var (service, providers, users, _) = Build(locks);
+        var user = UserNamed("racer");
+
+        Task store;
+        using (await locks.AcquireAsync(user.Username, TestContext.Current.CancellationToken))
+        {
+            store = service.StoreAsync(user, new MemoryStream(new byte[] { 1 }), "image/png", ".png");
+
+            Assert.False(store.IsCompleted); // parked before the write while the per-user lock is held
+            await providers.DidNotReceive().SaveImage(Arg.Any<Stream>(), Arg.Any<string>(), Arg.Any<string>());
+        }
+
+        await store;
+
+        // Once the in-flight store released, ours ran exactly once and left a single consistent record.
+        await providers.Received(1).SaveImage(Arg.Any<Stream>(), "image/png", ProfilePath("racer", ".png"));
+        Assert.Equal(ProfilePath("racer", ".png"), user.ProfileImage?.Path);
+        await users.DidNotReceive().ClearProfileImageAsync(Arg.Any<User>());
+        Assert.Equal(0, locks.TrackedKeys); // both holders left; the map is collected
+    }
+
+    [Fact]
+    public async Task StoreAsync_TwoOverlappingStores_SerializeAndTheLaterStoreWins()
+    {
+        // #400 acceptance criterion #2, the full shape: TWO real concurrent StoreAsync calls for the same
+        // user must serialize the whole save + profile-image transition, and the later store's record must
+        // be the final one (last-writer-consistent, no clobber). Deterministic via TaskCompletionSource
+        // gates, no timing: the first store's SaveImage parks mid-critical-section (holding the per-user
+        // lock) until we release it, so the second store provably cannot enter until then.
+        var locks = new KeyedLockStore(StringComparer.Ordinal);
+        var (service, providers, users, _) = Build(locks);
+        var user = UserNamed("racer");
+        var ct = TestContext.Current.CancellationToken;
+
+        var pngPath = ProfilePath("racer", ".png"); // the first store's target
+        var jpgPath = ProfilePath("racer", ".jpg"); // the second store's target (different path -> a real transition)
+        var firstInsideCriticalSection = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        providers.SaveImage(Arg.Any<Stream>(), Arg.Any<string>(), Arg.Any<string>())
+            .Returns(ci =>
+            {
+                // The first store's write parks here — inside the critical section, holding the lock —
+                // until the test releases it; the second store's write completes at once.
+                if (string.Equals(ci.ArgAt<string>(2), pngPath, StringComparison.Ordinal))
+                {
+                    firstInsideCriticalSection.TrySetResult();
+                    return releaseFirst.Task;
+                }
+
+                return Task.CompletedTask;
+            });
+
+        var first = service.StoreAsync(user, new MemoryStream(new byte[] { 1 }), "image/png", ".png");
+        await firstInsideCriticalSection.Task.WaitAsync(ct); // the first store now holds the per-user lock
+
+        var second = service.StoreAsync(user, new MemoryStream(new byte[] { 2 }), "image/jpeg", ".jpg");
+
+        // The second store cannot enter the critical section while the first holds the lock: its write is
+        // never issued, so the sequence is serialized rather than interleaved.
+        Assert.False(second.IsCompleted);
+        await providers.Received(1).SaveImage(Arg.Any<Stream>(), Arg.Any<string>(), Arg.Any<string>());
+        await providers.DidNotReceive().SaveImage(Arg.Any<Stream>(), "image/jpeg", jpgPath);
+
+        releaseFirst.SetResult();
+        await first;
+        await second;
+
+        // Last-writer-consistent: the final record is the second store's, written only after the first
+        // fully completed. Each store wrote exactly once, and the .png -> .jpg transition cleared the old
+        // record only after the new bytes were on disk (#377), so there is no clobber.
+        Assert.Equal(jpgPath, user.ProfileImage?.Path);
+        await providers.Received(1).SaveImage(Arg.Any<Stream>(), "image/png", pngPath);
+        await providers.Received(1).SaveImage(Arg.Any<Stream>(), "image/jpeg", jpgPath);
+        await users.Received(1).ClearProfileImageAsync(user);
+        Assert.Equal(0, locks.TrackedKeys); // both holders left; the map is collected
     }
 
     [Fact]
