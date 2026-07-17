@@ -131,11 +131,6 @@ Enhancement suggestions are tracked as [GitHub issues](https://github.com/iderex
 
 ### Your First Code Contribution
 
-<!-- TODO
-include Setup of env, IDE and typical getting started instructions?
-
--->
-
 The project is built with .NET 9, targeting Jellyfin 10.11. Download [the .NET 9 SDK](https://dotnet.microsoft.com/en-us/download).
 
 Any code editor or IDE with .NET support will work out of the box with this program.
@@ -150,21 +145,21 @@ Any code editor or IDE with .NET support will work out of the box with this prog
 **Building and testing.** CI runs these on every pull request and they must pass:
 
 ```sh
-dotnet build --no-restore --warnaserror     # warnings are errors, exactly as in CI
-dotnet test --no-build --verbosity normal   # the xUnit project SSO-Auth.Tests must stay green
+dotnet restore                               # once on a fresh clone; the --no-restore flags below assume it
+dotnet build --no-restore --warnaserror      # warnings are errors, exactly as in CI
+dotnet test --no-build --verbosity normal    # the xUnit project SSO-Auth.Tests must stay green
 npx prettier --check "**/*.{js,html,md,css,scss}"   # for any .js/.html/.md/.css change
 ```
+
+CI restores in a separate step, so its build/test use `--no-restore`/`--no-build`; on a fresh local clone run `dotnet restore` once first (or drop `--no-restore` on the first build) or the build fails before any package is fetched.
+
+**Developing the admin UI.** The settings page and the account-linking page are **embedded resources**, not files served from disk: `configPage.html`, `config.js`, and the `linking.*` assets are compiled into `SSO-Auth.dll` (see the `<EmbeddedResource>` entries in `SSO-Auth.csproj`). So the edit loop is **rebuild → redeploy the DLL → restart Jellyfin**: `dotnet publish -c Release`, copy the output into your Jellyfin `config/plugins/sso/`, and restart the server; there is no live reload. Jellyfin's logs (the plugin logs through them) live under the server's `config/log/` directory. One gotcha while iterating: the `/SSOViews` assets are served with an ETag derived from the assembly `FileVersion`, so a browser will `304`-serve the **previous** build of `linking.js`/`linking.css` until the version changes — disable the browser cache (DevTools → Network → "Disable cache") during a UI edit session, or you will be testing stale assets.
 
 **Branching and pull requests.** `main` is the released line and is PR-only. Branch every change — even a one-liner — off `main` for fixes and security work, or off the feature branch for features, using a short kebab-case name with a `fix/`, `harden/`, `feature/`, `chore/`, or `refactor/` prefix. Reference the issue your change addresses (`Closes #N`) and fill in the [pull request template](.github/pull_request_template.md).
 
 This is a security-sensitive login path: before opening a pull request, understand and own every line you propose, and be ready to explain what it does and why.
 
 ### Improving The Documentation
-
-<!-- TODO
-Updating, improving and correcting the documentation
-
--->
 
 We are always open to better docs! The main place documentation could be improved is the [providers](https://github.com/iderex/jellyfin-plugin-sso/blob/main/providers.md) documentation. This file keeps track of configurations that are known to work with common SSO providers.
 
@@ -182,9 +177,7 @@ We format all C# code according to the .NET formatter. Build with `dotnet build 
 
 We use [Prettier](https://prettier.io) to format these files. Run `npx prettier --write "**/*.{js,html,md,css,scss}"` before committing, and `npx prettier --check "**/*.{js,html,md,css,scss}"` to confirm — CI enforces the check (only `*.min.js` is exempt).
 
-<!-- TODO
-
--->
+Not every file under `SSO-Auth/Views` is project code. Check the provenance header before editing: `emby-restyle.css` and the minified `jellyfin-apiClient.esm.min.js` are **vendored** from jellyfin-web — update them by re-copying from upstream, not by editing in place — whereas `apiClient.js` is **project-maintained** code (loosely based on the linked upstream) that carries our own security logic and is edited here directly.
 
 <!-- omit in toc -->
 

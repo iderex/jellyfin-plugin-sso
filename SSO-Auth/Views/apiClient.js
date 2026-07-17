@@ -1,3 +1,7 @@
+// Project-maintained code, NOT a vendored copy: it is loosely based on jellyfin-web (the permalinks
+// below mark the functions it was adapted from) but carries this plugin's own logic, so edit it here
+// directly. The imported jellyfin-apiClient.esm.min.js bundle it depends on IS vendored. See
+// CONTRIBUTING.md → Styleguides.
 import jellyfinApiclient from "./jellyfin-apiClient.esm.min.js";
 window.jellyfinApiclient = jellyfinApiclient;
 
