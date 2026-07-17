@@ -106,7 +106,7 @@ expiry). A few provider settings must therefore match, or login is refused (fail
     verified-email requirement (it continues a relationship established under the old scheme, not a new
     one), so on that one path the admin-takeover ceiling is still enforced but this verified-email
     defense-in-depth is not. Both `AllowExistingAccountLink` and `RequireVerifiedEmailForAdoption` are
-    edited in the provider's `config.xml`, not on the config page.
+    settable in the admin OpenID provider form, or by editing the provider's `config.xml` directly.
 - **Upgrading from a username-keyed version — read this before you upgrade.** Links created by older
   plugin versions (up to and including 4.0.0.4) are keyed on the username. A username is something the
   identity provider can reassign, so following such a link is name-based account matching, governed by
