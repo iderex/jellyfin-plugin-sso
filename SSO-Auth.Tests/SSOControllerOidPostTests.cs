@@ -21,6 +21,15 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 /// match the id_token issuer is refused (RFC 9207 mix-up check, #125). The guard branches (unknown
 /// provider, missing/invalid/expired state, disabled, rate-limit) are covered in
 /// <see cref="SSOControllerEndpointTests"/> / <see cref="SSOControllerAdminTests"/>.
+///
+/// Two of the tests characterize the callback end-to-end against the OAuth 2.0 Security BCP update
+/// draft-ietf-oauth-security-topics-update-01 (2026-07) threat classes that apply to this RP (#176):
+/// Cross-toolkit OAuth Account Takeover (COAT) — a state minted in one named provider's context cannot
+/// complete against another configured provider's callback — and cross-user session fixation — a state
+/// token observed by a party in a different browser cannot complete the flow. The store-level mechanisms
+/// these rely on are pinned in <see cref="OidcStateStoreTests"/> (provider-scoped peek/redeem, the
+/// browser-binding gate, and the one-time atomic claim); the mint-path one-time-consume is pinned in
+/// <see cref="SSOControllerOidAuthTests"/>.
 /// </summary>
 [Collection("SSOController")]
 public class SSOControllerOidPostTests
@@ -55,6 +64,47 @@ public class SSOControllerOidPostTests
         // body is the uniform invalid-state message, so a wrong-browser hit is indistinguishable from an
         // expiry.
         var harness = ArrangeCallback(fixture, query: "?code=test-code&state=state-1", bindingCookie: null);
+
+        var result = await harness.Controller.OidPost("kc", "state-1");
+
+        Assert.Equal("Invalid or expired state", Assert.IsType<BadRequestObjectResult>(result).Value);
+    }
+
+    [Fact]
+    public async Task OidPost_StateMintedForAnotherProvider_RejectedOnThisProvidersCallback()
+    {
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        // COAT (draft-ietf-oauth-security-topics-update-01, 2026-07, #176): this plugin is a
+        // multi-provider OAuth client (OidConfigs is a dict of named providers), so a response minted in
+        // one provider's context must not complete against another's callback. The state is keyed by its
+        // token, so the lookup FINDS it under "kc2" — but PeekCurrent rejects it because the route
+        // provider does not match the provider recorded on the state, before any token exchange. Both
+        // providers are enabled, so this isolates the provider-context binding from the unknown/disabled
+        // guard.
+        var harness = ArrangeCallback(fixture, query: "?code=test-code&state=state-1", secondProvider: "kc2");
+
+        var crossContext = await harness.Controller.OidPost("kc2", "state-1");
+        Assert.Equal("Invalid or expired state", Assert.IsType<BadRequestObjectResult>(crossContext).Value);
+
+        // Positive control: PeekCurrent does not consume, so the same state still completes on the
+        // provider it WAS minted for — proving the rejection above is the provider-context binding, not an
+        // unrelated failure of the shared fixture.
+        var sameContext = await harness.Controller.OidPost("kc", "state-1");
+        Assert.Equal("text/html", Assert.IsType<ContentResult>(sameContext).ContentType);
+    }
+
+    [Fact]
+    public async Task OidPost_StateTokenPresentedFromADifferentBrowser_RejectedAsInvalidState()
+    {
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        // Cross-user session fixation (same BCP update, #176): an attacker who observes/fixates the state
+        // token still cannot complete the flow from their own browser. The callback requires the
+        // browser-binding cookie the challenge recorded (#326); the attacker's browser carries a DIFFERENT
+        // value, not the victim's. A present-but-mismatched cookie (not merely an absent one, covered by
+        // OidPost_MissingBindingCookie) is refused, proving the binding check requires equality, not mere
+        // presence. Once the victim completes, the one-time atomic claim prevents replay/handoff (pinned
+        // end-to-end by OidAuth_ValidState_ProvisionsAccountReturnsOk_AndIsSingleUse).
+        var harness = ArrangeCallback(fixture, query: "?code=test-code&state=state-1", bindingCookie: "attacker-other-browser-binding");
 
         var result = await harness.Controller.OidPost("kc", "state-1");
 
@@ -109,19 +159,32 @@ public class SSOControllerOidPostTests
         string query,
         string? idToken = null,
         bool tokenEndpointFails = false,
-        string? bindingCookie = Binding)
+        string? bindingCookie = Binding,
+        string? secondProvider = null)
     {
         idToken ??= fixture.IdToken(subject: "sub-1", username: "alice");
 
+        OidConfig NewProvider() => new()
+        {
+            Enabled = true,
+            OidEndpoint = Authority,
+            OidClientId = "jf",
+            OidScopes = Array.Empty<string>(),
+            DisablePushedAuthorization = true,
+            DoNotLoadProfile = true, // the id_token carries sub + preferred_username; skip the userinfo fetch
+        };
+
         var harness = new SsoControllerHarness(
-            c => c.OidConfigs["kc"] = new OidConfig
+            c =>
             {
-                Enabled = true,
-                OidEndpoint = Authority,
-                OidClientId = "jf",
-                OidScopes = Array.Empty<string>(),
-                DisablePushedAuthorization = true,
-                DoNotLoadProfile = true, // the id_token carries sub + preferred_username; skip the userinfo fetch
+                c.OidConfigs["kc"] = NewProvider();
+
+                // A second enabled provider so a COAT test can hit its callback with a state minted for
+                // "kc" and isolate the provider-context binding from the unknown/disabled-provider guard.
+                if (secondProvider is not null)
+                {
+                    c.OidConfigs[secondProvider] = NewProvider();
+                }
             },
             httpResponder: request =>
             {
