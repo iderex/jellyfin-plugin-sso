@@ -226,7 +226,11 @@ public class SSOControllerOidPostTests
 
         var result = await harness.Controller.OidPost("kc", state);
 
-        Assert.Equal(400, Assert.IsType<ContentResult>(result).StatusCode);
+        // Pin the 400 to the RFC 9207 reject specifically, not the shared token-exchange-error 400: assert
+        // the SsoResponseInvalid body so a 400 from a different source cannot satisfy this test.
+        var content = Assert.IsType<ContentResult>(result);
+        Assert.Equal(400, content.StatusCode);
+        Assert.Equal("SSO response validation failed", content.Content);
     }
 
     [Fact]
