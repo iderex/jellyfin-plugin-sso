@@ -363,9 +363,13 @@ public class SSOController : ControllerBase
     // Builds the space-delimited OpenID scope string, always leading with the base "openid profile".
     // OidScopes is null when a provider was stored without scopes (#368, e.g. via the OID/Add API) —
     // normalize to empty so neither the challenge nor the callback throws (an unhandled 500 on the
-    // anonymous challenge endpoint) or pads the scope string with null entries. Shared by both sites.
+    // anonymous challenge endpoint) or pads the scope string with null entries. Blank elements inside a
+    // non-null array are dropped too, so a persisted null/empty/whitespace scope cannot inject a
+    // doubled or trailing separator (#407). Shared by both sites.
     internal static string BuildScopeString(OidConfig config)
-        => string.Join(" ", (config.OidScopes ?? Array.Empty<string>()).Prepend("openid profile"));
+        => string.Join(" ", (config.OidScopes ?? Array.Empty<string>())
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Prepend("openid profile"));
 
     // Builds the OidcClient that both the challenge and the callback use. Pure mechanical assembly:
     // the redirect URI and the scope string are the only two inputs the endpoints derive differently,

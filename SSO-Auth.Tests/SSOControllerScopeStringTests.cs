@@ -38,4 +38,28 @@ public class SSOControllerScopeStringTests
 
         Assert.Equal("openid profile email groups", SSOController.BuildScopeString(config));
     }
+
+    [Fact]
+    public void NullElement_IsDropped_NoTrailingSeparator()
+    {
+        var config = new OidConfig { OidScopes = new[] { "email", null } };
+
+        Assert.Equal("openid profile email", SSOController.BuildScopeString(config));
+    }
+
+    [Fact]
+    public void EmptyElement_IsDropped_NoDoubledSeparator()
+    {
+        var config = new OidConfig { OidScopes = new[] { "", "groups" } };
+
+        Assert.Equal("openid profile groups", SSOController.BuildScopeString(config));
+    }
+
+    [Fact]
+    public void AllBlankElements_YieldBaseScopesOnly()
+    {
+        var config = new OidConfig { OidScopes = new[] { "", " ", null } };
+
+        Assert.Equal("openid profile", SSOController.BuildScopeString(config));
+    }
 }
