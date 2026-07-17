@@ -6,11 +6,58 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 /// <summary>
 /// Tracks SAML assertion IDs that have already been used to mint a session, so a captured assertion
 /// cannot be replayed within its validity window. Entries are retained until the supplied expiry and
-/// evicted opportunistically.
+/// reclaimed by a throttled expired-entry sweep, and the set is hard-capped so it cannot grow without
+/// bound (#452). It mirrors the sibling login-path caches (<see cref="SamlRequestCache"/>,
+/// <see cref="OidcStateStore"/>): an <see cref="IntervalGate"/>-throttled sweep plus a global cap.
+///
+/// The cap is applied differently from the siblings, on purpose. Recording a consumed assertion is what
+/// makes a replay detectable, so this cache must never drop a still-valid entry to free a slot — that
+/// would reopen the replay window for exactly that assertion (#32). Eviction is therefore tied strictly
+/// to expiry: an entry is removed only once the assertion it guards can no longer be validly presented.
+/// At the cap, a NEW distinct login is refused (returns false, so the login fails closed) rather than
+/// evicting a live entry — a bounded DoS backstop that never trades away replay protection. This path is
+/// reached only after full XML-DSig signature validation, so it is not anonymously floodable; filling the
+/// cap requires a large volume of legitimately signed, rate-limited assertions.
 /// </summary>
 internal sealed class SamlReplayCache
 {
+    // An approximate ceiling on retained consumed-assertion IDs, bounding memory (CWE-400 parity with the
+    // siblings). Unlike the siblings this is not an anti-flood cap on an anonymous endpoint — TryConsume
+    // runs only after signature validation — but a defense-in-depth memory bound. The check-then-insert is
+    // not serialized, so concurrent consumes can transiently overshoot by at most the number of in-flight
+    // threads; immaterial against a best-effort backstop.
+    internal const int DefaultMaxEntries = 100_000;
+
+    // The expired-entry sweep is an O(n) scan; throttling it to at most once per this interval matches the
+    // siblings and keeps the sweep off every consume. Throttling is safe because it is only memory
+    // reclamation — TryConsume rejects a live entry independently (see the replay check), and at the cap it
+    // forces an unthrottled reclaim before refusing, so a not-yet-swept expired entry neither grants a
+    // replay nor false-rejects a fresh login.
+    private static readonly TimeSpan DefaultPruneInterval = TimeSpan.FromMinutes(1);
+
+    private readonly int _maxEntries;
+
     private readonly ConcurrentDictionary<string, DateTime> _consumed = new(StringComparer.Ordinal);
+
+    // Throttles the sweep to one run per interval; the gate owns the atomic cursor and self-heals a
+    // backward wall-clock step of at least the interval (#334). See PruneExpired.
+    private readonly IntervalGate _pruneGate;
+
+    internal SamlReplayCache()
+        : this(DefaultMaxEntries, DefaultPruneInterval)
+    {
+    }
+
+    // Test constructor: a small cap and short interval make the cap and prune-throttle paths reachable in
+    // unit tests (the production values are unreachable there). IntervalGate rejects a non-positive interval.
+    internal SamlReplayCache(int maxEntries, TimeSpan pruneInterval)
+    {
+        _maxEntries = maxEntries;
+        _pruneGate = new IntervalGate(pruneInterval);
+    }
+
+    /// <summary>Gets the live entry count. Test-only, so the cap and sweep paths can be asserted.</summary>
+    internal int Count => _consumed.Count;
 
     /// <summary>
     /// Computes how long a just-consumed assertion must be retained for replay protection: the whole
@@ -38,22 +85,18 @@ internal sealed class SamlReplayCache
     }
 
     /// <summary>
-    /// Records the assertion ID as consumed. Returns false when the assertion has no usable ID or has
-    /// already been consumed within its validity window (a replay).
+    /// Records the assertion ID as consumed. Returns false when the assertion has no usable ID, has
+    /// already been consumed within its validity window (a replay), or the cache is full of still-valid
+    /// entries (a fail-closed cap refusal). A false return always rejects the login, so refusing at the
+    /// cap never reopens the replay window.
     /// </summary>
     /// <param name="assertionId">The assertion ID.</param>
-    /// <param name="expiryUtc">When the entry may be evicted (typically the assertion's NotOnOrAfter).</param>
+    /// <param name="expiryUtc">When the entry may be evicted (the assertion's retention horizon).</param>
     /// <param name="nowUtc">The current time.</param>
-    /// <returns>True if this is the first use; false on replay or a missing ID.</returns>
+    /// <returns>True if this is the first use; false on replay, a missing ID, or a fail-closed cap refusal.</returns>
     internal bool TryConsume(string assertionId, DateTime expiryUtc, DateTime nowUtc)
     {
-        foreach (var kvp in _consumed)
-        {
-            if (kvp.Value <= nowUtc)
-            {
-                _consumed.TryRemove(kvp.Key, out _);
-            }
-        }
+        PruneExpired(nowUtc);
 
         // Fail closed: without an ID we cannot enforce one-time use.
         if (string.IsNullOrEmpty(assertionId))
@@ -61,6 +104,75 @@ internal sealed class SamlReplayCache
             return false;
         }
 
-        return _consumed.TryAdd(assertionId, expiryUtc);
+        // Global cap. Only a NEW id would grow the set (an id already present is either a replay we reject
+        // below or an expired entry we replace in place, neither of which grows it). At the cap, reclaim
+        // expired entries the throttled sweep may have skipped, and only if the cache is STILL full of
+        // unexpired entries refuse the login (return false) — never evict a live entry, which would drop a
+        // within-window consumed assertion and reopen its replay window (#32).
+        if (_consumed.Count >= _maxEntries && !_consumed.ContainsKey(assertionId))
+        {
+            SweepExpired(nowUtc);
+            if (_consumed.Count >= _maxEntries && !_consumed.ContainsKey(assertionId))
+            {
+                return false;
+            }
+        }
+
+        while (true)
+        {
+            // Atomic first-use claim: the single winner of TryAdd is the first use, so two concurrent
+            // presentations of the same assertion cannot both succeed.
+            if (_consumed.TryAdd(assertionId, expiryUtc))
+            {
+                return true;
+            }
+
+            // An entry for this id already exists. Re-read it (it may have just been swept away).
+            if (!_consumed.TryGetValue(assertionId, out var existing))
+            {
+                continue;
+            }
+
+            // A still-valid entry is a replay: reject, and never refresh its expiry (refreshing would
+            // extend the replay window it guards).
+            if (existing > nowUtc)
+            {
+                return false;
+            }
+
+            // Present but expired: a reused xsd:ID from a genuinely new login (assertion IDs are unique in
+            // practice, so this is a correctness belt, not a hot path). It must not false-reject the new
+            // login, so replace it — but only if it is still the exact stale value we read, so a racing
+            // consumer of the same id cannot also win. A lost race loops and re-evaluates (the value is now
+            // fresh, so it is treated as a replay).
+            if (_consumed.TryUpdate(assertionId, expiryUtc, existing))
+            {
+                return true;
+            }
+        }
+    }
+
+    // Drops expired entries, at most once per prune interval. Enumerating a ConcurrentDictionary yields a
+    // safe moving snapshot and the KeyValuePair TryRemove overload is atomic, so this is correct under
+    // concurrent TryConsume — the size is bounded by the cap in TryConsume, not by this sweep.
+    private void PruneExpired(DateTime nowUtc)
+    {
+        if (_pruneGate.TryEnter(nowUtc))
+        {
+            SweepExpired(nowUtc);
+        }
+    }
+
+    // Removes every entry whose retention has elapsed. Uses the KeyValuePair overload so an entry a
+    // concurrent consume refreshed to a live expiry between the read and the remove is not dropped.
+    private void SweepExpired(DateTime nowUtc)
+    {
+        foreach (var kvp in _consumed)
+        {
+            if (kvp.Value <= nowUtc)
+            {
+                _consumed.TryRemove(kvp);
+            }
+        }
     }
 }
