@@ -102,7 +102,10 @@ expiry). A few provider settings must therefore match, or login is refused (fail
     `email_verified`; without that scope the claim is absent and every adoption is refused. **SAML** has
     no `email_verified` claim, so this gate is not applicable there — only the admin refusal above
     applies, and SAML operators relying on name-based adoption should ensure their IdP issues stable,
-    non-reassignable NameIDs. Both `AllowExistingAccountLink` and `RequireVerifiedEmailForAdoption` are
+    non-reassignable NameIDs. The transitional legacy re-key path below is **exempt** from the
+    verified-email requirement (it continues a relationship established under the old scheme, not a new
+    one), so on that one path the admin-takeover ceiling is still enforced but this verified-email
+    defense-in-depth is not. Both `AllowExistingAccountLink` and `RequireVerifiedEmailForAdoption` are
     edited in the provider's `config.xml`, not on the config page.
 - **Upgrading from a username-keyed version — read this before you upgrade.** Links created by older
   plugin versions (up to and including 4.0.0.4) are keyed on the username. A username is something the
@@ -121,6 +124,14 @@ expiry). A few provider settings must therefore match, or login is refused (fail
      password, so if your only admins sign in through OpenID they will be locked out by the 403 above
      with no way back in-band. **Before upgrading**, make sure at least one Jellyfin administrator has a
      normal password login (Dashboard → Users), or you will be left editing config on disk (next point).
+     Note the extra admin case (#218): a returning **administrator** who held a pre-#155 username-keyed
+     OpenID link is **refused on their first post-upgrade login even with `AllowExistingAccountLink` on**
+     — an admin account is never adopted or re-keyed by name — so re-link it explicitly with
+     `AddCanonicalLink` (from the break-glass admin) rather than expecting self-migration. If that admin
+     was itself originally plugin-**created** and is your _only_ admin (random password, signs in through
+     SSO), recover server-side: reset its password from the Jellyfin dashboard using another admin, or —
+     if truly locked out — link it by editing the provider's `<CanonicalLinks>` in `config.xml` to map
+     the current `sub` to that user id, then restart.
   2. **Fully locked out?** Stop Jellyfin, open the plugin's `config.xml` in its data directory, set
      `<AllowExistingAccountLink>true</AllowExistingAccountLink>` inside the affected provider's config
      block, restart, and complete the migration below; then set it back to `false`.
