@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using Jellyfin.Plugin.SSO_Auth;
+using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using MediaBrowser.Model.Plugins;
 using Microsoft.AspNetCore.Mvc;
@@ -31,6 +32,10 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 /// path, so the planned #318 controller split — into partial-class files or several controllers — cannot
 /// hide an endpoint from them, and each is sentinel-guarded against a vacuous pass: the file set must be
 /// non-empty, and the link-map scan pins its target property by reflection so a rename fails loudly (#388).
+/// The socket/DNS scan's markers are BCL identifiers rather than a token this codebase owns, so its
+/// sentinel instead pins the marker SET against the surface's legitimate home — AvatarService,
+/// AvatarUrlValidator, SsoRateLimiter — asserting at least one marker still matches real usage there,
+/// so a marker set that stops matching anything real fails loudly too (#444).
 /// </summary>
 public class ArchitectureConformanceTests
 {
@@ -214,6 +219,29 @@ public class ArchitectureConformanceTests
         Assert.True(
             socketLines.Count == 0,
             "A controller must not touch the raw socket/DNS surface (System.Net.Sockets, Socket, NetworkStream, Dns); outbound network primitives belong to AvatarService/AvatarUrlValidator and SsoRateLimiter. Found: " + string.Join(" | ", socketLines));
+
+        // Sentinel against a vacuous pass (#444): unlike the link-map rule above, these markers are BCL
+        // identifiers, not a token this codebase owns, so there is no single property to pin by
+        // reflection. Instead pin the marker SET against reality: the raw socket/DNS surface's one
+        // legitimate home is AvatarService/AvatarUrlValidator/SsoRateLimiter (#375), so at least one
+        // marker must still match a real line there today. If a refactor ever changed how that tier
+        // references sockets/DNS (a wrapping abstraction, a different BCL spelling) so that NONE of the
+        // markers matched it any more, the zero-occurrence scan above would keep "passing" for the wrong
+        // reason — this is the assertion that would actually catch it. Deliberately "at least one", not
+        // "every" marker: "System.Net.Dns" is a defensive marker for the fully-qualified/static-import
+        // spelling, which this codebase does not use anywhere today (Dns.GetHostAddressesAsync resolves
+        // through the "using System.Net;" form instead, caught by the "Dns." marker) — that marker having
+        // no live match is expected, not a liveness failure.
+        var homeTypes = new[] { typeof(AvatarService), typeof(AvatarUrlValidator), typeof(SsoRateLimiter) };
+        var homeFiles = SourceFilesDeclaring(homeTypes);
+        Assert.True(
+            homeFiles.Count == homeTypes.Length,
+            "The raw socket/DNS surface's legitimate home (AvatarService/AvatarUrlValidator/SsoRateLimiter) was renamed or moved; point Controller_NeverTouchesRawSocketsOrDns's liveness check at its new location (#444).");
+
+        var homeLines = homeFiles.SelectMany(File.ReadAllLines).ToList();
+        Assert.True(
+            markers.Any(m => homeLines.Any(l => l.Contains(m, StringComparison.Ordinal))),
+            "None of the socket/DNS markers match any line in their legitimate home (AvatarService/AvatarUrlValidator/SsoRateLimiter); the zero-occurrence controller scan above would pass vacuously — update the markers to track how the socket/DNS surface is actually referenced (#444).");
     }
 
     [Fact]
@@ -413,25 +441,30 @@ public class ArchitectureConformanceTests
     // loudly here rather than turning the rules into silent no-ops.
     private static IReadOnlyList<string> ControllerSourceFiles()
     {
-        var declarations = PluginClasses
-            .Where(t => typeof(ControllerBase).IsAssignableFrom(t))
-            .Select(t => new Regex($@"\bclass\s+{Regex.Escape(SimpleName(t))}\b"))
-            .ToList();
-
-        var files = Directory
-            .EnumerateFiles(Path.Combine(RepoRoot(), "SSO-Auth"), "*.cs", SearchOption.AllDirectories)
-            .Where(path => !IsBuildOutput(path))
-            .Where(path =>
-            {
-                var text = File.ReadAllText(path);
-                return declarations.Any(d => d.IsMatch(text));
-            })
-            .ToList();
+        var controllerTypes = PluginClasses.Where(t => typeof(ControllerBase).IsAssignableFrom(t));
+        var files = SourceFilesDeclaring(controllerTypes);
 
         Assert.True(
             files.Count > 0,
             "No controller source file was found to scan; a controller was renamed, moved out of SSO-Auth, or lost its ControllerBase base, so the controller source scans would pass vacuously — update ControllerSourceFiles (#388).");
         return files;
+    }
+
+    // Every source file that declares any of the given types, matched by class declaration in the file
+    // body (not the file name), so a file rename still resolves via the type's own name. Shared by
+    // ControllerSourceFiles above and the raw socket/DNS liveness check (#444) — both need "which files
+    // declare these types", just for a different type set.
+    private static IReadOnlyList<string> SourceFilesDeclaring(IEnumerable<Type> types)
+    {
+        var declarations = types
+            .Select(t => new Regex($@"\bclass\s+{Regex.Escape(SimpleName(t))}\b"))
+            .ToList();
+
+        return Directory
+            .EnumerateFiles(Path.Combine(RepoRoot(), "SSO-Auth"), "*.cs", SearchOption.AllDirectories)
+            .Where(path => !IsBuildOutput(path))
+            .Where(path => declarations.Any(d => d.IsMatch(File.ReadAllText(path))))
+            .ToList();
     }
 
     // obj/bin hold generated and compiled output; the source scans read hand-written source only.
