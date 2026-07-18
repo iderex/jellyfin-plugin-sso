@@ -17,6 +17,7 @@ This section is broken into providers that support Role-Based Access Control (RB
 - ✅ [Keycloak](#keycloak-oidc)
   - Both [OIDC](#keycloak-oidc) & [SAML](#keycloak-saml)
 - ✅ [Pocket ID](#pocket-id)
+- ✅ [Kanidm](#kanidm)
 
 ### No RBAC Support
 
