@@ -68,7 +68,8 @@ internal static class ProviderConfigValidator
             // that ReplaceLineEndings covers and char.IsControl does not.
             var echoName = string.Concat((provider ?? string.Empty).Where(c => !char.IsControl(c))).ReplaceLineEndings(string.Empty);
             throw new ArgumentException(
-                $"{protocol} provider '{echoName}' has a name with control characters, URI-reserved characters, or a backslash; the name becomes part of the callback URL registered with the identity provider, so a new name must not contain control characters, a backslash, or any of % : / ? # [ ] @ ! $ & ' ( ) * + , ; =.");
+                $"{protocol} provider '{echoName}' has a name with control characters, URI-reserved characters, or a backslash; the name becomes part of the callback URL registered with the identity provider, so a new name must not contain control characters, a backslash, or any of % : / ? # [ ] @ ! $ & ' ( ) * + , ; =.",
+                nameof(provider));
         }
     }
 
@@ -80,7 +81,8 @@ internal static class ProviderConfigValidator
         if (CanonicalBaseUrl.IsInvalidOverride(baseUrlOverride))
         {
             throw new ArgumentException(
-                $"{protocol} provider '{provider?.ReplaceLineEndings(string.Empty)}' has an invalid Base URL override; it must be an absolute http(s) URL such as https://jellyfin.example.com.");
+                $"{protocol} provider '{provider?.ReplaceLineEndings(string.Empty)}' has an invalid Base URL override; it must be an absolute http(s) URL such as https://jellyfin.example.com.",
+                nameof(baseUrlOverride));
         }
     }
 
@@ -91,7 +93,8 @@ internal static class ProviderConfigValidator
         if (SamlCertificate.IsInvalid(certificate))
         {
             throw new ArgumentException(
-                $"SAML provider '{provider?.ReplaceLineEndings(string.Empty)}' has an invalid signing certificate; it must be a Base64-encoded (DER) X.509 certificate.");
+                $"SAML provider '{provider?.ReplaceLineEndings(string.Empty)}' has an invalid signing certificate; it must be a Base64-encoded (DER) X.509 certificate.",
+                nameof(certificate));
         }
     }
 
@@ -105,7 +108,8 @@ internal static class ProviderConfigValidator
         if (SamlCertificate.IsInvalid(certificate))
         {
             throw new ArgumentException(
-                $"SAML provider '{provider?.ReplaceLineEndings(string.Empty)}' has an invalid secondary signing certificate; it must be a Base64-encoded (DER) X.509 certificate.");
+                $"SAML provider '{provider?.ReplaceLineEndings(string.Empty)}' has an invalid secondary signing certificate; it must be a Base64-encoded (DER) X.509 certificate.",
+                nameof(certificate));
         }
     }
 
@@ -118,7 +122,8 @@ internal static class ProviderConfigValidator
         if (SamlSigningKey.IsInvalid(signingKeyPfx))
         {
             throw new ArgumentException(
-                $"SAML provider '{provider?.ReplaceLineEndings(string.Empty)}' has an invalid request signing key; it must be a Base64-encoded, unencrypted PKCS#12 (PFX) blob containing an RSA or ECDSA private key.");
+                $"SAML provider '{provider?.ReplaceLineEndings(string.Empty)}' has an invalid request signing key; it must be a Base64-encoded, unencrypted PKCS#12 (PFX) blob containing an RSA or ECDSA private key.",
+                nameof(signingKeyPfx));
         }
     }
 }
