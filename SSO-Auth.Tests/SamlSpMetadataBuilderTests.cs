@@ -125,6 +125,14 @@ public class SamlSpMetadataBuilderTests
 
         // Both public certificates appear, primary first, in the order they were supplied.
         Assert.Equal(new[] { primaryBase64, rolloverBase64 }, advertised);
+
+        // XSD order: within SPSSODescriptor every KeyDescriptor must precede the AssertionConsumerService
+        // element. Pin it against document order so a future edit that emits a descriptor after the ACS
+        // (invalid metadata) fails here, not only against a real identity provider.
+        var childNames = spDescriptor.Elements().Select(e => e.Name).ToList();
+        var lastKeyDescriptorIndex = childNames.FindLastIndex(n => n == Md + "KeyDescriptor");
+        var acsIndex = childNames.FindIndex(n => n == Md + "AssertionConsumerService");
+        Assert.True(lastKeyDescriptorIndex < acsIndex, "Every KeyDescriptor must precede AssertionConsumerService (SAML metadata XSD order).");
     }
 
     [Fact]
