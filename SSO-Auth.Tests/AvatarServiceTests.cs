@@ -66,6 +66,29 @@ public class AvatarServiceTests
         return (service, providers, users, log);
     }
 
+    // Builds a service whose store-lock ACQUIRE WAIT is bounded by the given (short, test-only) timeout
+    // rather than the production 30s (#448), so a test can drive the abort-on-timeout branch deterministically
+    // and quickly instead of waiting out the real bound.
+    private static (AvatarService Service, IProviderManager Providers, IUserManager Users, CapturingLogger Log) Build(KeyedLockStore userStoreLocks, TimeSpan storeLockAcquireTimeout)
+    {
+        var users = Substitute.For<IUserManager>();
+        var providers = Substitute.For<IProviderManager>();
+        var serverConfig = Substitute.For<IServerConfigurationManager>();
+        serverConfig.ApplicationPaths.UserConfigurationDirectoryPath.Returns(UserDataRoot);
+        var log = new CapturingLogger();
+        var service = new AvatarService(
+            users,
+            providers,
+            serverConfig,
+            log,
+            "test-agent/1.0",
+            new HttpClient(new StubHandler(new HttpResponseMessage())),
+            userStoreLocks,
+            fileExists: null,
+            storeLockAcquireTimeout: storeLockAcquireTimeout);
+        return (service, providers, users, log);
+    }
+
     // An allowed public URL: the stub handler answers before any connection, so the URL only needs to
     // clear the allow-list — the SSRF transport guard (ConnectCallback) is never reached here.
     private const string AllowedUrl = "https://cdn.example.com/avatar.png";
@@ -226,6 +249,52 @@ public class AvatarServiceTests
         Assert.Equal(ProfilePath("racer", ".png"), user.ProfileImage?.Path);
         await users.DidNotReceive().ClearProfileImageAsync(Arg.Any<User>());
         Assert.Equal(0, locks.TrackedKeys); // both holders left; the map is collected
+    }
+
+    [Fact]
+    public async Task StoreAsync_LockAcquireTimesOut_AbortsWithoutStoringUnguarded()
+    {
+        // #448: CancellationToken.None made the same-user acquire wait unbounded, so a store step stalled
+        // while holding the gate could park every other concurrent login for that user forever. With a
+        // bounded wait, a stalled holder (stood in for here by a lock we hold and never release) times the
+        // waiter out; the store must abort — SaveImage is NEVER called (no unguarded write bypassing the
+        // lock) and the user's profile-image record is left untouched — rather than propagate an unhandled
+        // exception into the best-effort login path.
+        var locks = new KeyedLockStore(StringComparer.Ordinal);
+        var (service, providers, users, log) = Build(locks, TimeSpan.FromMilliseconds(50));
+        var user = UserNamed("racer");
+        var previous = new ImageInfo(ProfilePath("racer", ".jpg"));
+        user.ProfileImage = previous;
+
+        using (await locks.AcquireAsync(user.Username, TestContext.Current.CancellationToken))
+        {
+            // The lock is held for the whole store attempt, standing in for a stalled concurrent store.
+            await service.StoreAsync(user, new MemoryStream(new byte[] { 1 }), "image/png", ".png");
+        }
+
+        await providers.DidNotReceive().SaveImage(Arg.Any<Stream>(), Arg.Any<string>(), Arg.Any<string>());
+        await users.DidNotReceive().ClearProfileImageAsync(Arg.Any<User>());
+        Assert.Same(previous, user.ProfileImage); // record untouched — no unguarded store ran
+        Assert.Contains(log.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("Timed out"));
+        Assert.Equal(0, locks.TrackedKeys); // the timed-out waiter left no reference behind
+    }
+
+    [Fact]
+    public async Task StoreAsync_LockAcquiredBeforeTimeout_StoresNormally()
+    {
+        // The counterpart to the timeout test: when the lock is free (the normal case), a bounded wait
+        // still lets the store through exactly as before — the timeout only aborts a genuinely stalled
+        // wait, it does not shrink the normal-load window.
+        var locks = new KeyedLockStore(StringComparer.Ordinal);
+        var (service, providers, _, log) = Build(locks, TimeSpan.FromSeconds(30));
+        var user = UserNamed("alice");
+
+        await service.StoreAsync(user, new MemoryStream(new byte[] { 1 }), "image/png", ".png");
+
+        await providers.Received(1).SaveImage(Arg.Any<Stream>(), "image/png", ProfilePath("alice", ".png"));
+        Assert.Equal(ProfilePath("alice", ".png"), user.ProfileImage?.Path);
+        Assert.DoesNotContain(log.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("Timed out"));
+        Assert.Equal(0, locks.TrackedKeys);
     }
 
     [Fact]

@@ -25,6 +25,13 @@ internal sealed class AvatarService
     /// <summary>The maximum avatar size accepted, enforced both against Content-Length and while streaming (#220).</summary>
     internal const long MaxAvatarBytes = 10 * 1024 * 1024;
 
+    // Bounds the wait for the per-user store lock (#448). This flow tier is deliberately HttpContext-free
+    // (see LoginCompletionService/SessionMinter), so no ambient request-abort token reaches this far — a
+    // self-contained deadline is the same pattern TrySetAsync already uses for the fetch. 30s comfortably
+    // covers several legitimate queued same-user stores (each a local disk write, occasionally a DB clear)
+    // while still bounding a truly stalled holder so it cannot park same-user logins forever.
+    private static readonly TimeSpan StoreLockAcquireTimeout = TimeSpan.FromSeconds(30);
+
     // Serializes the store step per user across ALL logins (#400). Static because the controller builds a
     // fresh AvatarService per request, so two concurrent same-user logins hold different instances — an
     // instance lock would not serialize them. Keyed by user, so unrelated users never block each other,
@@ -50,6 +57,7 @@ internal sealed class AvatarService
     private readonly HttpClient _httpClient;
     private readonly KeyedLockStore _userStoreLocks;
     private readonly Func<string, bool> _fileExists;
+    private readonly TimeSpan _storeLockAcquireTimeout;
 
     internal AvatarService(
         IUserManager userManager,
@@ -76,6 +84,7 @@ internal sealed class AvatarService
     /// <param name="httpClient">The client used for every fetch; reused across calls (never disposed here).</param>
     /// <param name="userStoreLocks">The per-user store lock (#400); null uses the process-wide shared one. A test injects its own so it can drive the serialization deterministically.</param>
     /// <param name="fileExists">Probe for the on-disk profile image (#480); null uses <see cref="File.Exists"/>. A test injects its own to drive the missing-file self-heal branch without touching the filesystem.</param>
+    /// <param name="storeLockAcquireTimeout">How long <see cref="StoreAsync"/> waits for the per-user store lock (#448); null uses the production 30s bound. A test injects a short timeout so the abort-on-timeout branch is reachable without a real 30s wait.</param>
     internal AvatarService(
         IUserManager userManager,
         IProviderManager providerManager,
@@ -84,7 +93,8 @@ internal sealed class AvatarService
         string userAgent,
         HttpClient httpClient,
         KeyedLockStore userStoreLocks = null,
-        Func<string, bool> fileExists = null)
+        Func<string, bool> fileExists = null,
+        TimeSpan? storeLockAcquireTimeout = null)
     {
         _userManager = userManager ?? throw new ArgumentNullException(nameof(userManager));
         _providerManager = providerManager ?? throw new ArgumentNullException(nameof(providerManager));
@@ -94,6 +104,7 @@ internal sealed class AvatarService
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _userStoreLocks = userStoreLocks ?? SharedUserStoreLocks;
         _fileExists = fileExists ?? File.Exists;
+        _storeLockAcquireTimeout = storeLockAcquireTimeout ?? StoreLockAcquireTimeout;
     }
 
     /// <summary>
@@ -200,6 +211,8 @@ internal sealed class AvatarService
     /// at a never-written path (#377). (When the target path is unchanged the host writes the file in
     /// place, so a mid-write failure can still truncate the bytes — that is ImageSaver's contract, not
     /// ours to fix.) Throws on save failure; <see cref="TrySetAsync"/>'s best-effort catch owns the logging.
+    /// Returns silently instead, logging its own warning, if the per-user store lock cannot be acquired
+    /// within the bound (#448) — a timed-out wait skips the store entirely rather than throwing.
     /// </summary>
     /// <param name="user">The user whose profile image is set.</param>
     /// <param name="image">The fetched avatar bytes.</param>
@@ -213,7 +226,30 @@ internal sealed class AvatarService
         // can clear or overwrite the other's record. The lock spans only the store; the HTTP fetch runs
         // before this call (in TrySetAsync), so a slow endpoint never holds the per-user gate. Keyed by
         // user, so unrelated users never wait on each other.
-        using (await _userStoreLocks.AcquireAsync(user.Username, CancellationToken.None).ConfigureAwait(false))
+        //
+        // The wait itself is bounded (#448): CancellationToken.None made it unbounded, so a store step
+        // stalled while holding the gate (e.g. SaveImage blocking on disk I/O, or ClearProfileImageAsync
+        // on the host DB) could park every other concurrent login for this SAME user indefinitely.
+        // KeyedLockStore.AcquireAsync already honors cancellation and leaks no waiter/permit on it
+        // (KeyedLockStoreTests); a timed-out wait here acquires nothing, so the store below never runs
+        // unguarded — it is skipped entirely, exactly like the other best-effort fail-closed branches in
+        // this class (disallowed URL, disallowed content type, unsafe username).
+        using var acquireTimeout = new CancellationTokenSource(_storeLockAcquireTimeout);
+        IDisposable storeLock;
+        try
+        {
+            storeLock = await _userStoreLocks.AcquireAsync(user.Username, acquireTimeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (acquireTimeout.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "Timed out after {TimeoutSeconds}s waiting for another login to finish storing the SSO avatar for user: {Username}; skipping this store.",
+                _storeLockAcquireTimeout.TotalSeconds,
+                user.Username?.ReplaceLineEndings(string.Empty));
+            return;
+        }
+
+        using (storeLock)
         {
             await StoreLockedAsync(user, image, mediaType, extension).ConfigureAwait(false);
         }
