@@ -1,0 +1,3 @@
+# Fuzz seeds are opaque input bytes: never line-ending-convert them, so the corpus stays byte-exact
+# across platforms and reproduces identically for every fuzzer run.
+* -text
