@@ -18,7 +18,9 @@ public class SSOControllerAdminTests
     [Fact]
     public void OidDel_RemovesTheProvider()
     {
-        var harness = new SsoControllerHarness(c => c.OidConfigs["keycloak"] = new OidConfig());
+        // Enabled so the provider would appear in the enabled-only names list if it were not deleted
+        // (#344), keeping the DoesNotContain assertion a real proof of removal.
+        var harness = new SsoControllerHarness(c => c.OidConfigs["keycloak"] = new OidConfig { Enabled = true });
 
         harness.Controller.OidDel("keycloak");
 
@@ -39,7 +41,8 @@ public class SSOControllerAdminTests
     [Fact]
     public void SamlDel_RemovesTheProvider_ReturnsOk()
     {
-        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig());
+        // Enabled so it would appear in the enabled-only names list if not deleted (#344).
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig { Enabled = true });
 
         Assert.IsType<OkResult>(harness.Controller.SamlDel("adfs"));
 

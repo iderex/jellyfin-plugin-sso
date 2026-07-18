@@ -289,27 +289,37 @@ public class SSOController : ControllerBase
     }
 
     /// <summary>
-    /// Lists the OpenID providers names only.
+    /// Lists the names of the enabled OpenID providers only.
     /// </summary>
-    /// <returns>The list of OpenID configurations.</returns>
+    /// <returns>The list of enabled OpenID provider names.</returns>
     [HttpGet("OID/GetNames")]
     public ActionResult OidProviderNames()
     {
-        // Materialize the keys under the lock (#157/F-10): returning the live KeyCollection lets the
-        // JSON formatter enumerate it outside the lock, tearing against a concurrent provider add/remove.
-        return Ok(SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs.Keys.ToList()));
+        // Only enabled providers are offered (#344): this endpoint drives the self-service linking page,
+        // and a disabled provider cannot complete a link (the link leg fail-closes on Enabled, #343), so
+        // offering it would render an add button that only ever fails. The filter is UX honesty, not the
+        // gate — the server-side rejection stays the real defense in depth.
+        // Materialize under the lock (#157/F-10): returning a live view lets the JSON formatter enumerate
+        // it outside the lock, tearing against a concurrent provider add/remove.
+        return Ok(SSOPlugin.Instance.ReadConfiguration(c => EnabledProviderNames(c.OidConfigs)));
     }
 
     /// <summary>
-    /// Lists the SAML providers names only.
+    /// Lists the names of the enabled SAML providers only.
     /// </summary>
-    /// <returns>The list of SAML provider names.</returns>
+    /// <returns>The list of enabled SAML provider names.</returns>
     [HttpGet("SAML/GetNames")]
     public ActionResult SamlProviderNames()
     {
-        // Materialize under the lock (#157/F-10), as OID/GetNames does.
-        return Ok(SSOPlugin.Instance.ReadConfiguration(c => c.SamlConfigs.Keys.ToList()));
+        // Enabled-only and materialized under the lock, as OID/GetNames does (#344, #157/F-10).
+        return Ok(SSOPlugin.Instance.ReadConfiguration(c => EnabledProviderNames(c.SamlConfigs)));
     }
+
+    // Names of the enabled providers in a config map, materialized to a detached list (the caller holds
+    // the config lock). Shared by both GetNames twins so the enabled-only rule lives in one place.
+    private static List<string> EnabledProviderNames<TConfig>(SerializableDictionary<string, TConfig> configs)
+        where TConfig : ProviderConfigBase =>
+        configs.Where(kvp => kvp.Value.Enabled).Select(kvp => kvp.Key).ToList();
 
     /// <summary>
     /// This is a debug endpoint to list all running OpenID flows. Requires administrator privileges.

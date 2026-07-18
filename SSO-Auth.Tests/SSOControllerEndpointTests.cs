@@ -125,12 +125,12 @@ public class SSOControllerEndpointTests
     }
 
     [Fact]
-    public void OidProviderNames_ReturnsSeededNames()
+    public void OidProviderNames_ReturnsEnabledNames()
     {
         var harness = new SsoControllerHarness(c =>
         {
-            c.OidConfigs["keycloak"] = new OidConfig();
-            c.OidConfigs["authelia"] = new OidConfig();
+            c.OidConfigs["keycloak"] = new OidConfig { Enabled = true };
+            c.OidConfigs["authelia"] = new OidConfig { Enabled = true };
         });
 
         var result = Assert.IsType<OkObjectResult>(harness.Controller.OidProviderNames());
@@ -141,9 +141,40 @@ public class SSOControllerEndpointTests
     }
 
     [Fact]
-    public void SamlProviderNames_ReturnsSeededNames()
+    public void OidProviderNames_ExcludesDisabledProviders()
     {
-        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig());
+        // The self-service linking page must not offer a provider a user cannot link through (#344):
+        // a disabled provider is filtered out at the source so no add button is ever rendered for it.
+        var harness = new SsoControllerHarness(c =>
+        {
+            c.OidConfigs["keycloak"] = new OidConfig { Enabled = true };
+            c.OidConfigs["disabled-idp"] = new OidConfig { Enabled = false };
+        });
+
+        var result = Assert.IsType<OkObjectResult>(harness.Controller.OidProviderNames());
+        var names = Assert.IsType<List<string>>(result.Value);
+        Assert.Equal(new[] { "keycloak" }, names);
+    }
+
+    [Fact]
+    public void SamlProviderNames_ReturnsEnabledNames()
+    {
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig { Enabled = true });
+
+        var result = Assert.IsType<OkObjectResult>(harness.Controller.SamlProviderNames());
+        var names = Assert.IsType<List<string>>(result.Value);
+        Assert.Equal(new[] { "adfs" }, names);
+    }
+
+    [Fact]
+    public void SamlProviderNames_ExcludesDisabledProviders()
+    {
+        // SAML twin of the enabled-only linking filter (#344).
+        var harness = new SsoControllerHarness(c =>
+        {
+            c.SamlConfigs["adfs"] = new SamlConfig { Enabled = true };
+            c.SamlConfigs["disabled-idp"] = new SamlConfig { Enabled = false };
+        });
 
         var result = Assert.IsType<OkObjectResult>(harness.Controller.SamlProviderNames());
         var names = Assert.IsType<List<string>>(result.Value);

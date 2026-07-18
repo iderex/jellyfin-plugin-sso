@@ -278,7 +278,7 @@ async function link(request) {
            `MediaBrowser Client=""${request.appName}"",Device=""${request.deviceName}"",DeviceId=""${request.deviceId}"",Version=""${request.appVersion}"",Token=""${jfToken}""`)
 
        xhr.onload = function(e) {
-         resolve(xhr.response);
+         resolve(xhr.status);
        };
        xhr.onerror = function (e) {
          console.log(e);
@@ -306,7 +306,22 @@ async function main() {
 
     var request = {deviceId, appName, appVersion, deviceName, data};
 
-    if (" + $"{isLinking}".ToLower() + @") await link(request);
+    if (" + $"{isLinking}".ToLower() + @") {
+        // Surface a rejected link instead of swallowing it (#344): the link leg fail-closes with a
+        // non-2xx when the provider is disabled (#343), the caller is not allowed, or the request is
+        // throttled. Left silent, the page would fall through to the auth leg and show a misleading
+        // 'Login failed', so a rejected link stops here with its own message. A missing status
+        // (undefined: no stored credentials, or a network error) keeps the prior behavior of
+        // proceeding, since the outcome cannot be told apart from success.
+        var linkStatus = await link(request);
+        if (linkStatus !== undefined && (linkStatus < 200 || linkStatus >= 300)) {
+            document.querySelector('p').textContent =
+                linkStatus === 429
+                    ? 'Too many attempts. Please wait a moment and try again.'
+                    : 'Could not link this account. The provider may be disabled, or linking is not permitted.';
+            return;
+        }
+    }
 
     var url = ssoBaseUrl + '/sso/' + ssoMode + '/Auth/' + encodeURIComponent(ssoProvider);
 
