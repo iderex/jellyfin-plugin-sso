@@ -151,6 +151,47 @@ public class SamlOutcomeStoreTests
     }
 
     [Fact]
+    public void Reserve_ThenCommit_StoresARedeemableOutcome()
+    {
+        // The two-phase path the ACS callback uses (#539): reserve capacity first, then commit the built
+        // outcome once the assertion is consumed. The committed outcome redeems exactly like a TryAdd one.
+        var store = SmallStore();
+        Assert.True(store.TryReserve(clientKey: "A", Now, out var warn));
+        Assert.False(warn);
+        Assert.True(store.CommitReserved(Outcome("tok-1", clientKey: "A")));
+
+        Assert.NotNull(store.TryRedeem("tok-1", "adfs", Now));
+    }
+
+    [Fact]
+    public void Reserve_AtGlobalCap_Refuses_SoTheCallerNeverConsumesTheAssertion()
+    {
+        // #539: a full store refuses the reservation BEFORE the caller would consume the one-time replay
+        // cache, so a capacity refusal never burns the assertion. A null (exempt) key isolates the GLOBAL cap
+        // from the per-client sub-cap, so this proves the global-cap branch, not the per-client one.
+        var store = new SamlOutcomeStore(1, TimeSpan.FromMinutes(15), TimeSpan.FromMinutes(1));
+        Assert.True(store.TryAdd(Outcome("filler", clientKey: null), out _)); // occupies the one global slot
+
+        Assert.False(store.TryReserve(clientKey: null, Now, out var warn));
+        Assert.True(warn); // the throttled capacity warning fires for the first refusal in the interval
+    }
+
+    [Fact]
+    public void Release_AfterReserveWithoutCommit_FreesThePerClientSlot()
+    {
+        // A reservation that is not committed — a replayed or otherwise invalid assertion at the callback —
+        // must release its per-client slot, or the sub-cap would leak on every refused login and eventually
+        // lock the client out for real.
+        var store = SmallStore(); // per-key cap 2
+        Assert.True(store.TryReserve("A", Now, out _));
+        Assert.True(store.TryReserve("A", Now, out _)); // A holds its full share, all uncommitted
+        Assert.False(store.TryReserve("A", Now, out _)); // at the sub-cap
+
+        store.ReleaseReservation("A"); // abandon one reservation
+        Assert.True(store.TryReserve("A", Now, out _)); // the freed slot readmits A
+    }
+
+    [Fact]
     public void NewToken_IsUnguessableAndDistinct()
     {
         // A CSPRNG token: two mints never collide. A token that misses the store falls through to the

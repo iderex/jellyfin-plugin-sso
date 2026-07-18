@@ -45,17 +45,19 @@ internal sealed class SamlLoginService
     // browser binding (#415). One process-wide instance.
     private static readonly SamlRequestCache SamlRequests = new SamlRequestCache();
 
-    // The in-flight login-outcome store (#251): the ACS callback validates the assertion ONCE, stores the
-    // resulting verified outcome keyed by a CSPRNG token, and hands the intermediate page only that token;
-    // the session-mint leg redeems the token instead of re-parsing and re-validating the assertion. One
-    // process-wide instance, like the outstanding-request cache above — the callback and the mint leg run
-    // across separate per-request flow-service instances.
-    private static readonly SamlOutcomeStore Outcomes = new SamlOutcomeStore();
-
     // How long an issued SAML AuthnRequest ID stays valid for correlation — the interactive leg
     // (challenge -> IdP login/MFA -> POST back -> mint), matching the OpenID authorize-state lifetime the
     // sibling flow service keeps.
     private static readonly TimeSpan SamlRequestLifetime = TimeSpan.FromMinutes(15);
+
+    // The in-flight login-outcome store (#251): the ACS callback validates the assertion ONCE, stores the
+    // resulting verified outcome keyed by a CSPRNG token, and hands the intermediate page only that token;
+    // the session-mint leg redeems the token instead of re-parsing and re-validating the assertion. One
+    // process-wide instance, like the outstanding-request cache above — the callback and the mint leg run
+    // across separate per-request flow-service instances. Reassigned only by the test-only reset/swap hooks
+    // below (production sets it once); the field is not readonly solely so those hooks can install a
+    // small-cap store to exercise the cap path that the production ceiling makes unreachable.
+    private static SamlOutcomeStore _outcomes = new SamlOutcomeStore();
 
     // The shared login-completion tail (#160): resolve/adopt the link, build the session parameters, mint
     // under the revocation gate, audit, map to a LoginOutcome. Both protocols funnel their verified identity
@@ -91,13 +93,20 @@ internal sealed class SamlLoginService
     // InternalsVisibleTo, no endpoint/DI). Moved here with the statics from the controller (#160).
     internal static void ResetSamlRequestsForTests() => SamlRequests.Clear();
 
-    // Test-only: clears the in-flight login-outcome store (#251) between tests, the same process-wide-static
-    // reset reason as ResetSamlRequestsForTests. Internal, InternalsVisibleTo, never wired to an endpoint/DI.
-    internal static void ResetSamlOutcomesForTests() => Outcomes.Clear();
+    // Test-only: restores a fresh default in-flight login-outcome store (#251) between tests, the same
+    // process-wide-static reset reason as ResetSamlRequestsForTests. Installing a new instance (rather than
+    // Clear) also un-swaps any small-cap store a prior test installed via SetSamlOutcomeStoreForTests, so cap
+    // state cannot leak across tests. Internal, InternalsVisibleTo, never wired to an endpoint/DI.
+    internal static void ResetSamlOutcomesForTests() => _outcomes = new SamlOutcomeStore();
+
+    // Test-only: swaps in a specific outcome store so a test can drive the cap path the production ceiling
+    // (100k) makes unreachable — e.g. proving a cap refusal at the ACS callback no longer burns the assertion
+    // (#539). Un-swapped by the next ResetSamlOutcomesForTests. Internal, InternalsVisibleTo, no endpoint/DI.
+    internal static void SetSamlOutcomeStoreForTests(SamlOutcomeStore store) => _outcomes = store;
 
     // Test-only: seeds a single login outcome so a test can drive the token-redeem mint leg without first
     // running the callback that normally populates the store. Same test-only surface as the resets above.
-    internal static void SeedSamlOutcomeForTests(SamlLoginOutcome outcome) => Outcomes.Seed(outcome);
+    internal static void SeedSamlOutcomeForTests(SamlLoginOutcome outcome) => _outcomes.Seed(outcome);
 
     // Test-only seed of an outstanding SAML AuthnRequest so a test can exercise SamlAuth's browser
     // binding (#415) — normally populated by the challenge redirect leg — without deriving the random
@@ -184,41 +193,83 @@ internal sealed class SamlLoginService
         // cross-site and would not carry the SameSite=Lax binding cookie, so that check stays at the
         // same-origin mint leg (below), where the cookie is present — the assertion's InResponseTo is carried
         // in the stored outcome so the mint leg can correlate it without the XML.
-        if (!_validator.TryProduceVerifiedIdentity(config, provider, samlResponse, out var identity, out var rejection))
-        {
-            return LoginStatusMapper.ToActionResult(rejection);
-        }
-
+        //
+        // Reserve the outcome-store slot BEFORE the replay consume (#539). The consume is one-time: an
+        // assertion recorded as used can never be presented again. So if the store refused AFTER the consume,
+        // a cap refusal would burn the assertion for a login that never completed and permanently lock the
+        // legitimate user out even though nothing malicious happened. Reserving first means a capacity refusal
+        // fails closed here with the assertion untouched, so the user can retry once the store drains. Replay
+        // protection is unchanged: the consume below is still the atomic one-time claim, it now runs only once
+        // a slot is secured, and any failure between reserve and commit releases the reservation — so a
+        // committed login always consumed the assertion and a consumed assertion always completed (or was a
+        // genuine replay/invalid assertion, which still fails closed without minting).
         var clientKey = SsoRateLimiter.NormalizeClientKey(request.HttpContext.Connection.RemoteIpAddress);
-        Outcomes.PruneExpired(DateTime.UtcNow);
-        var outcome = new SamlLoginOutcome(
-            SamlOutcomeStore.NewToken(),
-            provider,
-            identity,
-            samlResponse.GetInResponseTo() ?? string.Empty,
-            clientKey,
-            DateTime.UtcNow);
-        if (!Outcomes.TryAdd(outcome, out var shouldWarnCapacity))
+        _outcomes.PruneExpired(DateTime.UtcNow);
+        if (!_outcomes.TryReserve(clientKey, DateTime.UtcNow, out var shouldWarnCapacity))
         {
-            // A CSPRNG-token collision (effectively impossible) or the store is at capacity — fail closed
-            // rather than render a page whose token could never redeem. The store throttles the capacity
-            // warning to one signal per interval so a flood cannot amplify into log volume (CWE-400).
+            // The per-client sub-cap or the global cap refused this login's outcome slot — fail closed BEFORE
+            // the replay consume, so the assertion is not recorded as used and the login can be retried once
+            // the store drains. The store throttles the capacity warning to one signal per interval so a flood
+            // cannot amplify into log volume (CWE-400).
             if (shouldWarnCapacity)
             {
-                _logger.LogWarning("SAML login outcome refused for provider {Provider}: a CSPRNG-token collision (effectively impossible) or the outcome store is at capacity (warning throttled).", provider?.ReplaceLineEndings(string.Empty));
+                _logger.LogWarning("SAML login outcome refused for provider {Provider}: the per-client sub-cap or the outcome store is at capacity (warning throttled); the assertion was not consumed, so the login can be retried.", provider?.ReplaceLineEndings(string.Empty));
             }
 
             return FlowResponses.PlainTextError(StatusCodes.Status500InternalServerError, "Could not start login; please retry.");
         }
 
-        return FlowResponses.AuthPage(response, nonce =>
-            WebResponse.Generator(
-                data: outcome.Token,
-                provider: provider,
-                baseUrl: requestBase,
-                mode: "SAML",
-                nonce: nonce,
-                isLinking: false));
+        // Slot secured: now consume the one-time replay cache and build the verified identity. Everything from
+        // here until the outcome is committed runs under a finally that releases the reservation unless it was
+        // handed to a committed outcome — so "exactly one release per reservation" is structural, covering both
+        // the fail-closed returns (a genuine replay or a NameID-less assertion, which mint nothing) AND any
+        // unexpected throw between reserve and commit; a per-client slot can never leak.
+        bool committed = false;
+        try
+        {
+            if (!_validator.TryProduceVerifiedIdentity(config, provider, samlResponse, out var identity, out var rejection))
+            {
+                // A genuine replay (or an assertion with no usable NameID) still fails closed here, minting
+                // nothing — so moving the capacity check ahead of the consume never lets a replayed assertion
+                // through. The reserved slot is freed by the finally.
+                return LoginStatusMapper.ToActionResult(rejection);
+            }
+
+            var outcome = new SamlLoginOutcome(
+                SamlOutcomeStore.NewToken(),
+                provider,
+                identity,
+                samlResponse.GetInResponseTo() ?? string.Empty,
+                clientKey,
+                DateTime.UtcNow);
+            if (!_outcomes.CommitReserved(outcome))
+            {
+                // Only reachable on an effectively-impossible CSPRNG-token collision — the capacity was already
+                // reserved, so this is not a cap refusal. The assertion is one-time and already consumed here,
+                // so this ~2^-256 event fails closed (unretryable) rather than rendering a token that could
+                // never redeem. The finally frees the reserved slot.
+                return FlowResponses.PlainTextError(StatusCodes.Status500InternalServerError, "Could not start login; please retry.");
+            }
+
+            // The committed outcome now owns the reserved slot (released on its redeem or prune), so the finally
+            // must NOT free it. AuthPage renders the token eagerly, so it is read before the finally runs.
+            committed = true;
+            return FlowResponses.AuthPage(response, nonce =>
+                WebResponse.Generator(
+                    data: outcome.Token,
+                    provider: provider,
+                    baseUrl: requestBase,
+                    mode: "SAML",
+                    nonce: nonce,
+                    isLinking: false));
+        }
+        finally
+        {
+            if (!committed)
+            {
+                _outcomes.ReleaseReservation(clientKey);
+            }
+        }
     }
 
     /// <summary>
@@ -353,7 +404,7 @@ internal sealed class SamlLoginService
         // here: only the browser binding remains, checked at this same-origin leg where the SameSite=Lax
         // cookie is sent (the cross-site ACS POST could not carry it). A miss falls through to the
         // deprecation branch below, so an unknown/expired/replayed token is rejected there rather than minting.
-        if (Outcomes.TryRedeem(response?.Data, provider, DateTime.UtcNow) is { } outcome)
+        if (_outcomes.TryRedeem(response?.Data, provider, DateTime.UtcNow) is { } outcome)
         {
             if (!CorrelateAndBind(provider, outcome.InResponseTo, bindingCookie, config.ValidateInResponseTo))
             {
