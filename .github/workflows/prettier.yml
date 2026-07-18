@@ -6,6 +6,7 @@ on:
   pull_request:
     branches: [ main ]
 
+# Read-only: the lint only inspects tracked files, it never writes.
 permissions:
   contents: read
 
@@ -14,6 +15,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # No `name:` on this job: the "Protect main" ruleset's required status check
+  # matches the literal check-run name, which defaults to the job id
+  # ("prettier") when no `name:` is set. Overriding it here would rename the
+  # check run and silently break the required-status-check gate.
   prettier:
     runs-on: ubuntu-latest
     timeout-minutes: 10

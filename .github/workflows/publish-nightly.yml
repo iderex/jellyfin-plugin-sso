@@ -5,10 +5,13 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+# Explicit deny-all at workflow level; the job below opts into write access
+# explicitly rather than granting it workflow-wide.
 permissions: {}
 
 jobs:
   build:
+    name: Build & publish nightly
 
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -63,7 +66,7 @@ jobs:
         popd
     - name: Publish output artifacts
       id: publish-assets
-      uses: softprops/action-gh-release@132dbbba49e22bd4837f09b46d32a8edaf6baa58
+      uses: softprops/action-gh-release@132dbbba49e22bd4837f09b46d32a8edaf6baa58 # unreleased commit between v3.0.1 and v3.0.2
       with:
           # Mark the nightly as a prerelease so the manifest step's ignorePrereleases
           # filter keeps 0.0.0.9000 out of the production manifest.json every plugin-repo
@@ -79,7 +82,7 @@ jobs:
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     - name: Publish Plugin Manifest
-      uses: Kevinjil/jellyfin-plugin-repo-action@296850372cd569cbcc040e834222a5afed861485
+      uses: Kevinjil/jellyfin-plugin-repo-action@296850372cd569cbcc040e834222a5afed861485 # v0.4.3
       with:
         ignorePrereleases: true
         githubToken: ${{ secrets.GITHUB_TOKEN }}

@@ -13,13 +13,16 @@ permissions:
 
 jobs:
   build:
+    name: Build package
     uses: ./.github/workflows/build.yml
     with:
       dotnet-version: "9.0.*"
       dotnet-target:  "net9.0"
   upload:
+    name: Upload release assets
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Publishes the GitHub release asset, so needs write access.
     permissions:
       contents: write
     needs:
@@ -38,7 +41,7 @@ jobs:
         ls -l
     - name: Publish output artifacts
       id: publish-assets
-      uses: softprops/action-gh-release@132dbbba49e22bd4837f09b46d32a8edaf6baa58
+      uses: softprops/action-gh-release@132dbbba49e22bd4837f09b46d32a8edaf6baa58 # unreleased commit between v3.0.1 and v3.0.2
       with:
           prerelease: false
           fail_on_unmatched_files: true
@@ -47,15 +50,17 @@ jobs:
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   generate:
+    name: Publish plugin manifest
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Publishes the plugin manifest to the pages branch, so needs write access.
     permissions:
       contents: write
     needs:
     - upload
     steps:
     - name: Publish Plugin Manifest
-      uses: Kevinjil/jellyfin-plugin-repo-action@296850372cd569cbcc040e834222a5afed861485
+      uses: Kevinjil/jellyfin-plugin-repo-action@296850372cd569cbcc040e834222a5afed861485 # v0.4.3
       with:
         ignorePrereleases: true
         githubToken: ${{ secrets.GITHUB_TOKEN }}

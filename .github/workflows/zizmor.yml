@@ -26,15 +26,24 @@ on:
   pull_request:
     branches: [ "**" ]
 
+# Explicit deny-all at workflow level; the job below grants only what it needs.
 permissions: {}
+
+# Cancel a superseded run on the same ref so a new push / PR update does not
+# queue behind an obsolete scan. This is an audit job, not a publish, so
+# cancelling a superseded run is safe.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   zizmor:
+    name: Audit workflows (zizmor)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       security-events: write # upload the SARIF into the code-scanning tab
-      contents: read
+      contents: read # checkout the workflows to scan
     env:
       ZIZMOR_VERSION: "1.26.1"
     steps:
