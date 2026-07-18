@@ -18,8 +18,8 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 /// authorization contract has three independent terms and each row below pins one of them: self is allowed
 /// without admin, an administrator may act on another user, a plain caller may not, the preference-access
 /// term gates every path (even self, even admin), and a request with no authenticated user faults closed
-/// rather than returning an allow. The deny rows assert <c>false</c> (or a throw), so loosening the helper
-/// to default-allow makes them fail. These tests drive the helper directly through a substituted
+/// via an explicit deny rather than returning an allow. The deny rows assert <c>false</c>, so loosening the
+/// helper to default-allow makes them fail. These tests drive the helper directly through a substituted
 /// <see cref="IAuthorizationContext"/>; they touch no process-wide state and so need no test collection.
 /// </summary>
 public class RequestHelpersTests
@@ -77,13 +77,12 @@ public class RequestHelpersTests
     [Fact]
     public async Task UnauthenticatedContext_FailsClosed()
     {
-        // No authenticated user resolved: the helper dereferences the (null) user and faults with a
-        // NullReferenceException rather than returning an allow — the ambiguous case never yields true. A
-        // future explicit null-guard should return false; if that lands, update this to Assert.False.
+        // No authenticated user resolved: the explicit null-guard returns a clean deny rather than
+        // dereferencing the (null) user and faulting with a NullReferenceException — the ambiguous case
+        // never yields true and never surfaces as a 500.
         var authContext = ContextFor(user: null);
 
-        await Assert.ThrowsAsync<NullReferenceException>(
-            async () => await RequestHelpers.AssertCanUpdateUser(authContext, Request(), Other));
+        Assert.False(await RequestHelpers.AssertCanUpdateUser(authContext, Request(), Other));
     }
 
     private static IAuthorizationContext ContextFor(User? user)
