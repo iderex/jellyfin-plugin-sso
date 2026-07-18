@@ -8,6 +8,7 @@ using System.Text.RegularExpressions;
 using Jellyfin.Plugin.SSO_Auth;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Api.Flows;
+using Jellyfin.Plugin.SSO_Auth.Api.Shared;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using MediaBrowser.Model.Plugins;
 using Microsoft.AspNetCore.Mvc;
@@ -485,8 +486,9 @@ public class ArchitectureConformanceTests
         // The two cache tokens are nameof-derived, so a rename of either type fails to COMPILE this rule
         // rather than passing vacuously; the two protocol tokens are the OidcClient methods the challenge
         // (PrepareLoginAsync) and callback (ProcessResponseAsync) drive. The shared per-client rate limiter
-        // is deliberately NOT a marker — it fronts BOTH protocols, so it legitimately stays a controller
-        // static and its extraction is out of scope for this step.
+        // is deliberately NOT a marker — it fronts BOTH protocols, so rather than living on either flow
+        // service it lives in the shared SsoRateLimitGate (#160), pinned off the controller by
+        // Controller_HoldsNoMutableStaticState.
         var storeToken = nameof(OidcStateStore);
         var cacheToken = nameof(OidcDiscoveryCache);
         var markers = new[] { storeToken, cacheToken, "PrepareLoginAsync", "ProcessResponseAsync" };
@@ -527,7 +529,8 @@ public class ArchitectureConformanceTests
         // rather than passing vacuously; the two protocol tokens are the outgoing-request builder
         // (SamlAuthnRequest, which the challenge constructs and signs) and the response validator
         // (ValidateSaml). The shared per-client rate limiter is deliberately NOT a marker — it fronts BOTH
-        // protocols, so it legitimately stays a controller static, exactly as in the OpenID rule.
+        // protocols, so it lives in the shared SsoRateLimitGate (#160), pinned off the controller by
+        // Controller_HoldsNoMutableStaticState, exactly as in the OpenID rule.
         var replayToken = nameof(SamlReplayCache);
         var requestToken = nameof(SamlRequestCache);
         var markers = new[] { replayToken, requestToken, "SamlAuthnRequest", "ValidateSaml" };
@@ -617,6 +620,63 @@ public class ArchitectureConformanceTests
         Assert.True(
             mapperSource.Contains("Status429TooManyRequests", StringComparison.Ordinal) && mapperSource.Contains("RetryAfter", StringComparison.Ordinal),
             "LoginStatusMapper must own the rate-limit 429 and its Retry-After header; otherwise the controller scan passes vacuously (#474).");
+    }
+
+    [Fact]
+    public void Controller_HoldsNoMutableStaticState()
+    {
+        // Locked in by the rate-limit-gate extraction (#160, #318): after the OpenID (#500), SAML (#501) and
+        // rate-limit (#160) moves, the controller is a stateless request dispatcher — every process-wide
+        // store, cache and limiter lives in a flow service or the Shared tier. So a controller holds NO
+        // mutable process-wide state as a static field. The former SsoRateLimiter static (the last such on
+        // SSOController) moved into SsoRateLimitGate; a new cache/limiter/counter/dictionary dropped back
+        // onto ANY controller — the exact regression this rule guards — fails HERE.
+        //
+        // "Mutable state" is what is forbidden, not every static: a compile-time constant (a const, which is
+        // IsLiteral) and an immutable static readonly VALUE (e.g. SSOViewsController's version-derived asset
+        // ETag, an EntityTagHeaderValue computed once at load) are fine — they never accumulate runtime
+        // state. So a static field is an offender only when it is genuinely mutable: a WRITABLE static (not
+        // readonly, so it can be reassigned at runtime), OR a static readonly reference to a state CONTAINER
+        // — a *Store/*Cache/*Limiter type, or a raw dictionary — which is readonly-by-reference but mutates
+        // internally (exactly the shape SsoRateLimiter had on the controller). Compiler-generated backing
+        // fields ('<'-named) are excluded, the same exclusion the other reflection rules use.
+        var stateSuffixes = new[] { "Store", "Cache", "Limiter" };
+        bool IsStateContainer(Type t) =>
+            IsDictionaryLike(t)
+            || (t.Assembly == typeof(SSOPlugin).Assembly && stateSuffixes.Any(s => SimpleName(t).EndsWith(s, StringComparison.Ordinal)));
+
+        const BindingFlags statics = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+        var controllers = PluginClasses.Where(t => typeof(ControllerBase).IsAssignableFrom(t)).ToList();
+
+        // Sentinel against a vacuous pass: a controller must be found, or a rename/rebase that lost the
+        // ControllerBase base would pass this rule for the wrong reason (as ControllerSourceFiles guards the
+        // source-scan rules).
+        Assert.True(
+            controllers.Count > 0,
+            "No controller type was found to check for mutable static state; a controller was renamed or lost its ControllerBase base — update Controller_HoldsNoMutableStaticState.");
+
+        var offenders = controllers
+            .SelectMany(t => t.GetFields(statics)
+                .Where(f => !f.Name.Contains('<', StringComparison.Ordinal))
+                .Where(f => !f.IsLiteral)
+                .Where(f => !f.IsInitOnly || IsStateContainer(f.FieldType))
+                .Select(f => $"{SimpleName(t)}.{f.Name} ({SimpleName(f.FieldType)})"))
+            .ToList();
+
+        Assert.True(
+            offenders.Count == 0,
+            "A controller must hold no mutable static state (a writable static, or a static readonly *Store/*Cache/*Limiter or dictionary); every process-wide store/cache/limiter belongs in a flow service or a Shared gate (#160, #318). Found: " + string.Join(", ", offenders));
+
+        // Liveness against a vacuous pass: the rate limiter must actually live in its new home — a move, not
+        // a silent removal — so SsoRateLimitGate must own the process-wide SsoRateLimiter instance the
+        // controller no longer holds, and it is a state container the offender scan above would catch on a
+        // controller (so the rule is proven non-vacuous on the very type that motivated it).
+        var gateOwnsLimiter = typeof(SsoRateLimitGate)
+            .GetFields(statics)
+            .Any(f => f.FieldType == typeof(SsoRateLimiter));
+        Assert.True(
+            gateOwnsLimiter && IsStateContainer(typeof(SsoRateLimiter)),
+            "SsoRateLimitGate must own the process-wide SsoRateLimiter (a state container) that moved off the controller; otherwise the controller scan passes vacuously (#160).");
     }
 
     [Fact]

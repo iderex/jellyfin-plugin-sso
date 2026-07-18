@@ -9,6 +9,7 @@ using Jellyfin.Data;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.SSO_Auth.Api.Flows;
+using Jellyfin.Plugin.SSO_Auth.Api.Shared;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Jellyfin.Plugin.SSO_Auth.Helpers;
 using MediaBrowser.Common.Api;
@@ -60,16 +61,17 @@ public class SSOController : ControllerBase
     // The OpenID login flow (#160, #318 step 12): challenge, redirect callback, session-minting
     // authenticate, and manual link. It owns the OpenID-specific process-wide caches (the authorize-state
     // store and the discovery-facts cache) as its own statics; the controller's OpenID endpoints apply the
-    // shared rate-limit gate below and delegate here. New'd per request like the other collaborators.
+    // shared rate-limit gate (SsoRateLimitGate) and delegate here. New'd per request like the other collaborators.
     private readonly Flows.OidcLoginService _oidc;
     // The SAML login flow (#160, #318 step 13): challenge, assertion-consumer callback, session-minting
     // authenticate, and manual link. It owns the SAML-specific process-wide caches (the replay cache and
     // the outstanding-AuthnRequest cache) as its own statics; the controller's SAML endpoints apply the
-    // shared rate-limit gate below and delegate here. New'd per request like the other collaborators.
+    // shared rate-limit gate (SsoRateLimitGate) and delegate here. New'd per request like the other collaborators.
     private readonly Flows.SamlLoginService _saml;
 
-    // Opt-in per-client rate limiter over the anonymous SSO flow endpoints (#128).
-    private static readonly SsoRateLimiter RateLimiter = new SsoRateLimiter();
+    // The shared per-client rate limiter and its opt-in check live in SsoRateLimitGate (#160, #318): the last
+    // mutable process-wide static moved off the controller into the Shared tier, so the controller now holds
+    // no mutable static state. The RateLimitCheck wrapper below supplies the request-scoped inputs.
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SSOController"/> class.
@@ -680,49 +682,12 @@ public class SSOController : ControllerBase
     private ActionResult OidLink(string provider, Guid jellyfinUserId, AuthResponse response) =>
         _oidc.Link(provider, jellyfinUserId, response, Request.Cookies[AuthorizeStateBinding.CookieName]);
 
-    // Applies the opt-in per-client rate limit (#128) on an anonymous flow endpoint: null when the
-    // request may proceed, else the throttled outcome rendered by the single mapper (#474). Reads the
-    // settings under the config lock; an unattributable or non-public client is never throttled (fail
-    // open, availability over throttling). Keys on RemoteIpAddress only — proxy attribution is the
-    // host's job (Jellyfin's "Known proxies" setting resolves the real client into it); see
-    // SsoRateLimiter.NormalizeClientKey. The endpoint class (challenge/callback/auth) is part of
-    // the key so one login — which hits all three — gets the full budget at each stage rather
-    // than a third of it, keeping the default generous for shared egress addresses (NAT/CGNAT).
-    private ActionResult RateLimitCheck(string endpointClass)
-    {
-        var (enabled, maxAttempts, windowSeconds) = SSOPlugin.Instance.ReadConfiguration(
-            c => (c.EnableRateLimit, c.RateLimitMaxAttempts, c.RateLimitWindowSeconds));
-        if (!enabled || windowSeconds < 1)
-        {
-            // maxAttempts < 1 is handled inside IsAllowed (it disables the limiter there).
-            return null;
-        }
-
-        var key = SsoRateLimiter.NormalizeClientKey(HttpContext.Connection.RemoteIpAddress);
-        if (key != null)
-        {
-            key = endpointClass + ":" + key;
-        }
-
-        var now = DateTime.UtcNow;
-        if (RateLimiter.IsAllowed(key, maxAttempts, TimeSpan.FromSeconds(windowSeconds), now, out var retryAfterSeconds))
-        {
-            return null;
-        }
-
-        // Bounded observability signal (#195): so an operator can notice a sustained brute-force or a
-        // reverse proxy misconfigured to pool every client into one bucket, without the notice itself
-        // becoming a log/CPU amplifier. The limiter emits at most one line per interval, carrying only
-        // an aggregate count (no client key — nothing to sanitize or forge); a returned 0 stays silent.
-        var throttledCount = RateLimiter.RecordThrottledHit(now);
-        if (throttledCount > 0)
-        {
-            _logger.LogWarning("SSO rate limit engaged on the anonymous login endpoints: {Count} request(s) throttled since the last notice; further notices are suppressed for at least a minute.", throttledCount);
-        }
-
-        // The rejection is expressed as a LoginOutcome and rendered by the single mapper (#474): the
-        // status, plain-text body and the retry-delay header all originate there, so the controller no
-        // longer emits a bare rate-limit ContentResult or sets the delay header itself.
-        return LoginStatusMapper.ToActionResult(new LoginOutcome.Throttled(retryAfterSeconds), Response);
-    }
+    // Fronts an anonymous flow endpoint with the shared per-client rate-limit gate (#128, #160): null when
+    // the request may proceed, else the throttled outcome the single mapper renders (#474). The gate owns the
+    // one process-wide limiter and the whole check (config read, IP classifier, endpoint-class keying, the
+    // #195 observability signal); this wrapper only supplies the three request-scoped inputs it needs — the
+    // endpoint class, the connection's remote address, and the response the retry-delay header is set on — so
+    // the controller keeps no rate-limit state of its own.
+    private ActionResult RateLimitCheck(string endpointClass) =>
+        SsoRateLimitGate.Check(endpointClass, HttpContext.Connection.RemoteIpAddress, _logger, Response);
 }

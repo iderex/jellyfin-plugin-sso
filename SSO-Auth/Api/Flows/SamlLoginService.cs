@@ -30,8 +30,9 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Flows;
 /// <item>the one-time-use replay cache of consumed assertion IDs (<see cref="SamlReplayCache"/>), and</item>
 /// <item>the outstanding-AuthnRequest cache for InResponseTo correlation and the browser binding (<see cref="SamlRequestCache"/>, #156/#415).</item>
 /// </list>
-/// The shared per-client rate limiter is deliberately NOT here — it also fronts the OpenID flow, so it stays a
-/// controller static both flows reach through the controller's rate-limit gate. The methods take the
+/// The shared per-client rate limiter is deliberately NOT here — it also fronts the OpenID flow, so it lives
+/// in the shared <see cref="SsoRateLimitGate"/> (Api/Shared) that the controller's endpoints front this
+/// service with, rather than as a per-flow static (#160). The methods take the
 /// request/response because SAML is irreducibly HTTP (the redirect, the ACS POST form, the binding cookie, the
 /// security-headered page, and the request-host-derived assertion-consumer URL the Recipient is bound to); the
 /// two response shapes both flows share — the security-headered auth page and the manual-link write mapping —
