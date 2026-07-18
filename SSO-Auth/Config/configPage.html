@@ -906,6 +906,30 @@
                 >
                   <span>Save</span>
                 </button>
+
+                <!--
+                  Test-connection (#163). No sso-* marker class: this button and the result container are
+                  not persisting provider fields, so listArgumentsByType/saveProvider must not pick them up
+                  and the ProviderFormFieldIds_MatchOidConfigProperties contract does not apply to them. The
+                  test validates the SAVED provider — it reads the stored config server-side — so save first.
+                -->
+                <button
+                  id="TestProvider"
+                  is="emby-button"
+                  type="button"
+                  class="raised button-alt block emby-button"
+                >
+                  <span>Test Connection</span>
+                </button>
+                <div class="fieldDescription">
+                  Validates the <strong>saved</strong> provider: the server
+                  fetches the OpenID discovery document over the same hardened,
+                  HTTPS-checked path the login uses and reports the issuer,
+                  endpoints and JWKS reachability. Save the provider first.
+                  Requires administrator privileges; the client secret is never
+                  shown.
+                </div>
+                <div id="TestResult"></div>
               </div>
             </div>
           </form>

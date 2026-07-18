@@ -54,6 +54,9 @@ public class SSOController : ControllerBase
     private readonly IAuthorizationContext _authContext;
     private readonly ILogger<SSOController> _logger;
     private readonly ICryptoProvider _cryptoProvider;
+    // Kept so the elevation-gated Test-connection endpoints (#163) can read a provider's OpenID discovery
+    // through the SAME hardened reader the login uses; the shared login flow takes its own reference.
+    private readonly IHttpClientFactory _httpClientFactory;
 
     // The account-linking workflow (resolve/adopt/create, legacy re-key, revoke); the controller keeps
     // the authz guards, the one-time-use replay/state consume, and the HTTP mapping (#318).
@@ -101,6 +104,7 @@ public class SSOController : ControllerBase
         _cryptoProvider = cryptoProvider;
         _logger = logger;
         _sessionManager = sessionManager;
+        _httpClientFactory = httpClientFactory;
         _canonicalLinks = new CanonicalLinkService(userManager, cryptoProvider, SSOPlugin.Instance.ConfigStore, logger);
         var avatarService = new AvatarService(userManager, providerManager, serverConfigurationManager, logger, SsoHttp.UserAgent);
         var sessionMinter = new SessionMinter(userManager, avatarService, sessionManager, logger);
@@ -338,6 +342,39 @@ public class SSOController : ControllerBase
         configs.Where(kvp => kvp.Value is { Enabled: true }).Select(kvp => kvp.Key).ToList();
 
     /// <summary>
+    /// Tests connectivity and basic config for a stored OpenID provider (#163). Requires administrator
+    /// privileges. Reads the provider's discovery document through the SAME hardened reader the login uses
+    /// and reports the issuer, endpoints and JWKS reachability — never the client secret. Deliberately
+    /// elevation-gated (unlike the anonymous GetNames): the server fetches an admin-configured URL, so an
+    /// unauthenticated caller must not be able to drive it as an SSRF probe.
+    /// </summary>
+    /// <param name="provider">The stored OpenID provider to test.</param>
+    /// <returns>The non-secret test result, or 404 when the provider is not configured.</returns>
+    [Authorize(Policy = Policies.RequiresElevation)]
+    [HttpGet("OID/Test/{provider}")]
+    public async Task<ActionResult> OidTest(string provider)
+    {
+        // Throttle after the elevation guard, before the outbound fetch (mirrors Unregister, #516): the
+        // [Authorize] filter rejects a non-elevated caller before the body runs, so an unauthorized request
+        // never reaches the limiter (no rate-limit oracle). Once past it, the shared "test" budget caps how
+        // fast an authorized admin can drive the probe's outbound discovery fetch.
+        if (RateLimitCheck("test") is { } throttled)
+        {
+            return throttled;
+        }
+
+        // Read the stored provider under the config lock, then hand it to the tester (the fetch and any
+        // logging live there). The tester never reveals the client secret — discovery needs no credential.
+        var config = SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs.TryGetValue(provider, out var cfg) ? cfg : null);
+        if (config is null)
+        {
+            return NotFound(NoMatchingProviderMessage);
+        }
+
+        return Ok(await ProviderConnectionTester.TestOidcAsync(config, provider, _httpClientFactory, _logger).ConfigureAwait(false));
+    }
+
+    /// <summary>
     /// This is a debug endpoint to list all running OpenID flows. Requires administrator privileges.
     /// </summary>
     /// <returns>The list of OpenID flows in progress.</returns>
@@ -512,6 +549,27 @@ public class SSOController : ControllerBase
     public ActionResult SamlProviders()
     {
         return Ok(SSOPlugin.Instance.ReadConfiguration(c => SnapshotConfigs(c.SamlConfigs)));
+    }
+
+    /// <summary>
+    /// Tests basic config for a stored SAML provider (#163). Requires administrator privileges. Parses the
+    /// configured PUBLIC identity-provider signing certificate and reports its non-secret facts — never the
+    /// service-provider signing key. There is no SAML metadata-URL field, so this makes no network call.
+    /// Elevation-gated like the other SAML admin endpoints.
+    /// </summary>
+    /// <param name="provider">The stored SAML provider to test.</param>
+    /// <returns>The non-secret test result, or 404 when the provider is not configured.</returns>
+    [Authorize(Policy = Policies.RequiresElevation)]
+    [HttpGet("SAML/Test/{provider}")]
+    public ActionResult SamlTest(string provider)
+    {
+        var config = SSOPlugin.Instance.ReadConfiguration(c => c.SamlConfigs.TryGetValue(provider, out var cfg) ? cfg : null);
+        if (config is null)
+        {
+            return NotFound(NoMatchingProviderMessage);
+        }
+
+        return Ok(ProviderConnectionTester.TestSaml(config));
     }
 
     /// <summary>

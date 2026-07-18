@@ -575,27 +575,24 @@ internal sealed class OidcLoginService
     // Uri constructor, after the options object).
     private OidcClientOptions BuildOidcOptions(OidConfig config, string redirectUri, string scope)
     {
-        var options = new OidcClientOptions
-        {
-            Authority = config.OidEndpoint?.Trim(),
-            ClientId = config.OidClientId?.Trim(),
-            // The client secret is stored encrypted at rest (#158); reveal it at the point of use. A legacy
-            // plaintext value passes through unchanged (transparent migration); a missing/corrupt key throws
-            // (CryptographicException) rather than returning a wrong or empty secret — the login then fails
-            // closed rather than silently attempting an unauthenticated token exchange.
-            ClientSecret = SSOPlugin.Instance.Secrets.Reveal(config.OidSecret)?.Trim(),
-            RedirectUri = redirectUri,
-            Scope = scope,
-            DisablePushedAuthorization = config.DisablePushedAuthorization,
-            LoggerFactory = _loggerFactory,
-            LoadProfile = !config.DoNotLoadProfile,
-            HttpClientFactory = o => SsoHttp.CreateClient(_httpClientFactory)
-        };
-        var oidEndpointUri = new Uri(config.OidEndpoint?.Trim());
-        options.Policy.Discovery.AdditionalEndpointBaseAddresses.Add(oidEndpointUri.GetLeftPart(UriPartial.Authority));
-        options.Policy.Discovery.ValidateEndpoints = !config.DoNotValidateEndpoints; // For Google and other providers with different endpoints
-        options.Policy.Discovery.RequireHttps = !config.DisableHttps;
-        options.Policy.Discovery.ValidateIssuerName = !config.DoNotValidateIssuerName;
+        // Authority and the discovery policy (RequireHttps / ValidateIssuerName / ValidateEndpoints + the
+        // additional base address) come from the one shared builder (#163), so the login and the admin
+        // Test-connection probe read discovery under an identical SSRF/TLS posture — the policy cannot drift
+        // between them. A null/invalid OidEndpoint still throws here (inside the caller's secret-reveal
+        // guard) exactly as before, so the challenge fails closed at the same point.
+        var options = OidcDiscoveryOptions.Build(config);
+        options.ClientId = config.OidClientId?.Trim();
+        // The client secret is stored encrypted at rest (#158); reveal it at the point of use. A legacy
+        // plaintext value passes through unchanged (transparent migration); a missing/corrupt key throws
+        // (CryptographicException) rather than returning a wrong or empty secret — the login then fails
+        // closed rather than silently attempting an unauthenticated token exchange.
+        options.ClientSecret = SSOPlugin.Instance.Secrets.Reveal(config.OidSecret)?.Trim();
+        options.RedirectUri = redirectUri;
+        options.Scope = scope;
+        options.DisablePushedAuthorization = config.DisablePushedAuthorization;
+        options.LoggerFactory = _loggerFactory;
+        options.LoadProfile = !config.DoNotLoadProfile;
+        options.HttpClientFactory = o => SsoHttp.CreateClient(_httpClientFactory);
 
         // OidcClient 7.x validates nothing about the id_token unless a validator is supplied (its
         // fallback only base64-decodes the payload). Signature validation is required and has no

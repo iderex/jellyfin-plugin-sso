@@ -377,6 +377,70 @@ const ssoConfigurationPage = {
       });
     });
   },
+  // Test-connection (#163). Calls the elevation-gated OID/Test endpoint for the SAVED provider and renders
+  // the result. The endpoint reads the stored config server-side, fetches the discovery document over the
+  // login's hardened path, and returns only non-secret facts (issuer, endpoints, JWKS reachability) — the
+  // client secret is never sent back. Everything is rendered with createElement/textContent (never
+  // innerHTML) so a reflected issuer/endpoint string cannot inject markup, matching linking.js and
+  // _populateFolders (#221).
+  testProvider: (page, provider_name) => {
+    const container = page.querySelector("#TestResult");
+    if (!provider_name) {
+      ssoConfigurationPage.renderTestMessage(
+        container,
+        "Enter a provider name and save it first, then test.",
+      );
+      return Promise.resolve();
+    }
+
+    ssoConfigurationPage.renderTestMessage(container, "Testing…");
+
+    return ApiClient.getJSON(
+      ApiClient.getUrl("sso/OID/Test/" + encodeURIComponent(provider_name)),
+    ).then(
+      (result) => ssoConfigurationPage.renderTestResult(container, result),
+      // A rejection is a transport/authorization failure or an unconfigured provider (404). Keep the
+      // message generic and actionable — it never reflects a server-side secret.
+      () =>
+        ssoConfigurationPage.renderTestMessage(
+          container,
+          "Could not run the test. Make sure the provider is saved and that you are signed in as an administrator, then try again.",
+        ),
+    );
+  },
+  renderTestMessage: (container, message) => {
+    container.replaceChildren();
+    const line = document.createElement("p");
+    line.classList.add("fieldDescription");
+    line.textContent = message;
+    container.appendChild(line);
+  },
+  renderTestResult: (container, result) => {
+    container.replaceChildren();
+
+    const heading = document.createElement("p");
+    heading.classList.add("fieldDescription");
+    // Boolean coercion, not string interpolation: the label is fixed text, so no server value reaches the DOM here.
+    heading.textContent =
+      (result && result.Ok ? "✅ " : "⚠ ") +
+      (result && result.Message ? result.Message : "No result returned.");
+    container.appendChild(heading);
+
+    const details =
+      result && Array.isArray(result.Details) ? result.Details : [];
+    if (details.length === 0) {
+      return;
+    }
+
+    const list = document.createElement("ul");
+    details.forEach((detail) => {
+      const item = document.createElement("li");
+      // textContent so an issuer/endpoint value echoed by the provider stays inert on the page.
+      item.textContent = String(detail);
+      list.appendChild(item);
+    });
+    container.appendChild(list);
+  },
   addTextAreaStyle: (view) => {
     const style = document.createElement("link");
     style.rel = "stylesheet";
@@ -396,6 +460,16 @@ export default function initSsoConfigurationPage(view) {
     // The save already alerts the admin on failure; swallow the rejection here so a failed save is not
     // an unhandled promise rejection (the rejection exists so callers can distinguish failure from success).
     ssoConfigurationPage.saveProvider(view, target_provider).catch(() => {});
+
+    e.preventDefault();
+    return false;
+  });
+
+  view.querySelector("#TestProvider").addEventListener("click", (e) => {
+    // Test the provider named in the add/update form (the one just saved), not the load selector.
+    const target_provider = view.querySelector("#OidProviderName").value;
+
+    ssoConfigurationPage.testProvider(view, target_provider);
 
     e.preventDefault();
     return false;
