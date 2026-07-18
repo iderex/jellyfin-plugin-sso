@@ -9,6 +9,9 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 /// entry shares the "[SSO Audit]" prefix so operators can filter the trail, and only non-sensitive
 /// fields are logged (never secrets or certificates). Identity-provider- and admin-supplied values
 /// are stripped of line endings inline before logging so they cannot forge or split an entry.
+/// Each call is guarded by <see cref="ILogger.IsEnabled(LogLevel)"/> so the inline line-ending
+/// sanitizer is not evaluated when the level is disabled (net10 CA1873, #566); the sanitizer stays
+/// at the logging call so CodeQL's log-forging taint tracking still sees it inline.
 /// </summary>
 internal static class SsoAudit
 {
@@ -19,12 +22,19 @@ internal static class SsoAudit
     /// <param name="username">The Jellyfin username the session was issued for.</param>
     /// <param name="isAdmin">Whether the session was granted administrator rights.</param>
     internal static void LoginSucceeded(ILogger logger, string protocol, string provider, string username, bool isAdmin)
-        => logger.LogInformation(
+    {
+        if (!logger.IsEnabled(LogLevel.Information))
+        {
+            return;
+        }
+
+        logger.LogInformation(
             "[SSO Audit] Login succeeded: {Username} via {Protocol} provider '{Provider}' (admin={IsAdmin}).",
             username?.ReplaceLineEndings(string.Empty),
             protocol,
             provider?.ReplaceLineEndings(string.Empty),
             isAdmin);
+    }
 
     /// <summary>Records an SSO identity being linked to a pre-existing account (the opt-in adoption path).</summary>
     /// <param name="logger">The logger.</param>
@@ -32,39 +42,67 @@ internal static class SsoAudit
     /// <param name="provider">The provider name.</param>
     /// <param name="displayName">The adopted account's name.</param>
     internal static void AccountAdopted(ILogger logger, string protocol, string provider, string displayName)
-        => logger.LogWarning(
+    {
+        if (!logger.IsEnabled(LogLevel.Warning))
+        {
+            return;
+        }
+
+        logger.LogWarning(
             "[SSO Audit] SSO identity linked to existing account '{DisplayName}' via {Protocol} provider '{Provider}' (AllowExistingAccountLink).",
             displayName?.ReplaceLineEndings(string.Empty),
             protocol,
             provider?.ReplaceLineEndings(string.Empty));
+    }
 
     /// <summary>Records a provider being added or updated.</summary>
     /// <param name="logger">The logger.</param>
     /// <param name="protocol">The protocol (OpenID or SAML).</param>
     /// <param name="provider">The provider name.</param>
     internal static void ProviderConfigured(ILogger logger, string protocol, string provider)
-        => logger.LogInformation(
+    {
+        if (!logger.IsEnabled(LogLevel.Information))
+        {
+            return;
+        }
+
+        logger.LogInformation(
             "[SSO Audit] Provider configured: {Protocol} '{Provider}'.",
             protocol,
             provider?.ReplaceLineEndings(string.Empty));
+    }
 
     /// <summary>Records a provider being removed.</summary>
     /// <param name="logger">The logger.</param>
     /// <param name="protocol">The protocol (OpenID or SAML).</param>
     /// <param name="provider">The provider name.</param>
     internal static void ProviderRemoved(ILogger logger, string protocol, string provider)
-        => logger.LogInformation(
+    {
+        if (!logger.IsEnabled(LogLevel.Information))
+        {
+            return;
+        }
+
+        logger.LogInformation(
             "[SSO Audit] Provider removed: {Protocol} '{Provider}'.",
             protocol,
             provider?.ReplaceLineEndings(string.Empty));
+    }
 
     /// <summary>Records that a provider's authorization server does not advertise PKCE S256 support (#141).</summary>
     /// <param name="logger">The logger.</param>
     /// <param name="provider">The provider name.</param>
     internal static void PkceNotAdvertised(ILogger logger, string provider)
-        => logger.LogWarning(
+    {
+        if (!logger.IsEnabled(LogLevel.Warning))
+        {
+            return;
+        }
+
+        logger.LogWarning(
             "[SSO Audit] OpenID provider '{Provider}' does not advertise PKCE (S256) in its discovery document (code_challenge_methods_supported). PKCE is still sent, but a server that ignores it leaves cross-session authorization-code injection undetectable (RFC 9700 §2.1.1). Set RequirePkce to fail closed once the provider supports it.",
             provider?.ReplaceLineEndings(string.Empty));
+    }
 
     /// <summary>Records a provider being saved with one or more security checks disabled (#140).</summary>
     /// <param name="logger">The logger.</param>
@@ -72,9 +110,16 @@ internal static class SsoAudit
     /// <param name="provider">The provider name.</param>
     /// <param name="options">The enabled insecure option names (configuration keys, not user input).</param>
     internal static void InsecureOptionsEnabled(ILogger logger, string protocol, string provider, IReadOnlyList<string> options)
-        => logger.LogWarning(
+    {
+        if (!logger.IsEnabled(LogLevel.Warning))
+        {
+            return;
+        }
+
+        logger.LogWarning(
             "[SSO Audit] {Protocol} provider '{Provider}' saved with security checks disabled: {Options}. These weaken RFC 9700 transport/issuer/endpoint validation; keep them only if the provider genuinely requires it. DisableHttps in particular exposes the id_token signing keys (JWKS) to a man-in-the-middle.",
             protocol,
             provider?.ReplaceLineEndings(string.Empty),
             string.Join(", ", options));
+    }
 }

@@ -162,9 +162,12 @@ internal sealed class SamlLoginService
 
         // relayState is attacker-controllable; strip line endings inline at the log call to prevent
         // log forging (structured logging alone does not sanitize a newline-bearing value).
-        _logger.LogInformation(
-            "SAML request has relayState of {RelayState}",
-            relayState?.ReplaceLineEndings(string.Empty));
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation(
+                "SAML request has relayState of {RelayState}",
+                relayState?.ReplaceLineEndings(string.Empty));
+        }
 
         // Bind SAMLResponse via [FromForm] rather than reading Request.Form directly: a non-form
         // content-type binds null (the form value provider is skipped, so Request.Form is never
@@ -181,11 +184,15 @@ internal sealed class SamlLoginService
 
         if (!SamlLoginPolicy.IsLoginAllowed(SamlAssertionValidator.GetAssertionRoles(samlResponse), config.Roles))
         {
-            _logger.LogWarning(
-                "SAML user: {UserId} has insufficient roles: {@Roles}. Expected any one of: {@ExpectedRoles}",
-                samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty),
-                SamlAssertionValidator.GetAssertionRoles(samlResponse).Select(r => r?.ReplaceLineEndings(string.Empty)),
-                config.Roles);
+            if (_logger.IsEnabled(LogLevel.Warning))
+            {
+                _logger.LogWarning(
+                    "SAML user: {UserId} has insufficient roles: {@Roles}. Expected any one of: {@ExpectedRoles}",
+                    samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty),
+                    SamlAssertionValidator.GetAssertionRoles(samlResponse).Select(r => r?.ReplaceLineEndings(string.Empty)),
+                    config.Roles);
+            }
+
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
         }
 
@@ -234,7 +241,10 @@ internal sealed class SamlLoginService
             // cannot amplify into log volume (CWE-400).
             if (shouldWarnCapacity)
             {
-                _logger.LogWarning("SAML login outcome refused for provider {Provider}: the per-client sub-cap or the outcome store is at capacity (warning throttled); the assertion was not consumed, so the login can be retried.", provider?.ReplaceLineEndings(string.Empty));
+                if (_logger.IsEnabled(LogLevel.Warning))
+                {
+                    _logger.LogWarning("SAML login outcome refused for provider {Provider}: the per-client sub-cap or the outcome store is at capacity (warning throttled); the assertion was not consumed, so the login can be retried.", provider?.ReplaceLineEndings(string.Empty));
+                }
             }
 
             return FlowResponses.PlainTextError(StatusCodes.Status500InternalServerError, "Could not start login; please retry.");
@@ -361,7 +371,10 @@ internal sealed class SamlLoginService
                 // (CWE-400) — parity with the OpenID challenge refusal.
                 if (shouldWarnCapacity)
                 {
-                    _logger.LogWarning("SAML request refused for provider {Provider}: the per-client sub-cap or the outstanding-request cache is at capacity (warning throttled).", provider?.ReplaceLineEndings(string.Empty));
+                    if (_logger.IsEnabled(LogLevel.Warning))
+                    {
+                        _logger.LogWarning("SAML request refused for provider {Provider}: the per-client sub-cap or the outstanding-request cache is at capacity (warning throttled).", provider?.ReplaceLineEndings(string.Empty));
+                    }
                 }
 
                 return FlowResponses.PlainTextError(StatusCodes.Status500InternalServerError, "Could not start login; please retry.");
@@ -387,7 +400,11 @@ internal sealed class SamlLoginService
             // stored envelope is corrupt (FormatException, #158). ANY of these fails closed with a clean
             // 500 — never a silent unsigned request — rather than escaping as a raw host 500. The key
             // material is not part of the message, so nothing sensitive is logged.
-            _logger.LogError("SAML challenge for provider {Provider} could not sign the AuthnRequest: {Reason}", provider?.ReplaceLineEndings(string.Empty), ex.Message);
+            if (_logger.IsEnabled(LogLevel.Error))
+            {
+                _logger.LogError("SAML challenge for provider {Provider} could not sign the AuthnRequest: {Reason}", provider?.ReplaceLineEndings(string.Empty), ex.Message);
+            }
+
             return FlowResponses.PlainTextError(StatusCodes.Status500InternalServerError, "Could not start login; the SAML request signing key is misconfigured.");
         }
 
@@ -467,9 +484,13 @@ internal sealed class SamlLoginService
         // only there would be fail-open.
         if (!SamlLoginPolicy.IsLoginAllowed(SamlAssertionValidator.GetAssertionRoles(samlResponse), config.Roles))
         {
-            _logger.LogWarning(
-                "SAML user: {UserId} has insufficient roles at the session-minting endpoint; login denied.",
-                samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty));
+            if (_logger.IsEnabled(LogLevel.Warning))
+            {
+                _logger.LogWarning(
+                    "SAML user: {UserId} has insufficient roles at the session-minting endpoint; login denied.",
+                    samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty));
+            }
+
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
         }
 
