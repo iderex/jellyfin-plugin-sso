@@ -1,0 +1,100 @@
+# CodeQL advanced setup — semantic security analysis of the whole codebase.
+#
+# This replaces the GitHub CodeQL DEFAULT setup, which only analyzes the
+# repository's default branch (main) and pull requests targeting it. Feature
+# work lands on the 4.2 dev branch first, so under default setup a 4.2 PR got
+# NO per-PR CodeQL and code was only scanned once it reached main (#574).
+# Advanced setup lets us widen the triggers to cover main AND the release
+# branches, closing that gap.
+#
+# Parity with the default setup it replaces (do not weaken): the same three
+# languages (csharp, javascript-typescript, actions) and the same
+# security-extended query suite. csharp is analyzed with an autobuild so the
+# analysis sees the compiled plugin; the interpreted languages need no build.
+#
+# Hardened per the repo's workflow policy (see zizmor.yml): every action is
+# SHA-pinned with a version comment, checkout runs with persist-credentials:false,
+# permissions are deny-all at the top level and the job grants only the CodeQL
+# minimum (security-events:write, contents:read, actions:read). CodeQL is a
+# NON-required check — no ruleset depends on this workflow's check-run name.
+name: CodeQL
+
+on:
+  push:
+    # main is the released line; the release/dev branches are where feature work
+    # accumulates before promotion. 4.2 is the current one; the 4.* / 5.* globs
+    # future-proof the next release lines so a new branch is covered without
+    # editing this file (a `*` matches any branch name that has no `/`, so plain
+    # numeric release branches like 4.2 / 4.3 / 5.0 all match). A release line
+    # that ever uses a non-numeric name must still be added here explicitly.
+    branches: [main, "4.2", "4.*", "5.*"]
+  pull_request:
+    # The pull_request branches filter matches the PR's BASE (target) branch, so
+    # this is what gives 4.2-targeted PRs their per-PR scan.
+    branches: [main, "4.2", "4.*", "5.*"]
+  schedule:
+    # Weekly baseline scan (default setup ran one too) so the whole tree is
+    # re-analyzed against updated CodeQL queries even without a push.
+    - cron: "17 3 * * 1"
+
+# Explicit deny-all at workflow level; the job below grants only the CodeQL
+# minimum.
+permissions: {}
+
+# A newer run on the same ref supersedes an in-flight one; this is analysis, not
+# a publish, so cancelling a superseded run is safe.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      security-events: write # upload the analysis SARIF into the code-scanning tab
+      contents: read # check out the code to analyze
+      actions: read # required for CodeQL to analyze the `actions` language and read workflow runs
+    strategy:
+      # Do not let one language's failure cancel the others' analysis.
+      fail-fast: false
+      matrix:
+        include:
+          # csharp is compiled: autobuild builds the plugin so the analysis sees
+          # real dataflow, not just source. setup-dotnet (below) pins the SDK.
+          - language: csharp
+            build-mode: autobuild
+          # Interpreted / declarative languages need no build.
+          - language: javascript-typescript
+            build-mode: none
+          - language: actions
+            build-mode: none
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          # No step pushes via git, so do not persist the GITHUB_TOKEN in
+          # .git/config (zizmor "artipacked" hardening).
+          persist-credentials: false
+
+      # Pin the SDK the plugin targets (net9.0) so CodeQL's autobuild builds
+      # csharp with the right toolchain. Skipped for the buildless languages.
+      - name: Setup .NET
+        if: matrix.language == 'csharp'
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # Match the default setup's suite exactly — no coverage regression.
+          queries: security-extended
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
+        with:
+          category: "/language:${{ matrix.language }}"
