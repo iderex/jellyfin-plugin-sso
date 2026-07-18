@@ -67,8 +67,8 @@ public class AvatarServiceTests
     }
 
     // Builds a service whose store-lock ACQUIRE WAIT is bounded by the given (short, test-only) timeout
-    // rather than the production 30s (#448), so a test can drive the abort-on-timeout branch deterministically
-    // and quickly instead of waiting out the real bound.
+    // rather than the production 3s (#448, shortened by #541), so a test can drive the abort-on-timeout
+    // branch deterministically and quickly instead of waiting out the real bound.
     private static (AvatarService Service, IProviderManager Providers, IUserManager Users, CapturingLogger Log) Build(KeyedLockStore userStoreLocks, TimeSpan storeLockAcquireTimeout)
     {
         var users = Substitute.For<IUserManager>();
@@ -286,7 +286,7 @@ public class AvatarServiceTests
         // still lets the store through exactly as before — the timeout only aborts a genuinely stalled
         // wait, it does not shrink the normal-load window.
         var locks = new KeyedLockStore(StringComparer.Ordinal);
-        var (service, providers, _, log) = Build(locks, TimeSpan.FromSeconds(30));
+        var (service, providers, _, log) = Build(locks, TimeSpan.FromSeconds(3));
         var user = UserNamed("alice");
 
         await service.StoreAsync(user, new MemoryStream(new byte[] { 1 }), "image/png", ".png");

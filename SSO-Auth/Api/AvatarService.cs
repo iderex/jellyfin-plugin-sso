@@ -27,10 +27,13 @@ internal sealed class AvatarService
 
     // Bounds the wait for the per-user store lock (#448). This flow tier is deliberately HttpContext-free
     // (see LoginCompletionService/SessionMinter), so no ambient request-abort token reaches this far — a
-    // self-contained deadline is the same pattern TrySetAsync already uses for the fetch. 30s comfortably
-    // covers several legitimate queued same-user stores (each a local disk write, occasionally a DB clear)
-    // while still bounding a truly stalled holder so it cannot park same-user logins forever.
-    private static readonly TimeSpan StoreLockAcquireTimeout = TimeSpan.FromSeconds(30);
+    // self-contained deadline is the same pattern TrySetAsync already uses for the fetch. This bound stacks
+    // with TrySetAsync's 10s fetch deadline on the synchronous login path, so it is kept well below that
+    // fetch bound rather than matching it (#541): the store step is purely local disk/DB work (SaveImage,
+    // occasionally ClearProfileImageAsync), never network I/O, so it does not need a network-sized budget.
+    // 3s comfortably covers several legitimate queued same-user stores while still bounding a truly stalled
+    // holder quickly, keeping the worst-case login stall close to the fetch's own 10s instead of ~40s.
+    private static readonly TimeSpan StoreLockAcquireTimeout = TimeSpan.FromSeconds(3);
 
     // Serializes the store step per user across ALL logins (#400). Static because the controller builds a
     // fresh AvatarService per request, so two concurrent same-user logins hold different instances — an
@@ -84,7 +87,7 @@ internal sealed class AvatarService
     /// <param name="httpClient">The client used for every fetch; reused across calls (never disposed here).</param>
     /// <param name="userStoreLocks">The per-user store lock (#400); null uses the process-wide shared one. A test injects its own so it can drive the serialization deterministically.</param>
     /// <param name="fileExists">Probe for the on-disk profile image (#480); null uses <see cref="File.Exists"/>. A test injects its own to drive the missing-file self-heal branch without touching the filesystem.</param>
-    /// <param name="storeLockAcquireTimeout">How long <see cref="StoreAsync"/> waits for the per-user store lock (#448); null uses the production 30s bound. A test injects a short timeout so the abort-on-timeout branch is reachable without a real 30s wait.</param>
+    /// <param name="storeLockAcquireTimeout">How long <see cref="StoreAsync"/> waits for the per-user store lock (#448, shortened by #541); null uses the production 3s bound. A test injects a shorter timeout so the abort-on-timeout branch is reachable without a real 3s wait.</param>
     internal AvatarService(
         IUserManager userManager,
         IProviderManager providerManager,
