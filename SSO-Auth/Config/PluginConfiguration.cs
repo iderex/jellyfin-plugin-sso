@@ -64,6 +64,18 @@ public class PluginConfiguration : MediaBrowser.Model.Plugins.BasePluginConfigur
 /// deserialization is by element name, so moving these up — which places them before the
 /// provider-specific elements in newly written XML — does not stop existing configs from loading.
 /// </summary>
+// Model-binding contract for every value-type member here and on the derived SamlConfig/OidConfig
+// (the bool flags and the int? PortOverride): the OID/SAML `Add` endpoints (SSOController.OidAdd /
+// SamlAdd) and the config-page PUT bind the whole provider object [FromBody] under RequiresElevation
+// and REPLACE it wholesale (configuration.OidConfigs[provider] = config), re-injecting only the
+// server-managed fields via ServerManagedFields.Preserve. An omitted bool therefore deserializes to
+// its default and that default is persisted BY DESIGN — the admin is replacing the object, not
+// patching it. This is why the value-type properties stay non-nullable and un-annotated (SonarCloud
+// S6964, #196): marking them [JsonRequired] would reject the intended partial post and break the
+// write-only-secret / blank-means-keep save flows that deliberately omit fields, while bool? would
+// invent an "unset" third state the replace contract does not have. Under-posting here is admin-only
+// and crosses no privilege boundary (non-security), so the documented whole-object-replace contract
+// is the disposition rather than a per-property annotation.
 public abstract class ProviderConfigBase
 {
     private SerializableDictionary<string, Guid> _canonicalLinks;
