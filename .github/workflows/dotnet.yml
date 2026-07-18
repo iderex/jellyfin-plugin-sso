@@ -104,6 +104,15 @@ jobs:
   # targeted ABI and produces the manifest) on every PR, not only at release time.
   package:
     name: Package (JPRM)
+    # build.yml is a reusable workflow whose build job declares id-token/attestations: write for its
+    # release-only SLSA attest step (#147). A caller must grant every permission the callee declares, or
+    # the reusable-workflow call fails to start ("workflow file issue"). This CI caller leaves `attest`
+    # at its default (false), so the attest step never runs and no token or attestation is minted — the
+    # grant only satisfies the reusable-workflow permission check.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/build.yml
     with:
       dotnet-version: "9.0.x"
