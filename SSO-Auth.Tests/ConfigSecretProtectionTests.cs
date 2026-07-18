@@ -80,6 +80,57 @@ public class ConfigSecretProtectionTests
     }
 
     [Fact]
+    public void ProtectAll_EncryptsTheRolloverSigningKey_AndRevealRecoversIt()
+    {
+        WithStore(store =>
+        {
+            // The rollover signing key (#491) carries a private key, so it must be encrypted at rest exactly
+            // like the primary — a plaintext rollover key would be a secrets-at-rest regression.
+            var config = new PluginConfiguration();
+            config.SamlConfigs["keycloak"] = new SamlConfig
+            {
+                SamlSigningKeyPfx = "primary-pfx-blob",
+                SamlRolloverSigningKeyPfx = "rollover-pfx-blob",
+            };
+
+            ConfigSecretProtection.ProtectAll(config, store);
+
+            Assert.True(SecretEnvelope.IsProtected(config.SamlConfigs["keycloak"].SamlSigningKeyPfx));
+            Assert.True(SecretEnvelope.IsProtected(config.SamlConfigs["keycloak"].SamlRolloverSigningKeyPfx));
+            Assert.Equal("primary-pfx-blob", store.Reveal(config.SamlConfigs["keycloak"].SamlSigningKeyPfx));
+            Assert.Equal("rollover-pfx-blob", store.Reveal(config.SamlConfigs["keycloak"].SamlRolloverSigningKeyPfx));
+        });
+    }
+
+    [Fact]
+    public void HasAnyEnvelope_ARolloverEnvelopeAlone_IsDetected_SoAMissingKeyFailsClosed()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "sso-cfgsec-" + Guid.NewGuid().ToString("N") + ".key");
+        try
+        {
+            // Encrypt a value so a real envelope exists, place it ONLY in the rollover field, then lose the
+            // key: ProtectAll must still see the config holds an envelope and refuse to mint a fresh key over
+            // it (orphan-prevention must cover the rollover field, not just the primary).
+            var envelope = new SecretStore(path).Protect("old-rollover");
+            File.Delete(path);
+
+            var config = new PluginConfiguration();
+            config.SamlConfigs["a"] = new SamlConfig { SamlRolloverSigningKeyPfx = envelope };
+            config.OidConfigs["b"] = new OidConfig { OidSecret = "new-plaintext" };
+
+            Assert.Throws<CryptographicException>(() => ConfigSecretProtection.ProtectAll(config, new SecretStore(path)));
+            Assert.False(File.Exists(path)); // no replacement key minted
+        }
+        finally
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    [Fact]
     public void ProtectAll_IsIdempotent()
     {
         WithStore(store =>

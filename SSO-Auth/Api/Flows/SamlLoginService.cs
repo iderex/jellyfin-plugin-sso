@@ -444,42 +444,80 @@ internal sealed class SamlLoginService
         // (SsoUrlBuilder.SamlExpectedAcsUrls), so publishing one is unambiguous for the identity provider.
         var acsUrl = SsoUrlBuilder.SamlAcsUrl(baseUrl, newPath: true, provider);
 
-        if (!TryResolveSigningCertificate(config, out var signingCertificateBase64))
+        if (!TryResolveSigningCertificates(config, out var signingCertificateBase64, out var rolloverSigningCertificateBase64))
         {
-            // Request signing is enabled but the key could not be loaded — the same fail-closed posture the
-            // signed challenge takes, so metadata never advertises signing the challenge would then fail to
-            // perform.
+            // Request signing is enabled but a configured signing key could not be loaded — the same
+            // fail-closed posture the signed challenge takes, so metadata never advertises signing the
+            // challenge would then fail to perform, and never emits a broken KeyDescriptor for a set-but-
+            // unloadable rollover key (#491).
             return FlowResponses.PlainTextError(
                 StatusCodes.Status409Conflict,
-                "SAML metadata is unavailable: request signing is enabled but the signing key could not be loaded.");
+                "SAML metadata is unavailable: request signing is enabled but a configured signing key could not be loaded.");
         }
 
         return new ContentResult
         {
-            Content = SamlSpMetadataBuilder.Build(entityId, acsUrl, signingCertificateBase64),
+            Content = SamlSpMetadataBuilder.Build(entityId, acsUrl, signingCertificateBase64, rolloverSigningCertificateBase64),
             ContentType = "application/samlmetadata+xml",
             StatusCode = StatusCodes.Status200OK,
         };
     }
 
-    // Resolves the PUBLIC signing certificate to advertise in the metadata: null when request signing is
-    // off (no KeyDescriptor is emitted), the Base64 (DER) public certificate when it is on, and false (fail
-    // closed) when it is on but the key cannot be loaded/decrypted — mirroring BuildChallengeRedirectUrl.
-    // Only the certificate's public RawData is exported; the private key never leaves this method.
-    private static bool TryResolveSigningCertificate(SamlConfig config, out string signingCertificateBase64)
+    // Resolves the PUBLIC signing certificate(s) to advertise in the metadata. Both out values are null when
+    // request signing is off (no KeyDescriptor). When it is on, the PRIMARY is mandatory — a set-but-
+    // unloadable primary fails closed (false), mirroring BuildChallengeRedirectUrl so metadata never
+    // advertises signing the challenge could not perform. The ROLLOVER (#491) is optional: a blank stored
+    // value means no overlap window (single descriptor, byte-for-byte the pre-#491 output); a set-but-
+    // unloadable rollover key also fails closed (false), so a hand-corrupted rollover key surfaces loudly as
+    // a 409 rather than silently dropping a key the admin configured. When the rollover certificate is
+    // identical to the primary — the natural end state after promoting the rollover into the primary field —
+    // the redundant second descriptor is dropped, returning to a single descriptor without needing to blank
+    // the write-only, blank-keeps-stored rollover key. Only the public RawData of each certificate is
+    // exported; no private key ever leaves this method.
+    private static bool TryResolveSigningCertificates(SamlConfig config, out string signingCertificateBase64, out string rolloverSigningCertificateBase64)
     {
         signingCertificateBase64 = null;
+        rolloverSigningCertificateBase64 = null;
         if (!config.SignAuthnRequests)
         {
             return true;
         }
 
+        if (!TryRevealPublicCertificate(config.SamlSigningKeyPfx, out signingCertificateBase64))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(config.SamlRolloverSigningKeyPfx))
+        {
+            return true;
+        }
+
+        if (!TryRevealPublicCertificate(config.SamlRolloverSigningKeyPfx, out rolloverSigningCertificateBase64))
+        {
+            return false;
+        }
+
+        if (string.Equals(rolloverSigningCertificateBase64, signingCertificateBase64, StringComparison.Ordinal))
+        {
+            rolloverSigningCertificateBase64 = null;
+        }
+
+        return true;
+    }
+
+    // Reveals a stored signing key (encrypted at rest, #158) and exports its PUBLIC certificate as Base64
+    // (DER). Fail-closed: a missing/corrupt at-rest key throws CryptographicException, and a garbage or
+    // private-key-less PKCS#12 fails to load — both return false so the caller emits no descriptor for it.
+    // The private key never leaves this method; only certificate.RawData (the public DER) is exported.
+    private static bool TryRevealPublicCertificate(string storedPfx, out string publicCertificateBase64)
+    {
+        publicCertificateBase64 = null;
+
         string revealed;
         try
         {
-            // The signing key is stored encrypted at rest (#158); reveal it at the point of use. A missing
-            // or corrupt key file throws CryptographicException — fail closed here rather than surface a 500.
-            revealed = SSOPlugin.Instance.Secrets.Reveal(config.SamlSigningKeyPfx);
+            revealed = SSOPlugin.Instance.Secrets.Reveal(storedPfx);
         }
         catch (CryptographicException)
         {
@@ -493,7 +531,7 @@ internal sealed class SamlLoginService
 
         using (certificate)
         {
-            signingCertificateBase64 = Convert.ToBase64String(certificate.RawData);
+            publicCertificateBase64 = Convert.ToBase64String(certificate.RawData);
             return true;
         }
     }

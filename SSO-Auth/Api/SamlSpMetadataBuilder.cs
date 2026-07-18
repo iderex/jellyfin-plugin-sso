@@ -11,10 +11,12 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 /// <c>SPSSODescriptor</c> — that an administrator can hand to an identity provider so it registers this
 /// service provider by URL instead of by hand (#162). Pure and request-free: it emits exactly the entity
 /// id, the HTTP-POST assertion-consumer URL, and — only when request signing is enabled — the PUBLIC
-/// signing certificate it is given. It never touches a private key or any secret, and it never reads the
-/// request <c>Host</c>: the caller resolves the entity id and ACS URL from the configured canonical Base
-/// URL (#139), so a spoofed or proxy-forwarded host cannot poison the ACS the identity provider is told to
-/// POST assertions to.
+/// signing certificate(s) it is given. During a signing-key rollover (#491) it advertises BOTH the primary
+/// and the optional rollover PUBLIC certificate as two <c>KeyDescriptor use="signing"</c> entries, so the
+/// identity provider trusts either while the administrator swaps. It never touches a private key or any
+/// secret, and it never reads the request <c>Host</c>: the caller resolves the entity id and ACS URL from
+/// the configured canonical Base URL (#139), so a spoofed or proxy-forwarded host cannot poison the ACS the
+/// identity provider is told to POST assertions to.
 /// </summary>
 internal static class SamlSpMetadataBuilder
 {
@@ -39,8 +41,16 @@ internal static class SamlSpMetadataBuilder
     /// when request signing is enabled, or <see langword="null"/> to advertise no signing key. This is only
     /// ever the public certificate — the private key must never be passed here.
     /// </param>
+    /// <param name="rolloverSigningCertificateBase64">
+    /// The OPTIONAL Base64 (DER) PUBLIC rollover signing certificate (#491), advertised as a SECOND
+    /// <c>KeyDescriptor use="signing"</c> so the identity provider trusts either during an overlap window.
+    /// <see langword="null"/> (the default) means no rollover — a single KeyDescriptor, byte-for-byte the
+    /// pre-#491 output. Ignored when <paramref name="signingCertificateBase64"/> is <see langword="null"/>
+    /// (no primary means signing is off, so there is nothing to roll over). Again only ever the public
+    /// certificate — never a private key.
+    /// </param>
     /// <returns>The metadata document as an XML string.</returns>
-    internal static string Build(string entityId, string assertionConsumerServiceUrl, string? signingCertificateBase64)
+    internal static string Build(string entityId, string assertionConsumerServiceUrl, string? signingCertificateBase64, string? rolloverSigningCertificateBase64 = null)
     {
         // A StringWriter is UTF-16 internally, which would make XmlWriter stamp encoding="utf-16" into the
         // XML declaration even though the bytes are served as UTF-8; report UTF-8 so the declaration matches
@@ -68,16 +78,15 @@ internal static class SamlSpMetadataBuilder
 
             if (signingCertificateBase64 is not null)
             {
-                xml.WriteStartElement("md", "KeyDescriptor", MetadataNamespace);
-                xml.WriteAttributeString("use", "signing");
-                xml.WriteStartElement("ds", "KeyInfo", DsigNamespace);
-                xml.WriteStartElement("ds", "X509Data", DsigNamespace);
-                xml.WriteStartElement("ds", "X509Certificate", DsigNamespace);
-                xml.WriteString(signingCertificateBase64);
-                xml.WriteEndElement(); // ds:X509Certificate
-                xml.WriteEndElement(); // ds:X509Data
-                xml.WriteEndElement(); // ds:KeyInfo
-                xml.WriteEndElement(); // md:KeyDescriptor
+                WriteSigningKeyDescriptor(xml, signingCertificateBase64);
+
+                // The rollover certificate (#491) is a SECOND signing KeyDescriptor during the overlap
+                // window. It is only meaningful alongside a primary (signing must be on), so it is nested
+                // under the primary guard; a null rollover leaves the single-descriptor output unchanged.
+                if (rolloverSigningCertificateBase64 is not null)
+                {
+                    WriteSigningKeyDescriptor(xml, rolloverSigningCertificateBase64);
+                }
             }
 
             xml.WriteStartElement("md", "AssertionConsumerService", MetadataNamespace);
@@ -92,6 +101,22 @@ internal static class SamlSpMetadataBuilder
         }
 
         return writer.ToString();
+    }
+
+    // Writes one <md:KeyDescriptor use="signing"> wrapping the given PUBLIC certificate DER. The caller
+    // passes only the public certificate (certificate.RawData); no private-key material ever reaches here.
+    private static void WriteSigningKeyDescriptor(XmlWriter xml, string signingCertificateBase64)
+    {
+        xml.WriteStartElement("md", "KeyDescriptor", MetadataNamespace);
+        xml.WriteAttributeString("use", "signing");
+        xml.WriteStartElement("ds", "KeyInfo", DsigNamespace);
+        xml.WriteStartElement("ds", "X509Data", DsigNamespace);
+        xml.WriteStartElement("ds", "X509Certificate", DsigNamespace);
+        xml.WriteString(signingCertificateBase64);
+        xml.WriteEndElement(); // ds:X509Certificate
+        xml.WriteEndElement(); // ds:X509Data
+        xml.WriteEndElement(); // ds:KeyInfo
+        xml.WriteEndElement(); // md:KeyDescriptor
     }
 
     // A StringWriter that reports UTF-8 so XmlWriter emits encoding="utf-8" in the XML declaration (the

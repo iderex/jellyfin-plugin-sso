@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Security.Cryptography.X509Certificates;
 using System.Xml.Linq;
 using Jellyfin.Plugin.SSO_Auth.Api;
@@ -97,6 +98,95 @@ public class SamlSpMetadataBuilderTests
 
         using var loaded = X509CertificateLoader.LoadCertificate(Convert.FromBase64String(advertised));
         Assert.False(loaded.HasPrivateKey);
+    }
+
+    [Fact]
+    public void Build_WithRollover_AdvertisesBothSigningCertificates_AsTwoKeyDescriptors()
+    {
+        // The overlap window (#491): the SP publishes BOTH its primary and its rollover PUBLIC certificate
+        // so the identity provider trusts either while the admin swaps the SP's own signing cert.
+        using var primary = SamlSigningKeyFactory.CreateCertificate();
+        using var rollover = SamlSigningKeyFactory.CreateCertificate();
+        var primaryBase64 = Convert.ToBase64String(primary.RawData);
+        var rolloverBase64 = Convert.ToBase64String(rollover.RawData);
+
+        var document = XDocument.Parse(SamlSpMetadataBuilder.Build(EntityId, AcsUrl, primaryBase64, rolloverBase64));
+        var spDescriptor = document.Root!.Element(Md + "SPSSODescriptor");
+
+        Assert.Equal("true", (string?)spDescriptor!.Attribute("AuthnRequestsSigned"));
+
+        var keyDescriptors = spDescriptor.Elements(Md + "KeyDescriptor").ToList();
+        Assert.Equal(2, keyDescriptors.Count);
+        Assert.All(keyDescriptors, kd => Assert.Equal("signing", (string?)kd.Attribute("use")));
+
+        var advertised = keyDescriptors
+            .Select(kd => kd.Element(Ds + "KeyInfo")!.Element(Ds + "X509Data")!.Element(Ds + "X509Certificate")!.Value)
+            .ToList();
+
+        // Both public certificates appear, primary first, in the order they were supplied.
+        Assert.Equal(new[] { primaryBase64, rolloverBase64 }, advertised);
+
+        // XSD order: within SPSSODescriptor every KeyDescriptor must precede the AssertionConsumerService
+        // element. Pin it against document order so a future edit that emits a descriptor after the ACS
+        // (invalid metadata) fails here, not only against a real identity provider.
+        var childNames = spDescriptor.Elements().Select(e => e.Name).ToList();
+        var lastKeyDescriptorIndex = childNames.FindLastIndex(n => n == Md + "KeyDescriptor");
+        var acsIndex = childNames.FindIndex(n => n == Md + "AssertionConsumerService");
+        Assert.True(lastKeyDescriptorIndex < acsIndex, "Every KeyDescriptor must precede AssertionConsumerService (SAML metadata XSD order).");
+    }
+
+    [Fact]
+    public void Build_WithRollover_BothAdvertisedCertificatesCarryNoPrivateKey()
+    {
+        // Neither the primary nor the rollover descriptor may leak a private key: both load public-only.
+        using var primary = SamlSigningKeyFactory.CreateCertificate();
+        using var rollover = SamlSigningKeyFactory.CreateCertificate();
+        var primaryBase64 = Convert.ToBase64String(primary.RawData);
+        var rolloverBase64 = Convert.ToBase64String(rollover.RawData);
+
+        var document = XDocument.Parse(SamlSpMetadataBuilder.Build(EntityId, AcsUrl, primaryBase64, rolloverBase64));
+
+        var advertised = document.Root!
+            .Element(Md + "SPSSODescriptor")!
+            .Elements(Md + "KeyDescriptor")
+            .Select(kd => kd.Element(Ds + "KeyInfo")!.Element(Ds + "X509Data")!.Element(Ds + "X509Certificate")!.Value);
+
+        foreach (var certificateBase64 in advertised)
+        {
+            using var loaded = X509CertificateLoader.LoadCertificate(Convert.FromBase64String(certificateBase64));
+            Assert.False(loaded.HasPrivateKey);
+        }
+    }
+
+    [Fact]
+    public void Build_RolloverWithoutPrimary_EmitsNoKeyDescriptor()
+    {
+        // A rollover with no primary is nonsensical (signing is off), so no key is advertised at all — the
+        // rollover is only ever meaningful alongside a primary.
+        using var rollover = SamlSigningKeyFactory.CreateCertificate();
+        var rolloverBase64 = Convert.ToBase64String(rollover.RawData);
+
+        var document = XDocument.Parse(
+            SamlSpMetadataBuilder.Build(EntityId, AcsUrl, signingCertificateBase64: null, rolloverSigningCertificateBase64: rolloverBase64));
+        var spDescriptor = document.Root!.Element(Md + "SPSSODescriptor");
+
+        Assert.Equal("false", (string?)spDescriptor!.Attribute("AuthnRequestsSigned"));
+        Assert.Empty(spDescriptor.Elements(Md + "KeyDescriptor"));
+    }
+
+    [Fact]
+    public void Build_WithoutRollover_EmitsExactlyOneKeyDescriptor_PreservingSingleKeyBehavior()
+    {
+        // Rollover unset (the default) is byte-for-byte the pre-#491 single-KeyDescriptor output.
+        using var primary = SamlSigningKeyFactory.CreateCertificate();
+        var primaryBase64 = Convert.ToBase64String(primary.RawData);
+
+        var withDefault = SamlSpMetadataBuilder.Build(EntityId, AcsUrl, primaryBase64);
+        var withExplicitNullRollover = SamlSpMetadataBuilder.Build(EntityId, AcsUrl, primaryBase64, rolloverSigningCertificateBase64: null);
+
+        Assert.Equal(withDefault, withExplicitNullRollover);
+        var spDescriptor = XDocument.Parse(withDefault).Root!.Element(Md + "SPSSODescriptor");
+        Assert.Single(spDescriptor!.Elements(Md + "KeyDescriptor"));
     }
 
     [Fact]

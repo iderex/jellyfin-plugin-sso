@@ -226,10 +226,10 @@ expiry). A few provider settings must therefore match, or login is refused (fail
 
 ## Secrets encrypted at rest and downgrade
 
-The plugin's two at-rest secrets — the OpenID client secret (`OidSecret`) and the SAML
-request-signing key (`SamlSigningKeyPfx`) — are encrypted in the configuration XML. Each is stored as
-an **AES-256-GCM `ssoenc:v1:` envelope** rather than plaintext, so a leaked config file alone does not
-reveal them.
+The plugin's at-rest secrets — the OpenID client secret (`OidSecret`) and the SAML request-signing keys
+(`SamlSigningKeyPfx` and, during a rollover, `SamlRolloverSigningKeyPfx`) — are encrypted in the
+configuration XML. Each is stored as an **AES-256-GCM `ssoenc:v1:` envelope** rather than plaintext, so a
+leaked config file alone does not reveal them.
 
 - **Key file.** The data-encryption key lives in a dedicated file, `sso-secret.key`, in the plugin data
   folder — **separate from the config XML**, and outside the config directory. On Linux it is created
@@ -372,15 +372,43 @@ not reset them):
   that leaves it blank keeps the stored key. It is persisted only to the server's on-disk config, and
   there it is **encrypted at rest** (see
   [Secrets encrypted at rest and downgrade](#secrets-encrypted-at-rest-and-downgrade)).
+- **`SamlRolloverSigningKeyPfx`** _(optional)_ — a **second** service-provider signing key, in the same
+  Base64-encoded PKCS#12 shape as `SamlSigningKeyPfx`, used **only** for a zero-downtime rollover of the
+  SP's own signing certificate (see [SP signing-key rollover](#saml-sp-signing-key-rollover) below). It
+  is **publish-only**: `AuthnRequests` are always signed with the **primary** key, never this one. When
+  it is set, the [SP metadata](#saml-service-provider-metadata) advertises **both** public certificates
+  so the identity provider trusts either during the overlap. It is treated as a secret exactly like the
+  primary key — withheld from config responses, encrypted at rest, and preserved on a blank save. Leave
+  it blank when you are not mid-rotation: behaviour is then identical to a single signing key.
 
-**Fail-closed:** if `SignAuthnRequests` is on but the signing key is missing or unloadable, the login
-challenge is refused with an error — it never silently falls back to sending an unsigned request, so an
-operator who turned signing on cannot get a silent downgrade. A garbage key is also rejected when the
-provider is saved.
+**Fail-closed:** if `SignAuthnRequests` is on but the primary signing key is missing or unloadable, the
+login challenge is refused with an error — it never silently falls back to sending an unsigned request,
+so an operator who turned signing on cannot get a silent downgrade. A garbage primary **or rollover** key
+is rejected when the provider is saved.
 
-> Signing with more than one certificate (primary + rollover) for zero-downtime key rotation, and
-> accepting multiple inbound IdP verification certificates during a rotation window, are tracked
-> separately and not yet implemented.
+### SAML SP signing-key rollover
+
+To rotate the service provider's **own** signing certificate without a hard cutover that would break
+logins the moment the identity provider stops trusting the old certificate, publish both the old and new
+public certificates during an overlap window while continuing to sign with the old one, then switch:
+
+1. **Stage the new key.** Generate the new keypair and set `SamlRolloverSigningKeyPfx` to it (leave
+   `SamlSigningKeyPfx` — the primary — as the current key). The plugin keeps signing `AuthnRequests`
+   with the primary (old) key, but the SP metadata now advertises **two** `KeyDescriptor use="signing"`
+   entries — the old and the new public certificate.
+2. **Let the identity provider pick up both certificates.** Re-import the metadata (or wait for it to
+   refresh if the IdP fetches it by URL) so the IdP trusts signatures from **either** certificate. There
+   is no downtime: logins keep verifying against the old certificate throughout.
+3. **Promote the new key.** Move the new key into the primary field — set `SamlSigningKeyPfx` to the new
+   key. The plugin now signs with the new key, which the IdP already trusts from step 2.
+4. **Return to a single certificate.** With the primary now equal to the staged key, the metadata
+   automatically collapses back to a **single** `KeyDescriptor` (the duplicate is dropped), so no
+   separate "clear the rollover key" step is needed. Once the IdP has re-imported this final metadata,
+   only the new certificate is trusted and the rotation is complete.
+
+Because the rollover key is publish-only and withheld from config responses, it can only be set or
+changed by posting a non-blank value; a blank save keeps whatever is stored, so an unrelated edit cannot
+end the overlap window by accident.
 
 ## SAML service-provider metadata
 
@@ -402,6 +430,10 @@ for example `https://jellyfin.example.com/sso/SAML/metadata/keycloak`. The respo
   **only when [request signing](#saml-request-signing-optional) (`SignAuthnRequests`) is enabled** for
   that provider. Only the public certificate is published; the private key (`SamlSigningKeyPfx`) never
   leaves the server. When signing is off, no `KeyDescriptor` is emitted and `AuthnRequestsSigned="false"`.
+  During an [SP signing-key rollover](#saml-sp-signing-key-rollover) — when `SamlRolloverSigningKeyPfx`
+  is also set — **two** signing `KeyDescriptor` entries are published (the primary and the rollover
+  public certificate), so the identity provider trusts either while you swap; again only the public
+  certificates are ever published.
 
 The endpoint is **anonymous** — SP metadata is public information, and a real identity provider fetches
 it unauthenticated.
@@ -412,8 +444,9 @@ request `Host` header.** This is deliberate and security-critical: metadata is c
 provider to decide where it POSTs assertions, so deriving the ACS from a spoofable (proxy-forwarded)
 host would let an attacker point your identity provider at an attacker-controlled endpoint. Therefore the
 endpoint **fails closed** — it returns `409 Conflict` and publishes nothing — when the provider has no
-`BaseUrlOverride` set (or no client ID, or request signing is on but the signing key cannot be loaded).
-Set the provider's `BaseUrlOverride` first, then fetch its metadata.
+`BaseUrlOverride` set (or no client ID, or request signing is on but the primary — or a configured
+rollover — signing key cannot be loaded; a broken `KeyDescriptor` is never published). Set the
+provider's `BaseUrlOverride` first, then fetch its metadata.
 
 ## SAML login browser binding
 

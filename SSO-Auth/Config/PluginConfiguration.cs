@@ -273,6 +273,23 @@ public class SamlConfig : ProviderConfigBase
     /// </summary>
     [System.Text.Json.Serialization.JsonConverter(typeof(WriteOnlySecretConverter))]
     public string SamlSigningKeyPfx { get; set; }
+
+    /// <summary>
+    /// Gets or sets an OPTIONAL second service-provider signing key for a zero-downtime rollover of the
+    /// SP's own signing certificate (#491, capability 1), as a Base64-encoded, unencrypted PKCS#12 (PFX)
+    /// blob in the same shape as <see cref="SamlSigningKeyPfx"/>. It is PUBLISH-ONLY: outgoing
+    /// AuthnRequests are always signed with the PRIMARY <see cref="SamlSigningKeyPfx"/>, and this key is
+    /// never used to sign. Its purpose is the metadata overlap window — when it is set and
+    /// <see cref="SignAuthnRequests"/> is on, the SP metadata advertises BOTH public certificates as two
+    /// <c>KeyDescriptor use="signing"</c> entries, so the identity provider accepts the primary's
+    /// signature while the administrator stages the swap (publish both, then promote the rollover key
+    /// into the primary field, then clear this one). Blank means no overlap: byte-for-byte the pre-#491
+    /// single-key, single-KeyDescriptor behavior. It carries the same private key, so it is treated as a
+    /// secret exactly like the primary: write-only across the JSON boundary, encrypted at rest (#158),
+    /// and preserved on a save that leaves it blank.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonConverter(typeof(WriteOnlySecretConverter))]
+    public string SamlRolloverSigningKeyPfx { get; set; }
 }
 
 /// <summary>
