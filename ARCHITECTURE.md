@@ -92,7 +92,7 @@ only way to get one process-wide instance):
 | `SamlReplayCache`    | `SamlLoginService` | one-time-use SAML assertion IDs (replay protection)                                         |
 | `SamlRequestCache`   | `SamlLoginService` | outstanding SAML `AuthnRequest` IDs for `InResponseTo` correlation                          |
 | `OidcDiscoveryCache` | `OidcLoginService` | per-discovery-URL PKCE-S256 / RFC 9207 `iss` facts, 15-minute TTL; owns the fetch/parse too |
-| `SsoRateLimiter`     | `SsoRateLimitGate` | opt-in per-client rate limiting on the anonymous login endpoints                            |
+| `SsoRateLimiter`     | `SsoRateLimitGate` | opt-in per-client rate limiting on the login endpoints and the link/unlink admin surface    |
 
 The controller itself now holds **no mutable static state** — every store above
 lives in a flow service or the Shared tier, pinned by

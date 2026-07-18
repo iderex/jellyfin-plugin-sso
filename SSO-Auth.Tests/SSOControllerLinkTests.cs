@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Threading.Tasks;
 using Duende.IdentityModel.OidcClient;
 using Jellyfin.Data;
@@ -351,12 +352,106 @@ public class SSOControllerLinkTests
         Assert.Contains("nameid-1", map["adfs"]);
     }
 
+    [Fact]
+    public async Task AddCanonicalLink_AuthorizedOverRateLimit_Returns429()
+    {
+        // #382: the authenticated link write surface is now throttled by the shared gate under its own "link"
+        // class. A burst past the configured budget is refused with the same 429 the login path renders.
+        var harness = ForCaller(isAdmin: true, callerId: Target, clientIp: IPAddress.Parse("8.8.4.10"), configure: c =>
+        {
+            c.EnableRateLimit = true;
+            c.RateLimitMaxAttempts = 1;
+            c.RateLimitWindowSeconds = 60;
+        });
+
+        // The first authorized call passes the limiter and spends the single-attempt budget; the unknown
+        // provider then rejects with the uniform 400 — but the budget is already spent.
+        Assert.IsType<BadRequestObjectResult>(
+            await harness.Controller.AddCanonicalLink("oid", "does-not-exist", Target, new AuthResponse { Data = "state-token" }));
+
+        // The second authorized call is over budget and is throttled before the provider is looked up: a 429
+        // from LoginOutcome.Throttled via the single mapper (#474), with the machine-readable Retry-After.
+        var throttled = Assert.IsType<ContentResult>(
+            await harness.Controller.AddCanonicalLink("oid", "does-not-exist", Target, new AuthResponse { Data = "state-token" }));
+        Assert.Equal(429, throttled.StatusCode);
+        Assert.Equal("Too many login attempts. Please wait a moment and try again.", throttled.Content);
+
+        var retryAfter = harness.Controller.Response.Headers.RetryAfter.ToString();
+        Assert.True(
+            int.TryParse(retryAfter, out var seconds) && seconds >= 1 && seconds <= 60,
+            $"Retry-After must be whole seconds within the 60s window; was '{retryAfter}'.");
+    }
+
+    [Fact]
+    public async Task DeleteCanonicalLink_AuthorizedOverRateLimit_Returns429()
+    {
+        // #382: the DELETE arm is throttled too — a name-miss DELETE still runs a full persist under the
+        // config lock, so it shares the "link" budget with the add arm.
+        var harness = ForCaller(isAdmin: true, callerId: Target, clientIp: IPAddress.Parse("8.8.4.11"), configure: c =>
+        {
+            c.EnableRateLimit = true;
+            c.RateLimitMaxAttempts = 1;
+            c.RateLimitWindowSeconds = 60;
+        });
+
+        // First call spends the single-attempt budget (unknown provider → 400).
+        Assert.IsType<BadRequestObjectResult>(
+            await harness.Controller.DeleteCanonicalLink("oid", "does-not-exist", Target, "sub-1"));
+
+        // Second call is over budget and throttled.
+        var throttled = Assert.IsType<ContentResult>(
+            await harness.Controller.DeleteCanonicalLink("oid", "does-not-exist", Target, "sub-1"));
+        Assert.Equal(429, throttled.StatusCode);
+    }
+
+    [Fact]
+    public async Task AddCanonicalLink_UnauthorizedOverRateLimit_Returns403NotThrottled()
+    {
+        // The caller-authz guard runs before the limiter (#382 keeps the 403 first), so an unauthorized caller
+        // is refused with 403 and never consumes or is judged by the rate-limit budget — even hammering past
+        // the configured max of one. This pins the ordering: no 429 can precede the 403 (no rate-limit oracle).
+        var harness = ForCaller(isAdmin: false, callerId: Other, clientIp: IPAddress.Parse("8.8.4.12"), configure: c =>
+        {
+            c.EnableRateLimit = true;
+            c.RateLimitMaxAttempts = 1;
+            c.RateLimitWindowSeconds = 60;
+        });
+
+        for (var i = 0; i < 3; i++)
+        {
+            var result = await harness.Controller.AddCanonicalLink("oid", "keycloak", Target, new AuthResponse());
+            Assert.Equal(403, Assert.IsType<ObjectResult>(result).StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task DeleteCanonicalLink_AuthorizedUnderRateLimit_NotThrottled()
+    {
+        // With rate limiting enabled but the budget generous (the default 30/60s), a normal admin unlink is
+        // unaffected: it removes the caller's own link and returns Ok, never a 429.
+        var harness = ForCaller(isAdmin: true, callerId: Target, clientIp: IPAddress.Parse("8.8.4.13"), configure: c =>
+        {
+            c.EnableRateLimit = true;
+            c.RateLimitMaxAttempts = 30;
+            c.RateLimitWindowSeconds = 60;
+            c.OidConfigs["keycloak"] = new OidConfig
+            {
+                CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Target },
+            };
+        });
+
+        var result = await harness.Controller.DeleteCanonicalLink("oid", "keycloak", Target, "sub-1");
+
+        Assert.IsType<OkResult>(result);
+    }
+
     // Builds a harness whose mocked IAuthorizationContext resolves the request to the given caller. An
     // admin (or the target user themselves) with preference access passes AssertCanUpdateUser; a
-    // non-admin editing another user, or any caller without EnableUserPreferenceAccess, is refused.
-    private static SsoControllerHarness ForCaller(bool isAdmin, Guid callerId, Action<PluginConfiguration>? configure = null, bool enableUserPreferenceAccess = true)
+    // non-admin editing another user, or any caller without EnableUserPreferenceAccess, is refused. A
+    // dedicated clientIp lets a throttling test isolate its process-static limiter counter (#382).
+    private static SsoControllerHarness ForCaller(bool isAdmin, Guid callerId, Action<PluginConfiguration>? configure = null, bool enableUserPreferenceAccess = true, IPAddress? clientIp = null)
     {
-        var harness = new SsoControllerHarness(configure);
+        var harness = new SsoControllerHarness(configure, clientIp);
 
         var user = new User("caller", "SSO-Auth", "Default") { Id = callerId, EnableUserPreferenceAccess = enableUserPreferenceAccess };
         user.SetPermission(PermissionKind.IsAdministrator, isAdmin);
