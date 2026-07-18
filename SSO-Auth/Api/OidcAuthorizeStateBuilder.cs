@@ -33,8 +33,14 @@ internal static class OidcAuthorizeStateBuilder
     /// </summary>
     /// <param name="claims">The claims of the verified OpenID login.</param>
     /// <param name="config">The OpenID provider configuration.</param>
+    /// <param name="issuer">
+    /// The validated id_token's issuer, read from the RAW token by the caller (#186). It is passed in rather
+    /// than scanned from <paramref name="claims"/> because OidcClient filters the standard protocol claims
+    /// (<c>iss</c>, <c>aud</c>, <c>exp</c>, …) out of the redeemed principal, so the claim list here never
+    /// carries <c>iss</c>. Null when the token carried none; the canonical link then stays un-stamped.
+    /// </param>
     /// <returns>The derived authorize-state values.</returns>
-    internal static OidcAuthorizeState Build(IEnumerable<Claim> claims, OidConfig config)
+    internal static OidcAuthorizeState Build(IEnumerable<Claim> claims, OidConfig config, string? issuer = null)
     {
         // Materialize so the claims can be enumerated more than once (avatar format, role claim, sub fallback).
         var claimList = claims as IReadOnlyList<Claim> ?? claims.ToList();
@@ -87,7 +93,7 @@ internal static class OidcAuthorizeStateBuilder
         // validation rejects it anyway, so no legitimate login can carry one.
         valid = valid && !string.IsNullOrWhiteSpace(username);
 
-        return new OidcAuthorizeState(username, subject, emailVerified, valid, admin, enableLiveTv, enableLiveTvManagement, folders, avatarUrl);
+        return new OidcAuthorizeState(username, subject, issuer, emailVerified, valid, admin, enableLiveTv, enableLiveTvManagement, folders, avatarUrl);
     }
 
     // The last "sub" claim value, or null when none is present. Kept separate from the username
@@ -189,6 +195,7 @@ internal static class OidcAuthorizeStateBuilder
     /// </summary>
     /// <param name="Username">The resolved username (last matching preferred-username or sub claim), or null when none is present.</param>
     /// <param name="Subject">The stable subject identifier (the "sub" claim) used to key the account link, or null when absent.</param>
+    /// <param name="Issuer">The id_token issuer (the "iss" claim) the account link is issuer-bound to, or null when absent (#186).</param>
     /// <param name="EmailVerified">The login's "email_verified" claim (true/false), or null when the claim is absent, used by the adoption gate (#218).</param>
     /// <param name="Valid">Whether the login is permitted (no allow-list, or a role matched the allow-list).</param>
     /// <param name="Admin">Whether the login grants administrator rights.</param>
@@ -199,6 +206,7 @@ internal static class OidcAuthorizeStateBuilder
     internal readonly record struct OidcAuthorizeState(
         string? Username,
         string? Subject,
+        string? Issuer,
         bool? EmailVerified,
         bool Valid,
         bool Admin,

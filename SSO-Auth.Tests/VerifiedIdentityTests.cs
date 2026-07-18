@@ -25,6 +25,7 @@ public class VerifiedIdentityTests
         var derived = new OidcAuthorizeStateBuilder.OidcAuthorizeState(
             Username: "alice",
             Subject: "sub-123",
+            Issuer: "https://issuer.example",
             EmailVerified: true,
             Valid: true,
             Admin: true,
@@ -40,8 +41,10 @@ public class VerifiedIdentityTests
         Assert.Equal("OpenID", identity.AuditProtocol);
         Assert.Equal("keycloak", identity.Provider);
 
-        // OpenID keys the link on the stable subject; the username is derived independently.
+        // OpenID keys the link on the stable subject; the username is derived independently. The issuer is
+        // carried onto the identity to issuer-bind the canonical link (#186).
         Assert.Equal("sub-123", identity.Subject);
+        Assert.Equal("https://issuer.example", identity.Issuer);
         Assert.Equal("alice", identity.Username);
         Assert.Equal(true, identity.EmailVerified);
         Assert.True(identity.Admin);
@@ -70,9 +73,11 @@ public class VerifiedIdentityTests
         Assert.Equal("alice@example.com", identity.Subject);
         Assert.Equal("alice@example.com", identity.Username);
 
-        // SAML carries no email_verified claim and no avatar, so the adoption gate and avatar step are inert.
+        // SAML carries no email_verified claim, no avatar, and no issuer binding (#186), so the adoption
+        // gate, avatar step, and issuer check are all inert.
         Assert.Null(identity.EmailVerified);
         Assert.Null(identity.AvatarUrl);
+        Assert.Null(identity.Issuer);
 
         Assert.True(identity.Admin);
         Assert.Equal(new[] { "movies" }, identity.Folders);

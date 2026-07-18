@@ -38,6 +38,7 @@ internal sealed record VerifiedIdentity
         string auditProtocol,
         string provider,
         string subject,
+        string? issuer,
         string username,
         bool? emailVerified,
         bool admin,
@@ -50,6 +51,7 @@ internal sealed record VerifiedIdentity
         AuditProtocol = auditProtocol;
         Provider = provider;
         Subject = subject;
+        Issuer = issuer;
         Username = username;
         EmailVerified = emailVerified;
         Admin = admin;
@@ -70,6 +72,13 @@ internal sealed record VerifiedIdentity
 
     /// <summary>Gets the stable subject identifier keying the account link (OpenID "sub"; the SAML NameID) (#155).</summary>
     internal string Subject { get; }
+
+    /// <summary>
+    /// Gets the issuer the account link is bound to — the OpenID id_token's "iss" claim, or null for SAML
+    /// (out of scope) and for a token that carried none. Used to stamp and re-check the per-link issuer
+    /// binding (#186).
+    /// </summary>
+    internal string? Issuer { get; }
 
     /// <summary>Gets the username the login resolves (the OpenID username; the SAML NameID).</summary>
     internal string Username { get; }
@@ -109,6 +118,7 @@ internal sealed record VerifiedIdentity
             "OpenID",
             provider,
             derived.Subject!,
+            derived.Issuer,
             derived.Username!,
             derived.EmailVerified,
             derived.Admin,
@@ -122,7 +132,8 @@ internal sealed record VerifiedIdentity
     /// the response has passed signature, time-bound, audience, recipient and replay validation, the login
     /// allow-list, and the non-empty-NameID guard (#95) — so a raw or unvalidated response can never reach
     /// this factory. SAML keys the link directly on the NameID (subject and username are the same value) and
-    /// carries no <c>email_verified</c> claim or avatar (both null).
+    /// carries no <c>email_verified</c> claim, avatar, or issuer binding (all null — issuer binding is
+    /// OpenID-only, #186).
     /// </summary>
     /// <param name="provider">The provider that verified the login.</param>
     /// <param name="nameId">The validated, non-empty NameID; the link key and the username.</param>
@@ -134,6 +145,7 @@ internal sealed record VerifiedIdentity
             "SAML",
             provider,
             nameId,
+            null,
             nameId,
             null,
             privileges.Admin,

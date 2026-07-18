@@ -76,6 +76,17 @@ internal static class OidcResponseIssuer
         }
     }
 
+    /// <summary>
+    /// The validated id_token's issuer (its <c>iss</c> claim), or null when the token is absent/degenerate.
+    /// Read from the RAW token rather than the redeemed <c>result.User</c> claims because OidcClient filters
+    /// the standard protocol claims (<c>iss</c>, <c>aud</c>, <c>exp</c>, …) out of the principal — the same
+    /// reason the mix-up check above re-reads it here. This is the authoritative (iss, sub) issuer the
+    /// canonical link is bound to (#186).
+    /// </summary>
+    /// <param name="identityToken">The redeemed, already-validated id_token.</param>
+    /// <returns>The token's issuer; null when the token does not parse, and empty when it carries no <c>iss</c> (JsonWebToken.Issuer returns "" for an absent claim). Both are treated as "no issuer" by every consumer (IsNullOrWhiteSpace / ordinal Equals), so the link stays un-stamped.</returns>
+    internal static string? IdTokenIssuer(string? identityToken) => TokenIssuer(identityToken);
+
     // The id_token was validated by OidcIdTokenValidator before this runs, so it parses; the guard and
     // catch are defensive so a degenerate token can never turn the mix-up check itself into a 500.
     private static string? TokenIssuer(string? identityToken)

@@ -52,7 +52,8 @@ internal static class ServerManagedFields
         }
     }
 
-    // Links + secret: an OpenID provider carries both server-managed fields (#157/#189).
+    // Links + issuer bindings + secret: an OpenID provider carries these server-managed fields
+    // (#157/#189/#186).
     internal static void Preserve(OidConfig incoming, OidConfig live)
     {
         // A null provider entry (a malformed Add before #350, or a legacy store) carries no
@@ -62,7 +63,20 @@ internal static class ServerManagedFields
             return;
         }
 
-        incoming.CanonicalLinks = live.CanonicalLinks;
+        // The repoint belt (#186): an OidEndpoint change re-identifies the provider — a different discovery
+        // URL is potentially a different identity provider — exactly as ResolveUpdatedSecret treats it when
+        // it drops the client secret on the same change. Carrying the accumulated sub-keyed links across
+        // such a change is the silent-mapping this issue closes, so DROP them (and their issuer bindings)
+        // rather than preserve them. This protects even un-stamped legacy links (a user who has not logged
+        // in since the upgrade) against a post-upgrade repoint, which the per-login issuer gate alone could
+        // not. While the endpoint is UNCHANGED (the common save), both maps are carried over verbatim so
+        // existing links keep working (issue #186 criterion 3). The complementary per-login issuer gate
+        // covers a repoint that keeps the SAME discovery URL (a swapped IdP behind it), which this string
+        // compare cannot detect.
+        var endpointUnchanged = string.Equals(incoming.OidEndpoint, live.OidEndpoint, StringComparison.Ordinal);
+        incoming.CanonicalLinks = endpointUnchanged ? live.CanonicalLinks : new SerializableDictionary<string, Guid>();
+        incoming.CanonicalLinkIssuers = endpointUnchanged ? live.CanonicalLinkIssuers : new SerializableDictionary<string, string>();
+
         incoming.OidSecret = ResolveUpdatedSecret(incoming, live);
     }
 

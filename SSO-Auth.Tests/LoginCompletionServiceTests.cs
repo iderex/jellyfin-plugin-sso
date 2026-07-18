@@ -54,6 +54,7 @@ public class LoginCompletionServiceTests
         VerifiedIdentity.FromOidcRedemption(provider, new OidcAuthorizeStateBuilder.OidcAuthorizeState(
             Username: username,
             Subject: subject,
+            Issuer: null,
             EmailVerified: null,
             Valid: true,
             Admin: false,

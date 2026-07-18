@@ -72,11 +72,11 @@ public class OidcStateStoreTests
         string? clientKey = null)
         => new(
             Pending(provider, stateValue, created, binding, isLinking, clientKey: clientKey),
-            new OidcAuthorizeStateBuilder.OidcAuthorizeState(username, subject, emailVerified, true, admin, enableLiveTv, enableLiveTvManagement, folders ?? new List<string>(), avatar));
+            new OidcAuthorizeStateBuilder.OidcAuthorizeState(username, subject, null, emailVerified, true, admin, enableLiveTv, enableLiveTvManagement, folders ?? new List<string>(), avatar));
 
     // A fully-populated role-gate result, so a redeemed Ready can be asserted field-for-field.
     private static OidcAuthorizeStateBuilder.OidcAuthorizeState FullDerived() =>
-        new("alice", "sub-full", null, true, true, false, false, new List<string> { "movies" }, "https://idp.example/a.png");
+        new("alice", "sub-full", "https://idp.example", null, true, true, false, false, new List<string> { "movies" }, "https://idp.example/a.png");
 
     // --- PeekCurrent (OidPost precondition): provider-bound + unexpired + still pending, non-consuming ---
 
@@ -705,7 +705,7 @@ public class OidcStateStoreTests
     private static void Validate(OidcStateStore store, string token) =>
         store.Promote(
             store.PeekCurrent(token, "p", Now, Binding),
-            new OidcAuthorizeStateBuilder.OidcAuthorizeState("u", "sub", null, true, false, false, false, new List<string>(), null));
+            new OidcAuthorizeStateBuilder.OidcAuthorizeState("u", "sub", null, null, true, false, false, false, new List<string>(), null));
 
     [Fact]
     public void TryAdd_FloodFromOneKey_DoesNotRefuseADifferentKey()

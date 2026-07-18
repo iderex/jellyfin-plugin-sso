@@ -81,6 +81,45 @@ expiry). A few provider settings must therefore match, or login is refused (fail
   that mints a _different_ `sub` for the same user on every login (a misconfigured pairwise-subject
   setup) will work exactly once and then be refused — fix the IdP configuration; there is nothing
   safe to anchor the identity to otherwise.
+- **Account links are bound to the issuer that created them (repointing protection).** Each OpenID
+  canonical link records the id_token `iss` it was minted under, so a link is the full
+  OIDC-recommended `(iss, sub)` pair, not a bare `sub`. This matters when a provider entry is
+  **repointed at a different identity provider** — because a `sub` is only unique _within_ an issuer,
+  a new IdP that mints a short numeric subject like `1` could otherwise collide with an accumulated
+  link and silently sign the new user in to the old user's account. Two independent guards close that:
+  - **Login-time issuer check.** On every login the resolved link's stored issuer is compared to the
+    login's issuer, and a mismatch **refuses the login** (fail closed). This catches a swapped IdP even
+    behind an _unchanged_ discovery URL (a DNS/backend repoint), which nothing else can see. It is
+    self-healing: re-establish the link with the admin linking endpoint (`AddCanonicalLink`), or clear
+    the stale links, and logins resume.
+  - **Clear-on-endpoint-change.** Changing a provider's `OidEndpoint` (through the admin form or
+    `OID/Add`) **drops that provider's accumulated links and their issuer bindings**, treating the URL
+    change as a provider re-identification — the same way the stored client secret is dropped on an
+    endpoint change. This also protects links that predate this feature (see migration below) against a
+    repoint. So an endpoint edit is a reconfiguration: users re-link on their next login (or via the
+    admin endpoint), just as you must re-enter the client secret. **The comparison is exact** (ordinal),
+    so even a _benign_ normalization — adding a trailing slash, changing host case — clears the links.
+    **Plan a re-link window when you change an endpoint:** with `AllowExistingAccountLink` **on**, the
+    next login wave re-adopts each account by name and re-stamps the links automatically (treat it as the
+    short, controlled window described below, then turn the flag back off); with `AllowExistingAccountLink`
+    **off**, every returning user instead hits the "an account already exists" refusal (HTTP 403) until you
+    re-link them with `AddCanonicalLink` or open that brief adoption window. If the URL edit was cosmetic
+    and you did **not** intend to re-identify the provider, prefer leaving the endpoint string untouched.
+
+  **Migration / compatibility.** Links created before this feature carry no stored issuer. They keep
+  working unchanged while the endpoint is unchanged, and are **stamped with the current issuer on the
+  next successful login** (trust-on-first-use) — no userbase lockout on upgrade. One accepted, narrow
+  residual (the issue itself calls it that, not a regression): if a provider was repointed at a new IdP
+  **before** you upgraded to a version with this feature, an un-stamped legacy link whose `sub` collides
+  is stamped with the _new_ issuer on first login rather than being caught; the clear-on-endpoint-change
+  guard covers every repoint from the upgrade onward.
+
+- **`DoNotValidateIssuerName` relaxes the issuer binding.** With this escape hatch on, the id_token's
+  `iss` is **not** cross-checked against the discovery location, so the value bound to the link is
+  whatever the signed token asserts (still signed by the discovered keyset, but not tied to the
+  configured endpoint). The binding is still enforced login-to-login; it just trusts the token's
+  self-declared issuer. Enabling it is recorded in the `[SSO Audit]` log like the other relaxations —
+  prefer it only for genuinely templated / multi-tenant providers.
 - **Adopting a same-named pre-existing account is gated (`AllowExistingAccountLink`).** When a first
   login finds no link but a Jellyfin account already bears the SSO name, the account is adopted only if
   the provider has `AllowExistingAccountLink` set — otherwise the login is refused (HTTP 403). Adoption

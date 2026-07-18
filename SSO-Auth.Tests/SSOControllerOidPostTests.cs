@@ -4,12 +4,14 @@ using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
 using Duende.IdentityModel.OidcClient;
+using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Plugin.SSO_Auth;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Api.Flows;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using NSubstitute;
 using Xunit;
 
 namespace Jellyfin.Plugin.SSO_Auth.Tests;
@@ -55,6 +57,40 @@ public class SSOControllerOidPostTests
         var page = Assert.IsType<ContentResult>(result);
         Assert.Equal("text/html", page.ContentType);
         Assert.False(string.IsNullOrEmpty(page.Content));
+    }
+
+    [Fact]
+    public async Task OidPost_FullLogin_StampsTheRealIdTokenIssuerOntoTheCanonicalLink()
+    {
+        // End-to-end empirical proof (#186): a full callback + authenticate over a REAL signed id_token must
+        // capture that token's `iss` and stamp it onto the freshly created canonical link. This is what
+        // proves the issuer binding is sourced from the validated token (not reasoned about) — the whole
+        // chain OidcIdTokenValidator -> claims -> OidcAuthorizeStateBuilder -> VerifiedIdentity ->
+        // LoginCompletionService -> CanonicalLinkService runs against the fixture's actual token here.
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        var harness = ArrangeCallback(fixture, query: "?code=test-code&state=state-1");
+        var user = new User("alice", "SSO-Auth", "Default") { Id = Guid.Parse("55555555-5555-5555-5555-555555555555") };
+        harness.UserManager.CreateUserAsync("alice").Returns(user);
+        harness.UserManager.GetUserById(user.Id).Returns(user);
+
+        // The callback promotes the state to a redeemable Ready built from the real id_token's claims.
+        Assert.Equal("text/html", Assert.IsType<ContentResult>(await harness.Controller.OidCallback("kc", "state-1")).ContentType);
+
+        // The authenticate leg redeems it and mints, resolving/creating the account and stamping the link.
+        var authed = await harness.Controller.OidAuth("kc", new AuthResponse
+        {
+            Data = "state-1",
+            DeviceID = "device-1",
+            DeviceName = "Test Device",
+            AppName = "Jellyfin Web",
+            AppVersion = "1.0",
+        });
+        Assert.IsType<OkObjectResult>(authed);
+
+        // The link is bound to the token's actual issuer (the fixture's Authority), read from the real
+        // validated id_token — not a value hand-fed by the test.
+        var issuers = SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["kc"].CanonicalLinkIssuers);
+        Assert.Equal(Authority, issuers["sub-1"]);
     }
 
     [Fact]

@@ -273,8 +273,11 @@ internal sealed class OidcLoginService
         }
 
         // Derive the authorize-state values (username, validity, admin, Live TV, folders, avatar)
-        // from the verified login's claims and the provider configuration.
-        var derived = OidcAuthorizeStateBuilder.Build(result.User.Claims, config);
+        // from the verified login's claims and the provider configuration. The issuer the account link is
+        // bound to (#186) is read from the RAW id_token, not result.User: OidcClient filters the standard
+        // protocol claims (iss, aud, exp, …) out of the redeemed principal, so the claim list carries no
+        // `iss` — the same reason the RFC 9207 check above re-reads it from result.IdentityToken.
+        var derived = OidcAuthorizeStateBuilder.Build(result.User.Claims, config, OidcResponseIssuer.IdTokenIssuer(result.IdentityToken));
 
         // Fail closed (#155): a valid OpenID login must resolve a stable subject to key the account
         // link on. sub is an OIDC Core MUST and (post-#134) the id_token validator has verified the
@@ -406,8 +409,9 @@ internal sealed class OidcLoginService
         }
 
         // Manual linking keys on the stable subject (#155), matching the auto-login path, so a
-        // later provider-side rename does not orphan the link the user just created.
-        return FlowResponses.MapCanonicalLinkWrite(_canonicalLinks.TryCreateLink(ProviderMode.Oid, provider, redeemed.Identity.Subject, jellyfinUserId));
+        // later provider-side rename does not orphan the link the user just created. The redeemed
+        // identity's issuer stamps the link (#186), so a manual link is issuer-bound like an auto-login one.
+        return FlowResponses.MapCanonicalLinkWrite(_canonicalLinks.TryCreateLink(ProviderMode.Oid, provider, redeemed.Identity.Subject, jellyfinUserId, redeemed.Identity.Issuer));
     }
 
     // Builds the space-delimited OpenID scope string, always leading with the base "openid profile".
