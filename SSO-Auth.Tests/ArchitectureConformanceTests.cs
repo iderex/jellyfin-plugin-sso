@@ -980,6 +980,27 @@ public class ArchitectureConformanceTests
             "Every persisting provider-form field (sso-text/sso-line-list/sso-toggle/sso-folder-list/sso-role-map) must have an id equal to an OidConfig property; these do not: " + string.Join(" | ", offenders));
     }
 
+    [Fact]
+    public void SourceFilesDeclaring_MatchesRecordStructAndStructAlongsideClass()
+    {
+        // #542: the helper's regex used to be "\bclass\s+{Name}\b" only, so it silently returned an empty
+        // file list for a record struct/struct type instead of finding its declaring file — a latent
+        // false-negative for any future rule that scans one by name. RouteSuffix and DiscoveryFacts
+        // ("internal readonly record struct ...") are real record structs already living in SSO-Auth/Api,
+        // so this pins the fix against actual source rather than a synthetic fixture.
+        var recordStructFiles = SourceFilesDeclaring(new[] { typeof(RouteSuffix), typeof(DiscoveryFacts) });
+        Assert.True(
+            recordStructFiles.Count == 2,
+            "SourceFilesDeclaring must find the declaring file of a record struct type (RouteSuffix, DiscoveryFacts), not just a class.");
+
+        // The class path must keep working too — the widened regex must not have narrowed the original
+        // "class Name" match.
+        var classFiles = SourceFilesDeclaring(new[] { typeof(AuthorizeSession) });
+        Assert.True(
+            classFiles.Count == 1,
+            "SourceFilesDeclaring must still find the declaring file of an ordinary class (AuthorizeSession).");
+    }
+
     // The markup of the #sso-new-oidc-provider settings form (from the opening tag's id attribute to its
     // closing </form>). Forms are not nested here, so the first </form> after the id marker closes it; the
     // preceding #sso-load-config form is left out because its </form> sits before the marker.
@@ -1042,14 +1063,21 @@ public class ArchitectureConformanceTests
         return files;
     }
 
-    // Every source file that declares any of the given types, matched by class declaration in the file
-    // body (not the file name), so a file rename still resolves via the type's own name. Shared by
-    // ControllerSourceFiles above and the raw socket/DNS liveness check (#444) — both need "which files
-    // declare these types", just for a different type set.
+    // The C# keywords a type declaration's name can immediately follow. "struct" alone also matches a
+    // "record struct" declaration (the name follows "struct", not "record", in that form); "record" alone
+    // matches a positional/reference record ("record Foo(...)"), since "record class Foo" is already
+    // covered by "class".
+    private static readonly string[] TypeDeclarationKeywords = { "class", "struct", "record" };
+
+    // Every source file that declares any of the given types, matched by class/struct/record declaration
+    // in the file body (not the file name), so a file rename still resolves via the type's own name.
+    // Shared by ControllerSourceFiles above and the raw socket/DNS liveness check (#444) — both need
+    // "which files declare these types", just for a different type set (#542).
     private static IReadOnlyList<string> SourceFilesDeclaring(IEnumerable<Type> types)
     {
         var declarations = types
-            .Select(t => new Regex($@"\bclass\s+{Regex.Escape(SimpleName(t))}\b"))
+            .SelectMany(t => TypeDeclarationKeywords.Select(keyword =>
+                new Regex($@"\b{keyword}\s+{Regex.Escape(SimpleName(t))}\b")))
             .ToList();
 
         return Directory
