@@ -9,7 +9,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Shared;
 
 /// <summary>
 /// The shared per-client rate-limit gate over the SSO flow endpoints (#128, #160): the anonymous login
-/// endpoints and, since #382, the authenticated link/unlink admin write surface. It owns the ONE
+/// endpoints, the authenticated link/unlink admin write surface (#382) and the admin SSO-revoke (#516). It owns the ONE
 /// process-wide <see cref="SsoRateLimiter"/> instance and the opt-in check every rate-limited endpoint
 /// fronts itself with — the last mutable process-wide static that lived on <see cref="SSOController"/> (#318).
 /// Relocating it into the shared tier leaves the controller a stateless request dispatcher (every store,
@@ -24,7 +24,8 @@ internal static class SsoRateLimitGate
     // The opt-in per-client rate limiter over the SSO flow endpoints (#128). One process-wide instance
     // (static readonly), exactly as it was on the controller: every rate-limited endpoint reaches it through
     // this gate, so a single shared window per client is preserved across the OpenID and SAML login endpoints
-    // (and now the link/unlink admin surface, #382, under its own class) rather than split into separate limiters.
+    // (and now the link/unlink admin surface, #382, and the admin SSO-revoke, #516, each under its own class)
+    // rather than split into separate limiters.
     private static readonly SsoRateLimiter RateLimiter = new SsoRateLimiter();
 
     /// <summary>
@@ -34,12 +35,12 @@ internal static class SsoRateLimitGate
     /// availability over throttling). Keys on the connection's remote address only — proxy attribution is the
     /// host's job (Jellyfin's "Known proxies" setting resolves the real client into it); see
     /// <see cref="SsoRateLimiter.NormalizeClientKey"/>. The endpoint class (challenge/callback/auth for the
-    /// anonymous login flows, "link" for the authenticated link/unlink write surface, #382) is part of the
-    /// key, so each class carries an independent budget: one login — which hits all three login classes — gets
-    /// the full budget at each stage rather than a third of it, keeping the default generous for shared egress
-    /// addresses (NAT/CGNAT).
+    /// anonymous login flows, "link" for the authenticated link/unlink write surface, #382, and "unregister"
+    /// for the admin SSO-revoke write, #516) is part of the key, so each class carries an independent budget:
+    /// one login — which hits all three login classes — gets the full budget at each stage rather than a third
+    /// of it, keeping the default generous for shared egress addresses (NAT/CGNAT).
     /// </summary>
-    /// <param name="endpointClass">The endpoint class folded into the rate-limit key (e.g. challenge/callback/auth/link).</param>
+    /// <param name="endpointClass">The endpoint class folded into the rate-limit key (e.g. challenge/callback/auth/link/unregister).</param>
     /// <param name="remoteIp">The connection's remote address, the sole attribution input (proxy resolution is the host's job).</param>
     /// <param name="logger">The caller's logger, for the bounded throttle-engaged observability signal (#195).</param>
     /// <param name="response">The response whose Retry-After header a throttled outcome sets (#474).</param>
