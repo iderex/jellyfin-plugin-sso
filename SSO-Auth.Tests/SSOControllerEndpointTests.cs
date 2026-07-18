@@ -1,9 +1,11 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Config;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Xunit;
 
@@ -188,6 +190,23 @@ public class SSOControllerEndpointTests
 
         var result = Assert.IsType<OkObjectResult>(harness.Controller.OidStates());
         Assert.Empty(Assert.IsAssignableFrom<IEnumerable>(result.Value));
+    }
+
+    [Theory]
+    [InlineData(nameof(SSOController.OidProviderNames))]
+    [InlineData(nameof(SSOController.SamlProviderNames))]
+    public void GetNames_HasNoAuthorizeAttribute(string methodName)
+    {
+        // Change detector for the documented anonymous-by-design decision (#540): OID/GetNames and
+        // SAML/GetNames carry no [Authorize] on purpose — the provider-name list they return is already
+        // rendered anonymously by SSOViewsController's linking page (see the in-code rationale on both
+        // methods), so gating them would add no confidentiality while breaking that unauthenticated
+        // render. A future [Authorize] landing here — accidental or from a reviewer expecting these
+        // gated — should fail this test and surface the decision instead of silently changing behavior.
+        var method = typeof(SSOController).GetMethod(methodName, BindingFlags.Public | BindingFlags.Instance);
+
+        Assert.NotNull(method);
+        Assert.Null(method!.GetCustomAttribute<AuthorizeAttribute>());
     }
 }
 

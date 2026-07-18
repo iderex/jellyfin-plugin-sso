@@ -289,7 +289,8 @@ public class SSOController : ControllerBase
     }
 
     /// <summary>
-    /// Lists the names of the enabled OpenID providers only.
+    /// Lists the names of the enabled OpenID providers only. Intentionally anonymous — see the
+    /// in-body rationale (#540).
     /// </summary>
     /// <returns>The list of enabled OpenID provider names.</returns>
     [HttpGet("OID/GetNames")]
@@ -301,17 +302,30 @@ public class SSOController : ControllerBase
         // gate — the server-side rejection stays the real defense in depth.
         // Materialize under the lock (#157/F-10): returning a live view lets the JSON formatter enumerate
         // it outside the lock, tearing against a concurrent provider add/remove.
+        //
+        // No [Authorize] here — deliberate, not an oversight (#540). SSOViewsController, which serves the
+        // self-service linking page (linking.html/linking.js, the sole caller of this endpoint), carries no
+        // [Authorize] of its own either, so the same provider-name list this endpoint returns is already
+        // rendered into that page's visible DOM for an anonymous visitor. Gating GetNames would add no
+        // confidentiality (the list is public via the page regardless) while breaking that page's render for
+        // any caller who has not first authenticated — including the isLinking=false leg, which is how a
+        // brand-new (not-yet-Jellyfin-authenticated) user discovers which providers they can sign in with.
+        // Provider names are configuration, not secrets; the identity-provider connection itself (client
+        // secret, signing keys) stays behind the elevation-gated OID/Get and SAML/Get.
         return Ok(SSOPlugin.Instance.ReadConfiguration(c => EnabledProviderNames(c.OidConfigs)));
     }
 
     /// <summary>
-    /// Lists the names of the enabled SAML providers only.
+    /// Lists the names of the enabled SAML providers only. Intentionally anonymous — see the
+    /// in-body rationale (#540).
     /// </summary>
     /// <returns>The list of enabled SAML provider names.</returns>
     [HttpGet("SAML/GetNames")]
     public ActionResult SamlProviderNames()
     {
         // Enabled-only and materialized under the lock, as OID/GetNames does (#344, #157/F-10).
+        // Anonymous by the same design as OID/GetNames above (#540) — same caller, same already-public
+        // rendering, same rationale.
         return Ok(SSOPlugin.Instance.ReadConfiguration(c => EnabledProviderNames(c.SamlConfigs)));
     }
 
