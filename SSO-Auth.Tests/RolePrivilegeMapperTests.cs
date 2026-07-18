@@ -310,4 +310,108 @@ public class RolePrivilegeMapperTests
         Assert.True(RolePrivilegeMapper.Evaluate(new[] { "jellyfin" }, saml).Valid);
         Assert.False(RolePrivilegeMapper.Evaluate(new[] { "other" }, saml).Valid);
     }
+
+    // --- AssemblePrivileges (#508): the shared post-Evaluate merge glue that used to be duplicated,
+    // byte-identical, in OidcAuthorizeStateBuilder and SamlAuthorizeStateBuilder. Covers both former
+    // call sites (an OidConfig and a SamlConfig) since the method is protocol-agnostic.
+
+    [Fact]
+    public void AssemblePrivileges_FolderRolesOff_CopiesEnabledFolders()
+    {
+        var config = Oid(c =>
+        {
+            c.EnableFolderRoles = false;
+            c.EnabledFolders = new[] { "movies", "shows" };
+        });
+
+        var result = RolePrivilegeMapper.AssemblePrivileges(Array.Empty<string>(), config);
+
+        Assert.Equal(new List<string> { "movies", "shows" }, result.Folders);
+    }
+
+    [Fact]
+    public void AssemblePrivileges_FolderRolesOff_NullEnabledFolders_YieldsEmptyFolders()
+    {
+        // A null EnabledFolders (never configured) must not throw and must yield an empty, non-null list.
+        var config = Saml(c =>
+        {
+            c.EnableFolderRoles = false;
+            c.EnabledFolders = null;
+        });
+
+        var result = RolePrivilegeMapper.AssemblePrivileges(Array.Empty<string>(), config);
+
+        Assert.Empty(result.Folders);
+    }
+
+    [Fact]
+    public void AssemblePrivileges_FolderRolesOn_IgnoresStaticFolders_AppendsRoleGranted()
+    {
+        var config = Oid(c =>
+        {
+            c.EnableFolderRoles = true;
+            c.EnabledFolders = new[] { "static" };
+            c.FolderRoleMapping = new List<FolderRoleMap>
+            {
+                new FolderRoleMap { Role = "media", Folders = new List<string> { "movies" } },
+            };
+        });
+
+        var result = RolePrivilegeMapper.AssemblePrivileges(new[] { "media" }, config);
+
+        // Folder roles on -> the statically-enabled set is NOT copied; only role-granted folders apply.
+        Assert.Equal(new List<string> { "movies" }, result.Folders);
+    }
+
+    [Fact]
+    public void AssemblePrivileges_LiveTv_ConfigDefaultOrRoleGrant_UnionsBothSources()
+    {
+        var config = Saml(c =>
+        {
+            c.EnableLiveTv = true;
+            c.EnableLiveTvManagement = false;
+            c.EnableLiveTvRoles = true;
+            c.LiveTvManagementRoles = new[] { "tv-admin" };
+        });
+
+        var result = RolePrivilegeMapper.AssemblePrivileges(new[] { "tv-admin" }, config);
+
+        Assert.True(result.EnableLiveTv);           // from the config default
+        Assert.True(result.EnableLiveTvManagement);  // granted by the role
+    }
+
+    [Fact]
+    public void AssemblePrivileges_Admin_GrantedByRole()
+    {
+        var config = Oid(c => c.AdminRoles = new[] { "admins" });
+
+        Assert.True(RolePrivilegeMapper.AssemblePrivileges(new[] { "admins" }, config).Admin);
+        Assert.False(RolePrivilegeMapper.AssemblePrivileges(new[] { "outsiders" }, config).Admin);
+    }
+
+    [Fact]
+    public void AssemblePrivileges_Valid_ComputedForBothConfigTypes_SamlCallerIgnoresIt()
+    {
+        // Mirrors the OIDC builder's OR-merge input and the SAML builder's disregard for Valid: the
+        // assembled Valid is populated identically for both config shapes, and it is up to the caller
+        // whether to use it.
+        var oid = Oid(c => c.Roles = new[] { "jellyfin" });
+        var saml = Saml(c => c.Roles = new[] { "jellyfin" });
+
+        Assert.True(RolePrivilegeMapper.AssemblePrivileges(new[] { "jellyfin" }, oid).Valid);
+        Assert.True(RolePrivilegeMapper.AssemblePrivileges(new[] { "jellyfin" }, saml).Valid);
+        Assert.False(RolePrivilegeMapper.AssemblePrivileges(new[] { "other" }, saml).Valid);
+    }
+
+    [Fact]
+    public void AssemblePrivileges_NoRolesNoDefaults_YieldsNoPrivileges()
+    {
+        var result = RolePrivilegeMapper.AssemblePrivileges(Array.Empty<string>(), Saml(_ => { }));
+
+        Assert.False(result.Valid);
+        Assert.False(result.Admin);
+        Assert.False(result.EnableLiveTv);
+        Assert.False(result.EnableLiveTvManagement);
+        Assert.Empty(result.Folders);
+    }
 }

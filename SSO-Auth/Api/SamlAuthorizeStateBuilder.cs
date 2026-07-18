@@ -24,22 +24,12 @@ internal static class SamlAuthorizeStateBuilder
     /// <returns>The derived authorize-state privileges.</returns>
     internal static SamlAuthorizeState Build(IEnumerable<string> roles, SamlConfig config)
     {
-        // Folders start from the statically-enabled set only when folder roles are off; role-granted
-        // folders are appended below.
-        var folders = !config.EnableFolderRoles && config.EnabledFolders != null
-            ? new List<string>(config.EnabledFolders)
-            : new List<string>();
+        // Assemble the role-derived privileges (folders, admin, Live TV) in the single shared home
+        // (#508). Login validity is decided separately by SamlLoginPolicy, so the assembled Valid is
+        // ignored here.
+        var privileges = RolePrivilegeMapper.AssemblePrivileges(roles, config);
 
-        // Map the roles to privileges and merge (monotonic: only ever grants). Login validity is
-        // decided separately by SamlLoginPolicy, so grants.Valid is ignored here. Admin starts false, so
-        // its OR-merge is a plain assignment; Live TV starts from the config default and is OR-ed.
-        var grants = RolePrivilegeMapper.Evaluate(roles, config);
-        var admin = grants.Admin;
-        var enableLiveTv = config.EnableLiveTv || grants.EnableLiveTv;
-        var enableLiveTvManagement = config.EnableLiveTvManagement || grants.EnableLiveTvManagement;
-        folders.AddRange(grants.Folders);
-
-        return new SamlAuthorizeState(admin, enableLiveTv, enableLiveTvManagement, folders);
+        return new SamlAuthorizeState(privileges.Admin, privileges.EnableLiveTv, privileges.EnableLiveTvManagement, privileges.Folders);
     }
 
     /// <summary>
