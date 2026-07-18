@@ -21,7 +21,7 @@ internal sealed class ProviderConfigStore
     // Static on purpose: it keeps the process-wide serialization of the old SSOPlugin lock, so two
     // plugin instances (tests construct several; production has one) can never interleave writes.
     // It becomes an instance field once the store is a DI singleton (#318 step 9).
-    private static readonly object Sync = new object();
+    private static readonly System.Threading.Lock Sync = new();
 
     private readonly Func<PluginConfiguration> _live;
     private readonly Action<BasePluginConfiguration> _persist;
