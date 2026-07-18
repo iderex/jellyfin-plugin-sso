@@ -1,0 +1,35 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stryker-mutator/stryker-net/master/src/Stryker.Core/Stryker.Core/Options/stryker-schema.json",
+  "stryker-config": {
+    "project": "SSO-Auth.csproj",
+    "target-framework": "net9.0",
+    "coverage-analysis": "perTest",
+    "reporters": ["html", "markdown", "progress", "cleartext"],
+    "thresholds": {
+      "high": 80,
+      "low": 60,
+      "break": 0
+    },
+    "mutate": [
+      "Saml.cs",
+      "SamlAssertionTime.cs",
+      "SamlSignatureAlgorithms.cs",
+      "Api/SamlAssertionValidator.cs",
+      "Api/SamlRecipientValidator.cs",
+      "Api/SamlResponseLoader.cs",
+      "Api/SamlLoginPolicy.cs",
+      "Api/SamlReplayCache.cs",
+      "Api/SamlCertificate.cs",
+      "Api/SamlRedirectSigner.cs",
+      "Api/OidcIdTokenValidator.cs",
+      "Api/OidcResponseIssuer.cs",
+      "Api/OidcDiscoveryReader.cs",
+      "Api/PkceDiscovery.cs",
+      "Api/OidcInsecureToggles.cs",
+      "Api/OidcRoleExtractor.cs",
+      "Api/RolePrivilegeMapper.cs",
+      "Api/LoginStatusMapper.cs",
+      "Api/AdoptionEligibilityResolver.cs"
+    ]
+  }
+}

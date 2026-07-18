@@ -41,15 +41,10 @@ dotnet_diagnostic.SA1649.severity = none
 # PR).
 dotnet_diagnostic.CA1309.severity = error
 dotnet_diagnostic.CA1311.severity = suggestion
-dotnet_diagnostic.CA1848.severity = suggestion
-dotnet_diagnostic.RCS1194.severity = suggestion
 dotnet_diagnostic.MA0002.severity = suggestion
 dotnet_diagnostic.MA0006.severity = error
 dotnet_diagnostic.MA0011.severity = suggestion
 dotnet_diagnostic.MA0015.severity = suggestion
-dotnet_diagnostic.MA0016.severity = suggestion
-dotnet_diagnostic.MA0048.severity = suggestion
-dotnet_diagnostic.MA0051.severity = suggestion
 dotnet_diagnostic.MA0074.severity = suggestion
 dotnet_diagnostic.MA0158.severity = suggestion
 # HIGH-priority backlog: culture-dependent casing/comparison on the identity
@@ -58,15 +53,42 @@ dotnet_diagnostic.MA0158.severity = suggestion
 # PR with a migration consideration — not a ride-along in a config change.
 dotnet_diagnostic.CA1304.severity = suggestion
 dotnet_diagnostic.CA1310.severity = suggestion
-dotnet_diagnostic.MA0008.severity = suggestion
 # The SSO_Auth namespace underscore is load-bearing: renaming breaks users'
 # persisted AuthenticationProviderId (same rationale as the accepted S101).
 dotnet_diagnostic.CA1707.severity = none
 
+# --- Accept-with-reason dispositions (issue #104) --------------------------
+# Families reviewed and deliberately accepted: fixing them is noise or
+# negative-value on this plugin. Disabled repo-wide (not left as a suggestion)
+# so they no longer surface, mirroring the SA1402=none / SA1649=none / CA1707
+# accepts above. Each carries the reason it was declined.
+# CA1848 (use LoggerMessage delegates): plugin log volume is trivial; 51 call
+# sites across every hot login/security file for negligible runtime benefit.
+# Per issue #104's own lean.
+dotnet_diagnostic.CA1848.severity = none
+# MA0048 (file name must match type name): deliberate helper-near-caller
+# co-location; consistent with the existing SA1402=none / SA1649=none decision.
+dotnet_diagnostic.MA0048.severity = none
+# MA0008 (add StructLayoutAttribute): meaningless for managed record struct
+# value types with reference fields; these are not interop types.
+dotnet_diagnostic.MA0008.severity = none
+# RCS1194 + CA1032 (implement standard exception constructors): internal sealed
+# exceptions with deliberately narrow constructors and generic messages; the
+# extra public constructors are unused noise.
+dotnet_diagnostic.RCS1194.severity = none
+dotnet_diagnostic.CA1032.severity = none
+# MA0016 (prefer collection abstraction over List): PluginConfiguration.Folders
+# is a serialized config DTO; changing its type risks persisted-config
+# serialization compatibility.
+dotnet_diagnostic.MA0016.severity = none
+# MA0051 (method is too long): splitting login-path methods (Oidc/SamlLogin
+# Service, CanonicalLinkService) is behavior-relevant refactoring on the auth
+# path for zero functional or security gain.
+dotnet_diagnostic.MA0051.severity = none
+
 # --- Migrated from jellyfin.ruleset: CA ------------------------------------
 # Demoted to suggestion.
 dotnet_diagnostic.CA1031.severity = suggestion
-dotnet_diagnostic.CA1032.severity = suggestion
 dotnet_diagnostic.CA1062.severity = suggestion
 dotnet_diagnostic.CA1716.severity = suggestion
 dotnet_diagnostic.CA1720.severity = suggestion

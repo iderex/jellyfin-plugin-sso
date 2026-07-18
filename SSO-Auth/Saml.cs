@@ -40,23 +40,39 @@ internal sealed class SamlResponse
     private const string BearerSubjectConfirmationDataXPath =
         "/samlp:Response/saml:Assertion[1]/saml:Subject/saml:SubjectConfirmation[@Method='urn:oasis:names:tc:SAML:2.0:cm:bearer']/saml:SubjectConfirmationData";
 
-    private readonly X509Certificate2 _certificate;
+    private readonly List<X509Certificate2> _certificates;
     private readonly XmlDocument _xmlDoc;
     private readonly XmlNamespaceManager _xmlNameSpaceManager; // we need this one to run our XPath queries on the SAML XML
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="SamlResponse"/> class.
+    /// Initializes a new instance of the <see cref="SamlResponse"/> class, verifying against a single
+    /// identity-provider signing certificate.
     /// </summary>
     /// <param name="certificateStr">The certificate formatted as a Base64 string.</param>
     /// <param name="responseString">The SAML response formatted as a string.</param>
     public SamlResponse(string certificateStr, string responseString)
+        : this(certificateStr, null, responseString)
     {
-        // Decode and load the certificate, then parse the response — in that exact order, so the exception
-        // sequence SamlResponseLoader.TryParse catches is unchanged: FormatException (bad certificate
-        // base64), CryptographicException (bad certificate), then FormatException/XmlException (bad body).
-        // The XML is loaded here, at construction, and the fields are readonly: a validated response
-        // object can never have different XML swapped into it afterwards (#396).
-        _certificate = X509CertificateLoader.LoadCertificate(Convert.FromBase64String(certificateStr));
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SamlResponse"/> class, verifying against the primary
+    /// signing certificate OR an optional secondary certificate — the identity-provider verification-key
+    /// overlap window (#491). The response is accepted when its signature verifies against EITHER
+    /// certificate under the same fail-closed checks; a blank secondary is byte-for-byte the primary-only
+    /// behavior.
+    /// </summary>
+    /// <param name="certificateStr">The primary certificate formatted as a Base64 string.</param>
+    /// <param name="secondaryCertificateStr">The optional secondary certificate (Base64), or blank for none.</param>
+    /// <param name="responseString">The SAML response formatted as a string.</param>
+    public SamlResponse(string certificateStr, string secondaryCertificateStr, string responseString)
+    {
+        // Decode and load the certificate(s), then parse the response — in that exact order, so the
+        // exception sequence SamlResponseLoader.TryParse catches is unchanged: FormatException (bad
+        // certificate base64), CryptographicException (bad certificate), then FormatException/XmlException
+        // (bad body). The XML is loaded here, at construction, and the fields are readonly: a validated
+        // response object can never have different XML swapped into it afterwards (#396).
+        _certificates = LoadCandidateCertificates(certificateStr, secondaryCertificateStr);
         _xmlDoc = ParseResponseXml(responseString);
         _xmlNameSpaceManager = GetNamespaceManager(); // lets construct a "manager" for XPath queries
     }
@@ -65,6 +81,27 @@ internal sealed class SamlResponse
     /// Gets the SAML response's XML data.
     /// </summary>
     public string Xml => _xmlDoc.OuterXml;
+
+    // Loads the candidate identity-provider signing certificates: the primary always, and the optional
+    // secondary only when configured (#491). The primary is loaded FIRST so the constructor's exception
+    // ordering — and therefore the fail-closed mapping in SamlResponseLoader.TryParse — is unchanged. Both
+    // are the identity provider's PUBLIC signing certificate; a configured-but-unloadable secondary throws
+    // the same load exceptions as the primary and is rejected the same fail-closed way (the admin write
+    // paths reject it up front via SamlCertificate.IsInvalid).
+    private static List<X509Certificate2> LoadCandidateCertificates(string certificateStr, string secondaryCertificateStr)
+    {
+        var certificates = new List<X509Certificate2>
+        {
+            X509CertificateLoader.LoadCertificate(Convert.FromBase64String(certificateStr)),
+        };
+
+        if (!string.IsNullOrWhiteSpace(secondaryCertificateStr))
+        {
+            certificates.Add(X509CertificateLoader.LoadCertificate(Convert.FromBase64String(secondaryCertificateStr)));
+        }
+
+        return certificates;
+    }
 
     // Parses the untrusted, Base64-encoded SAML response into a hardened XmlDocument. The body base64
     // decode runs after the certificate load (preserving the constructor's exception ordering), and the
@@ -132,7 +169,7 @@ internal sealed class SamlResponse
         {
             // EVERY position-bound signature must independently validate — its reference must cover the
             // Response root or the single Assertion, its algorithms must be allowed, and it must verify
-            // against the pinned certificate (#238). The Web Browser SSO profile permits signing the
+            // against a pinned certificate (#238). The Web Browser SSO profile permits signing the
             // Response, the Assertion, or BOTH; validating all of them (rather than only the first in
             // document order) removes the "which signature is authoritative" ambiguity without rejecting
             // a conformant IdP that signs both — a second, non-verifying signature rejects the whole
@@ -144,7 +181,7 @@ internal sealed class SamlResponse
 
                 if (!ValidateSignatureReference(signedXml, signatureElement)
                     || !IsSignatureAlgorithmAllowed(signedXml)
-                    || !signedXml.CheckSignature(_certificate, true))
+                    || !VerifiesAgainstCandidateCertificate(signedXml))
                 {
                     return false;
                 }
@@ -193,6 +230,43 @@ internal sealed class SamlResponse
         }
 
         return SamlSignatureAlgorithms.IsAllowed(signedXml.SignedInfo.SignatureMethod, digestMethods);
+    }
+
+    // The signature must verify against at least one candidate certificate that is CURRENTLY within its
+    // validity window (#491). Only the cryptographic key trial spans the primary and the optional
+    // secondary certificate; the position-bound signature selection, the single-reference /
+    // reference-covers-{root|assertion} / enveloped-within binding, and the algorithm allowlist all run
+    // once per signature ABOVE this, cert-independently — so trying a second certificate cannot relax any
+    // of them or open a wrapping/downgrade path, it only decides which key's signature is accepted. An
+    // expired (or not-yet-valid) candidate is skipped rather than trusted, so a signing key the identity
+    // provider has rolled away from can no longer authenticate even while it is still configured for the
+    // overlap window.
+    private bool VerifiesAgainstCandidateCertificate(SignedXml signedXml)
+    {
+        var utcNow = DateTime.UtcNow;
+        foreach (var certificate in _certificates)
+        {
+            if (IsWithinValidityPeriod(certificate, utcNow) && signedXml.CheckSignature(certificate, true))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Whether the certificate is within its own [NotBefore, NotAfter] validity window at verification
+    // time. SignedXml.CheckSignature(cert, verifySignatureOnly: true) validates only the cryptography and
+    // does NOT itself check the certificate dates, so this is the single place the window is enforced — an
+    // expired or not-yet-valid certificate is fail-closed rejected (#491). NotBefore/NotAfter are exposed
+    // as local time, so both sides are compared in UTC. The same clock-skew tolerance every other time
+    // bound on this path uses (SamlAssertionTime.ClockSkew) is applied to both edges, so a small IdP/SP
+    // clock difference at a cutover — the moment a freshly staged certificate's NotBefore is a few minutes
+    // ahead of this server — does not spuriously reject an otherwise-valid signature.
+    private static bool IsWithinValidityPeriod(X509Certificate2 certificate, DateTime utcNow)
+    {
+        return utcNow >= certificate.NotBefore.ToUniversalTime() - SamlAssertionTime.ClockSkew
+            && utcNow <= certificate.NotAfter.ToUniversalTime() + SamlAssertionTime.ClockSkew;
     }
 
     /// <summary>

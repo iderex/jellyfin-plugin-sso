@@ -23,10 +23,19 @@ permissions:
 jobs:
   build:
     name: Build package
+    # A called reusable workflow is capped by the calling job's permissions, so
+    # grant the signing scopes here (least privilege: only this job gets them) for
+    # build.yml's provenance attestation. id-token: write mints the OIDC token
+    # Sigstore signs with; attestations: write records the provenance.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/build.yml
     with:
       dotnet-version: "9.0.*"
       dotnet-target:  "net9.0"
+      attest: true
   upload:
     name: Upload release assets
     runs-on: ubuntu-latest

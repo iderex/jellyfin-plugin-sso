@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Security.Claims;
 using System.Security.Cryptography;
@@ -148,7 +149,8 @@ internal sealed class OidcIdTokenValidator : IIdentityTokenValidator
     // of Duende's retired validator package: RSA from e/n, EC from crv/x/y, keys marked use!="sig"
     // excluded. A malformed or unsupported advertised key is skipped rather than thrown on — one
     // broken key in the set must not take down logins signed by a good one; if NO usable key remains,
-    // validation fails closed with the key-not-found path above.
+    // validation fails closed with the key-not-found path above. Each key's conversion is delegated to
+    // TryConvertSigningKey so this stays a plain filter-map over the advertised set.
     private static List<SecurityKey> ConvertSigningKeys(Duende.IdentityModel.Jwk.JsonWebKeySet? keySet, List<IDisposable> ephemeralKeys)
     {
         var keys = new List<SecurityKey>();
@@ -159,55 +161,90 @@ internal sealed class OidcIdTokenValidator : IIdentityTokenValidator
 
         foreach (var webKey in keySet.Keys)
         {
-            // A JWKS with a literal null entry (["keys":[null]]) must be skipped, not dereferenced —
-            // otherwise the whole login 500s, contradicting the skip-on-malformed contract below.
-            if (webKey == null)
+            if (TryConvertSigningKey(webKey, ephemeralKeys, out var key))
             {
-                continue;
-            }
-
-            if (webKey.Use != null && !string.Equals(webKey.Use, "sig", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            try
-            {
-                if (!string.IsNullOrEmpty(webKey.E) && !string.IsNullOrEmpty(webKey.N))
-                {
-                    keys.Add(new RsaSecurityKey(new RSAParameters
-                    {
-                        Exponent = Base64UrlEncoder.DecodeBytes(webKey.E),
-                        Modulus = Base64UrlEncoder.DecodeBytes(webKey.N),
-                    })
-                    { KeyId = webKey.Kid });
-                }
-                else if (!string.IsNullOrEmpty(webKey.X) && !string.IsNullOrEmpty(webKey.Y) && TryGetCurve(webKey.Crv, out var curve))
-                {
-                    var ecdsa = ECDsa.Create(new ECParameters
-                    {
-                        Curve = curve,
-                        Q = new ECPoint
-                        {
-                            X = Base64UrlEncoder.DecodeBytes(webKey.X),
-                            Y = Base64UrlEncoder.DecodeBytes(webKey.Y),
-                        },
-                    });
-                    ephemeralKeys.Add(ecdsa);
-                    keys.Add(new ECDsaSecurityKey(ecdsa) { KeyId = webKey.Kid });
-                }
-            }
-            catch (FormatException)
-            {
-                // Un-decodable key material in one advertised key: skip it, the remaining keys decide.
-            }
-            catch (CryptographicException)
-            {
-                // Invalid EC point/curve combination: likewise skip.
+                keys.Add(key);
             }
         }
 
         return keys;
+    }
+
+    // Converts one advertised JWK into a usable signing key, or reports that it is unusable (out false).
+    // The exclusions and the skip-on-malformed contract live here: a literal null entry (["keys":[null]])
+    // must be skipped rather than dereferenced (otherwise the whole login 500s), a key marked use!="sig"
+    // is not a signing key, and un-decodable/invalid key material is caught and skipped so one broken key
+    // in the set cannot take down logins signed by a good one. Returns false — never throws — on every
+    // reject path so the caller drops the key without aborting the scan.
+    private static bool TryConvertSigningKey(Duende.IdentityModel.Jwk.JsonWebKey? webKey, List<IDisposable> ephemeralKeys, [NotNullWhen(true)] out SecurityKey? key)
+    {
+        key = null;
+        if (webKey == null)
+        {
+            return false;
+        }
+
+        if (webKey.Use != null && !string.Equals(webKey.Use, "sig", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        try
+        {
+            // RSA (e/n) is tried first; an EC (crv/x/y) key is only attempted when the key is not RSA-shaped,
+            // preserving the original else-if precedence. A decode/point failure throws out of the converter
+            // and is caught below as a skip.
+            key = (SecurityKey?)ConvertRsaSigningKey(webKey) ?? ConvertEcSigningKey(webKey, ephemeralKeys);
+        }
+        catch (FormatException)
+        {
+            // Un-decodable key material in one advertised key: skip it, the remaining keys decide.
+            return false;
+        }
+        catch (CryptographicException)
+        {
+            // Invalid EC point/curve combination: likewise skip.
+            return false;
+        }
+
+        return key != null;
+    }
+
+    // RSA signing key from the JWK e/n pair (RFC 7518). Returns null when the key does not carry both
+    // parameters, so it is not RSA-shaped and the EC conversion is tried instead. A non-base64url
+    // exponent/modulus throws FormatException, surfaced to TryConvertSigningKey's skip path.
+    private static RsaSecurityKey? ConvertRsaSigningKey(Duende.IdentityModel.Jwk.JsonWebKey webKey) =>
+        !string.IsNullOrEmpty(webKey.E) && !string.IsNullOrEmpty(webKey.N)
+            ? new RsaSecurityKey(new RSAParameters
+            {
+                Exponent = Base64UrlEncoder.DecodeBytes(webKey.E),
+                Modulus = Base64UrlEncoder.DecodeBytes(webKey.N),
+            })
+            { KeyId = webKey.Kid }
+            : null;
+
+    // EC signing key from the JWK crv/x/y triple. Returns null when a coordinate is absent or the curve is
+    // unsupported (TryGetCurve false), so the key is skipped. The ECDsa instance is registered in
+    // ephemeralKeys for disposal by ValidateAsync. A non-base64url coordinate throws FormatException and an
+    // invalid point throws CryptographicException — both surfaced to TryConvertSigningKey's skip path.
+    private static ECDsaSecurityKey? ConvertEcSigningKey(Duende.IdentityModel.Jwk.JsonWebKey webKey, List<IDisposable> ephemeralKeys)
+    {
+        if (string.IsNullOrEmpty(webKey.X) || string.IsNullOrEmpty(webKey.Y) || !TryGetCurve(webKey.Crv, out var curve))
+        {
+            return null;
+        }
+
+        var ecdsa = ECDsa.Create(new ECParameters
+        {
+            Curve = curve,
+            Q = new ECPoint
+            {
+                X = Base64UrlEncoder.DecodeBytes(webKey.X),
+                Y = Base64UrlEncoder.DecodeBytes(webKey.Y),
+            },
+        });
+        ephemeralKeys.Add(ecdsa);
+        return new ECDsaSecurityKey(ecdsa) { KeyId = webKey.Kid };
     }
 
     private static bool TryGetCurve(string? crv, out ECCurve curve)

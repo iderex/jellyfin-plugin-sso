@@ -64,6 +64,18 @@ public class PluginConfiguration : MediaBrowser.Model.Plugins.BasePluginConfigur
 /// deserialization is by element name, so moving these up — which places them before the
 /// provider-specific elements in newly written XML — does not stop existing configs from loading.
 /// </summary>
+// Model-binding contract for every value-type member here and on the derived SamlConfig/OidConfig
+// (the bool flags and the int? PortOverride): the OID/SAML `Add` endpoints (SSOController.OidAdd /
+// SamlAdd) and the config-page PUT bind the whole provider object [FromBody] under RequiresElevation
+// and REPLACE it wholesale (configuration.OidConfigs[provider] = config), re-injecting only the
+// server-managed fields via ServerManagedFields.Preserve. An omitted bool therefore deserializes to
+// its default and that default is persisted BY DESIGN — the admin is replacing the object, not
+// patching it. This is why the value-type properties stay non-nullable and un-annotated (SonarCloud
+// S6964, #196): marking them [JsonRequired] would reject the intended partial post and break the
+// write-only-secret / blank-means-keep save flows that deliberately omit fields, while bool? would
+// invent an "unset" third state the replace contract does not have. Under-posting here is admin-only
+// and crosses no privilege boundary (non-security), so the documented whole-object-replace contract
+// is the disposition rather than a per-property annotation.
 public abstract class ProviderConfigBase
 {
     private SerializableDictionary<string, Guid> _canonicalLinks;
@@ -225,6 +237,25 @@ public class SamlConfig : ProviderConfigBase
     public string SamlCertificate { get; set; }
 
     /// <summary>
+    /// Gets or sets an OPTIONAL second identity-provider signing certificate accepted alongside
+    /// <see cref="SamlCertificate"/> during an INBOUND (IdP-side) signing-key rotation (#491). A response
+    /// is accepted when its signature verifies against EITHER this certificate or the primary, under the
+    /// SAME algorithm allowlist (no SHA-1), signature-scope, and fail-closed checks; when blank, the trial
+    /// narrows to the primary alone. Note the validity-window check added with this field applies to the
+    /// primary too, so an already-EXPIRED primary certificate — which the pre-#491 path still accepted, as
+    /// XML-DSig verification ignores certificate dates — is now rejected on upgrade unless a current
+    /// certificate is configured (here or promoted into <see cref="SamlCertificate"/>). Unlike
+    /// <see cref="SamlSigningKeyPfx"/> and
+    /// <see cref="SamlRolloverSigningKeyPfx"/> — the SP's own PRIVATE signing keys — this is the identity
+    /// provider's PUBLIC signing certificate, exactly like <see cref="SamlCertificate"/>: it is NOT a
+    /// secret, so it carries no write-only/encrypted-at-rest handling and is stored and returned in the
+    /// clear. An expired certificate is rejected, so an administrator adds the identity provider's new
+    /// certificate here before the cutover and promotes it into <see cref="SamlCertificate"/> (clearing
+    /// this field) once the provider has fully rotated — with no login downtime across the overlap window.
+    /// </summary>
+    public string SamlSecondaryCertificate { get; set; }
+
+    /// <summary>
     /// Gets or sets the audience (SP entity id) that a SAML response must be addressed to. When
     /// unset, the SamlClientId is used. Ignored when <see cref="DoNotValidateAudience"/> is set.
     /// </summary>
@@ -273,6 +304,23 @@ public class SamlConfig : ProviderConfigBase
     /// </summary>
     [System.Text.Json.Serialization.JsonConverter(typeof(WriteOnlySecretConverter))]
     public string SamlSigningKeyPfx { get; set; }
+
+    /// <summary>
+    /// Gets or sets an OPTIONAL second service-provider signing key for a zero-downtime rollover of the
+    /// SP's own signing certificate (#491, capability 1), as a Base64-encoded, unencrypted PKCS#12 (PFX)
+    /// blob in the same shape as <see cref="SamlSigningKeyPfx"/>. It is PUBLISH-ONLY: outgoing
+    /// AuthnRequests are always signed with the PRIMARY <see cref="SamlSigningKeyPfx"/>, and this key is
+    /// never used to sign. Its purpose is the metadata overlap window — when it is set and
+    /// <see cref="SignAuthnRequests"/> is on, the SP metadata advertises BOTH public certificates as two
+    /// <c>KeyDescriptor use="signing"</c> entries, so the identity provider accepts the primary's
+    /// signature while the administrator stages the swap (publish both, then promote the rollover key
+    /// into the primary field, then clear this one). Blank means no overlap: byte-for-byte the pre-#491
+    /// single-key, single-KeyDescriptor behavior. It carries the same private key, so it is treated as a
+    /// secret exactly like the primary: write-only across the JSON boundary, encrypted at rest (#158),
+    /// and preserved on a save that leaves it blank.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonConverter(typeof(WriteOnlySecretConverter))]
+    public string SamlRolloverSigningKeyPfx { get; set; }
 }
 
 /// <summary>

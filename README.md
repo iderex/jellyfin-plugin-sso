@@ -57,16 +57,14 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 
 **Install from the Jellyfin plugin catalog (recommended for testing):**
 
-1. In Jellyfin, go to **Dashboard → Plugins → Repositories** and add the repository URL for your Jellyfin server generation and the channel you want. Add **one** of these:
+1. In Jellyfin, go to **Dashboard → Plugins → Repositories** and add the repository URL for the channel you want. **One URL serves both Jellyfin generations** — your server installs the matching build automatically. Add **one** of these:
 
-   | Server             | Channel    | Repository URL                                                                                     |
-   | ------------------ | ---------- | -------------------------------------------------------------------------------------------------- |
-   | Jellyfin **10.11** | **stable** | `https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-release/manifest.json`      |
-   | Jellyfin **10.11** | **beta**   | `https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json`         |
-   | Jellyfin **10.12** | **stable** | `https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-jf12-release/manifest.json` |
-   | Jellyfin **10.12** | **beta**   | `https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-jf12-beta/manifest.json`    |
-   - **stable** ships tagged releases only. **beta** tracks `main` — every merge publishes an installable build, so betas move fast and may break; use them for testing, not production.
-   - The **10.12** URLs already exist so you can add them now, but they stay **empty until the 10.12 build leg is enabled** — that generation runs on .NET 10 and there is no Jellyfin 10.12 SDK to build against yet. When it lands, the **10.12 beta** fills first; the **10.12 stable** URL only carries a build once there is an actual 10.12 stable release. On **10.11**, use the 10.11 URLs.
+   | Channel    | Repository URL                                                                                |
+   | ---------- | --------------------------------------------------------------------------------------------- |
+   | **stable** | `https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-release/manifest.json` |
+   | **beta**   | `https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json`    |
+   - **stable** ships tagged releases only. **beta** publishes on every merge, so betas move fast and may break — use them for testing, not production.
+   - Each manifest lists builds for **both Jellyfin 10.11** (.NET 9) and **Jellyfin 12.0** (.NET 10). Jellyfin filters by the plugin's target ABI, so your server is only ever offered the build that runs on it — you don't pick the generation, it does. Jellyfin 12.0 support is currently **beta only** (the stable 12.0 build lands at a 12.0 stable release).
 
 2. Go to **Dashboard → Plugins → Catalog**, find **SSO Authentication**, and install it.
 3. **Restart Jellyfin** to load the plugin.

@@ -80,8 +80,12 @@ internal sealed class SamlAssertionValidator
     internal bool TryValidate(SamlConfig config, string provider, string requestBaseUrl, string rawResponse, out SamlResponse samlResponse)
     {
         // A malformed response (non-base64, malformed XML, prohibited DOCTYPE) fails TryParse and is
-        // rejected the same way an invalid one is — a clean 4xx, never an unhandled 500 (#199).
-        if (!SamlResponseLoader.TryParse(config.SamlCertificate, rawResponse, out samlResponse)
+        // rejected the same way an invalid one is — a clean 4xx, never an unhandled 500 (#199). The
+        // optional secondary certificate is passed alongside the primary so a response signed by either is
+        // accepted across an identity-provider signing-key overlap window (#491); when it is blank the
+        // trial narrows to the primary alone (both the primary and any secondary are additionally required
+        // to be within their validity window — see IsWithinValidityPeriod).
+        if (!SamlResponseLoader.TryParse(config.SamlCertificate, config.SamlSecondaryCertificate, rawResponse, out samlResponse)
             || !IsResponseValid(config, provider, requestBaseUrl, samlResponse))
         {
             return false;
@@ -135,10 +139,12 @@ internal sealed class SamlAssertionValidator
     /// <param name="config">The provider configuration the privileges are derived against.</param>
     /// <param name="provider">The provider that verified the login.</param>
     /// <param name="samlResponse">The validated, allow-listed, correlated response.</param>
+    /// <param name="assertionRoles">The assertion's role values, already evaluated once by the flow service for
+    /// the login allow-list; reused here for the privilege derivation instead of re-reading the assertion (#479).</param>
     /// <param name="identity">The verified identity on success; otherwise null.</param>
     /// <param name="rejection">The fail-closed outcome on failure; otherwise null.</param>
     /// <returns>True with <paramref name="identity"/> set on success; false with <paramref name="rejection"/> set.</returns>
-    internal bool TryProduceVerifiedIdentity(SamlConfig config, string provider, SamlResponse samlResponse, out VerifiedIdentity identity, out LoginOutcome rejection)
+    internal bool TryProduceVerifiedIdentity(SamlConfig config, string provider, SamlResponse samlResponse, IReadOnlyList<string> assertionRoles, out VerifiedIdentity identity, out LoginOutcome rejection)
     {
         identity = null;
 
@@ -154,10 +160,12 @@ internal sealed class SamlAssertionValidator
         }
 
         // Derive the authorize-state privileges (admin, Live TV, Live TV management, folders) from the
-        // assertion's roles and the provider configuration. Login validity was already decided by
-        // SamlLoginPolicy at the flow service and the username is the assertion's NameID, so neither is
-        // derived here.
-        var derived = SamlAuthorizeStateBuilder.Build(GetAssertionRoles(samlResponse), config);
+        // assertion's roles and the provider configuration. The roles were already evaluated once by the flow
+        // service for the login allow-list and are threaded in here, so the role XPath runs a single time per
+        // response rather than once for the gate and again for this derivation (#479). Login validity was
+        // already decided by SamlLoginPolicy at the flow service and the username is the assertion's NameID, so
+        // neither is derived here.
+        var derived = SamlAuthorizeStateBuilder.Build(assertionRoles, config);
 
         // Fail closed (#95): an assertion without a usable NameID carries no identity to log in — reject it
         // as an invalid login instead of failing downstream on a null canonical name. Whitespace-only counts

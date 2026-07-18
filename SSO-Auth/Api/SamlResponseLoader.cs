@@ -22,14 +22,29 @@ internal static class SamlResponseLoader
     internal const int MaxEncodedResponseLength = 256 * 1024;
 
     /// <summary>
-    /// Tries to parse a SAML response, returning <see langword="false"/> (rather than throwing) on the
-    /// malformed-input exceptions the <see cref="SamlResponse"/> constructor raises.
+    /// Tries to parse a SAML response against a single signing certificate, returning
+    /// <see langword="false"/> (rather than throwing) on the malformed-input exceptions the
+    /// <see cref="SamlResponse"/> constructor raises.
     /// </summary>
     /// <param name="certificateStr">The identity provider's signing certificate as a Base64 string.</param>
     /// <param name="responseString">The untrusted SAML response (Base64).</param>
     /// <param name="response">The parsed response on success; otherwise <see langword="null"/>.</param>
     /// <returns><see langword="true"/> if the response parsed; otherwise <see langword="false"/>.</returns>
     internal static bool TryParse(string certificateStr, string responseString, out SamlResponse response)
+        => TryParse(certificateStr, null, responseString, out response);
+
+    /// <summary>
+    /// Tries to parse a SAML response against the primary signing certificate OR an optional secondary
+    /// certificate — the identity-provider verification-key overlap window (#491) — returning
+    /// <see langword="false"/> (rather than throwing) on the malformed-input exceptions the
+    /// <see cref="SamlResponse"/> constructor raises.
+    /// </summary>
+    /// <param name="certificateStr">The identity provider's primary signing certificate as a Base64 string.</param>
+    /// <param name="secondaryCertificateStr">The optional secondary certificate (Base64), or blank for none.</param>
+    /// <param name="responseString">The untrusted SAML response (Base64).</param>
+    /// <param name="response">The parsed response on success; otherwise <see langword="null"/>.</param>
+    /// <returns><see langword="true"/> if the response parsed; otherwise <see langword="false"/>.</returns>
+    internal static bool TryParse(string certificateStr, string secondaryCertificateStr, string responseString, out SamlResponse response)
     {
         // A null or empty body is the most common malformed callback (an absent SAMLResponse form field
         // yields a null string on the unauthenticated ACS endpoint); reject it here rather than let
@@ -50,7 +65,7 @@ internal static class SamlResponseLoader
 
         try
         {
-            response = new SamlResponse(certificateStr, responseString);
+            response = new SamlResponse(certificateStr, secondaryCertificateStr, responseString);
             return true;
         }
         catch (Exception ex) when (ex is FormatException or XmlException or CryptographicException or ArgumentException)
