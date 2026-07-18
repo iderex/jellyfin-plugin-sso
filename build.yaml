@@ -1,7 +1,7 @@
 name: "SSO Authentication"
 guid: "505ce9d1-d916-42fa-86ca-673ef241d7df"
 imageUrl: "https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/main/img/logo.png"
-version: "4.1.1"
+version: "4.1.2"
 # The oldest Jellyfin server this plugin claims to load on. The shipping build compiles against a
 # newer 10.11.x SDK, so the CI `abi-floor` job also builds against this floor to prove every Jellyfin
 # API the plugin calls exists here — otherwise a newer member would throw MissingMethodException at
