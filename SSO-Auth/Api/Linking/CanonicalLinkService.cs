@@ -4,6 +4,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
 using Jellyfin.Data;
+using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using MediaBrowser.Controller.Library;
@@ -162,74 +163,12 @@ internal sealed class CanonicalLinkService
             throw new AccountLinkForbiddenException("The SSO login did not resolve an identity; refusing to create or link an account.");
         }
 
-        // The link is keyed on the stable identity. A legacy OpenID link (#155) was keyed on the
-        // mutable username instead; when no subject-keyed link exists yet but a legacy one resolves,
-        // adopt and re-key it, locking it to the subject so a later provider-side rename cannot
-        // detach it. Because the legacy key is a name the identity provider controls, following it is
-        // name-based account matching, so it honors AllowExistingAccountLink exactly like same-named
-        // adoption below (#354): with the flag off, a login whose preferred_username points at another
-        // user's entry is refused by the adoption gate instead of being handed that account. Even with
-        // the flag on it is followed ONLY while the recorded target still bears the name (#361 below);
-        // a target renamed away from it is not handed over on the strength of a stale name key.
-        // Only OpenID differs key from name; SAML passes key == name.
-        // Both candidates are read in ONE pass under the config lock: with separate reads, a
-        // concurrent login's migration could commit between them, so this login would see the subject
-        // key before the re-key and the legacy key after it, resolve neither, and bounce a legitimate
-        // user off the adoption gate with a spurious 403. A link whose target user was deleted counts
-        // as absent (dangling links are dead, not identities).
-        var (subjectLink, legacyLink, subjectIssuer) = _configStore.Read(configuration =>
-        {
-            // The login callbacks resolve the provider before calling, so it is normally present and
-            // enabled. If it was deleted OR DISABLED in the race between that lookup and here, fail
-            // CLOSED: refuse rather than fall through to the adoption gate, whose create/adopt arms
-            // would otherwise mint a session with the provider's pre-delete/pre-disable settings (#373,
-            // #380 — a missing provider must never default the login to valid, and the same holds for a
-            // disabled one). Residual window, documented honestly: the mint itself always runs OUTSIDE
-            // the config lock, so a delete/disable after the LAST guarded transaction of any arm — this
-            // single read on the UseExistingLink path, the link write on adopt/create, the migration on
-            // the legacy path — still mints once. The guards move the final checkpoint later; #343's
-            // "disabling takes effect immediately" stays best-effort for an in-flight request unless the
-            // lock were held through minting.
-            if (!TryGetLinks(configuration, mode, provider, requireEnabled: true, out var links))
-            {
-                throw new AccountLinkForbiddenException("The SSO provider is no longer configured or is disabled; refusing to resolve or create an account.");
-            }
+        // Read candidates -> refuse a repoint -> maybe migrate/stamp -> resolve -> act. The two locked
+        // transactions (the candidate read and, on the legacy path, the migrate-and-resolve) stay whole
+        // inside their own helpers; each fail-closed branch keeps its verbatim log line one level down.
+        var candidates = ReadResolutionCandidates(mode, provider, canonicalKey, username, issuer);
 
-            Guid? bySubject = links.TryGetValue(canonicalKey, out var s) && _userManager.GetUserById(s) != null
-                ? s : null;
-            Guid? byName = bySubject is null
-                && !string.Equals(canonicalKey, username, StringComparison.Ordinal)
-                && links.TryGetValue(username, out var n) && _userManager.GetUserById(n) != null
-                ? n : (Guid?)null;
-
-            // Classify the subject link's issuer binding in the SAME locked read (#186), so the verdict
-            // cannot tear against a concurrent stamp or repoint. NotBound unless a subject link resolved
-            // for an OpenID provider.
-            var issuerVerdict = bySubject is null
-                ? IssuerBinding.NotBound
-                : ClassifyIssuer(configuration, mode, provider, canonicalKey, issuer);
-            return (bySubject, byName, issuerVerdict);
-        });
-
-        // Non-inert issuer binding (#186): the subject-keyed link this identity resolves to was minted
-        // under a DIFFERENT issuer than the login now presents — an admin repointed the provider entry at
-        // another identity provider behind the same discovery URL, or (with the URL edited) the belt has
-        // not yet run. Refuse rather than map this login onto the old link's account; a colliding `sub`
-        // from a new IdP (realistic for short numeric subjects like "1") no longer inherits the old user.
-        // Fail closed, self-healing: the admin re-establishes the link, or an endpoint edit clears the
-        // stale links (ServerManagedFields belt). This is the check that MUST fire at runtime — the prior
-        // review rejected an inert take; a rejection test pins that it does. A login with no issuer while
-        // the link has one lands here too (ClassifyIssuer treats it as a mismatch), so a token omitting
-        // `iss` cannot slip past a stamped binding.
-        if (subjectLink.HasValue && subjectIssuer == IssuerBinding.Mismatch)
-        {
-            _logger.LogWarning(
-                "OpenID login for {Name} via {Mode}/{Provider} refused: the account link's stored issuer does not match the login's issuer (the provider entry may have been repointed at a different identity provider). Re-establish the link via the admin endpoints.",
-                username?.ReplaceLineEndings(string.Empty),
-                mode.ToToken(),
-                provider?.ReplaceLineEndings(string.Empty));
-            throw new AccountLinkForbiddenException("The account link was minted under a different issuer; refusing to resolve it after an apparent provider repoint.");
-        }
+        RefuseRepointedIssuer(candidates, mode, provider, username);
 
         // The account currently bearing the display name, resolved once (outside the config lock — it is
         // a user-manager read, not a config read). It is both the same-name adoption candidate for the
@@ -239,44 +178,16 @@ internal sealed class CanonicalLinkService
         // for the terminal branches to label (a fresh-account orphan, or a reject), never followed.
         var existingAccount = _userManager.GetUserByName(username);
         Guid? existingAccountUserId = existingAccount?.Id;
-        bool legacyNameStillHeldByTarget = legacyLink.HasValue && existingAccountUserId == legacyLink;
+        bool legacyNameStillHeldByTarget = candidates.LegacyLink.HasValue && existingAccountUserId == candidates.LegacyLink;
 
-        var (linkedUserId, migrateLegacy) = AccountLinkResolver.ResolveCanonicalLink(subjectLink, legacyLink, legacyNameStillHeldByTarget, allowExistingAccountLink);
+        var (linkedUserId, migrateLegacy) = AccountLinkResolver.ResolveCanonicalLink(candidates.SubjectLink, candidates.LegacyLink, legacyNameStillHeldByTarget, allowExistingAccountLink);
         if (migrateLegacy)
         {
-            // The legacy re-key is name-based account matching too (#218): migration fires only when the
-            // account currently bearing the name IS the legacy target (legacyNameStillHeldByTarget), so
-            // that target is exactly existingAccount. Apply the admin refusal here as well — an attacker
-            // presenting a new subject with a victim admin's preferred_username would otherwise re-key the
-            // admin's legacy link onto their own subject and take the account over. Admin-only gate
-            // (AdoptionGate.None): the verified-email requirement is deliberately not applied to the
-            // re-key, which continues a relationship established under the pre-#155 scheme rather than
-            // forming a new one. Link an admin account explicitly via the admin endpoint instead.
-            if (AdoptionEligibilityResolver.Resolve(existingAccount!.HasPermission(PermissionKind.IsAdministrator), AdoptionGate.None) != AdoptionVerdict.Allow)
-            {
-                _logger.LogWarning(
-                    "SSO login for {Name} via {Mode}/{Provider} refused: a legacy username-keyed link points at an administrator account, which is not adopted by name. Link it explicitly via the admin endpoints.",
-                    username?.ReplaceLineEndings(string.Empty),
-                    mode.ToToken(),
-                    provider?.ReplaceLineEndings(string.Empty));
-                throw new AccountLinkForbiddenException();
-            }
-
-            // Re-key the legacy link AND re-resolve the identity in ONE config transaction (#363), then
-            // bind the login to the value that transaction returns. The candidate resolution above was a
-            // separate lock acquisition, so a concurrent login could migrate this same identity between
-            // that snapshot and the re-key; taking the authoritative mapping from inside the re-key
-            // transaction — rather than the pre-migration snapshot's linkedUserId — closes that window
-            // instead of reasoning about its (previously argued-benign) safety. A concurrent winner's live
-            // subject link is used as-is; the deleted-target edge resolves to null so the login falls
-            // through to the create/adopt gate rather than binding to a dead account.
-            linkedUserId = MigrateAndResolveCanonicalLink(mode, provider, canonicalKey, username, issuer);
-            _logger.LogInformation(
-                "Migrated {Mode}/{Provider} canonical link from the legacy username key to the stable subject key.",
-                mode.ToToken(),
-                provider?.ReplaceLineEndings(string.Empty));
+            // Migration fires only when the account currently bearing the name IS the legacy target
+            // (legacyNameStillHeldByTarget), so that target is exactly existingAccount (non-null here).
+            linkedUserId = MigrateLegacyLinkIfEligible(mode, provider, canonicalKey, username, issuer, existingAccount!);
         }
-        else if (subjectLink.HasValue && subjectIssuer == IssuerBinding.Absent)
+        else if (candidates.SubjectLink.HasValue && candidates.SubjectIssuer == IssuerBinding.Absent)
         {
             // Trust-on-first-use migration (#186): the resolved subject link carries no stored issuer — it
             // was minted before this store existed, or by a null-issuer path. The provider is unchanged
@@ -307,108 +218,245 @@ internal sealed class CanonicalLinkService
                 return decision.UserId;
 
             case AccountLinkAction.AdoptExistingAccount:
-            {
-                // Same-name adoption trusts the identity provider to make usernames unique and
-                // non-reassignable (#218): a new principal asserting an existing user's name is otherwise
-                // routed straight to that account. Before writing the link, clear the eligibility gate —
-                // an administrator target is never adopted by name (link it explicitly via the admin
-                // endpoint), and a provider that requires a verified email must have carried
-                // email_verified == true. Fail closed: a refusal writes no link and emits no adoption
-                // audit. existingAccount is non-null here (adoption is only chosen when a named account
-                // resolved), so the admin read cannot NRE.
-                var verdict = AdoptionEligibilityResolver.Resolve(
-                    existingAccount!.HasPermission(PermissionKind.IsAdministrator),
-                    adoptionGate);
-                if (verdict != AdoptionVerdict.Allow)
-                {
-                    _logger.LogWarning(
-                        "SSO login for {Name} via {Mode}/{Provider} refused adoption of a pre-existing account: {Reason}.",
-                        username?.ReplaceLineEndings(string.Empty),
-                        mode.ToToken(),
-                        provider?.ReplaceLineEndings(string.Empty),
-                        verdict);
-                    throw new AccountLinkForbiddenException();
-                }
-
-                // Atomic check-then-link (#133): if a concurrent first-login already linked this
-                // identity, that winner is used and no second write or duplicate audit occurs. The link
-                // write also stamps the login's issuer (#186), so the adopted link is issuer-bound.
-                var (adoptedUserId, wrote) = LinkCanonicalIfAbsent(mode, provider, canonicalKey, decision.UserId, issuer);
-                if (wrote)
-                {
-                    SsoAudit.AccountAdopted(_logger, mode == ProviderMode.Oid ? "OpenID" : "SAML", provider, username);
-                }
-
-                return adoptedUserId;
-            }
+                // existingAccount is non-null here (adoption is only chosen when a named account resolved).
+                return AdoptExistingAccount(mode, provider, canonicalKey, username, issuer, existingAccount!, adoptionGate, decision.UserId);
 
             case AccountLinkAction.CreateNewAccount:
-            {
-                if (legacyLink.HasValue && _legacyLinkWarnGate.TryEnter(_clock()))
-                {
-                    // The dangerous, previously-silent case (#354/#361): a legacy username-keyed link
-                    // exists and its target still exists, but no live account bears the name anymore (the
-                    // account was renamed on the Jellyfin side), so the legacy link was NOT followed —
-                    // whether adoption is off, or on but the name no longer resolves to the recorded target
-                    // (#361, the stale-name superset the flag-on arm used to hand over). We are about to
-                    // provision a FRESH account under this subject, leaving the original — the one the
-                    // legacy key points at — orphaned from this identity. This warning is the single
-                    // observable signal of that outcome; recover by linking the original account to this
-                    // subject via the admin endpoints. See the upgrade runbook in providers.md. Throttled
-                    // through the shared once-per-interval gate (#362) so a login loop cannot flood it; the
-                    // account is still provisioned on every login regardless of whether the line is emitted.
-                    _logger.LogWarning(
-                        "SSO login for {Name} via {Mode}/{Provider}: a legacy username-keyed link exists but no live account bears the name (it was renamed on the Jellyfin side), so a fresh account is being provisioned and the original account is now orphaned. Re-link it to this subject via the admin endpoints.",
-                        username?.ReplaceLineEndings(string.Empty),
-                        mode.ToToken(),
-                        provider?.ReplaceLineEndings(string.Empty));
-                }
-
-                _logger.LogInformation("SSO user {Name} doesn't exist, creating...", username?.ReplaceLineEndings(string.Empty));
-                var user = await _userManager.CreateUserAsync(username).ConfigureAwait(false);
-                user.AuthenticationProviderId = typeof(SSOController).FullName;
-                // https://jonathancrozier.com/blog/how-to-generate-a-cryptographically-secure-random-string-in-dot-net-with-c-sharp
-                user.Password = _cryptoProvider.CreatePasswordHash(Convert.ToBase64String(RandomNumberGenerator.GetBytes(64))).ToString();
-
-                // Atomic check-then-link (#133): if a concurrent first-login for the same identity
-                // linked meanwhile, use its account — this freshly created user is left unlinked rather
-                // than overwriting the winner's link (a rare, benign orphan, not a duplicate login). The
-                // link write stamps the login's issuer (#186), so the new link is issuer-bound.
-                var (effectiveUserId, _) = LinkCanonicalIfAbsent(mode, provider, canonicalKey, user.Id, issuer);
-                return effectiveUserId;
-            }
+                return await CreateNewAccountAsync(mode, provider, canonicalKey, username, issuer, candidates.LegacyLink).ConfigureAwait(false);
 
             case AccountLinkAction.RejectNameTaken:
-                if (legacyLink.HasValue)
-                {
-                    // Refused, but specifically because a legacy username-keyed link (#354) is pending
-                    // and a live account still bears the name — the migratable case, distinct from an
-                    // ordinary #95 name collision. Throttled through the shared once-per-interval gate
-                    // (#362) so a login loop for a not-yet-migrated user cannot flood it; the refusal below
-                    // still throws on every login regardless of whether this line is emitted.
-                    if (_legacyLinkWarnGate.TryEnter(_clock()))
-                    {
-                        _logger.LogWarning(
-                            "SSO login for {Name} via {Mode}/{Provider} refused: a legacy username-keyed link is pending but AllowExistingAccountLink is off and a live account still bears the name. Enable AllowExistingAccountLink (a short controlled window) or link the account via the admin endpoints to migrate it.",
-                            username?.ReplaceLineEndings(string.Empty),
-                            mode.ToToken(),
-                            provider?.ReplaceLineEndings(string.Empty));
-                    }
-                }
-                else
-                {
-                    _logger.LogWarning(
-                        "SSO login for {Name} via {Mode}/{Provider} refused: a pre-existing unlinked Jellyfin account exists and AllowExistingAccountLink is disabled for this provider.",
-                        username?.ReplaceLineEndings(string.Empty),
-                        mode.ToToken(),
-                        provider?.ReplaceLineEndings(string.Empty));
-                }
-
-                throw new AccountLinkForbiddenException();
+                throw RejectNameTaken(candidates.LegacyLink, mode, provider, username);
 
             default:
                 throw new InvalidOperationException($"Unhandled account-link action: {decision.Action}");
         }
+    }
+
+    // Reads both candidate links (subject-keyed and legacy username-keyed) AND the subject link's issuer
+    // binding in ONE pass under the config lock, so the whole verdict is linearized against a concurrent
+    // migration or issuer stamp/repoint.
+    //
+    // The link is keyed on the stable identity. A legacy OpenID link (#155) was keyed on the mutable
+    // username instead; when no subject-keyed link exists yet but a legacy one resolves, the caller
+    // adopts and re-keys it, locking it to the subject so a later provider-side rename cannot detach it.
+    // Because the legacy key is a name the identity provider controls, following it is name-based account
+    // matching, so it honors AllowExistingAccountLink exactly like same-named adoption (#354): with the
+    // flag off, a login whose preferred_username points at another user's entry is refused by the
+    // adoption gate instead of being handed that account. Even with the flag on it is followed ONLY while
+    // the recorded target still bears the name (#361); a target renamed away from it is not handed over
+    // on the strength of a stale name key. Only OpenID differs key from name; SAML passes key == name.
+    // Both candidates are read in ONE pass under the config lock: with separate reads, a concurrent
+    // login's migration could commit between them, so this login would see the subject key before the
+    // re-key and the legacy key after it, resolve neither, and bounce a legitimate user off the adoption
+    // gate with a spurious 403. A link whose target user was deleted counts as absent (dangling links are
+    // dead, not identities).
+    private ResolutionCandidates ReadResolutionCandidates(ProviderMode mode, string provider, string canonicalKey, string username, string issuer)
+    {
+        return _configStore.Read(configuration =>
+        {
+            // The login callbacks resolve the provider before calling, so it is normally present and
+            // enabled. If it was deleted OR DISABLED in the race between that lookup and here, fail
+            // CLOSED: refuse rather than fall through to the adoption gate, whose create/adopt arms
+            // would otherwise mint a session with the provider's pre-delete/pre-disable settings (#373,
+            // #380 — a missing provider must never default the login to valid, and the same holds for a
+            // disabled one). Residual window, documented honestly: the mint itself always runs OUTSIDE
+            // the config lock, so a delete/disable after the LAST guarded transaction of any arm — this
+            // single read on the UseExistingLink path, the link write on adopt/create, the migration on
+            // the legacy path — still mints once. The guards move the final checkpoint later; #343's
+            // "disabling takes effect immediately" stays best-effort for an in-flight request unless the
+            // lock were held through minting.
+            if (!TryGetLinks(configuration, mode, provider, requireEnabled: true, out var links))
+            {
+                throw new AccountLinkForbiddenException("The SSO provider is no longer configured or is disabled; refusing to resolve or create an account.");
+            }
+
+            Guid? bySubject = links.TryGetValue(canonicalKey, out var s) && _userManager.GetUserById(s) != null
+                ? s : null;
+            Guid? byName = bySubject is null
+                && !string.Equals(canonicalKey, username, StringComparison.Ordinal)
+                && links.TryGetValue(username, out var n) && _userManager.GetUserById(n) != null
+                ? n : (Guid?)null;
+
+            // Classify the subject link's issuer binding in the SAME locked read (#186), so the verdict
+            // cannot tear against a concurrent stamp or repoint. NotBound unless a subject link resolved
+            // for an OpenID provider.
+            var issuerVerdict = bySubject is null
+                ? IssuerBinding.NotBound
+                : ClassifyIssuer(configuration, mode, provider, canonicalKey, issuer);
+            return new ResolutionCandidates(bySubject, byName, issuerVerdict);
+        });
+    }
+
+    // Non-inert issuer binding (#186): the subject-keyed link this identity resolves to was minted under a
+    // DIFFERENT issuer than the login now presents — an admin repointed the provider entry at another
+    // identity provider behind the same discovery URL, or (with the URL edited) the belt has not yet run.
+    // Refuse rather than map this login onto the old link's account; a colliding `sub` from a new IdP
+    // (realistic for short numeric subjects like "1") no longer inherits the old user. Fail closed,
+    // self-healing: the admin re-establishes the link, or an endpoint edit clears the stale links
+    // (ServerManagedFields belt). This is the check that MUST fire at runtime — the prior review rejected
+    // an inert take; a rejection test pins that it does. A login with no issuer while the link has one
+    // lands here too (ClassifyIssuer treats it as a mismatch), so a token omitting `iss` cannot slip past
+    // a stamped binding.
+    private void RefuseRepointedIssuer(ResolutionCandidates candidates, ProviderMode mode, string provider, string username)
+    {
+        if (candidates.SubjectLink.HasValue && candidates.SubjectIssuer == IssuerBinding.Mismatch)
+        {
+            _logger.LogWarning(
+                "OpenID login for {Name} via {Mode}/{Provider} refused: the account link's stored issuer does not match the login's issuer (the provider entry may have been repointed at a different identity provider). Re-establish the link via the admin endpoints.",
+                username?.ReplaceLineEndings(string.Empty),
+                mode.ToToken(),
+                provider?.ReplaceLineEndings(string.Empty));
+            throw new AccountLinkForbiddenException("The account link was minted under a different issuer; refusing to resolve it after an apparent provider repoint.");
+        }
+    }
+
+    // The #155 legacy re-key, gated by the admin refusal and folded into ONE config transaction (#363).
+    // Returns the authoritative user id the identity now resolves to (the value the login binds to), or
+    // throws when an administrator target must not be adopted by name. The name contains "Migrate", so the
+    // #363 conformance rule pins its Guid? return type.
+    private Guid? MigrateLegacyLinkIfEligible(ProviderMode mode, string provider, string canonicalKey, string username, string issuer, User existingAccount)
+    {
+        // The legacy re-key is name-based account matching too (#218): migration fires only when the
+        // account currently bearing the name IS the legacy target (legacyNameStillHeldByTarget), so
+        // that target is exactly existingAccount. Apply the admin refusal here as well — an attacker
+        // presenting a new subject with a victim admin's preferred_username would otherwise re-key the
+        // admin's legacy link onto their own subject and take the account over. Admin-only gate
+        // (AdoptionGate.None): the verified-email requirement is deliberately not applied to the
+        // re-key, which continues a relationship established under the pre-#155 scheme rather than
+        // forming a new one. Link an admin account explicitly via the admin endpoint instead.
+        if (AdoptionEligibilityResolver.Resolve(existingAccount.HasPermission(PermissionKind.IsAdministrator), AdoptionGate.None) != AdoptionVerdict.Allow)
+        {
+            _logger.LogWarning(
+                "SSO login for {Name} via {Mode}/{Provider} refused: a legacy username-keyed link points at an administrator account, which is not adopted by name. Link it explicitly via the admin endpoints.",
+                username?.ReplaceLineEndings(string.Empty),
+                mode.ToToken(),
+                provider?.ReplaceLineEndings(string.Empty));
+            throw new AccountLinkForbiddenException();
+        }
+
+        // Re-key the legacy link AND re-resolve the identity in ONE config transaction (#363), then
+        // bind the login to the value that transaction returns. The candidate resolution above was a
+        // separate lock acquisition, so a concurrent login could migrate this same identity between
+        // that snapshot and the re-key; taking the authoritative mapping from inside the re-key
+        // transaction — rather than the pre-migration snapshot's linkedUserId — closes that window
+        // instead of reasoning about its (previously argued-benign) safety. A concurrent winner's live
+        // subject link is used as-is; the deleted-target edge resolves to null so the login falls
+        // through to the create/adopt gate rather than binding to a dead account.
+        var migratedUserId = MigrateAndResolveCanonicalLink(mode, provider, canonicalKey, username, issuer);
+        _logger.LogInformation(
+            "Migrated {Mode}/{Provider} canonical link from the legacy username key to the stable subject key.",
+            mode.ToToken(),
+            provider?.ReplaceLineEndings(string.Empty));
+        return migratedUserId;
+    }
+
+    // Adopts the pre-existing account that shares the display name, after clearing the eligibility gate.
+    // existingAccount is non-null (the caller passes it only when a named account resolved), so the admin
+    // read cannot NRE.
+    private Guid AdoptExistingAccount(ProviderMode mode, string provider, string canonicalKey, string username, string issuer, User existingAccount, AdoptionGate adoptionGate, Guid candidateUserId)
+    {
+        // Same-name adoption trusts the identity provider to make usernames unique and
+        // non-reassignable (#218): a new principal asserting an existing user's name is otherwise
+        // routed straight to that account. Before writing the link, clear the eligibility gate —
+        // an administrator target is never adopted by name (link it explicitly via the admin
+        // endpoint), and a provider that requires a verified email must have carried
+        // email_verified == true. Fail closed: a refusal writes no link and emits no adoption audit.
+        var verdict = AdoptionEligibilityResolver.Resolve(
+            existingAccount.HasPermission(PermissionKind.IsAdministrator),
+            adoptionGate);
+        if (verdict != AdoptionVerdict.Allow)
+        {
+            _logger.LogWarning(
+                "SSO login for {Name} via {Mode}/{Provider} refused adoption of a pre-existing account: {Reason}.",
+                username?.ReplaceLineEndings(string.Empty),
+                mode.ToToken(),
+                provider?.ReplaceLineEndings(string.Empty),
+                verdict);
+            throw new AccountLinkForbiddenException();
+        }
+
+        // Atomic check-then-link (#133): if a concurrent first-login already linked this
+        // identity, that winner is used and no second write or duplicate audit occurs. The link
+        // write also stamps the login's issuer (#186), so the adopted link is issuer-bound.
+        var (adoptedUserId, wrote) = LinkCanonicalIfAbsent(mode, provider, canonicalKey, candidateUserId, issuer);
+        if (wrote)
+        {
+            SsoAudit.AccountAdopted(_logger, mode == ProviderMode.Oid ? "OpenID" : "SAML", provider, username);
+        }
+
+        return adoptedUserId;
+    }
+
+    // Provisions a fresh Jellyfin account for this identity and links it on the subject key, warning first
+    // when a now-orphaned legacy link is being left behind.
+    private async Task<Guid> CreateNewAccountAsync(ProviderMode mode, string provider, string canonicalKey, string username, string issuer, Guid? legacyLink)
+    {
+        if (legacyLink.HasValue && _legacyLinkWarnGate.TryEnter(_clock()))
+        {
+            // The dangerous, previously-silent case (#354/#361): a legacy username-keyed link
+            // exists and its target still exists, but no live account bears the name anymore (the
+            // account was renamed on the Jellyfin side), so the legacy link was NOT followed —
+            // whether adoption is off, or on but the name no longer resolves to the recorded target
+            // (#361, the stale-name superset the flag-on arm used to hand over). We are about to
+            // provision a FRESH account under this subject, leaving the original — the one the
+            // legacy key points at — orphaned from this identity. This warning is the single
+            // observable signal of that outcome; recover by linking the original account to this
+            // subject via the admin endpoints. See the upgrade runbook in providers.md. Throttled
+            // through the shared once-per-interval gate (#362) so a login loop cannot flood it; the
+            // account is still provisioned on every login regardless of whether the line is emitted.
+            _logger.LogWarning(
+                "SSO login for {Name} via {Mode}/{Provider}: a legacy username-keyed link exists but no live account bears the name (it was renamed on the Jellyfin side), so a fresh account is being provisioned and the original account is now orphaned. Re-link it to this subject via the admin endpoints.",
+                username?.ReplaceLineEndings(string.Empty),
+                mode.ToToken(),
+                provider?.ReplaceLineEndings(string.Empty));
+        }
+
+        _logger.LogInformation("SSO user {Name} doesn't exist, creating...", username?.ReplaceLineEndings(string.Empty));
+        var user = await _userManager.CreateUserAsync(username).ConfigureAwait(false);
+        user.AuthenticationProviderId = typeof(SSOController).FullName;
+        // https://jonathancrozier.com/blog/how-to-generate-a-cryptographically-secure-random-string-in-dot-net-with-c-sharp
+        user.Password = _cryptoProvider.CreatePasswordHash(Convert.ToBase64String(RandomNumberGenerator.GetBytes(64))).ToString();
+
+        // Atomic check-then-link (#133): if a concurrent first-login for the same identity
+        // linked meanwhile, use its account — this freshly created user is left unlinked rather
+        // than overwriting the winner's link (a rare, benign orphan, not a duplicate login). The
+        // link write stamps the login's issuer (#186), so the new link is issuer-bound.
+        var (effectiveUserId, _) = LinkCanonicalIfAbsent(mode, provider, canonicalKey, user.Id, issuer);
+        return effectiveUserId;
+    }
+
+    // Logs the name-taken refusal (distinguishing a pending migratable legacy link from an ordinary #95
+    // collision) and RETURNS the exception the caller throws, so the terminal switch arm reads as the
+    // refusal it is. The refusal throws on every login; only the WARNING is throttled through the shared
+    // once-per-interval gate (#362) so a login loop for a not-yet-migrated user cannot flood the log.
+    private AccountLinkForbiddenException RejectNameTaken(Guid? legacyLink, ProviderMode mode, string provider, string username)
+    {
+        if (legacyLink.HasValue)
+        {
+            // Refused, but specifically because a legacy username-keyed link (#354) is pending
+            // and a live account still bears the name — the migratable case, distinct from an
+            // ordinary #95 name collision. Throttled through the shared once-per-interval gate
+            // (#362) so a login loop for a not-yet-migrated user cannot flood it; the refusal
+            // still throws on every login regardless of whether this line is emitted.
+            if (_legacyLinkWarnGate.TryEnter(_clock()))
+            {
+                _logger.LogWarning(
+                    "SSO login for {Name} via {Mode}/{Provider} refused: a legacy username-keyed link is pending but AllowExistingAccountLink is off and a live account still bears the name. Enable AllowExistingAccountLink (a short controlled window) or link the account via the admin endpoints to migrate it.",
+                    username?.ReplaceLineEndings(string.Empty),
+                    mode.ToToken(),
+                    provider?.ReplaceLineEndings(string.Empty));
+            }
+        }
+        else
+        {
+            _logger.LogWarning(
+                "SSO login for {Name} via {Mode}/{Provider} refused: a pre-existing unlinked Jellyfin account exists and AllowExistingAccountLink is disabled for this provider.",
+                username?.ReplaceLineEndings(string.Empty),
+                mode.ToToken(),
+                provider?.ReplaceLineEndings(string.Empty));
+        }
+
+        return new AccountLinkForbiddenException();
     }
 
     /// <summary>
@@ -849,4 +897,9 @@ internal sealed class CanonicalLinkService
             issuers.Remove(canonicalKey);
         }
     }
+
+    // The result of the single under-lock candidate read: the subject-keyed link (if live), the legacy
+    // username-keyed link (if live), and the subject link's issuer binding against the login (#186) — all
+    // resolved in one locked pass so the orchestrator acts on a self-consistent snapshot.
+    private readonly record struct ResolutionCandidates(Guid? SubjectLink, Guid? LegacyLink, IssuerBinding SubjectIssuer);
 }
