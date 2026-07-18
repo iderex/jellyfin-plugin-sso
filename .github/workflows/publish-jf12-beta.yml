@@ -21,10 +21,13 @@ on:
 # Explicit deny-all at workflow level; the job below opts into write access explicitly.
 permissions: {}
 
-# Serialize JF12 beta publishes so a burst of merges to 4.2 cannot race the manifest-branch push /
-# draft-publish. cancel-in-progress is false — a publish must never be killed mid-run.
+# Serialize ALL beta publishes that regenerate manifest-beta — this JF12 leg AND the JF10.11
+# publish-beta.yml on main — under ONE shared concurrency group, so their manifest-branch
+# regenerations never run concurrently and race (a reader-vs-pusher TOCTOU that could transiently drop
+# the other generation's just-published build from manifest-beta, #135 review). cancel-in-progress is
+# false — a publish holding contents:write must never be killed mid-run.
 concurrency:
-  group: publish-jf12-beta
+  group: publish-manifest-beta
   cancel-in-progress: false
 
 jobs:
