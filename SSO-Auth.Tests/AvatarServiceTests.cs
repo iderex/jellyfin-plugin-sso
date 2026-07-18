@@ -447,8 +447,10 @@ public class AvatarServiceTests
 
     // Builds a service over a StubHandler the test keeps a handle to, so it can assert the conditional
     // fetch header and the handler reuse count (#248). The logger is returned too, so a test can assert the
-    // 304 path took the early return rather than a swallowed error.
-    private static (AvatarService Service, IProviderManager Providers, IUserManager Users, StubHandler Handler, CapturingLogger Log) BuildWithHandler(HttpResponseMessage response)
+    // 304 path took the early return rather than a swallowed error. The on-disk probe (#480) defaults to
+    // "present" so the conditional-cadence tests exercise the normal file-present path; the missing-file
+    // self-heal tests pass their own predicate returning false.
+    private static (AvatarService Service, IProviderManager Providers, IUserManager Users, StubHandler Handler, CapturingLogger Log) BuildWithHandler(HttpResponseMessage response, Func<string, bool>? fileExists = null)
     {
         var users = Substitute.For<IUserManager>();
         var providers = Substitute.For<IProviderManager>();
@@ -456,7 +458,7 @@ public class AvatarServiceTests
         serverConfig.ApplicationPaths.UserConfigurationDirectoryPath.Returns(UserDataRoot);
         var handler = new StubHandler(response);
         var log = new CapturingLogger();
-        var service = new AvatarService(users, providers, serverConfig, log, "test-agent/1.0", new HttpClient(handler));
+        var service = new AvatarService(users, providers, serverConfig, log, "test-agent/1.0", new HttpClient(handler), fileExists: fileExists ?? (_ => true));
         return (service, providers, users, handler, log);
     }
 
@@ -513,6 +515,68 @@ public class AvatarServiceTests
         await service.TrySetAsync(UserNamed("alice"), AllowedUrl);
 
         Assert.Null(handler.LastIfModifiedSince);
+        await providers.Received(1).SaveImage(Arg.Any<Stream>(), "image/png", ProfilePath("alice", ".png"));
+    }
+
+    [Fact]
+    public async Task TrySetAsync_ProfileFileMissingOnDisk_FetchesUnconditionallyAndReStores()
+    {
+        // #480: the ImageInfo record is live but the on-disk profile.* file was deleted out-of-band. Under the
+        // conditional-fetch cadence (#248) this login would send If-Modified-Since, get a 304, and skip the
+        // re-download — so the avatar could never self-heal from the surviving record. With the local file
+        // absent we now fetch UNCONDITIONALLY (no If-Modified-Since) and re-store, restoring the file. This is
+        // the self-heal that the always-download behaviour had before #248, back for the missing-file case only.
+        using var response = ImageResponse("image/png", new byte[] { 1, 2, 3 });
+        var (service, providers, _, handler, _) = BuildWithHandler(response, fileExists: _ => false);
+        var user = UserNamed("alice");
+        user.ProfileImage = new ImageInfo(ProfilePath("alice", ".png")) { LastModified = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc) };
+
+        await service.TrySetAsync(user, AllowedUrl);
+
+        Assert.Null(handler.LastIfModifiedSince); // the missing file forced a full, unconditional fetch
+        await providers.Received(1).SaveImage(Arg.Any<Stream>(), "image/png", ProfilePath("alice", ".png"));
+    }
+
+    [Fact]
+    public async Task TrySetAsync_ProfileFileMissingOnDisk_SuppressesConditionalEvenUnderAStubbornNotModified()
+    {
+        // #480 fail-closed edge: with the local file gone we must NOT advertise our stale last-store timestamp,
+        // so If-Modified-Since is withheld even though the record still carries a valid one — the file-existence
+        // gate overrides the timestamp-based conditional. A well-behaved origin then re-sends the image (asserted
+        // above); a non-compliant origin that answers 304 to an UNCONDITIONAL request refuses us the bytes, so
+        // the best-effort path simply keeps the existing record and, critically, never throws into the login.
+        // Pins that the header is suppressed and that the 304 short-circuit stays safe when the file is missing.
+        using var response = NotModifiedResponse();
+        var (service, providers, users, handler, log) = BuildWithHandler(response, fileExists: _ => false);
+        var user = UserNamed("alice");
+        var previous = new ImageInfo(ProfilePath("alice", ".png")) { LastModified = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc) };
+        user.ProfileImage = previous;
+
+        await service.TrySetAsync(user, AllowedUrl);
+
+        Assert.Null(handler.LastIfModifiedSince); // the stale timestamp was deliberately withheld
+        Assert.Same(previous, user.ProfileImage); // best-effort: the record is left untouched
+        await providers.DidNotReceive().SaveImage(Arg.Any<Stream>(), Arg.Any<string>(), Arg.Any<string>());
+        await users.DidNotReceive().ClearProfileImageAsync(Arg.Any<User>());
+        Assert.DoesNotContain(log.Entries, e => e.Level == LogLevel.Error); // never throws into login
+    }
+
+    [Fact]
+    public async Task TrySetAsync_ProfileImageWithoutRealTimestamp_FetchesUnconditionallyEvenWithFilePresent()
+    {
+        // Fail-closed edge on the re-validation anchor: a live ImageInfo whose LastModified is the sentinel
+        // DateTime.MinValue (a record with no real "when we last stored it" time) offers no basis for a 304,
+        // so even with the on-disk file present we fetch UNCONDITIONALLY rather than advertise a bogus year-0001
+        // If-Modified-Since. Pins the `lastStored > DateTime.MinValue` guard that the #480 hunk carries: a
+        // `>`->`>=` slip would send the sentinel as the conditional header, which this asserts against.
+        using var response = ImageResponse("image/png", new byte[] { 1, 2, 3 });
+        var (service, providers, _, handler, _) = BuildWithHandler(response); // file present (default _ => true)
+        var user = UserNamed("alice");
+        user.ProfileImage = new ImageInfo(ProfilePath("alice", ".png")) { LastModified = DateTime.MinValue };
+
+        await service.TrySetAsync(user, AllowedUrl);
+
+        Assert.Null(handler.LastIfModifiedSince); // no real anchor -> unconditional despite the file being present
         await providers.Received(1).SaveImage(Arg.Any<Stream>(), "image/png", ProfilePath("alice", ".png"));
     }
 

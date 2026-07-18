@@ -49,6 +49,7 @@ internal sealed class AvatarService
     private readonly string _userAgent;
     private readonly HttpClient _httpClient;
     private readonly KeyedLockStore _userStoreLocks;
+    private readonly Func<string, bool> _fileExists;
 
     internal AvatarService(
         IUserManager userManager,
@@ -74,6 +75,7 @@ internal sealed class AvatarService
     /// <param name="userAgent">The outbound User-Agent.</param>
     /// <param name="httpClient">The client used for every fetch; reused across calls (never disposed here).</param>
     /// <param name="userStoreLocks">The per-user store lock (#400); null uses the process-wide shared one. A test injects its own so it can drive the serialization deterministically.</param>
+    /// <param name="fileExists">Probe for the on-disk profile image (#480); null uses <see cref="File.Exists"/>. A test injects its own to drive the missing-file self-heal branch without touching the filesystem.</param>
     internal AvatarService(
         IUserManager userManager,
         IProviderManager providerManager,
@@ -81,7 +83,8 @@ internal sealed class AvatarService
         ILogger logger,
         string userAgent,
         HttpClient httpClient,
-        KeyedLockStore userStoreLocks = null)
+        KeyedLockStore userStoreLocks = null,
+        Func<string, bool> fileExists = null)
     {
         _userManager = userManager ?? throw new ArgumentNullException(nameof(userManager));
         _providerManager = providerManager ?? throw new ArgumentNullException(nameof(providerManager));
@@ -90,6 +93,7 @@ internal sealed class AvatarService
         _userAgent = userAgent ?? throw new ArgumentNullException(nameof(userAgent));
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _userStoreLocks = userStoreLocks ?? SharedUserStoreLocks;
+        _fileExists = fileExists ?? File.Exists;
     }
 
     /// <summary>
@@ -125,15 +129,23 @@ internal sealed class AvatarService
             using var request = new HttpRequestMessage(HttpMethod.Get, avatarUri);
             request.Headers.UserAgent.ParseAdd(_userAgent);
 
-            // Conditional refresh (#248): when we already hold this user's avatar, ask the origin to send
-            // fresh bytes only if the image changed since we last stored it. If-Modified-Since carries the
-            // timestamp of our last store (ProfileImage.LastModified) — exactly "when we last fetched this
-            // representation" — so an unchanged avatar answers 304 and we skip the re-download AND the
-            // re-store entirely; only a changed image (200) is fetched and re-stored. An origin that ignores
-            // the header just answers 200 as before, so this degrades safely to the old always-download.
-            // SpecifyKind(Utc) makes the DateTimeOffset construction total regardless of the stored Kind;
-            // ProfileImage.LastModified is already written as DateTime.UtcNow, so no time is shifted.
-            if (user.ProfileImage?.LastModified is { } lastStored && lastStored > DateTime.MinValue)
+            // Conditional refresh (#248) — but only while we still hold this user's avatar ON DISK. When we
+            // have the file, ask the origin for fresh bytes only if the image changed since our last store:
+            // If-Modified-Since carries that store's timestamp (ProfileImage.LastModified) — exactly "when we
+            // last fetched this representation" — so an unchanged avatar answers 304 and we skip the
+            // re-download AND the re-store; only a changed image (200) is fetched and re-stored.
+            // Force-refresh on a missing file (#480): if the ImageInfo record is live but the profile.* file
+            // was deleted out-of-band, sending the conditional would let a 304 skip the re-download and the
+            // avatar could never self-heal from the live record — so when the local file is absent we omit
+            // If-Modified-Since and fetch unconditionally to restore it. An origin that ignores the header
+            // just answers 200 as before, so the file-present case still degrades safely to the old
+            // always-download. SpecifyKind(Utc) makes the DateTimeOffset construction total regardless of the
+            // stored Kind; ProfileImage.LastModified is already written as DateTime.UtcNow, so no time shifts.
+            var storedImage = user.ProfileImage;
+            if (storedImage?.LastModified is { } lastStored
+                && lastStored > DateTime.MinValue
+                && storedImage.Path is { } storedPath
+                && _fileExists(storedPath))
             {
                 request.Headers.IfModifiedSince = new DateTimeOffset(DateTime.SpecifyKind(lastStored, DateTimeKind.Utc));
             }
