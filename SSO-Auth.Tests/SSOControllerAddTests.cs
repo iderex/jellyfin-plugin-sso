@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.SSO_Auth;
+using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Microsoft.AspNetCore.Mvc;
 using NSubstitute;
@@ -90,8 +91,12 @@ public class SSOControllerAddTests
 
         harness.Controller.OidAdd("keycloak", new OidConfig { OidSecret = string.Empty, OidEndpoint = "https://idp.example/", OidClientId = "client-1" });
 
-        var secret = SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["keycloak"].OidSecret);
-        Assert.Equal("stored-secret", secret);
+        // The persisted secret is now encrypted at rest (#158), so read the stored value and reveal it: the
+        // #189 blank-means-keep contract is that the ORIGINAL secret survives the re-save, and reveal
+        // round-trips it. The stored form is an envelope, not the plaintext.
+        var stored = SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["keycloak"].OidSecret);
+        Assert.True(SecretEnvelope.IsProtected(stored), "the kept secret must be stored encrypted at rest");
+        Assert.Equal("stored-secret", SSOPlugin.Instance.Secrets.Reveal(stored));
     }
 
     [Fact]

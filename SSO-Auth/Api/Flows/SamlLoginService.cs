@@ -306,14 +306,15 @@ internal sealed class SamlLoginService
         {
             redirectUrl = BuildChallengeRedirectUrl(config, samlRequest, relayState);
         }
-        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or CryptographicException)
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or CryptographicException or FormatException)
         {
             // Signing is enabled for this provider but the request could not be signed: the key is
             // missing/unusable (InvalidOperationException), the endpoint is empty (ArgumentException from
-            // the signer), or the platform key store refused the signing operation (CryptographicException).
-            // ANY of these fails closed with a clean 500 — never a silent unsigned request — rather than
-            // escaping as a raw host 500. The key material is not part of the message, so nothing sensitive
-            // is logged.
+            // the signer), the platform key store refused the signing operation, or the at-rest signing
+            // key could not be decrypted — the key file is missing/corrupt (CryptographicException) or the
+            // stored envelope is corrupt (FormatException, #158). ANY of these fails closed with a clean
+            // 500 — never a silent unsigned request — rather than escaping as a raw host 500. The key
+            // material is not part of the message, so nothing sensitive is logged.
             _logger.LogError("SAML challenge for provider {Provider} could not sign the AuthnRequest: {Reason}", provider?.ReplaceLineEndings(string.Empty), ex.Message);
             return FlowResponses.PlainTextError(StatusCodes.Status500InternalServerError, "Could not start login; the SAML request signing key is misconfigured.");
         }
@@ -537,7 +538,11 @@ internal sealed class SamlLoginService
             return request.GetRedirectUrl(endpoint, relayState);
         }
 
-        if (!SamlSigningKey.TryLoad(config.SamlSigningKeyPfx, out var signingCertificate))
+        // The signing key is stored encrypted at rest (#158); reveal it at the point of use. A legacy
+        // plaintext value passes through unchanged (transparent migration); a missing/corrupt key throws
+        // (CryptographicException), which the caller's signing try/catch turns into a clean fail-closed 500
+        // rather than a silent unsigned request.
+        if (!SamlSigningKey.TryLoad(SSOPlugin.Instance.Secrets.Reveal(config.SamlSigningKeyPfx), out var signingCertificate))
         {
             throw new InvalidOperationException("Outgoing SAML request signing is enabled but the signing key could not be loaded.");
         }

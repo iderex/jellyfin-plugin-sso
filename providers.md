@@ -185,6 +185,34 @@ expiry). A few provider settings must therefore match, or login is refused (fail
   attacker probing names while the flag is on. This runbook is mirrored on the
   [Security Model](https://github.com/iderex/jellyfin-plugin-sso/wiki/Security-Model) wiki page.
 
+## Secrets encrypted at rest and downgrade
+
+The plugin's two at-rest secrets — the OpenID client secret (`OidSecret`) and the SAML
+request-signing key (`SamlSigningKeyPfx`) — are encrypted in the configuration XML. Each is stored as
+an **AES-256-GCM `ssoenc:v1:` envelope** rather than plaintext, so a leaked config file alone does not
+reveal them.
+
+- **Key file.** The data-encryption key lives in a dedicated file, `sso-secret.key`, in the plugin data
+  folder — **separate from the config XML**, and outside the config directory. On Linux it is created
+  with owner-only (`0600`) permissions; on Windows it inherits the (already access-controlled) data
+  folder's ACL. It is created the first time a secret is encrypted (a save), never at startup. **Back it
+  up together with the config, and never delete it:** without the key file, every encrypted secret is
+  permanently unrecoverable, and the plugin will refuse to start a signed SAML login or an OpenID token
+  exchange rather than fall back to an empty or wrong secret (fail closed).
+- **Transparent migration.** An existing plaintext config keeps working unchanged: secrets are read
+  through as-is, and each is rewritten as an envelope the next time the configuration is saved. No manual
+  migration step is needed.
+
+**Downgrade / rollback (breaking on-disk format).** This is a breaking change to how secrets are stored.
+A version of the plugin **without** this change cannot read `ssoenc:` values — after a downgrade, the
+affected OpenID/SAML providers would behave as if their secret were unset. To roll back safely:
+
+1. Before downgrading, open each affected provider on the settings page and re-enter its client secret /
+   re-upload its signing key, then save — **or** keep a backup of the pre-upgrade (plaintext) config XML.
+2. Install the older plugin version and restore that plaintext config (or re-enter the secrets on the
+   older version's settings page).
+3. The `sso-secret.key` file is ignored by older versions and can be left in place or removed.
+
 ## Canonical base URL (recommended hardening)
 
 By default the plugin builds the OpenID `redirect_uri` and the SAML base URL from the request `Host`
@@ -302,7 +330,9 @@ not reset them):
   `openssl pkcs12 -export -inkey sp-key.pem -in sp-cert.pem -passout pass: -out sp.pfx`, then Base64 the
   file (`base64 -w0 sp.pfx`). Treated as a secret: it is withheld from every config response (a `SAML`
   provider fetch returns it as `null`) so the private key never reaches the admin browser, and a save
-  that leaves it blank keeps the stored key. It is persisted only to the server's on-disk config.
+  that leaves it blank keeps the stored key. It is persisted only to the server's on-disk config, and
+  there it is **encrypted at rest** (see
+  [Secrets encrypted at rest and downgrade](#secrets-encrypted-at-rest-and-downgrade)).
 
 **Fail-closed:** if `SignAuthnRequests` is on but the signing key is missing or unloadable, the login
 challenge is refused with an error — it never silently falls back to sending an unsigned request, so an
