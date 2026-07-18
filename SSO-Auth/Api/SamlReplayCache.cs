@@ -8,7 +8,9 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 /// cannot be replayed within its validity window. Entries are retained until the supplied expiry and
 /// reclaimed by a throttled expired-entry sweep, and the set is hard-capped so it cannot grow without
 /// bound (#452). It mirrors the sibling login-path caches (<see cref="SamlRequestCache"/>,
-/// <see cref="OidcStateStore"/>): an <see cref="IntervalGate"/>-throttled sweep plus a global cap.
+/// <see cref="OidcStateStore"/>): an <see cref="IntervalGate"/>-throttled sweep plus a global cap, and a
+/// second <see cref="IntervalGate"/>-throttled signal that surfaces a cap refusal to the caller so a full
+/// replay cache is observable rather than silent (#470).
 ///
 /// The cap is applied differently from the siblings, on purpose. Recording a consumed assertion is what
 /// makes a replay detectable, so this cache must never drop a still-valid entry to free a slot — that
@@ -43,6 +45,15 @@ internal sealed class SamlReplayCache
     // backward wall-clock step of at least the interval (#334). See PruneExpired.
     private readonly IntervalGate _pruneGate;
 
+    // Throttles the cap-refusal capacity warning to one signal per interval (CWE-400): its OWN gate,
+    // distinct from the prune gate, so a full cache signals at most once per interval rather than once per
+    // refused assertion — a compromised identity provider replaying signed assertions at the cap cannot
+    // amplify the refusal into unbounded log volume. Mirrors the sibling caches (OidcStateStore,
+    // SamlRequestCache) so the SAML replay refusal has the same operator visibility (#470). The warning
+    // LINE itself stays at the caller, which owns the logger, so the log-forging inline sanitizer never
+    // crosses a helper boundary; this cache only decides WHETHER to warn.
+    private readonly IntervalGate _capWarnGate;
+
     internal SamlReplayCache()
         : this(DefaultMaxEntries, DefaultPruneInterval)
     {
@@ -54,6 +65,7 @@ internal sealed class SamlReplayCache
     {
         _maxEntries = maxEntries;
         _pruneGate = new IntervalGate(pruneInterval);
+        _capWarnGate = new IntervalGate(pruneInterval);
     }
 
     /// <summary>Gets the live entry count. Test-only, so the cap and sweep paths can be asserted.</summary>
@@ -96,10 +108,12 @@ internal sealed class SamlReplayCache
     /// <param name="assertionId">The assertion ID.</param>
     /// <param name="expiryUtc">When the entry may be evicted (the assertion's retention horizon).</param>
     /// <param name="nowUtc">The current time.</param>
+    /// <param name="shouldWarnCapacity">True for at most one caller per interval when a fail-closed cap refusal occurred, so the caller can log it once; false on any other outcome (first use, replay, missing ID).</param>
     /// <returns>True if this is the first use; false on replay, a missing ID, or a fail-closed cap refusal.</returns>
-    internal bool TryConsume(string assertionId, DateTime expiryUtc, DateTime nowUtc)
+    internal bool TryConsume(string assertionId, DateTime expiryUtc, DateTime nowUtc, out bool shouldWarnCapacity)
     {
         PruneExpired(nowUtc);
+        shouldWarnCapacity = false;
 
         // Fail closed: without an ID we cannot enforce one-time use.
         if (string.IsNullOrEmpty(assertionId))
@@ -117,6 +131,11 @@ internal sealed class SamlReplayCache
             SweepExpired(nowUtc);
             if (_consumed.Count >= _maxEntries && !_consumed.ContainsKey(assertionId))
             {
+                // A genuine fail-closed cap refusal: the cache is full of still-live consumed assertions and
+                // this new one is turned away (the login fails closed). Signal it once per interval — its own
+                // gate, so a flood of refusals cannot amplify into log volume — so an operator can see the
+                // replay cache is under real pressure (#470). The refusal itself is unchanged.
+                shouldWarnCapacity = _capWarnGate.TryEnter(nowUtc);
                 return false;
             }
         }
