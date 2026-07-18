@@ -151,9 +151,10 @@ public class ArchitectureConformanceTests
     {
         // Locked in by the OidcStateStore consolidation (#318): a raw dictionary holding runtime state
         // outside a *Store/*Cache/*Limiter type is how the pre-consolidation controller accumulated its
-        // scattered cap/lifetime/sweep conventions. The former SSOController.DiscoveryFactsCache exemption
-        // was retired in #449 once that cache moved into OidcDiscoveryCache (a *Cache type), so the rule now
-        // covers it structurally. One documented exemption remains:
+        // scattered cap/lifetime/sweep conventions. The former SSOController.DiscoveryFactsCache moved into a
+        // *Cache type in #449 and was then removed entirely in #450 (discovery is now read once per challenge
+        // and fed to the login, with nothing cached), so no discovery-facts dictionary remains to exempt.
+        // One documented exemption remains:
         // - ProviderConfigBase._canonicalLinks: the persisted account-link map — serialized plugin
         //   configuration mutated only under the config lock, so a runtime store type would be the
         //   wrong home; it is config state, not in-flight state.
@@ -570,20 +571,20 @@ public class ArchitectureConformanceTests
     {
         // Locked in by the OpenID flow extraction (#160, #318 step 12): the OpenID challenge and redirect
         // callback bodies, together with the OpenID-specific process-wide state (the in-flight authorize
-        // store and the discovery-facts cache), moved into OidcLoginService. The controller's OpenID
-        // endpoints now apply the shared rate-limit gate and hand the request to that service, so a
-        // CONTROLLER neither holds those OIDC caches nor drives the OidcClient challenge/callback protocol
-        // itself. Call-level property, so it is a source scan like the other controller rules above.
+        // store) and the discovery read, moved into OidcLoginService. The controller's OpenID endpoints now
+        // apply the shared rate-limit gate and hand the request to that service, so a CONTROLLER neither
+        // holds the OIDC authorize store / discovery read nor drives the OidcClient challenge/callback
+        // protocol itself. Call-level property, so it is a source scan like the other controller rules above.
         //
-        // The two cache tokens are nameof-derived, so a rename of either type fails to COMPILE this rule
-        // rather than passing vacuously; the two protocol tokens are the OidcClient methods the challenge
-        // (PrepareLoginAsync) and callback (ProcessResponseAsync) drive. The shared per-client rate limiter
+        // The store and reader tokens are nameof-derived, so a rename of either type fails to COMPILE this
+        // rule rather than passing vacuously; the two protocol tokens are the OidcClient methods the
+        // challenge (PrepareLoginAsync) and callback (ProcessResponseAsync) drive. The shared per-client rate limiter
         // is deliberately NOT a marker — it fronts BOTH protocols, so rather than living on either flow
         // service it lives in the shared SsoRateLimitGate (#160), pinned off the controller by
         // Controller_HoldsNoMutableStaticState.
         var storeToken = nameof(OidcStateStore);
-        var cacheToken = nameof(OidcDiscoveryCache);
-        var markers = new[] { storeToken, cacheToken, "PrepareLoginAsync", "ProcessResponseAsync" };
+        var readerToken = nameof(OidcDiscoveryReader);
+        var markers = new[] { storeToken, readerToken, "PrepareLoginAsync", "ProcessResponseAsync" };
 
         var controllerHits = ControllerSourceFiles()
             .SelectMany(path => File.ReadAllLines(path)
@@ -603,7 +604,7 @@ public class ArchitectureConformanceTests
             SourceFilesDeclaring(new[] { typeof(OidcLoginService) }).Select(File.ReadAllText));
         Assert.True(
             markers.All(m => oidcSource.Contains(m, StringComparison.Ordinal)),
-            "OidcLoginService must own the OpenID challenge/callback flow and its authorize/discovery caches; otherwise the controller scan passes vacuously (#160).");
+            "OidcLoginService must own the OpenID challenge/callback flow, its authorize store, and the discovery read; otherwise the controller scan passes vacuously (#160).");
     }
 
     [Fact]

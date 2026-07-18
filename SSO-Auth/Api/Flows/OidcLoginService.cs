@@ -23,13 +23,11 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Flows;
 /// flow-tier collaborator rather than inline on the controller.
 /// </summary>
 /// <remarks>
-/// The two OpenID-specific process-wide caches live here as <c>static readonly</c> fields, one instance for
-/// the whole process exactly as they were on the controller (a fresh per-request controller reconstructs the
-/// service, so an instance field would lose the in-flight state between the challenge and its callback):
-/// <list type="bullet">
-/// <item>the in-flight authorize-state store (<see cref="OidcStateStore"/>), and</item>
-/// <item>the discovery-facts cache (<see cref="OidcDiscoveryCache"/>).</item>
-/// </list>
+/// The in-flight authorize-state store (<see cref="OidcStateStore"/>) lives here as a <c>static readonly</c>
+/// field, one instance for the whole process exactly as it was on the controller (a fresh per-request
+/// controller reconstructs the service, so an instance field would lose the in-flight state between the
+/// challenge and its callback). The discovery read (<see cref="OidcDiscoveryReader"/>) is stateless — the
+/// challenge fetches the document once and feeds it to the login, so there is no cache to hold here (#450).
 /// The shared per-client rate limiter is deliberately NOT here — it also fronts the SAML flow, so it lives in
 /// the shared <see cref="SsoRateLimitGate"/> (Api/Shared) that the controller's endpoints front this service
 /// with, rather than as a per-flow static (#160). Because the challenge and
@@ -43,15 +41,8 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Flows;
 internal sealed class OidcLoginService
 {
     // The in-flight OpenID authorize-state store (cap, lifetime, throttled sweep and capacity signal all
-    // live inside; see OidcStateStore). One process-wide instance, like the discovery cache below and the
-    // SAML caches the controller keeps.
+    // live inside; see OidcStateStore). One process-wide instance, like the SAML caches the controller keeps.
     private static readonly OidcStateStore StateStore = new();
-
-    // The per-discovery-URL cache of the two facts the challenge reads in one fetch — PKCE-S256 support
-    // (#141) and whether the AS advertises the RFC 9207 response-`iss` parameter (#210) — plus the
-    // fetch/parse that populates it. One process-wide instance; the TTL, bounding rationale, and tolerant
-    // fail-open-only-under-RequirePkce behaviour all live inside OidcDiscoveryCache (#449).
-    private static readonly OidcDiscoveryCache DiscoveryCache = new();
 
     // The shared login-completion tail (#160): resolve/adopt the link, build the session parameters, mint
     // under the revocation gate, audit, map to a LoginOutcome. Both protocols funnel their verified identity
@@ -84,15 +75,14 @@ internal sealed class OidcLoginService
     /// <returns>One redacted summary per in-flight state.</returns>
     internal IEnumerable<OidcStateStore.Summary> StateSummaries() => StateStore.Summaries();
 
-    // Test-only reset of the process-wide OpenID caches this service keeps as statics: the in-flight
-    // authorize-state store and the discovery-facts cache. A test that drives the login flow mutates these,
-    // so without a reset the state leaks into a sibling test in the same non-parallel collection. Internal
-    // and reachable only through InternalsVisibleTo; it is never wired to an endpoint or DI, so it adds no
-    // runtime or security surface. Moved here with the statics from the controller (#160, #289).
+    // Test-only reset of the process-wide OpenID authorize-state store this service keeps as a static. A
+    // test that drives the login flow mutates it, so without a reset the state leaks into a sibling test in
+    // the same non-parallel collection. Internal and reachable only through InternalsVisibleTo; it is never
+    // wired to an endpoint or DI, so it adds no runtime or security surface. Moved here with the statics from
+    // the controller (#160, #289). The discovery read is stateless (#450), so there is nothing else to clear.
     internal static void ResetOidStateForTests()
     {
         StateStore.Clear();
-        DiscoveryCache.Clear();
     }
 
     // Test-only seed of a single authorize-state entry so a test can exercise the callback/authenticate legs
@@ -123,16 +113,36 @@ internal sealed class OidcLoginService
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.UnknownProvider));
         }
 
-        // RFC 9700 §2.1.1: confirm the authorization server advertises PKCE (S256) before relying on
-        // it. OidcClient sends code_challenge unconditionally but never checks this, so a server that
-        // ignores PKCE would silently downgrade authorization-code-injection protection (#141). Fail
-        // closed when the provider is marked RequirePkce; otherwise emit an audit warning and proceed.
-        // One discovery read yields both facts the challenge needs: PKCE-S256 support (gated below) and
-        // whether the AS advertises the RFC 9207 response-`iss` parameter (persisted on the state below,
-        // so the callback can require `iss` without a second fetch) (#210).
-        var discoveryFacts = await DiscoveryCache.ReadFactsAsync(config, provider, _httpClientFactory, _logger).ConfigureAwait(false);
-        var pkceSupported = discoveryFacts.PkceS256;
-        if (pkceSupported == false)
+        var newPath = ResolveChallengeNewPath(config, isLinking, request);
+
+        string redirectUri = SsoUrlBuilder.OidRedirectUri(RequestBaseUrl(request, config), newPath, provider);
+
+        // Read the discovery document ONCE, up front, and source both the security facts AND the login's
+        // provider metadata from that single response (#450). Before this, the facts came from a separate
+        // best-effort probe distinct from the discovery PrepareLoginAsync performed internally, so the two
+        // could disagree and a failed/omitted probe silently downgraded the RFC 9207 requirement. The read
+        // is IdentityModel's own GetDiscoveryDocumentAsync under this provider's DiscoveryPolicy (RequireHttps
+        // / ValidateIssuerName / ValidateEndpoints), so the plugin-owned fetch honours the same channel and
+        // endpoint validation the library would.
+        var options = BuildOidcOptions(config, redirectUri, BuildScopeString(config));
+        var discovery = await OidcDiscoveryReader.ReadAsync(options, provider, _httpClientFactory, _logger).ConfigureAwait(false);
+        if (!discovery.Available)
+        {
+            // Fail closed (#450): the discovery document the login itself needs could not be read, so there
+            // is no authoritative source for the PKCE-S256 (#141) and RFC 9207 response-`iss` (#210) facts —
+            // and no metadata to build the authorization request from. Reject rather than fall back to a
+            // second, divergent fetch or a silent tolerant default. This is not a new lockout: without
+            // discovery, PrepareLoginAsync could not build the authorize redirect either.
+            _logger.LogWarning("OpenID login refused for provider {Provider}: the authorization server's discovery document could not be read.", provider?.ReplaceLineEndings(string.Empty));
+            return FlowResponses.PlainTextError(StatusCodes.Status400BadRequest, "Error preparing login: the authorization server's discovery document could not be read.");
+        }
+
+        // RFC 9700 §2.1.1: confirm the authorization server advertises PKCE (S256) before relying on it.
+        // OidcClient sends code_challenge unconditionally but never checks this, so a server that ignores
+        // PKCE would silently downgrade authorization-code-injection protection (#141). The fact is now
+        // definite (the document was read); fail closed when the provider is marked RequirePkce, otherwise
+        // emit an audit warning and proceed.
+        if (!discovery.Facts.PkceS256)
         {
             if (config.RequirePkce)
             {
@@ -142,17 +152,13 @@ internal sealed class OidcLoginService
 
             SsoAudit.PkceNotAdvertised(_logger, provider);
         }
-        else if (pkceSupported is null && config.RequirePkce)
-        {
-            _logger.LogWarning("OpenID login refused for provider {Provider}: RequirePkce is set but the discovery document could not be read to confirm PKCE (S256).", provider?.ReplaceLineEndings(string.Empty));
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.PkceUnverifiable));
-        }
 
-        var newPath = ResolveChallengeNewPath(config, isLinking, request);
-
-        string redirectUri = SsoUrlBuilder.OidRedirectUri(RequestBaseUrl(request, config), newPath, provider);
-
-        var oidcClient = CreateOidcClient(config, redirectUri, BuildScopeString(config));
+        // Feed the ONE discovery response the facts came from to the login: assigning ProviderInformation
+        // before constructing the client sets its internal use-discovery flag false, so PrepareLoginAsync
+        // reuses this metadata instead of performing its own second discovery (#450). The metadata is
+        // reused again at the callback (#247), so the challenge, the facts, and the callback all agree.
+        options.ProviderInformation = discovery.ProviderInformation;
+        var oidcClient = new OidcClient(options);
         var state = await oidcClient.PrepareLoginAsync().ConfigureAwait(false);
 
         if (state.IsError)
@@ -173,13 +179,14 @@ internal sealed class OidcLoginService
         // source normalizes to null and is exempt.
         var clientKey = SsoRateLimiter.NormalizeClientKey(request.HttpContext.Connection.RemoteIpAddress);
 
-        // Build the challenge's authorize state complete — the discovery metadata PrepareLoginAsync just
+        // Build the challenge's authorize state complete — the discovery metadata the single read above
         // fetched and validated against this provider's DiscoveryPolicy (reused at the callback so
-        // ProcessResponseAsync skips a second discovery + JWKS, #247), and whether that discovery
+        // ProcessResponseAsync skips a second discovery + JWKS, #247), and whether that same discovery
         // advertised the RFC 9207 response-`iss` parameter (so the callback requires `iss`, its absence
-        // being a downgrade, #210). Folded in at construction so registration is one atomic insert and the
-        // stored Pending is never mutated after it enters the store (#341).
-        var pending = new AuthorizeSession.Pending(state, provider, isLinking, DateTime.Now, bindingId, clientKey, oidcClient.Options.ProviderInformation, discoveryFacts.ResponseIssuerAdvertised);
+        // being a downgrade, #210). Both come from the one response (#450). Folded in at construction so
+        // registration is one atomic insert and the stored Pending is never mutated after it enters the
+        // store (#341).
+        var pending = new AuthorizeSession.Pending(state, provider, isLinking, DateTime.Now, bindingId, clientKey, discovery.ProviderInformation, discovery.Facts.ResponseIssuerAdvertised);
         if (!StateStore.TryAdd(pending, out var shouldWarnCapacity))
         {
             if (shouldWarnCapacity)
@@ -438,6 +445,39 @@ internal sealed class OidcLoginService
     // OidEndpoint still fails at the same point (the Uri constructor, after the options object).
     private OidcClient CreateOidcClient(OidConfig config, string redirectUri, string scope, ProviderInformation providerInformation = null)
     {
+        var options = BuildOidcOptions(config, redirectUri, scope);
+
+        // Reuse an already-fetched, policy-validated discovery metadata when the caller supplies it — the
+        // challenge feeds the single discovery read it performed (#450), and the callback feeds the metadata
+        // captured at the challenge (#247) so ProcessResponseAsync does not re-run discovery + JWKS.
+        // Pre-assigning ProviderInformation sets the client's internal _useDiscovery = false, which also
+        // disables the library's invalid_signature JWKS-refresh-and-retry. Two directions of key change,
+        // both bounded by the authorize state's ~15-minute lifetime: a key rotated IN during the window (the
+        // id_token signed by a key the challenge did not capture) fails this callback closed and self-heals
+        // on retry (the next challenge fetches fresh keys); a key rotated OUT / revoked during the window
+        // stays accepted until the state expires, since the callback validates against the captured set — a
+        // far tighter exposure than the platform-default 24-hour JWKS cache, and never wider than the state
+        // lifetime. Populated only from a validated fetch (never hand-filled), so the DiscoveryPolicy
+        // (RequireHttps / ValidateIssuerName / ValidateEndpoints) is not bypassed.
+        if (providerInformation is not null)
+        {
+            options.ProviderInformation = providerInformation;
+        }
+
+        return new OidcClient(options);
+    }
+
+    // Builds the OidcClient options both sites share — Authority, client credentials, redirect URI, scope,
+    // the discovery policy (RequireHttps / ValidateIssuerName / ValidateEndpoints + the additional base
+    // address for providers whose endpoints sit off the authority), and the required id_token signature
+    // validator (#134) — but WITHOUT ProviderInformation. Split out from CreateOidcClient so the challenge
+    // can configure the policy, read discovery ONCE under it, and only then construct the client with the
+    // resulting metadata pre-assigned (#450); the constructor's internal use-discovery flag is decided from
+    // whether ProviderInformation is set at construction, so the assignment must happen before `new
+    // OidcClient(options)`, not after. A null OidEndpoint still fails at the same point it did before (the
+    // Uri constructor, after the options object).
+    private OidcClientOptions BuildOidcOptions(OidConfig config, string redirectUri, string scope)
+    {
         var options = new OidcClientOptions
         {
             Authority = config.OidEndpoint?.Trim(),
@@ -462,23 +502,7 @@ internal sealed class OidcLoginService
         options.Policy.RequireIdentityTokenSignature = true;
         options.IdentityTokenValidator = new OidcIdTokenValidator();
 
-        // Reuse the challenge's already-fetched, policy-validated discovery metadata when the callback
-        // supplies it (#247), so ProcessResponseAsync does not re-run discovery + JWKS. Pre-assigning
-        // ProviderInformation sets the client's internal _useDiscovery = false, which also disables the
-        // library's invalid_signature JWKS-refresh-and-retry. Two directions of key change, both bounded
-        // by the authorize state's ~15-minute lifetime: a key rotated IN during the window (the id_token
-        // signed by a key the challenge did not capture) fails this callback closed and self-heals on
-        // retry (the next challenge fetches fresh keys); a key rotated OUT / revoked during the window
-        // stays accepted until the state expires, since the callback validates against the captured
-        // set — a far tighter exposure than the platform-default 24-hour JWKS cache, and never wider than
-        // the state lifetime. Populated only from a validated fetch (never hand-filled), so the
-        // DiscoveryPolicy (RequireHttps / ValidateIssuerName / ValidateEndpoints) is not bypassed.
-        if (providerInformation is not null)
-        {
-            options.ProviderInformation = providerInformation;
-        }
-
-        return new OidcClient(options);
+        return options;
     }
 
     // Callback-side client: the redirect URI is rebuilt from the callback's own route (the IdP calls

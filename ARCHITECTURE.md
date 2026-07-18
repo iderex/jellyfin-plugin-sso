@@ -86,13 +86,12 @@ and SAML caches on their owning flow service (`OidcLoginService` /
 `IPluginServiceRegistrator` in source, so a `static readonly` field is today's
 only way to get one process-wide instance):
 
-| Store                | Owner              | Guards                                                                                      |
-| -------------------- | ------------------ | ------------------------------------------------------------------------------------------- |
-| `OidcStateStore`     | `OidcLoginService` | in-flight OIDC authorize state; capacity cap, lifetime, throttled-sweep via `IntervalGate`  |
-| `SamlReplayCache`    | `SamlLoginService` | one-time-use SAML assertion IDs (replay protection)                                         |
-| `SamlRequestCache`   | `SamlLoginService` | outstanding SAML `AuthnRequest` IDs for `InResponseTo` correlation                          |
-| `OidcDiscoveryCache` | `OidcLoginService` | per-discovery-URL PKCE-S256 / RFC 9207 `iss` facts, 15-minute TTL; owns the fetch/parse too |
-| `SsoRateLimiter`     | `SsoRateLimitGate` | opt-in per-client rate limiting on the login endpoints and the link/unlink admin surface    |
+| Store              | Owner              | Guards                                                                                     |
+| ------------------ | ------------------ | ------------------------------------------------------------------------------------------ |
+| `OidcStateStore`   | `OidcLoginService` | in-flight OIDC authorize state; capacity cap, lifetime, throttled-sweep via `IntervalGate` |
+| `SamlReplayCache`  | `SamlLoginService` | one-time-use SAML assertion IDs (replay protection)                                        |
+| `SamlRequestCache` | `SamlLoginService` | outstanding SAML `AuthnRequest` IDs for `InResponseTo` correlation                         |
+| `SsoRateLimiter`   | `SsoRateLimitGate` | opt-in per-client rate limiting on the login endpoints and the link/unlink admin surface   |
 
 The controller itself now holds **no mutable static state** — every store above
 lives in a flow service or the Shared tier, pinned by

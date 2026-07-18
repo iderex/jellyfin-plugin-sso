@@ -28,7 +28,6 @@ public class LoginStatusMapperTests
             (PublicReason.SsoResponseInvalid, 400, "SSO response validation failed"),
             (PublicReason.SamlResponseInvalid, 400, "SAML response validation failed"),
             (PublicReason.PkceNotSupported, 400, "The identity provider does not advertise the required PKCE (S256) support."),
-            (PublicReason.PkceUnverifiable, 400, "The identity provider's PKCE (S256) support could not be verified."),
             (PublicReason.EmailNotVerified, 403, "A verified email is required to log in."),
         };
 

@@ -130,6 +130,65 @@ public class SSOControllerOidChallengeTests
         + "\"code_challenge_methods_supported\":[\"S256\"]}";
 
     [Fact]
+    public async Task OidChallenge_ReadsDiscoveryExactlyOnce()
+    {
+        // #450: the challenge sources the PKCE-S256 (#141) and RFC 9207 response-iss (#210) facts from the
+        // SAME discovery response it feeds the login, so it must fetch the discovery document ONCE — not the
+        // pre-#450 pair of a best-effort probe plus OidcClient's own internal discovery. JWKS may be fetched
+        // separately; only the well-known document is counted.
+        const string authority = "https://idp-once.example.com";
+        var discoveryFetches = 0;
+        var harness = new SsoControllerHarness(
+            c => c.OidConfigs["kc"] = new OidConfig
+            {
+                Enabled = true,
+                OidEndpoint = authority,
+                OidClientId = "jf",
+                OidScopes = Array.Empty<string>(),
+                DisablePushedAuthorization = true,
+            },
+            httpResponder: request =>
+            {
+                var url = request.RequestUri!.AbsoluteUri;
+                if (url == authority + "/.well-known/openid-configuration")
+                {
+                    discoveryFetches++;
+                    return Json(Discovery(authority));
+                }
+
+                return url == authority + "/jwks"
+                    ? Json("{\"keys\":[]}")
+                    : new HttpResponseMessage(HttpStatusCode.NotFound);
+            });
+
+        var result = await harness.Controller.OidChallenge("kc");
+
+        Assert.IsType<RedirectResult>(result);
+        Assert.Equal(1, discoveryFetches); // one discovery read, not two (the separate probe is gone)
+    }
+
+    [Fact]
+    public async Task OidChallenge_DiscoveryUnreadable_FailsClosed_EvenWithoutRequirePkce()
+    {
+        // #450 fail-closed: when the discovery document cannot be read there is no authoritative source for
+        // the iss-required / PKCE facts and no metadata to build the authorize request from, so the login is
+        // refused — NOT silently proceeded on a tolerant default. This holds even when RequirePkce is not
+        // set, matching the pre-#450 net behaviour (PrepareLoginAsync could not build the redirect either).
+        var harness = new SsoControllerHarness(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            OidEndpoint = "https://idp-down.example.com",
+            OidClientId = "jf",
+            // RequirePkce deliberately left false.
+        });
+        // No httpResponder: the discovery fetch fails.
+
+        var result = await harness.Controller.OidChallenge("kc");
+
+        Assert.Equal(400, Assert.IsType<ContentResult>(result).StatusCode);
+    }
+
+    [Fact]
     public async Task OidChallenge_StartPath_RecordsNewPathAsServerState()
     {
         const string authority = "https://idp-newpath.example.com";
