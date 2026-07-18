@@ -32,7 +32,7 @@ permissions: {}
 # mid-run (it holds contents:write and moves a release + a manifest branch),
 # matching the never-cancel posture noted in zizmor.yml.
 concurrency:
-  group: publish-beta
+  group: publish-manifest-beta
   cancel-in-progress: false
 
 jobs:
