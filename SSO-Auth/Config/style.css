@@ -35,6 +35,14 @@
   margin-top: 0.25em;
 }
 
+.sso-linking-error {
+  color: #ff8a80;
+  border: 1px solid #ff8a80;
+  border-radius: 0.25em;
+  padding: 0.75em 1em;
+  margin-bottom: 1em;
+}
+
 .sso-role-mapping-container,
 .sso-bordered-list {
   border-color: rgba(255, 255, 255, 0.135);

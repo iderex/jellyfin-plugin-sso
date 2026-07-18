@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Microsoft.AspNetCore.Mvc;
+using NSubstitute;
 using Xunit;
 
 namespace Jellyfin.Plugin.SSO_Auth.Tests;
@@ -211,6 +212,65 @@ public class SSOControllerOidChallengeTests
         await harness.Controller.OidChallenge("kc");
 
         Assert.True(SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["kc"].NewPath));
+    }
+
+    [Fact]
+    public async Task OidChallenge_NewPathChanges_PersistsThroughTheConfigStore()
+    {
+        // #412: the derived spelling must be recorded through MutateConfiguration (which persists),
+        // not a bare field write on a config object read outside the lock — that write bypassed the
+        // store entirely and never reached the persist delegate. Starting the provider on the legacy
+        // spelling and hitting the descriptive route forces an actual change, so this proves the write
+        // now reaches SerializeToFile instead of being a purely in-memory mutation.
+        const string authority = "https://idp-newpath-persist.example.com";
+        var harness = new SsoControllerHarness(
+            c => c.OidConfigs["kc"] = new OidConfig
+            {
+                Enabled = true,
+                OidEndpoint = authority,
+                OidClientId = "jf",
+                OidScopes = Array.Empty<string>(),
+                DisablePushedAuthorization = true,
+                NewPath = false,
+            },
+            httpResponder: request => request.RequestUri!.AbsoluteUri == authority + "/jwks"
+                ? Json("{\"keys\":[]}")
+                : Json(Discovery(authority)));
+        harness.Controller.HttpContext.Request.Path = "/sso/OID/start/kc";
+
+        await harness.Controller.OidChallenge("kc");
+
+        Assert.True(SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["kc"].NewPath));
+        harness.Xml.Received(1).SerializeToFile(Arg.Any<object>(), Arg.Any<string>());
+    }
+
+    [Fact]
+    public async Task OidChallenge_NewPathAlreadyCurrent_SkipsTheRedundantPersist()
+    {
+        // The common case — every login after the first on a given route — must not pay a config
+        // persist on every challenge: the derived spelling already matches what is stored, so the
+        // atomic write path (#412) is a locked comparison only, mirroring
+        // CanonicalLinkService.ResolveOrCreateAsync's read-first, persist-only-on-change shape.
+        const string authority = "https://idp-newpath-noop.example.com";
+        var harness = new SsoControllerHarness(
+            c => c.OidConfigs["kc"] = new OidConfig
+            {
+                Enabled = true,
+                OidEndpoint = authority,
+                OidClientId = "jf",
+                OidScopes = Array.Empty<string>(),
+                DisablePushedAuthorization = true,
+                NewPath = true,
+            },
+            httpResponder: request => request.RequestUri!.AbsoluteUri == authority + "/jwks"
+                ? Json("{\"keys\":[]}")
+                : Json(Discovery(authority)));
+        harness.Controller.HttpContext.Request.Path = "/sso/OID/start/kc";
+
+        await harness.Controller.OidChallenge("kc");
+
+        Assert.True(SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["kc"].NewPath));
+        harness.Xml.DidNotReceive().SerializeToFile(Arg.Any<object>(), Arg.Any<string>());
     }
 
     private static HttpResponseMessage Json(string body) =>

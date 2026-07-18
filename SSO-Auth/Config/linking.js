@@ -1,5 +1,16 @@
 const ssoConfigLinking = {
   pluginUniqueId: "505ce9d1-d916-42fa-86ca-673ef241d7df",
+
+  // A single generic banner for a failed request on this page (GetNames load, existing-links load,
+  // or unlink, #536/#564). It never carries a status code or server message, so a rejection cannot
+  // leak an internal detail into the admin UI; it just tells the user the page is no longer
+  // trustworthy as shown.
+  showError: () => {
+    const banner = document.querySelector("#sso-linking-error");
+    if (banner) {
+      banner.hidden = false;
+    }
+  },
   loadProviders: (view) => {
     ["oid", "saml"].forEach((provider_mode) => {
       const container = view.querySelector(
@@ -7,19 +18,25 @@ const ssoConfigLinking = {
       );
       container.innerHTML = "";
 
-      fetch(
-        new Request(
-          ApiClient.getUrl(`sso/${provider_mode.toUpperCase()}/GetNames`),
-        ),
-      ).then((resp) => {
-        resp.json().then((config_names) => {
+      ApiClient.fetch(
+        {
+          type: "GET",
+          url: ApiClient.getUrl(`sso/${provider_mode.toUpperCase()}/GetNames`),
+        },
+        true,
+      )
+        .then((resp) => resp.json())
+        .then((config_names) => {
           ssoConfigLinking.loadProviderList(
             container,
             config_names,
             provider_mode,
           );
-        });
-      });
+        })
+        // ApiClient.fetch rejects on a non-2xx status (auth expiry, a server error, ...), the same as
+        // the existing-links load below, so a failed GetNames load surfaces the banner instead of
+        // silently rendering an empty provider list (#564).
+        .catch(() => ssoConfigLinking.showError());
     });
   },
   loadProviderList: (container, providers, provider_mode) => {
@@ -44,8 +61,9 @@ const ssoConfigLinking = {
           url: ApiClient.getUrl(`sso/${provider_mode}/links/${currentUserId}`),
         },
         true,
-      ).then((resp) => {
-        resp.json().then((provider_map) => {
+      )
+        .then((resp) => resp.json())
+        .then((provider_map) => {
           Object.keys(provider_map).forEach((provider_name) => {
             let existing_links = container.querySelector(
               `.sso-provider-existing-links-container[data-provider="${CSS.escape(provider_name)}"]`,
@@ -77,8 +95,10 @@ const ssoConfigLinking = {
               provider_map[provider_name],
             );
           });
-        });
-      });
+        })
+        // ApiClient.fetch rejects on a non-2xx status (auth expiry, a server error, ...), so a failed
+        // existing-links load surfaces the banner instead of silently leaving the list empty (#536).
+        .catch(() => ssoConfigLinking.showError());
     }
   },
 
@@ -223,9 +243,14 @@ const ssoConfigLinking = {
         });
       });
 
-    Promise.all(delete_requests).then((values) => {
-      window.location.reload();
-    });
+    Promise.all(delete_requests)
+      .then(() => {
+        window.location.reload();
+      })
+      // ApiClient.fetch rejects on a non-2xx status, so a rejected DELETE must not fall through to
+      // the unconditional reload below it: that would show the exact same page a successful removal
+      // shows, with no indication that the link the user asked to remove is still present (#536).
+      .catch(() => ssoConfigLinking.showError());
   },
 };
 

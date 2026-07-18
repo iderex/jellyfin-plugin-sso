@@ -7,6 +7,7 @@ using Jellyfin.Plugin.SSO_Auth;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Microsoft.AspNetCore.Mvc;
+using NSubstitute;
 using Xunit;
 
 namespace Jellyfin.Plugin.SSO_Auth.Tests;
@@ -199,6 +200,43 @@ public class SSOControllerChallengeTests
         var result = Assert.IsType<RedirectResult>(harness.Controller.SamlChallenge("adfs"));
 
         Assert.Contains("SAMLRequest=", result.Url);
+    }
+
+    [Fact]
+    public void SamlChallenge_NewPathChanges_PersistsThroughTheConfigStore()
+    {
+        // #412: the derived spelling must be recorded through MutateConfiguration (which persists),
+        // not a bare field write on a config object read outside the lock — that write bypassed the
+        // store entirely and never reached the persist delegate. Starting the provider on the legacy
+        // spelling and hitting the descriptive route forces an actual change, so this proves the write
+        // now reaches SerializeToFile instead of being a purely in-memory mutation.
+        var provider = EnabledProvider();
+        provider.NewPath = false;
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = provider);
+        harness.Controller.HttpContext.Request.Path = "/sso/SAML/start/adfs";
+
+        Assert.IsType<RedirectResult>(harness.Controller.SamlChallenge("adfs"));
+
+        Assert.True(SSOPlugin.Instance.ReadConfiguration(c => c.SamlConfigs["adfs"].NewPath));
+        harness.Xml.Received(1).SerializeToFile(Arg.Any<object>(), Arg.Any<string>());
+    }
+
+    [Fact]
+    public void SamlChallenge_NewPathAlreadyCurrent_SkipsTheRedundantPersist()
+    {
+        // The common case — every login after the first on a given route — must not pay a config
+        // persist on every challenge: the derived spelling already matches what is stored, so the
+        // atomic write path (#412) is a locked comparison only, mirroring
+        // CanonicalLinkService.ResolveOrCreateAsync's read-first, persist-only-on-change shape.
+        var provider = EnabledProvider();
+        provider.NewPath = true;
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = provider);
+        harness.Controller.HttpContext.Request.Path = "/sso/SAML/start/adfs";
+
+        Assert.IsType<RedirectResult>(harness.Controller.SamlChallenge("adfs"));
+
+        Assert.True(SSOPlugin.Instance.ReadConfiguration(c => c.SamlConfigs["adfs"].NewPath));
+        harness.Xml.DidNotReceive().SerializeToFile(Arg.Any<object>(), Arg.Any<string>());
     }
 
     [Fact]

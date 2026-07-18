@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using MediaBrowser.Model.Plugins;
 using Microsoft.Extensions.Logging;
@@ -166,6 +167,90 @@ public class ProviderConfigStoreTests
         store.Save(incoming);
 
         Assert.Single(persisted);
+    }
+
+    [Fact]
+    public async Task Mutate_ConcurrentReadModifyWrites_NeverLoseAnUpdate()
+    {
+        // Race regression for #412: the challenge flow now records the server-managed NewPath spelling
+        // through Mutate instead of an unsynchronized field write, specifically so two concurrent
+        // challenges cannot race a read-modify-write and lose one another's update. This pins the
+        // general property that guarantee rests on: every Mutate call is a fully serialized
+        // read-modify-write, so N concurrent increments through the store are never dropped — if the
+        // store's lock were removed (or a caller bypassed it, as the pre-fix NewPath write did), some
+        // increments would race and the final count would fall short of N.
+        var (store, live, _) = CreateStore();
+        live.RateLimitMaxAttempts = 0; // the constructor default (30) would otherwise fold into the count
+        var ct = TestContext.Current.CancellationToken;
+
+        const int concurrency = 64;
+        var tasks = new Task[concurrency];
+        for (var i = 0; i < concurrency; i++)
+        {
+            tasks[i] = Task.Run(() => store.Mutate(c => c.RateLimitMaxAttempts++), ct);
+        }
+
+        await Task.WhenAll(tasks);
+
+        Assert.Equal(concurrency, live.RateLimitMaxAttempts);
+    }
+
+    [Fact]
+    public async Task Mutate_ConcurrentChallengeStyleReadThenWrite_NeverThrows_AndSettlesOnADerivedSpelling()
+    {
+        // Mirrors OidcLoginService/SamlLoginService.ResolveChallengeNewPath's shape (#412): a fast Read,
+        // then a Mutate only when the derived spelling differs from what is stored — never a bare field
+        // write outside the lock. Concurrent callers alternate between the two derivable spellings for
+        // "kc" while OTHER concurrent callers add and remove UNRELATED provider entries — a genuine
+        // structural dictionary mutation racing the "kc" reads. This is the exact hazard Read's own doc
+        // comment cites (a Dictionary read-during-write is undefined behavior in .NET: throw, misread, or
+        // a spin on a corrupted chain during a resize) — without the store's lock, THIS combination could
+        // actually throw or corrupt state; a bool-only workload against a single already-live entry could
+        // not, so it would pass whether or not the lock existed. With the lock, every call must complete
+        // cleanly and the "kc" entry must survive untouched.
+        var (store, live, _) = CreateStore();
+        var seeded = new OidConfig { Enabled = true };
+        live.OidConfigs["kc"] = seeded;
+        var ct = TestContext.Current.CancellationToken;
+
+        const int concurrency = 50;
+        var tasks = new Task[concurrency * 2];
+        for (var i = 0; i < concurrency; i++)
+        {
+            var derived = i % 2 == 0;
+            tasks[i] = Task.Run(
+                () =>
+                {
+                    var stored = store.Read(c => c.OidConfigs["kc"].NewPath);
+                    if (stored != derived)
+                    {
+                        store.Mutate(c => c.OidConfigs["kc"].NewPath = derived);
+                    }
+                },
+                ct);
+
+            // Concurrent structural churn on an unrelated key, racing the "kc" reads/writes above on the
+            // SAME dictionary — added and removed within the same task so the map ends the test with only
+            // "kc" left in it.
+            var churnKey = "churn-" + i;
+            tasks[concurrency + i] = Task.Run(
+                () =>
+                {
+                    store.Mutate(c => c.OidConfigs[churnKey] = new OidConfig());
+                    store.Mutate(c => c.OidConfigs.Remove(churnKey));
+                },
+                ct);
+        }
+
+        await Task.WhenAll(tasks); // throws if any callback threw or the store deadlocked/corrupted the map
+
+        // Either NewPath spelling is a legitimate race outcome, but the map itself must have survived the
+        // structural churn intact: exactly the "kc" entry left (every churn key fully cleaned up, none
+        // leaked or half-written), the SAME object instance (never replaced or duplicated by an
+        // interleaved write), with every OTHER field untouched by the race.
+        Assert.Equal(1, store.Read(c => c.OidConfigs.Count));
+        Assert.Same(seeded, store.Read(c => c.OidConfigs["kc"]));
+        Assert.True(store.Read(c => c.OidConfigs["kc"].Enabled));
     }
 
     [Fact]
