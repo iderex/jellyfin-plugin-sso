@@ -107,6 +107,32 @@ public class SSOControllerChallengeTests
     }
 
     [Fact]
+    public void SamlChallenge_RolloverKeySet_StillSignsWithThePrimaryKey_NotTheRollover()
+    {
+        // The rollover key (#491) is PUBLISH-ONLY (SP metadata overlap): the AuthnRequest signature must
+        // still verify against the PRIMARY public key and must NOT verify against the rollover key.
+        var (primaryPfx, primaryPublic) = SamlSigningKeyFactory.CreatePair();
+        var (rolloverPfx, rolloverPublic) = SamlSigningKeyFactory.CreatePair();
+        using (primaryPublic)
+        using (rolloverPublic)
+        {
+            var harness = new SsoControllerHarness(c =>
+            {
+                var config = EnabledProvider();
+                config.SignAuthnRequests = true;
+                config.SamlSigningKeyPfx = primaryPfx;
+                config.SamlRolloverSigningKeyPfx = rolloverPfx;
+                c.SamlConfigs["adfs"] = config;
+            });
+
+            var result = Assert.IsType<RedirectResult>(harness.Controller.SamlChallenge("adfs"));
+
+            Assert.True(RedirectSignatureVerifies(result.Url, primaryPublic), "The AuthnRequest must be signed with the primary key.");
+            Assert.False(RedirectSignatureVerifies(result.Url, rolloverPublic), "The rollover key is publish-only and must never sign the AuthnRequest.");
+        }
+    }
+
+    [Fact]
     public void SamlChallenge_SigningEnabledButKeyMissing_FailsClosedWith500_AndNoRedirect()
     {
         // An operator who turned signing on but has no key must NOT get a silent unsigned request: fail

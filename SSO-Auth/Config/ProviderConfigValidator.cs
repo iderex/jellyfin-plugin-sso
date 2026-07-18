@@ -46,6 +46,7 @@ internal static class ProviderConfigValidator
                 ValidateBaseUrlOverride("SAML", kvp.Key, kvp.Value?.BaseUrlOverride);
                 ValidateSamlCertificate(kvp.Key, kvp.Value?.SamlCertificate);
                 ValidateSamlSigningKey(kvp.Key, kvp.Value?.SamlSigningKeyPfx);
+                ValidateSamlSigningKey(kvp.Key, kvp.Value?.SamlRolloverSigningKeyPfx);
             }
         }
     }

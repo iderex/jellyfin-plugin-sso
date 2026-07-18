@@ -52,6 +52,10 @@ internal static class ConfigSecretProtection
                 }
 
                 saml.SamlSigningKeyPfx = store.Protect(saml.SamlSigningKeyPfx, configHasEnvelopes);
+
+                // The rollover signing key (#491) carries a private key too, so it is encrypted at rest
+                // exactly like the primary — a plaintext rollover key would be a secrets-at-rest regression.
+                saml.SamlRolloverSigningKeyPfx = store.Protect(saml.SamlRolloverSigningKeyPfx, configHasEnvelopes);
             }
         }
     }
@@ -77,7 +81,9 @@ internal static class ConfigSecretProtection
         {
             foreach (var saml in configuration.SamlConfigs.Values)
             {
-                if (saml != null && SecretEnvelope.IsWellFormedEnvelope(saml.SamlSigningKeyPfx))
+                if (saml != null
+                    && (SecretEnvelope.IsWellFormedEnvelope(saml.SamlSigningKeyPfx)
+                        || SecretEnvelope.IsWellFormedEnvelope(saml.SamlRolloverSigningKeyPfx)))
                 {
                     return true;
                 }

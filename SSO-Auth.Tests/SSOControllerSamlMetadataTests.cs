@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Security.Cryptography.X509Certificates;
 using System.Xml.Linq;
 using Jellyfin.Plugin.SSO_Auth.Config;
@@ -153,6 +154,97 @@ public class SSOControllerSamlMetadataTests
         Assert.False(loaded.HasPrivateKey);
         // The stored PFX (which carries the private key) never appears in the response.
         Assert.DoesNotContain(pfxBase64, result.Content!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SamlMetadata_RolloverSet_AdvertisesBothPublicCertificates_AsTwoSigningKeyDescriptors()
+    {
+        // The overlap window (#491): with a rollover key configured the endpoint publishes BOTH public
+        // certificates, so the identity provider trusts either while the admin swaps the SP signing cert.
+        using var primary = SamlSigningKeyFactory.CreateCertificate();
+        using var rollover = SamlSigningKeyFactory.CreateCertificate();
+        var primaryPfx = Convert.ToBase64String(primary.Export(X509ContentType.Pfx));
+        var rolloverPfx = Convert.ToBase64String(rollover.Export(X509ContentType.Pfx));
+        var expectedPrimaryPublic = Convert.ToBase64String(primary.RawData);
+        var expectedRolloverPublic = Convert.ToBase64String(rollover.RawData);
+
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig
+        {
+            Enabled = true,
+            SamlClientId = "https://sp",
+            BaseUrlOverride = CanonicalBaseUrl,
+            SignAuthnRequests = true,
+            SamlSigningKeyPfx = primaryPfx,
+            SamlRolloverSigningKeyPfx = rolloverPfx,
+        });
+
+        var result = Assert.IsType<ContentResult>(harness.Controller.SamlMetadata("adfs"));
+
+        Assert.Equal(200, result.StatusCode);
+        var spDescriptor = XDocument.Parse(result.Content!).Root!.Element(Md + "SPSSODescriptor");
+        var advertised = spDescriptor!
+            .Elements(Md + "KeyDescriptor")
+            .Select(kd => kd.Element(Ds + "KeyInfo")!.Element(Ds + "X509Data")!.Element(Ds + "X509Certificate")!.Value)
+            .ToList();
+
+        Assert.Equal(new[] { expectedPrimaryPublic, expectedRolloverPublic }, advertised);
+        // Neither PFX (each carrying a private key) ever appears in the served metadata.
+        Assert.DoesNotContain(primaryPfx, result.Content!, StringComparison.Ordinal);
+        Assert.DoesNotContain(rolloverPfx, result.Content!, StringComparison.Ordinal);
+        foreach (var certificateBase64 in advertised)
+        {
+            using var loaded = X509CertificateLoader.LoadCertificate(Convert.FromBase64String(certificateBase64));
+            Assert.False(loaded.HasPrivateKey);
+        }
+    }
+
+    [Fact]
+    public void SamlMetadata_RolloverEqualToPrimary_CollapsesToASingleKeyDescriptor()
+    {
+        // Promoting the rollover into the primary field (both hold the same cert) is the end state of a
+        // rotation: the redundant second descriptor is dropped, returning to a single-key document without
+        // the admin having to blank the write-only, blank-keeps-stored rollover key.
+        using var certificate = SamlSigningKeyFactory.CreateCertificate();
+        var pfx = Convert.ToBase64String(certificate.Export(X509ContentType.Pfx));
+
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig
+        {
+            Enabled = true,
+            SamlClientId = "https://sp",
+            BaseUrlOverride = CanonicalBaseUrl,
+            SignAuthnRequests = true,
+            SamlSigningKeyPfx = pfx,
+            SamlRolloverSigningKeyPfx = pfx,
+        });
+
+        var result = Assert.IsType<ContentResult>(harness.Controller.SamlMetadata("adfs"));
+
+        Assert.Equal(200, result.StatusCode);
+        var spDescriptor = XDocument.Parse(result.Content!).Root!.Element(Md + "SPSSODescriptor");
+        Assert.Single(spDescriptor!.Elements(Md + "KeyDescriptor"));
+    }
+
+    [Fact]
+    public void SamlMetadata_RolloverSetButUnloadable_FailsClosed()
+    {
+        // A set-but-unloadable rollover key surfaces loudly (409), the same fail-closed posture as the
+        // primary — it never emits a broken KeyDescriptor and never silently drops a configured key.
+        using var primary = SamlSigningKeyFactory.CreateCertificate();
+        var primaryPfx = Convert.ToBase64String(primary.Export(X509ContentType.Pfx));
+
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig
+        {
+            Enabled = true,
+            SamlClientId = "https://sp",
+            BaseUrlOverride = CanonicalBaseUrl,
+            SignAuthnRequests = true,
+            SamlSigningKeyPfx = primaryPfx,
+            SamlRolloverSigningKeyPfx = "not-a-valid-pfx",
+        });
+
+        var result = Assert.IsType<ContentResult>(harness.Controller.SamlMetadata("adfs"));
+
+        Assert.Equal(409, result.StatusCode);
     }
 
     [Fact]

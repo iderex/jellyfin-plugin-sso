@@ -463,6 +463,7 @@ public class SSOController : ControllerBase
         RejectInvalidBaseUrlOverride(newConfig.BaseUrlOverride);
         RejectInvalidSamlCertificate(newConfig.SamlCertificate);
         RejectInvalidSamlSigningKey(newConfig.SamlSigningKeyPfx);
+        RejectInvalidSamlSigningKey(newConfig.SamlRolloverSigningKeyPfx);
         SSOPlugin.Instance.MutateConfiguration(configuration =>
         {
             // The name guard needs the under-lock existence check (#336) and runs before any mutation,
