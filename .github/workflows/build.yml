@@ -13,17 +13,28 @@ on:
         default: "net9.0"
         description: "The .NET target to set for JPRM"
         type: string
+      attest:
+        required: false
+        default: false
+        description: "Emit a signed SLSA build-provenance attestation for the built artifact. Release-only; leave false for CI/PR builds."
+        type: boolean
 
-# Read-only: this reusable workflow only builds the plugin and uploads the
-# resulting artifact, no job here needs write access.
-permissions:
-  contents: read
+# Deny-all at the workflow level; the build job opts into exactly the scopes it
+# needs. The plain build only reads; provenance attestation (opt-in via `attest`)
+# additionally needs an OIDC token and attestation write, which the caller must
+# grant — for a non-attesting caller those scopes are capped away, so the extra
+# grants are inert.
+permissions: {}
 
 jobs:
   build:
     name: Build package
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout Repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -41,6 +52,20 @@ jobs:
         id: jprm
         with:
           dotnet-target: "${{ inputs.dotnet-target }}"
+
+      # SLSA v1.1 Build L3 provenance for the plugin zip. Running the attestation
+      # inside this reusable workflow is what lifts the provenance from Build L2 to
+      # L3: the recorded builder is a trusted, reusable workflow rather than an
+      # inline job. Gated on `attest` so only the release pipeline signs (CI/PR
+      # builds neither ship an artifact nor hold the signing token). The bytes
+      # attested here are the exact bytes the release ships (upload/download of
+      # `build-artifact` preserves them), so a downloaded release zip verifies with:
+      #   gh attestation verify <plugin>.zip --repo iderex/jellyfin-plugin-sso
+      - name: Attest build provenance
+        if: ${{ inputs.attest }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: "${{ steps.jprm.outputs.artifact }}"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # tag=v7.0.1
