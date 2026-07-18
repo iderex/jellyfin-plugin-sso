@@ -97,6 +97,26 @@ public class OidcLoginServiceTests
         Assert.Empty(service.StateSummaries());
     }
 
+    [Fact]
+    public void ResolveChallengeNewPath_ProviderDisabledInTheRaceWindow_SkipsThePersist_ButStillReturnsThisRequestsDerivedSpelling()
+    {
+        // #412 review follow-up: exercises the Mutate delegate's own re-check inside ResolveChallengeNewPath.
+        // `config` mirrors the reference the real caller already captured under ReadConfiguration's lock
+        // (FindOidConfig) before its own Enabled check passed; something then disables the provider in the
+        // LIVE store before this write attempt runs — a race the outer check cannot see. The current
+        // challenge must still get its own freshly-derived spelling for its redirect, but the disabled
+        // provider's stored NewPath must be left untouched rather than written into.
+        var (_, context) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true, NewPath = false });
+        var config = SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["kc"]);
+        SSOPlugin.Instance.MutateConfiguration(c => c.OidConfigs["kc"].Enabled = false);
+        context.Request.Path = "/sso/OID/start/kc";
+
+        var result = OidcLoginService.ResolveChallengeNewPath("kc", config, isLinking: false, context.Request, Substitute.For<ILogger>());
+
+        Assert.True(result); // this request's own redirect still uses the freshly-derived spelling
+        Assert.False(SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["kc"].NewPath)); // stored value untouched
+    }
+
     // Builds an OidcLoginService over the same collaborator graph the controller constructs, against a
     // freshly-bootstrapped SSOPlugin.Instance seeded via the configure callback and a DefaultHttpContext for
     // the request/response the challenge reads and writes. The harness resets the process-wide OpenID state,
