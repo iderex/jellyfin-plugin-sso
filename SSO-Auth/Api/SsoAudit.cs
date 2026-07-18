@@ -104,6 +104,16 @@ internal static class SsoAudit
             provider?.ReplaceLineEndings(string.Empty));
     }
 
+    /// <summary>Records an administrator importing a configuration document (#161).</summary>
+    /// <param name="logger">The logger.</param>
+    /// <param name="oidProviders">How many OpenID providers the import merged.</param>
+    /// <param name="samlProviders">How many SAML providers the import merged.</param>
+    internal static void ConfigImported(ILogger logger, int oidProviders, int samlProviders)
+        => logger.LogWarning(
+            "[SSO Audit] Configuration imported by an administrator: {OidProviders} OpenID and {SamlProviders} SAML provider(s) merged. Server-managed secrets and links were preserved; redacted secrets must be re-entered on this instance.",
+            oidProviders,
+            samlProviders);
+
     /// <summary>Records a provider being saved with one or more security checks disabled (#140).</summary>
     /// <param name="logger">The logger.</param>
     /// <param name="protocol">The protocol (OpenID or SAML).</param>

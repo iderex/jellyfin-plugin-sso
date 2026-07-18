@@ -51,4 +51,25 @@ public class SamlCertificateTests
     {
         Assert.Throws<System.ArgumentException>(() => SSOController.RejectInvalidSamlCertificate("QUJD"));
     }
+
+    [Fact]
+    public void RejectInvalidSamlSecondaryCertificate_ValidOrBlank_DoesNotThrow()
+    {
+        // The inbound secondary verification certificate (#491) is validated exactly like the primary — a
+        // valid or blank value passes the Add-endpoint guard.
+        var exception = Record.Exception(() =>
+        {
+            SSOController.RejectInvalidSamlSecondaryCertificate(SamlTestFactory.Create().CertificateBase64);
+            SSOController.RejectInvalidSamlSecondaryCertificate(null);
+            SSOController.RejectInvalidSamlSecondaryCertificate(string.Empty);
+        });
+
+        Assert.Null(exception);
+    }
+
+    [Fact]
+    public void RejectInvalidSamlSecondaryCertificate_Garbage_Throws()
+    {
+        Assert.Throws<System.ArgumentException>(() => SSOController.RejectInvalidSamlSecondaryCertificate("QUJD"));
+    }
 }

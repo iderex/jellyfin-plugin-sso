@@ -226,10 +226,10 @@ expiry). A few provider settings must therefore match, or login is refused (fail
 
 ## Secrets encrypted at rest and downgrade
 
-The plugin's two at-rest secrets — the OpenID client secret (`OidSecret`) and the SAML
-request-signing key (`SamlSigningKeyPfx`) — are encrypted in the configuration XML. Each is stored as
-an **AES-256-GCM `ssoenc:v1:` envelope** rather than plaintext, so a leaked config file alone does not
-reveal them.
+The plugin's at-rest secrets — the OpenID client secret (`OidSecret`) and the SAML request-signing keys
+(`SamlSigningKeyPfx` and, during a rollover, `SamlRolloverSigningKeyPfx`) — are encrypted in the
+configuration XML. Each is stored as an **AES-256-GCM `ssoenc:v1:` envelope** rather than plaintext, so a
+leaked config file alone does not reveal them.
 
 - **Key file.** The data-encryption key lives in a dedicated file, `sso-secret.key`, in the plugin data
   folder — **separate from the config XML**, and outside the config directory. On Linux it is created
@@ -372,15 +372,224 @@ not reset them):
   that leaves it blank keeps the stored key. It is persisted only to the server's on-disk config, and
   there it is **encrypted at rest** (see
   [Secrets encrypted at rest and downgrade](#secrets-encrypted-at-rest-and-downgrade)).
+- **`SamlRolloverSigningKeyPfx`** _(optional)_ — a **second** service-provider signing key, in the same
+  Base64-encoded PKCS#12 shape as `SamlSigningKeyPfx`, used **only** for a zero-downtime rollover of the
+  SP's own signing certificate (see [SP signing-key rollover](#saml-sp-signing-key-rollover) below). It
+  is **publish-only**: `AuthnRequests` are always signed with the **primary** key, never this one. When
+  it is set, the [SP metadata](#saml-service-provider-metadata) advertises **both** public certificates
+  so the identity provider trusts either during the overlap. It is treated as a secret exactly like the
+  primary key — withheld from config responses, encrypted at rest, and preserved on a blank save. Leave
+  it blank when you are not mid-rotation: behaviour is then identical to a single signing key.
 
-**Fail-closed:** if `SignAuthnRequests` is on but the signing key is missing or unloadable, the login
-challenge is refused with an error — it never silently falls back to sending an unsigned request, so an
-operator who turned signing on cannot get a silent downgrade. A garbage key is also rejected when the
-provider is saved.
+**Fail-closed:** if `SignAuthnRequests` is on but the primary signing key is missing or unloadable, the
+login challenge is refused with an error — it never silently falls back to sending an unsigned request,
+so an operator who turned signing on cannot get a silent downgrade. A garbage primary **or rollover** key
+is rejected when the provider is saved.
 
-> Signing with more than one certificate (primary + rollover) for zero-downtime key rotation, and
-> accepting multiple inbound IdP verification certificates during a rotation window, are tracked
-> separately and not yet implemented.
+### SAML SP signing-key rollover
+
+To rotate the service provider's **own** signing certificate without a hard cutover that would break
+logins the moment the identity provider stops trusting the old certificate, publish both the old and new
+public certificates during an overlap window while continuing to sign with the old one, then switch:
+
+1. **Stage the new key.** Generate the new keypair and set `SamlRolloverSigningKeyPfx` to it (leave
+   `SamlSigningKeyPfx` — the primary — as the current key). The plugin keeps signing `AuthnRequests`
+   with the primary (old) key, but the SP metadata now advertises **two** `KeyDescriptor use="signing"`
+   entries — the old and the new public certificate.
+2. **Let the identity provider pick up both certificates.** Re-import the metadata (or wait for it to
+   refresh if the IdP fetches it by URL) so the IdP trusts signatures from **either** certificate. There
+   is no downtime: logins keep verifying against the old certificate throughout.
+3. **Promote the new key.** Move the new key into the primary field — set `SamlSigningKeyPfx` to the new
+   key. The plugin now signs with the new key, which the IdP already trusts from step 2.
+4. **Return to a single certificate.** With the primary now equal to the staged key, the metadata
+   automatically collapses back to a **single** `KeyDescriptor` (the duplicate is dropped), so no
+   separate "clear the rollover key" step is needed. Once the IdP has re-imported this final metadata,
+   only the new certificate is trusted and the rotation is complete.
+
+Because the rollover key is publish-only and withheld from config responses, it can only be set or
+changed by posting a non-blank value; a blank save keeps whatever is stored, so an unrelated edit cannot
+end the overlap window by accident.
+
+## SAML identity-provider certificate rotation (inbound)
+
+The counterpart to the SP-side rollover above: when the **identity provider** rotates its **own**
+signing key, a hard cutover would break every login the moment it starts signing with the new key while
+the plugin still trusts only the old `SamlCertificate`. To roll over with no downtime, the plugin accepts
+a response whose signature verifies against **either** the primary `SamlCertificate` **or** an optional
+second certificate:
+
+- **`SamlCertificate`** — the identity provider's **public** signing certificate, as a Base64-encoded
+  (DER) X.509 certificate. This is the primary and only required certificate.
+- **`SamlSecondaryCertificate`** _(optional)_ — a **second** identity-provider public signing
+  certificate, in the same Base64-encoded (DER) X.509 shape. A response is accepted when its signature
+  verifies against **either** certificate, under the **same** checks as the primary (the no-SHA-1
+  algorithm allowlist, single-signature/anti-wrapping binding, XXE/DOCTYPE rejection, time-bound,
+  audience and recipient). Leave it blank when you are not mid-rotation: validation is then **byte-for-byte
+  the primary-only behaviour**. Unlike the SP's own signing keys (`SamlSigningKeyPfx` /
+  `SamlRolloverSigningKeyPfx`, which carry a **private** key and are encrypted at rest), these are the
+  identity provider's **public** certificates — **not secrets** — so they are stored and returned in the
+  clear.
+
+**Expired certificates are rejected.** A certificate is used to verify only while it is within its own
+`[NotBefore, NotAfter]` validity window (with the same five-minute clock-skew tolerance the other SAML
+time-bounds use); an expired (or not-yet-valid) certificate never verifies a response, whether it is the
+primary or the secondary. This is what makes the overlap window **terminate**: once the identity
+provider's old certificate expires, it stops authenticating logins on its own.
+
+> **Upgrade note.** Earlier versions did **not** check the certificate's validity dates at all (XML-DSig
+> verification ignores them), so a deployment whose identity-provider signing certificate has **already
+> expired** — but whose key still signs — kept working. From this version such a certificate is rejected.
+> If logins for a SAML provider start failing right after upgrading, the primary `SamlCertificate` is
+> likely expired: obtain the identity provider's **current** certificate and set it (in `SamlCertificate`,
+> or in `SamlSecondaryCertificate` during a rotation).
+
+Both are set through the SAML provider configuration (the `SAML/Add` API, like the other SAML options —
+there is no admin-UI toggle yet); include them whenever you re-post a provider's config so a save does
+not reset them. A garbage secondary certificate is rejected when the provider is saved, exactly like the
+primary.
+
+To roll the identity provider's signing key over:
+
+1. **Stage the new certificate.** Before the identity provider cuts over, obtain its **new** public
+   signing certificate and set `SamlSecondaryCertificate` to it (leave `SamlCertificate` — the primary —
+   as the current certificate). Logins now verify against **either**, so responses signed with the old
+   **or** the new key are accepted throughout the overlap.
+2. **Let the identity provider cut over.** When the provider starts signing with its new key, logins keep
+   working — they now verify against the secondary. There is no downtime.
+3. **Promote the new certificate.** Move the new certificate into the primary field — set
+   `SamlCertificate` to the new certificate — and **clear `SamlSecondaryCertificate`**. Validation is
+   back to a single certificate (the new one), and the rotation is complete.
+
+## SAML service-provider metadata
+
+The plugin can publish standard SAML 2.0 **service-provider metadata** for a provider, so you can
+register this service provider at your identity provider by URL instead of typing the entity ID,
+assertion-consumer URL and signing certificate by hand:
+
+```
+GET <base URL>/sso/SAML/metadata/<ProviderName>
+```
+
+for example `https://jellyfin.example.com/sso/SAML/metadata/keycloak`. The response is an
+`application/samlmetadata+xml` `EntityDescriptor`/`SPSSODescriptor` carrying:
+
+- the **entityID**, which is the provider's configured client ID (`SamlClientId`) — the same value the
+  plugin sends as the `AuthnRequest` `Issuer`, so the identity provider correlates the two;
+- one **HTTP-POST `AssertionConsumerService`** at `<base URL>/sso/SAML/post/<ProviderName>`; and
+- a **`KeyDescriptor use="signing"`** carrying the SP's **public** request-signing certificate — but
+  **only when [request signing](#saml-request-signing-optional) (`SignAuthnRequests`) is enabled** for
+  that provider. Only the public certificate is published; the private key (`SamlSigningKeyPfx`) never
+  leaves the server. When signing is off, no `KeyDescriptor` is emitted and `AuthnRequestsSigned="false"`.
+  During an [SP signing-key rollover](#saml-sp-signing-key-rollover) — when `SamlRolloverSigningKeyPfx`
+  is also set — **two** signing `KeyDescriptor` entries are published (the primary and the rollover
+  public certificate), so the identity provider trusts either while you swap; again only the public
+  certificates are ever published.
+
+The endpoint is **anonymous** — SP metadata is public information, and a real identity provider fetches
+it unauthenticated.
+
+**The published entity ID and ACS URL come only from the configured
+[canonical base URL](#canonical-base-url-recommended-hardening) (`BaseUrlOverride`), never from the
+request `Host` header.** This is deliberate and security-critical: metadata is consumed by the identity
+provider to decide where it POSTs assertions, so deriving the ACS from a spoofable (proxy-forwarded)
+host would let an attacker point your identity provider at an attacker-controlled endpoint. Therefore the
+endpoint **fails closed** — it returns `409 Conflict` and publishes nothing — when the provider has no
+`BaseUrlOverride` set (or no client ID, or request signing is on but the primary — or a configured
+rollover — signing key cannot be loaded; a broken `KeyDescriptor` is never published). Set the
+provider's `BaseUrlOverride` first, then fetch its metadata.
+
+## Test connection (admin)
+
+Each provider can be validated for connectivity and basic config **before** a user hits the failure at
+first login. In the plugin's admin config page, the OpenID provider form has a **Test Connection** button
+that runs the check against the **saved** provider and shows the result inline; the same checks are also
+reachable directly:
+
+```
+GET <base URL>/sso/OID/Test/<ProviderName>
+GET <base URL>/sso/SAML/Test/<ProviderName>
+```
+
+Both endpoints **require administrator privileges** — unlike the anonymous provider-name listings, a test
+makes the server fetch an admin-configured URL, so it is elevation-gated so that an unauthenticated caller
+cannot use it as a server-side request probe. Each returns a small JSON `{ "Ok", "Message", "Details" }`
+result:
+
+- **OpenID** reads the provider's discovery document through the **same hardened path the login uses** —
+  the provider's discovery policy (`RequireHttps` unless `DisableHttps` is set, issuer and endpoint
+  validation), the same bounded fetch — and reports the **issuer**, the **authorization / token / UserInfo
+  endpoints**, **JWKS reachability** (and the advertised signing-key count), and whether the server
+  advertises **PKCE (S256)** and the **RFC 9207 response `iss`** parameter. The **client secret is never
+  read** for a test (discovery needs no credential) and never appears in the result or the log.
+- **SAML** parses the configured identity-provider **public** signing certificate (`SamlCertificate`) and
+  reports its subject, issuer, validity window and SHA-256 thumbprint. There is no SAML metadata-URL
+  setting, so the SAML test makes **no network call**; the service-provider signing key
+  (`SamlSigningKeyPfx`) is never read or reported.
+
+A failing probe returns `Ok: false` with an actionable, **generic** message (what to check — reachability,
+HTTPS, the `.well-known` path, a parsable certificate) that never echoes a stored secret. Because the test
+reads the **stored** provider config, **save the provider first**, then test.
+
+## Configuration export / import (admin)
+
+The whole plugin configuration can be exported to a file on one instance and imported into another (for
+example when replicating a setup or migrating a server). Both actions live in the plugin's admin config
+page — an **Export Configuration** button and an **Import Configuration** button — and are also reachable
+directly:
+
+```
+GET  <base URL>/sso/Config/Export
+POST <base URL>/sso/Config/Import
+```
+
+Both endpoints **require administrator privileges**, like every other config endpoint. The request body of
+an import is size-capped, so an oversized document is rejected before it is parsed.
+
+### The export is redacted — secrets never leave the server
+
+The export document is the **same redaction the config already applies on the JSON boundary**, reused, not
+a second copy: the provider secrets — the OpenID **client secret** (`OidSecret`) and the SAML **signing
+keys** (`SamlSigningKeyPfx`, `SamlRolloverSigningKeyPfx`) — are withheld exactly as they are on a normal
+config load, and the **server-managed account-link maps** (`CanonicalLinks`, `CanonicalLinkIssuers`) are
+omitted entirely. So an exported file contains **no plaintext secret, no encrypted `ssoenc:` envelope, and
+no account-link data**. The at-rest data-encryption key (`sso-secret.key`) lives in a separate file and is
+never part of the configuration at all. Everything else — every provider's endpoints, client id, RBAC
+roles, folder mappings, and the security toggles — **is** included, so the document is a complete,
+shareable description of the setup minus its secrets. The global rate-limit settings are included in the
+export for reference, but are **not applied on import** (see below).
+
+### The import merges and preserves an unchanged provider's secrets and links
+
+An import is a **fail-closed merge**, not a blind overwrite:
+
+- It is **validated first** through the same rules the config-page save uses (a malformed Base URL
+  override, an unloadable SAML certificate or signing key, or a new provider name containing
+  URI-reserved/control characters is **rejected**), and only a wholly-valid document is applied —
+  **atomically**, so a rejected import changes nothing.
+- For a provider that **already exists** on the target instance and whose identity is **unchanged**, the
+  target's own **secret is kept** (the export carried none, so the blank value means "keep the stored
+  secret"), and its server-managed **account links, issuer bindings, and redirect-path state are
+  preserved**.
+- **Changing an OpenID provider's identity on import drops that provider's links and secret** — by design.
+  If the imported document gives an existing OpenID provider a **different discovery endpoint or client
+  id**, the plugin treats it as a repoint to a potentially different identity provider and, exactly as a
+  config-page edit does (#186), **clears that provider's account links and issuer bindings and does not
+  carry over its stored secret**. Its users must re-link and an admin must re-enter the secret. This is a
+  deliberate safety measure (a different IdP must not inherit the old one's account mappings), but because
+  the endpoint change can ride in from a file, **review an export before importing it over a live provider**.
+  SAML provider links are preserved regardless of endpoint changes.
+- Providers on the target that are **not** in the imported document are **left untouched** (it is a merge,
+  not a replace).
+- A provider that is **new** to the target is added with a **blank secret**, so its login fails closed
+  until an administrator supplies the secret.
+- The **global rate-limit settings are not imported** — they are instance-local operational tuning
+  (reverse-proxy dependent), so the target keeps its own limiter configuration. This is deliberate: a
+  document from an instance that never enabled rate limiting must not silently turn a DoS control off on a
+  target that had it on. Tune the limiter on the config page, not by import.
+
+**Round-trip in practice:** export from instance A, import into instance B, then on B open each provider,
+**re-enter its client secret / signing key, and save**. The export deliberately never carried the secrets,
+so re-entering them on the target is the final step — everything else is already in place.
 
 ## SAML login browser binding
 

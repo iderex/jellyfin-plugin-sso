@@ -5,6 +5,11 @@
 # Compile-time API compatibility is already enforced by building against the pinned Jellyfin.*
 # packages with --warnaserror; this catches the metadata/ABI drift that a build cannot.
 #
+# The csproj may MULTI-TARGET several server generations (net9.0 for Jellyfin 10.11, net10.0 for
+# Jellyfin 12.0, #135). build.yaml describes ONE generation (its framework/targetAbi/version) — the one
+# the shipping package here is for — so this gate validates that generation: its framework must be one
+# of the csproj targets, and the checks compare against that framework's conditional JellyfinVersion.
+#
 # Runtime SSO behavior against a live Jellyfin + identity provider is verified separately by a
 # manual end-to-end check on a real server — it cannot be exercised headlessly.
 set -euo pipefail
@@ -27,26 +32,36 @@ check() { # description actual expected
 
 # `|| true` so a missing match yields an empty value handled by need()/fail below, rather than
 # aborting the whole script via `set -e`/`pipefail` before a clear error can be printed.
-tfm=$(grep -oP '(?<=<TargetFramework>)[^<]+' "$csproj" | head -1 || true); need "$tfm" "csproj TargetFramework"
 asmver=$(grep -oP '(?<=<AssemblyVersion>)[^<]+' "$csproj" | head -1 || true); need "$asmver" "csproj AssemblyVersion"
 filever=$(grep -oP '(?<=<FileVersion>)[^<]+' "$csproj" | head -1 || true); need "$filever" "csproj FileVersion"
 controller=$(grep -oP 'Jellyfin\.Controller"\s+Version="\K[^"]+' "$csproj" | head -1 || true); need "$controller" "Jellyfin.Controller version"
 model=$(grep -oP 'Jellyfin\.Model"\s+Version="\K[^"]+' "$csproj" | head -1 || true); need "$model" "Jellyfin.Model version"
 
-# The Jellyfin packages take their version from the $(JellyfinVersion) property (#142, so the
-# abi-floor CI job can override it); resolve it to the property's default so the metadata checks below
-# compare real version numbers rather than the literal '$(JellyfinVersion)'.
-jellyfinversion=$(grep -oP '<JellyfinVersion[^>]*>\K[^<]+' "$csproj" | head -1 || true); need "$jellyfinversion" "csproj JellyfinVersion default"
-[[ "$controller" == '$(JellyfinVersion)' ]] && controller="$jellyfinversion"
-[[ "$model" == '$(JellyfinVersion)' ]] && model="$jellyfinversion"
-
+# build.yaml describes the generation this package targets.
 byframework=$(grep -oP 'framework:\s*"?\K[^"[:space:]]+' "$buildyaml" | head -1 || true); need "$byframework" "build.yaml framework"
 byversion=$(grep -oP '^version:\s*"?\K[^"[:space:]]+' "$buildyaml" | head -1 || true); need "$byversion" "build.yaml version"
 abi=$(grep -oP 'targetAbi:\s*"?\K[^"[:space:]]+' "$buildyaml" | head -1 || true); need "$abi" "build.yaml targetAbi"
 
+# The csproj may multi-target (<TargetFrameworks>) or single-target (<TargetFramework>); read either.
+tfms=$(grep -oP '(?<=<TargetFrameworks>)[^<]+' "$csproj" | head -1 || true)
+[[ -z "$tfms" ]] && tfms=$(grep -oP '(?<=<TargetFramework>)[^<]+' "$csproj" | head -1 || true)
+need "$tfms" "csproj TargetFramework(s)"
+
+# Jellyfin.* take their version from $(JellyfinVersion), which a multi-target csproj conditions per TFM.
+# Resolve the value for the framework build.yaml describes so the checks compare real version numbers.
+jellyfinversion=$(grep -oP "== '${byframework}'\"[^>]*>\K[^<]+" "$csproj" | head -1 || true)
+[[ -z "$jellyfinversion" ]] && jellyfinversion=$(grep -oP '<JellyfinVersion[^>]*>\K[^<]+' "$csproj" | head -1 || true)
+need "$jellyfinversion" "csproj JellyfinVersion for $byframework"
+[[ "$controller" == '$(JellyfinVersion)' ]] && controller="$jellyfinversion"
+[[ "$model" == '$(JellyfinVersion)' ]] && model="$jellyfinversion"
+
 [[ "$fail" -eq 0 ]] || { echo "aborting: could not read all metadata"; exit 1; }
 
-check "target framework (csproj vs build.yaml)" "$tfm" "$byframework"
+# build.yaml's framework must be one of the csproj's target frameworks (semicolon-separated list).
+case ";$tfms;" in
+  *";$byframework;"*) echo "ok: build.yaml framework $byframework is a csproj target ($tfms)" ;;
+  *) echo "::error::build.yaml framework '$byframework' is not among csproj TargetFrameworks '$tfms'" >&2; fail=1 ;;
+esac
 check "plugin version (build.yaml vs AssemblyVersion)" "$byversion" "$asmver"
 check "FileVersion vs AssemblyVersion" "$filever" "$asmver"
 check "Jellyfin Controller vs Model package version" "$controller" "$model"

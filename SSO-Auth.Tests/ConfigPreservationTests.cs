@@ -400,6 +400,98 @@ public class ConfigPreservationTests
         Assert.Contains("idp", ex.Message, StringComparison.Ordinal);
     }
 
+    // --- SAML rollover signing key: write-only secret + preserve-on-blank (#491) ---
+
+    [Fact]
+    public void SamlRolloverSigningKey_SerializedValueIsHidden_ButStaysDeserializableAndInXml()
+    {
+        var config = new SamlConfig { SamlClientId = "sp", SamlRolloverSigningKeyPfx = "rollover-secret-blob" };
+
+        // JSON responses must not leak the rollover private-key blob; it is emitted as null (write-only),
+        // exactly like the primary signing key.
+        var json = System.Text.Json.JsonSerializer.Serialize(config);
+        Assert.DoesNotContain("rollover-secret-blob", json, StringComparison.Ordinal);
+        Assert.Contains("\"SamlRolloverSigningKeyPfx\":null", json, StringComparison.Ordinal);
+
+        var camel = System.Text.Json.JsonSerializer.Serialize(
+            config,
+            new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
+        Assert.DoesNotContain("rollover-secret-blob", camel, StringComparison.Ordinal);
+
+        // XML (on-disk config) must still persist it, so the overlap window survives a restart.
+        var serializer = new XmlSerializer(typeof(SamlConfig));
+        using var writer = new System.IO.StringWriter();
+        serializer.Serialize(writer, config);
+        var xml = writer.ToString();
+        Assert.Contains("SamlRolloverSigningKeyPfx", xml, StringComparison.Ordinal);
+        Assert.Contains("rollover-secret-blob", xml, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SamlRolloverSigningKey_IsDeserializedFromJson_SoItCanBeSetAndRotated()
+    {
+        const string body = "{\"SamlClientId\":\"sp\",\"SamlRolloverSigningKeyPfx\":\"typed-rollover-pfx\"}";
+        var parsed = System.Text.Json.JsonSerializer.Deserialize<SamlConfig>(body);
+        Assert.Equal("typed-rollover-pfx", parsed!.SamlRolloverSigningKeyPfx);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Preserve_BlankIncomingRolloverKey_KeepsLiveKey(string? incomingKey)
+    {
+        // A config-page/API save arrives with the withheld rollover key blank and must keep the stored one,
+        // so an unrelated edit cannot silently end the overlap window mid-rotation.
+        var live = new PluginConfiguration();
+        live.SamlConfigs["adfs"] = new SamlConfig { SamlRolloverSigningKeyPfx = "live-rollover-pfx" };
+        var incoming = new PluginConfiguration();
+        incoming.SamlConfigs["adfs"] = new SamlConfig { SamlRolloverSigningKeyPfx = incomingKey };
+
+        ServerManagedFields.Preserve(incoming, live);
+
+        Assert.Equal("live-rollover-pfx", incoming.SamlConfigs["adfs"].SamlRolloverSigningKeyPfx);
+    }
+
+    [Fact]
+    public void Preserve_NonBlankIncomingRolloverKey_IsKeptAsRotation()
+    {
+        var live = new PluginConfiguration();
+        live.SamlConfigs["adfs"] = new SamlConfig { SamlRolloverSigningKeyPfx = "old-rollover-pfx" };
+        var incoming = new PluginConfiguration();
+        incoming.SamlConfigs["adfs"] = new SamlConfig { SamlRolloverSigningKeyPfx = "new-rollover-pfx" };
+
+        ServerManagedFields.Preserve(incoming, live);
+
+        Assert.Equal("new-rollover-pfx", incoming.SamlConfigs["adfs"].SamlRolloverSigningKeyPfx);
+    }
+
+    [Fact]
+    public void Preserve_PrimaryAndRolloverKeys_ArePreservedIndependently()
+    {
+        // A save that rotates ONLY the primary (blank rollover) must keep the stored rollover, and vice
+        // versa — the two write-only keys never bleed into each other.
+        var live = new PluginConfiguration();
+        live.SamlConfigs["adfs"] = new SamlConfig { SamlSigningKeyPfx = "live-primary", SamlRolloverSigningKeyPfx = "live-rollover" };
+        var incoming = new PluginConfiguration();
+        incoming.SamlConfigs["adfs"] = new SamlConfig { SamlSigningKeyPfx = "rotated-primary", SamlRolloverSigningKeyPfx = null };
+
+        ServerManagedFields.Preserve(incoming, live);
+
+        Assert.Equal("rotated-primary", incoming.SamlConfigs["adfs"].SamlSigningKeyPfx);
+        Assert.Equal("live-rollover", incoming.SamlConfigs["adfs"].SamlRolloverSigningKeyPfx);
+    }
+
+    [Fact]
+    public void ValidateSamlRolloverSigningKey_GarbageKey_ThrowsNamingProvider()
+    {
+        var incoming = new PluginConfiguration();
+        incoming.SamlConfigs["idp"] = new SamlConfig { SamlRolloverSigningKeyPfx = "QUJD" }; // valid base64, not a PKCS#12
+
+        var ex = Assert.Throws<ArgumentException>(() => ProviderConfigValidator.Validate(incoming, new PluginConfiguration()));
+        Assert.Contains("idp", ex.Message, StringComparison.Ordinal);
+    }
+
     // --- Base-URL override validation on save (#139) ---
 
     [Fact]
@@ -741,5 +833,37 @@ public class ConfigPreservationTests
     public void ValidateSamlCertificates_NullMap_DoesNotThrow()
     {
         ProviderConfigValidator.Validate(new PluginConfiguration { SamlConfigs = null }, new PluginConfiguration());
+    }
+
+    [Fact]
+    public void ValidateSamlSecondaryCertificate_ValidOrBlank_DoesNotThrow()
+    {
+        // The inbound secondary verification certificate (#491) is validated on the whole-config save path
+        // exactly like the primary; a valid or blank value is accepted.
+        var incoming = new PluginConfiguration();
+        incoming.SamlConfigs["ok"] = new SamlConfig
+        {
+            SamlCertificate = SamlTestFactory.Create().CertificateBase64,
+            SamlSecondaryCertificate = SamlTestFactory.Create().CertificateBase64,
+        };
+        incoming.SamlConfigs["blank"] = new SamlConfig { SamlCertificate = null, SamlSecondaryCertificate = null };
+
+        ProviderConfigValidator.Validate(incoming, new PluginConfiguration());
+    }
+
+    [Fact]
+    public void ValidateSamlSecondaryCertificate_Garbage_Throws()
+    {
+        // A set-but-unloadable secondary certificate is rejected fail-closed before persistence, so it can
+        // never make every callback throw a CryptographicException 500.
+        var incoming = new PluginConfiguration();
+        incoming.SamlConfigs["idp"] = new SamlConfig
+        {
+            SamlCertificate = SamlTestFactory.Create().CertificateBase64,
+            SamlSecondaryCertificate = "QUJD", // valid base64, not a cert
+        };
+
+        var ex = Assert.Throws<ArgumentException>(() => ProviderConfigValidator.Validate(incoming, new PluginConfiguration()));
+        Assert.Contains("secondary", ex.Message, StringComparison.Ordinal);
     }
 }

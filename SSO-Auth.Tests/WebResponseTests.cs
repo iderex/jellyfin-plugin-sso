@@ -92,4 +92,29 @@ public class WebResponseTests
         Assert.DoesNotContain("style=\"", html);
         Assert.Contains("#iframe-main", html);
     }
+
+    [Theory]
+    [InlineData("https://jf.example.com", "const ssoBaseUrl = \"https://jf.example.com\";")]
+    [InlineData("http://jf.example.com", "const ssoBaseUrl = \"http://jf.example.com\";")]
+    public void Generator_SplitsProtocolFromDomain_PreservingScheme(string baseUrl, string expected)
+    {
+        // The `//` protocol separator is located ordinally (independent of the current culture) and
+        // the scheme is preserved verbatim while the domain is punycode-mapped and reassembled. The
+        // http/https cases put the separator at different offsets, exercising the split itself.
+        var html = WebResponse.Generator("ZGF0YQ==", "keycloak", baseUrl, "OID", "n0nce");
+
+        Assert.Contains(expected, html);
+    }
+
+    [Theory]
+    [InlineData(true, "if (true) {")]
+    [InlineData(false, "if (false) {")]
+    public void Generator_EmitsIsLinkingAsJsBooleanLiteral(bool isLinking, string expected)
+    {
+        // isLinking guards the link leg as a bare JS boolean literal; it must render exactly as
+        // `true`/`false` (culture-invariant), never `True`/`False` or a localized casing.
+        var html = WebResponse.Generator("ZGF0YQ==", "keycloak", "https://jf.example.com", "SAML", "n0nce", isLinking);
+
+        Assert.Contains(expected, html);
+    }
 }

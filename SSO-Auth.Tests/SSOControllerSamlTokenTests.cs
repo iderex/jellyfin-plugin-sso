@@ -17,8 +17,9 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 /// (never the assertion); posting that token to SAML/Auth redeems the already-verified outcome and mints
 /// the session without re-parsing or re-validating the assertion. They pin the token is single-use, an
 /// unknown/expired token is refused, the one-time replay guard fires exactly once (at the callback), the
-/// browser binding still gates a solicited login on the token path, and the pre-#251 deprecation shape
-/// (the full assertion posted to SAML/Auth) still fully validates and logs in during the window.
+/// browser binding still gates a solicited login on the token path, and — since #528 dropped the
+/// deprecation window — a pre-#251 full assertion posted straight to SAML/Auth is now rejected fail-closed
+/// (SAML/Auth accepts ONLY the opaque token).
 /// </summary>
 [Collection("SSOController")]
 public class SSOControllerSamlTokenTests
@@ -90,9 +91,8 @@ public class SSOControllerSamlTokenTests
         var fixture = SamlTestFactory.Create(nameId: "alice");
         var harness = ProvisioningHarness(fixture, out _);
 
-        // A token that was never issued misses the store and falls through to the deprecation validation,
-        // which fails closed: its decoded bytes are not a SAML response, so the XML parse rejects it — a
-        // clean fail-closed 400, nothing minted.
+        // A token that was never issued misses the store and is rejected fail-closed right there (#528 removed
+        // the deprecation fallback): a clean 400 in the uniform SAML body, nothing minted.
         var result = Assert.IsType<ContentResult>(
             await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = SamlOutcomeStore.NewToken() }));
         Assert.Equal(400, result.StatusCode);
@@ -137,19 +137,22 @@ public class SSOControllerSamlTokenTests
     }
 
     [Fact]
-    public async Task DeprecationWindow_FullAssertionPostedToAuth_StillValidatesAndLogsIn()
+    public async Task PreDeprecationAssertionPostedToAuth_IsRejectedFailClosed()
     {
-        // The pre-#251 intermediate page embeds the full assertion and posts it straight to SAML/Auth. For
-        // the deprecation window that legacy shape must still FULLY validate and mint, so an admin upgrading
-        // mid-login does not break a user's in-flight login. (No prior callback ran, so nothing consumed the
-        // assertion's one-time id — the deprecation branch validates and consumes it here.)
+        // #528 (BREAKING): the pre-#251 shape — a full base64 assertion POSTed straight to SAML/Auth,
+        // bypassing the rendered token page — is no longer accepted. It is not a live login-outcome token, so
+        // it misses the redeem and is rejected fail-closed (a clean 400 in the uniform SAML body), NEVER
+        // re-parsed and re-validated as an assertion and never minting a session. This is the wire-contract
+        // break #251 flagged: a scripted client that skips the page and posts a raw assertion is refused.
         var fixture = SamlTestFactory.Create(nameId: "alice");
         var harness = ProvisioningHarness(fixture, out _);
 
-        var result = await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = fixture.EncodeResponse() });
+        var result = Assert.IsType<ContentResult>(
+            await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = fixture.EncodeResponse() }));
 
-        Assert.IsType<OkObjectResult>(result);
-        await harness.UserManager.Received(1).CreateUserAsync("alice");
+        Assert.Equal(400, result.StatusCode);
+        Assert.Equal("SAML response validation failed", result.Content);
+        await harness.UserManager.DidNotReceive().CreateUserAsync(Arg.Any<string>());
     }
 
     [Fact]

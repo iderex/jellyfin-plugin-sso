@@ -92,6 +92,11 @@ internal static class ServerManagedFields
 
         incoming.CanonicalLinks = live.CanonicalLinks;
         incoming.SamlSigningKeyPfx = ResolveUpdatedSigningKey(incoming, live);
+
+        // The rollover signing key (#491) is withheld from JSON exactly like the primary, so a config-page
+        // save arrives with it blank and must keep the stored value; a non-blank incoming value is an
+        // intentional rotation of the overlap key and wins. Same no-identity-guard reasoning as the primary.
+        incoming.SamlRolloverSigningKeyPfx = ResolveUpdatedRolloverSigningKey(incoming, live);
     }
 
     /// <summary>
@@ -107,6 +112,20 @@ internal static class ServerManagedFields
     /// <returns>The signing key to persist for the updated provider.</returns>
     internal static string ResolveUpdatedSigningKey(SamlConfig incoming, SamlConfig live)
         => string.IsNullOrWhiteSpace(incoming.SamlSigningKeyPfx) ? live.SamlSigningKeyPfx : incoming.SamlSigningKeyPfx;
+
+    /// <summary>
+    /// Decides which OPTIONAL rollover signing key an updated SAML provider should keep (#491), the exact
+    /// same blank-keeps-stored / non-blank-rotates rule as <see cref="ResolveUpdatedSigningKey"/>: the
+    /// rollover key is withheld from JSON, so a config-page save arrives blank and must keep the stored
+    /// value rather than silently ending the overlap window, while an explicit non-blank value stages a new
+    /// overlap certificate. Like the primary it is never transmitted (publish-only, used to export its
+    /// public certificate into metadata), so it carries no provider-identity guard.
+    /// </summary>
+    /// <param name="incoming">The provider config about to be persisted.</param>
+    /// <param name="live">The current live provider config.</param>
+    /// <returns>The rollover signing key to persist for the updated provider.</returns>
+    internal static string ResolveUpdatedRolloverSigningKey(SamlConfig incoming, SamlConfig live)
+        => string.IsNullOrWhiteSpace(incoming.SamlRolloverSigningKeyPfx) ? live.SamlRolloverSigningKeyPfx : incoming.SamlRolloverSigningKeyPfx;
 
     /// <summary>
     /// Decides which OpenID client secret an updated provider should keep (#189), the single rule

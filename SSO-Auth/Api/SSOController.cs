@@ -43,6 +43,11 @@ public class SSOController : ControllerBase
     private const string OpenIdProtocol = "OpenID";
     private const string SamlProtocol = "SAML";
 
+    // Hard cap on the config-import request body (#161): a whole plugin configuration is small (kilobytes),
+    // so 1 MiB is generous headroom while an oversized document is rejected fail-closed (413) before it is
+    // parsed, rather than being deserialized into memory.
+    private const long ConfigImportMaxBytes = 1024 * 1024;
+
     private readonly IUserManager _userManager;
     // The shared login-completion tail (#160, #318): resolve/adopt the link, build the session parameters,
     // mint under the revocation gate, audit, map to a LoginOutcome. The controller passes the
@@ -54,6 +59,9 @@ public class SSOController : ControllerBase
     private readonly IAuthorizationContext _authContext;
     private readonly ILogger<SSOController> _logger;
     private readonly ICryptoProvider _cryptoProvider;
+    // Kept so the elevation-gated Test-connection endpoints (#163) can read a provider's OpenID discovery
+    // through the SAME hardened reader the login uses; the shared login flow takes its own reference.
+    private readonly IHttpClientFactory _httpClientFactory;
 
     // The account-linking workflow (resolve/adopt/create, legacy re-key, revoke); the controller keeps
     // the authz guards, the one-time-use replay/state consume, and the HTTP mapping (#318).
@@ -101,6 +109,7 @@ public class SSOController : ControllerBase
         _cryptoProvider = cryptoProvider;
         _logger = logger;
         _sessionManager = sessionManager;
+        _httpClientFactory = httpClientFactory;
         _canonicalLinks = new CanonicalLinkService(userManager, cryptoProvider, SSOPlugin.Instance.ConfigStore, logger);
         var avatarService = new AvatarService(userManager, providerManager, serverConfigurationManager, logger, SsoHttp.UserAgent);
         var sessionMinter = new SessionMinter(userManager, avatarService, sessionManager, logger);
@@ -165,7 +174,7 @@ public class SSOController : ControllerBase
     {
         if (CanonicalBaseUrl.IsInvalidOverride(baseUrlOverride))
         {
-            throw new ArgumentException("The Base URL override must be an absolute http(s) URL such as https://jellyfin.example.com, or left blank.");
+            throw new ArgumentException("The Base URL override must be an absolute http(s) URL such as https://jellyfin.example.com, or left blank.", nameof(baseUrlOverride));
         }
     }
 
@@ -178,7 +187,20 @@ public class SSOController : ControllerBase
     {
         if (SamlCertificate.IsInvalid(certificateStr))
         {
-            throw new ArgumentException("The SAML signing certificate must be a Base64-encoded (DER) X.509 certificate, or left blank.");
+            throw new ArgumentException("The SAML signing certificate must be a Base64-encoded (DER) X.509 certificate, or left blank.", nameof(certificateStr));
+        }
+    }
+
+    // Rejects a non-loadable inbound secondary verification certificate at the SAML/Add endpoint (#491),
+    // the same fail-closed door as the primary certificate guard above and for the same reason: a garbage
+    // secondary would persist and then throw a CryptographicException on every callback (an unhandled
+    // 500). It is the identity provider's PUBLIC certificate, so it is validated exactly like the primary.
+    // Blank is valid (no overlap window configured).
+    internal static void RejectInvalidSamlSecondaryCertificate(string certificateStr)
+    {
+        if (SamlCertificate.IsInvalid(certificateStr))
+        {
+            throw new ArgumentException("The SAML secondary signing certificate must be a Base64-encoded (DER) X.509 certificate, or left blank.", nameof(certificateStr));
         }
     }
 
@@ -190,7 +212,7 @@ public class SSOController : ControllerBase
     {
         if (SamlSigningKey.IsInvalid(signingKeyPfx))
         {
-            throw new ArgumentException("The SAML request signing key must be a Base64-encoded, unencrypted PKCS#12 (PFX) blob containing an RSA or ECDSA private key, or left blank.");
+            throw new ArgumentException("The SAML request signing key must be a Base64-encoded, unencrypted PKCS#12 (PFX) blob containing an RSA or ECDSA private key, or left blank.", nameof(signingKeyPfx));
         }
     }
 
@@ -203,7 +225,7 @@ public class SSOController : ControllerBase
     {
         if (config is null)
         {
-            throw new ArgumentException("The provider configuration body must not be empty.");
+            throw new ArgumentException("The provider configuration body must not be empty.", nameof(config));
         }
     }
 
@@ -219,7 +241,7 @@ public class SSOController : ControllerBase
     {
         if (!providerExists && ProviderNameValidator.IsInvalid(provider))
         {
-            throw new ArgumentException("A new provider name must not contain control characters, a backslash, or any of % : / ? # [ ] @ ! $ & ' ( ) * + , ; = because the name becomes part of the callback URL registered with the identity provider.");
+            throw new ArgumentException("A new provider name must not contain control characters, a backslash, or any of % : / ? # [ ] @ ! $ & ' ( ) * + , ; = because the name becomes part of the callback URL registered with the identity provider.", nameof(provider));
         }
     }
 
@@ -338,6 +360,39 @@ public class SSOController : ControllerBase
         configs.Where(kvp => kvp.Value is { Enabled: true }).Select(kvp => kvp.Key).ToList();
 
     /// <summary>
+    /// Tests connectivity and basic config for a stored OpenID provider (#163). Requires administrator
+    /// privileges. Reads the provider's discovery document through the SAME hardened reader the login uses
+    /// and reports the issuer, endpoints and JWKS reachability — never the client secret. Deliberately
+    /// elevation-gated (unlike the anonymous GetNames): the server fetches an admin-configured URL, so an
+    /// unauthenticated caller must not be able to drive it as an SSRF probe.
+    /// </summary>
+    /// <param name="provider">The stored OpenID provider to test.</param>
+    /// <returns>The non-secret test result, or 404 when the provider is not configured.</returns>
+    [Authorize(Policy = Policies.RequiresElevation)]
+    [HttpGet("OID/Test/{provider}")]
+    public async Task<ActionResult> OidTest(string provider)
+    {
+        // Throttle after the elevation guard, before the outbound fetch (mirrors Unregister, #516): the
+        // [Authorize] filter rejects a non-elevated caller before the body runs, so an unauthorized request
+        // never reaches the limiter (no rate-limit oracle). Once past it, the shared "test" budget caps how
+        // fast an authorized admin can drive the probe's outbound discovery fetch.
+        if (RateLimitCheck("test") is { } throttled)
+        {
+            return throttled;
+        }
+
+        // Read the stored provider under the config lock, then hand it to the tester (the fetch and any
+        // logging live there). The tester never reveals the client secret — discovery needs no credential.
+        var config = SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs.TryGetValue(provider, out var cfg) ? cfg : null);
+        if (config is null)
+        {
+            return NotFound(NoMatchingProviderMessage);
+        }
+
+        return Ok(await ProviderConnectionTester.TestOidcAsync(config, provider, _httpClientFactory, _logger).ConfigureAwait(false));
+    }
+
+    /// <summary>
     /// This is a debug endpoint to list all running OpenID flows. Requires administrator privileges.
     /// </summary>
     /// <returns>The list of OpenID flows in progress.</returns>
@@ -426,6 +481,30 @@ public class SSOController : ControllerBase
     }
 
     /// <summary>
+    /// Serves this service provider's SAML 2.0 metadata for <paramref name="provider"/> (#162), so an
+    /// administrator can register the SP at the identity provider by URL instead of hand-configuring the
+    /// entity id, assertion-consumer URL and signing certificate. Anonymous by design — SP metadata is
+    /// public (a real identity provider fetches it unauthenticated) — and deliberately request-free: the
+    /// published entity id and ACS URL are built only from the provider's configured canonical Base URL,
+    /// never the request Host.
+    /// </summary>
+    /// <param name="provider">The SAML provider whose metadata to serve.</param>
+    /// <returns>The SP metadata document, or a fail-closed rejection when the provider is unknown/disabled or its canonical Base URL is unconfigured.</returns>
+    [HttpGet("SAML/metadata/{provider}")]
+    public ActionResult SamlMetadata(string provider)
+    {
+        if (RateLimitCheck("metadata") is { } throttled)
+        {
+            return throttled;
+        }
+
+        // The SP metadata flow lives in the flow service (#160, #318): it resolves the entity id and
+        // assertion-consumer URL from the configured canonical Base URL (never the request Host) and emits
+        // the SPSSODescriptor, advertising the PUBLIC signing certificate only when request signing is on.
+        return _saml.Metadata(provider);
+    }
+
+    /// <summary>
     /// Adds a SAML configuration. If the provider already exists, overwrite it.
     /// </summary>
     /// <param name="provider">The provider name to add.</param>
@@ -438,7 +517,9 @@ public class SSOController : ControllerBase
         RejectNullProviderBody(newConfig);
         RejectInvalidBaseUrlOverride(newConfig.BaseUrlOverride);
         RejectInvalidSamlCertificate(newConfig.SamlCertificate);
+        RejectInvalidSamlSecondaryCertificate(newConfig.SamlSecondaryCertificate);
         RejectInvalidSamlSigningKey(newConfig.SamlSigningKeyPfx);
+        RejectInvalidSamlSigningKey(newConfig.SamlRolloverSigningKeyPfx);
         SSOPlugin.Instance.MutateConfiguration(configuration =>
         {
             // The name guard needs the under-lock existence check (#336) and runs before any mutation,
@@ -490,6 +571,107 @@ public class SSOController : ControllerBase
     }
 
     /// <summary>
+    /// Tests basic config for a stored SAML provider (#163). Requires administrator privileges. Parses the
+    /// configured PUBLIC identity-provider signing certificate and reports its non-secret facts — never the
+    /// service-provider signing key. There is no SAML metadata-URL field, so this makes no network call.
+    /// Elevation-gated like the other SAML admin endpoints.
+    /// </summary>
+    /// <param name="provider">The stored SAML provider to test.</param>
+    /// <returns>The non-secret test result, or 404 when the provider is not configured.</returns>
+    [Authorize(Policy = Policies.RequiresElevation)]
+    [HttpGet("SAML/Test/{provider}")]
+    public ActionResult SamlTest(string provider)
+    {
+        var config = SSOPlugin.Instance.ReadConfiguration(c => c.SamlConfigs.TryGetValue(provider, out var cfg) ? cfg : null);
+        if (config is null)
+        {
+            return NotFound(NoMatchingProviderMessage);
+        }
+
+        return Ok(ProviderConnectionTester.TestSaml(config));
+    }
+
+    /// <summary>
+    /// Exports the whole plugin configuration as a redacted, importable document (#161). Requires
+    /// administrator privileges, like the other config endpoints — the document lists every provider's
+    /// settings. The redaction is the config's OWN JSON-boundary withholding, reused: the provider secrets
+    /// (OidSecret, the SAML signing keys) are serialized as null by their WriteOnlySecretConverter (#189) and
+    /// the server-managed canonical-link maps are dropped by [JsonIgnore] (#157/#186), so the document carries
+    /// no plaintext secret, no <c>ssoenc:</c> envelope, and no link map. The at-rest data-encryption key
+    /// (sso-secret.key) lives in a separate file and is never part of the configuration object at all.
+    /// </summary>
+    /// <returns>The redacted export document.</returns>
+    [Authorize(Policy = Policies.RequiresElevation)]
+    [HttpGet("Config/Export")]
+    public ActionResult ExportConfig()
+    {
+        // Snapshot under the config lock; the JSON formatter redacts the secrets and links as it serializes
+        // the returned document (the same withholding OID/Get relies on), after the lock is released.
+        return Ok(SSOPlugin.Instance.ReadConfiguration(ConfigExport.Build));
+    }
+
+    /// <summary>
+    /// Imports a configuration export document into this instance (#161). Requires administrator privileges.
+    /// The import is a fail-closed MERGE: the document is validated through the same ProviderConfigValidator
+    /// the config-page save uses, and only if the whole document is valid is it merged — atomically, through
+    /// MutateConfiguration — reusing ServerManagedFields.Preserve so a redacted (blank) secret keeps this
+    /// instance's stored secret and the server-managed links/issuers are never wiped. A provider new to this
+    /// instance arrives with a blank secret and fails its login closed until an administrator re-enters it.
+    /// The request body is size-capped so an oversized document is rejected before it is parsed.
+    /// </summary>
+    /// <param name="document">The export document to import.</param>
+    /// <returns>No content on success, or 400 when the document is missing, unsupported, or invalid.</returns>
+    [Authorize(Policy = Policies.RequiresElevation)]
+    [HttpPost("Config/Import")]
+    [RequestSizeLimit(ConfigImportMaxBytes)]
+    [Consumes(MediaTypeNames.Application.Json)]
+    public ActionResult ImportConfig([FromBody] ConfigExportDocument document)
+    {
+        if (document is null)
+        {
+            return BadRequest("The configuration import document is missing or is not valid JSON.");
+        }
+
+        try
+        {
+            // Validate-then-merge lives in the Config helper; the mutation persists only if it returns without
+            // throwing (an invalid document throws inside the lambda, so MutateConfiguration persists nothing).
+            SSOPlugin.Instance.MutateConfiguration(configuration => ConfigImport.Apply(configuration, document));
+        }
+        catch (ArgumentException ex)
+        {
+            // The validator and the import throw ArgumentException for a hostile/malformed document (a bad
+            // Base URL override, an unloadable certificate/key, a reserved-character provider name, an
+            // unsupported version). Strip line endings from the echoed message so it cannot split a log line.
+            return BadRequest(ex.Message?.ReplaceLineEndings(string.Empty));
+        }
+
+        // Audit the import and any provider that arrived with a security check disabled (#140), so importing
+        // an escape hatch (DisableHttps, DoNotValidateIssuerName, …) leaves the same trace a form save would.
+        var oidCount = document.Configuration?.OidConfigs?.Count ?? 0;
+        var samlCount = document.Configuration?.SamlConfigs?.Count ?? 0;
+        SsoAudit.ConfigImported(_logger, oidCount, samlCount);
+        if (document.Configuration?.OidConfigs is { } oidConfigs)
+        {
+            foreach (var kvp in oidConfigs)
+            {
+                if (kvp.Value is null)
+                {
+                    continue;
+                }
+
+                var insecure = OidcInsecureToggles.Enabled(kvp.Value);
+                if (insecure.Count > 0)
+                {
+                    SsoAudit.InsecureOptionsEnabled(_logger, OpenIdProtocol, kvp.Key, insecure);
+                }
+            }
+        }
+
+        return NoContent();
+    }
+
+    /// <summary>
     /// This endpoint accepts JSON and will authorize the user from the device values passed from the client.
     /// </summary>
     /// <param name="provider">The provider to authenticate against.</param>
@@ -505,16 +687,16 @@ public class SSOController : ControllerBase
             return throttled;
         }
 
-        // The SAML session-minting authenticate leg lives in the flow service (#160, #318): it validates
-        // the signed response, correlates it to an AuthnRequest this server issued (browser binding),
-        // enforces the login allow-list and one-time replay consume, and hands the verified identity to the
-        // shared completion tail. The controller passes the presented binding cookie and the
-        // HttpContext-derived remote endpoint in, keeping the flow tier HttpContext-free (#177).
+        // The SAML session-minting authenticate leg lives in the flow service (#160, #318): it redeems the
+        // one-time login-outcome token the ACS callback minted (#251; since #528 the token is the only
+        // accepted shape), correlates the carried InResponseTo to an AuthnRequest this server issued (browser
+        // binding), and hands the already-verified identity to the shared completion tail. The controller
+        // passes the presented binding cookie and the HttpContext-derived remote endpoint in, keeping the flow
+        // tier HttpContext-free (#177).
         return await _saml.AuthenticateAsync(
             provider,
             response,
             Request.Cookies[AuthorizeStateBinding.SamlCookieName],
-            Request,
             () => HttpContext.GetNormalizedRemoteIP().ToString()).ConfigureAwait(false);
     }
 
@@ -568,7 +750,10 @@ public class SSOController : ControllerBase
         // the #232 in-flight re-check, not a substitute: this kills existing sessions, #232 closes the mint race.
         await _sessionManager.RevokeUserTokens(user.Id, null).ConfigureAwait(false);
 
-        _logger.LogInformation("Unregistered SSO for user {UserId}: removed {Count} canonical link(s) and revoked active tokens.", user.Id, revoked);
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("Unregistered SSO for user {UserId}: removed {Count} canonical link(s) and revoked active tokens.", user.Id, revoked);
+        }
 
         return Ok();
     }
@@ -655,7 +840,10 @@ public class SSOController : ControllerBase
         if (removal is { Result: CanonicalLinkRemoveResult.Removed, UserRetainsAnyLink: false })
         {
             await _sessionManager.RevokeUserTokens(jellyfinUserId, null).ConfigureAwait(false);
-            _logger.LogInformation("Removed the last SSO link for user {UserId} and revoked their active tokens.", jellyfinUserId);
+            if (_logger.IsEnabled(LogLevel.Information))
+            {
+                _logger.LogInformation("Removed the last SSO link for user {UserId} and revoked their active tokens.", jellyfinUserId);
+            }
         }
 
         return removal.Result switch
@@ -763,7 +951,7 @@ public class SSOController : ControllerBase
     private static ProviderMode ParseMode(string mode) =>
         ProviderModeParser.TryParse(mode, out var parsed)
             ? parsed
-            : throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'");
+            : throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'", nameof(mode));
 
     // Fronts a rate-limited endpoint with the shared per-client gate (#128, #160, #382, #516): null when the
     // request may proceed, else the throttled outcome the single mapper renders (#474). The anonymous login

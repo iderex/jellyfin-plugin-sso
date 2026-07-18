@@ -19,7 +19,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 internal sealed class SecretStore
 {
     private readonly string _keyFilePath;
-    private readonly object _lock = new object();
+    private readonly System.Threading.Lock _lock = new();
     private byte[] _cachedKey;
 
     /// <summary>

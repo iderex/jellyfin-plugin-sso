@@ -182,14 +182,19 @@ internal sealed class SamlLoginService
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
 
-        if (!SamlLoginPolicy.IsLoginAllowed(SamlAssertionValidator.GetAssertionRoles(samlResponse), config.Roles))
+        // Evaluate the assertion's role attribute ONCE per response (#479): the same list feeds the allow-list
+        // gate here, the denied-path warning below, and the privilege derivation in TryProduceVerifiedIdentity
+        // on the mint path — the assertion is immutable here, so the role XPath runs once instead of at each use.
+        var assertionRoles = SamlAssertionValidator.GetAssertionRoles(samlResponse);
+
+        if (!SamlLoginPolicy.IsLoginAllowed(assertionRoles, config.Roles))
         {
             if (_logger.IsEnabled(LogLevel.Warning))
             {
                 _logger.LogWarning(
                     "SAML user: {UserId} has insufficient roles: {@Roles}. Expected any one of: {@ExpectedRoles}",
                     samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty),
-                    SamlAssertionValidator.GetAssertionRoles(samlResponse).Select(r => r?.ReplaceLineEndings(string.Empty)),
+                    assertionRoles.Select(r => r?.ReplaceLineEndings(string.Empty)),
                     config.Roles);
             }
 
@@ -197,10 +202,13 @@ internal sealed class SamlLoginService
         }
 
         // Linking keeps the assertion-embedded page (#251 is scoped to the login round-trip): the page JS
-        // posts its data to BOTH SAML/Link and SAML/Auth, and the one-time outcome token is single-use, so a
-        // token would satisfy only the first of the two posts. The link redeem (SamlLoginService.Link)
-        // consumes the assertion's one-time-use id on its own leg, and the follow-on SAML/Auth post then
-        // falls to the fully-validating deprecation branch below — byte-for-byte the pre-#251 linking flow.
+        // posts its data to BOTH SAML/Link and SAML/Auth. The link redeem (SamlLoginService.Link) consumes the
+        // assertion's one-time-use id on its own leg; the follow-on SAML/Auth post carries that same assertion
+        // (not a login-outcome token), so it does not redeem a live token and is rejected fail-closed at the
+        // mint leg — a harmless no-op, since the link already completed on its own leg. This was already the
+        // effective behaviour before #528: post-link the assertion's replay id was consumed, so the old
+        // deprecation branch rejected the follow-on post too. Removing that branch (#528) changes only WHERE
+        // the follow-on post is rejected (token-miss vs. a re-validated replay), not that it is rejected.
         if (isLinking)
         {
             return FlowResponses.AuthPage(response, nonce =>
@@ -258,7 +266,7 @@ internal sealed class SamlLoginService
         bool committed = false;
         try
         {
-            if (!_validator.TryProduceVerifiedIdentity(config, provider, samlResponse, out var identity, out var rejection))
+            if (!_validator.TryProduceVerifiedIdentity(config, provider, samlResponse, assertionRoles, out var identity, out var rejection))
             {
                 // A genuine replay (or an assertion with no usable NameID) still fails closed here, minting
                 // nothing — so moving the capacity check ahead of the consume never lets a replayed assertion
@@ -326,11 +334,7 @@ internal sealed class SamlLoginService
         bool newPath = ResolveChallengeNewPath(provider, config, isLinking, request, _logger);
 
         string redirectUri = SsoUrlBuilder.SamlAcsUrl(GetRequestBase(request, config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), newPath, provider);
-        string relayState = null;
-        if (isLinking)
-        {
-            relayState = "linking";
-        }
+        string relayState = isLinking ? "linking" : null;
 
         var samlRequest = new SamlAuthnRequest(
             config.SamlClientId.Trim(),
@@ -412,19 +416,161 @@ internal sealed class SamlLoginService
     }
 
     /// <summary>
-    /// The SAML session-minting authenticate leg: validates the signed response, correlates it to an
-    /// AuthnRequest this server issued (browser binding, #156/#415), enforces the login allow-list and
-    /// one-time replay consume, then hands the fully-verified identity to the shared completion tail. The
-    /// controller applies the shared rate-limit gate before delegating and supplies the binding cookie and
-    /// remote-endpoint resolver.
+    /// Serves this service provider's SAML 2.0 metadata for <paramref name="provider"/> (#162), so an
+    /// administrator can register the SP at the identity provider by URL rather than hand-configuring the
+    /// entity id, assertion-consumer URL and signing certificate. Anonymous by design — SP metadata is
+    /// public — and deliberately request-free: unlike the login flow, it refuses to derive the published
+    /// entity id/ACS from the request <c>Host</c>. Both are built ONLY from the provider's configured
+    /// canonical Base URL (<see cref="Config.ProviderConfigBase.BaseUrlOverride"/>, #139); if that is not
+    /// configured the endpoint fails closed rather than publish a spoofable ACS an attacker could point the
+    /// identity provider at (RFC 9700 sect. 4.1). The signing certificate is advertised only when request
+    /// signing is enabled, and only ever as the PUBLIC certificate.
+    /// </summary>
+    /// <param name="provider">The SAML provider whose metadata to serve.</param>
+    /// <returns>The SP metadata document, or a fail-closed rejection when the provider is unknown/disabled or its metadata prerequisites are unconfigured.</returns>
+    internal ActionResult Metadata(string provider)
+    {
+        // Unknown and disabled providers share the login flow's uniform rejection, so a disabled provider
+        // does not expose its entity id / signing certificate through this anonymous surface either.
+        var config = FindSamlConfig(provider);
+        if (config is not { Enabled: true })
+        {
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.UnknownProvider));
+        }
+
+        // The published ACS/entity id MUST be non-spoofable: build them ONLY from the configured canonical
+        // Base URL, never the request Host (which a reverse proxy forwarding an unfiltered X-Forwarded-Host
+        // could influence). With no canonical Base URL configured, fail closed rather than bake a
+        // request-derived value into metadata an identity provider consumes to decide where to POST
+        // assertions — the login flow may fall back to the request host, but published metadata must not.
+        if (!CanonicalBaseUrl.TryNormalize(config.BaseUrlOverride, out var baseUrl))
+        {
+            return FlowResponses.PlainTextError(
+                StatusCodes.Status409Conflict,
+                "SAML metadata is unavailable: configure this provider's canonical Base URL first, so the published assertion-consumer URL cannot be derived from a spoofable request host.");
+        }
+
+        // The entity id is the value the challenge sends as the AuthnRequest Issuer (the client id); an
+        // enabled SAML provider always has one, but guard fail-closed rather than emit metadata with an
+        // empty entityID.
+        var entityId = config.SamlClientId?.Trim();
+        if (string.IsNullOrEmpty(entityId))
+        {
+            return FlowResponses.PlainTextError(
+                StatusCodes.Status409Conflict,
+                "SAML metadata is unavailable: this provider has no client id (SP entity id) configured.");
+        }
+
+        // Advertise the canonical new-path ACS spelling; the SP accepts either spelling on the way back
+        // (SsoUrlBuilder.SamlExpectedAcsUrls), so publishing one is unambiguous for the identity provider.
+        var acsUrl = SsoUrlBuilder.SamlAcsUrl(baseUrl, newPath: true, provider);
+
+        if (!TryResolveSigningCertificates(config, out var signingCertificateBase64, out var rolloverSigningCertificateBase64))
+        {
+            // Request signing is enabled but a configured signing key could not be loaded — the same
+            // fail-closed posture the signed challenge takes, so metadata never advertises signing the
+            // challenge would then fail to perform, and never emits a broken KeyDescriptor for a set-but-
+            // unloadable rollover key (#491).
+            return FlowResponses.PlainTextError(
+                StatusCodes.Status409Conflict,
+                "SAML metadata is unavailable: request signing is enabled but a configured signing key could not be loaded.");
+        }
+
+        return new ContentResult
+        {
+            Content = SamlSpMetadataBuilder.Build(entityId, acsUrl, signingCertificateBase64, rolloverSigningCertificateBase64),
+            ContentType = "application/samlmetadata+xml",
+            StatusCode = StatusCodes.Status200OK,
+        };
+    }
+
+    // Resolves the PUBLIC signing certificate(s) to advertise in the metadata. Both out values are null when
+    // request signing is off (no KeyDescriptor). When it is on, the PRIMARY is mandatory — a set-but-
+    // unloadable primary fails closed (false), mirroring BuildChallengeRedirectUrl so metadata never
+    // advertises signing the challenge could not perform. The ROLLOVER (#491) is optional: a blank stored
+    // value means no overlap window (single descriptor, byte-for-byte the pre-#491 output); a set-but-
+    // unloadable rollover key also fails closed (false), so a hand-corrupted rollover key surfaces loudly as
+    // a 409 rather than silently dropping a key the admin configured. When the rollover certificate is
+    // identical to the primary — the natural end state after promoting the rollover into the primary field —
+    // the redundant second descriptor is dropped, returning to a single descriptor without needing to blank
+    // the write-only, blank-keeps-stored rollover key. Only the public RawData of each certificate is
+    // exported; no private key ever leaves this method.
+    private static bool TryResolveSigningCertificates(SamlConfig config, out string signingCertificateBase64, out string rolloverSigningCertificateBase64)
+    {
+        signingCertificateBase64 = null;
+        rolloverSigningCertificateBase64 = null;
+        if (!config.SignAuthnRequests)
+        {
+            return true;
+        }
+
+        if (!TryRevealPublicCertificate(config.SamlSigningKeyPfx, out signingCertificateBase64))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(config.SamlRolloverSigningKeyPfx))
+        {
+            return true;
+        }
+
+        if (!TryRevealPublicCertificate(config.SamlRolloverSigningKeyPfx, out rolloverSigningCertificateBase64))
+        {
+            return false;
+        }
+
+        if (string.Equals(rolloverSigningCertificateBase64, signingCertificateBase64, StringComparison.Ordinal))
+        {
+            rolloverSigningCertificateBase64 = null;
+        }
+
+        return true;
+    }
+
+    // Reveals a stored signing key (encrypted at rest, #158) and exports its PUBLIC certificate as Base64
+    // (DER). Fail-closed: a missing/corrupt at-rest key throws CryptographicException, and a garbage or
+    // private-key-less PKCS#12 fails to load — both return false so the caller emits no descriptor for it.
+    // The private key never leaves this method; only certificate.RawData (the public DER) is exported.
+    private static bool TryRevealPublicCertificate(string storedPfx, out string publicCertificateBase64)
+    {
+        publicCertificateBase64 = null;
+
+        string revealed;
+        try
+        {
+            revealed = SSOPlugin.Instance.Secrets.Reveal(storedPfx);
+        }
+        catch (CryptographicException)
+        {
+            return false;
+        }
+
+        if (!SamlSigningKey.TryLoad(revealed, out var certificate))
+        {
+            return false;
+        }
+
+        using (certificate)
+        {
+            publicCertificateBase64 = Convert.ToBase64String(certificate.RawData);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// The SAML session-minting authenticate leg: redeems the one-time login-outcome token the ACS callback
+    /// minted (#251), correlates the carried InResponseTo to an AuthnRequest this server issued (browser
+    /// binding, #156/#415), then hands the already-verified identity to the shared completion tail. Since #528
+    /// this leg accepts ONLY the token — the assertion was validated once at the callback and is never
+    /// re-parsed here — so a request that does not redeem a live token fails closed. The controller applies the
+    /// shared rate-limit gate before delegating and supplies the binding cookie and remote-endpoint resolver.
     /// </summary>
     /// <param name="provider">The provider to authenticate against.</param>
     /// <param name="response">The client's auth request context (app/device) plus the SAML response in <c>Data</c>.</param>
     /// <param name="bindingCookie">The browser-binding cookie value the redeem presented (#415).</param>
-    /// <param name="request">The current request; read for the assertion-consumer base URL (recipient binding).</param>
     /// <param name="remoteEndPointResolver">Resolves the normalized client IP for the activity log (#177).</param>
     /// <returns>The minted session, or a fail-closed rejection.</returns>
-    internal async Task<ActionResult> AuthenticateAsync(string provider, AuthResponse response, string bindingCookie, HttpRequest request, Func<string> remoteEndPointResolver)
+    internal async Task<ActionResult> AuthenticateAsync(string provider, AuthResponse response, string bindingCookie, Func<string> remoteEndPointResolver)
     {
         // Unknown and disabled providers share one rejection so neither can be probed apart — this
         // unifies the previously JSON unknown-provider body and the disabled provider's 500.
@@ -434,76 +580,35 @@ internal sealed class SamlLoginService
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.UnknownProvider));
         }
 
-        // The one-time outcome-token path (#251): the plugin now renders a token (not the assertion) for
-        // login flows. Redeem it once — an atomic claim, so a replayed token misses and a token minted for
-        // another provider is refused (details on SamlOutcomeStore.TryRedeem). The assertion was already
-        // fully validated at the ACS callback (signature, time, audience, recipient, role gate, the one-time
-        // replay consume and the verified-identity construction), so NOTHING is re-parsed or re-validated
-        // here: only the browser binding remains, checked at this same-origin leg where the SameSite=Lax
-        // cookie is sent (the cross-site ACS POST could not carry it). A miss falls through to the
-        // deprecation branch below, so an unknown/expired/replayed token is rejected there rather than minting.
-        if (_outcomes.TryRedeem(response?.Data, provider, DateTime.UtcNow) is { } outcome)
-        {
-            if (!CorrelateAndBind(provider, outcome.InResponseTo, bindingCookie, config.ValidateInResponseTo))
-            {
-                return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
-            }
-
-            // From here the SAML and OpenID paths are one: the verified identity flows into the shared
-            // completion tail. SAML keys the link on the NameID and carries no email_verified claim, so
-            // AdoptionGate.None; the resolver's admin-adoption refusal (#218) still applies.
-            return await _loginCompletion.CompleteAsync(
-                outcome.Identity,
-                response,
-                config,
-                AdoptionGate.None,
-                remoteEndPointResolver).ConfigureAwait(false);
-        }
-
-        // DEPRECATION WINDOW (#251, drop scheduled by #528): a page rendered by a PRE-#251
-        // plugin still embeds the full base64 assertion and posts it here. For one release SAML/Auth also
-        // accepts that legacy shape and FULLY validates it — signature/time/audience/recipient, the
-        // InResponseTo correlation + browser binding, the login allow-list, and the one-time replay consume —
-        // exactly as before #251, so an admin upgrading mid-login does not break a user's in-flight login.
-        // The plugin itself renders only tokens going forward; this branch is removed once the window closes.
-        var requestBase = GetRequestBase(request, config.SchemeOverride, config.PortOverride, config.BaseUrlOverride);
-        if (!_validator.TryValidate(config, provider, requestBase, response?.Data, out var samlResponse))
-        {
-            // A malformed body, an unknown/expired/replayed token that reached this fallback, or a failed
-            // signature/time/audience/recipient check is rejected the same way — a clean 4xx, never a 500 (#199).
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
-        }
-
-        if (!CorrelateAndBind(provider, samlResponse.GetInResponseTo(), bindingCookie, config.ValidateInResponseTo))
+        // The one-time outcome-token path (#251) is now the ONLY shape SAML/Auth accepts (#528): the plugin
+        // renders a token (never the assertion) for login flows. Redeem it once — an atomic claim, so a
+        // replayed token misses and a token minted for another provider is refused (details on
+        // SamlOutcomeStore.TryRedeem). A miss fails CLOSED right here: an unknown, expired, or replayed token,
+        // OR the pre-#251 assertion-embedded shape a legacy page still posts (the deprecation branch #251 kept
+        // for one release, dropped by #528). That legacy body is NOT re-parsed or re-validated as an assertion
+        // — it simply is not a live token, so it is rejected the same uniform way as any other non-token, never
+        // falling through open. The removal is the wire-contract break #251 flagged: a scripted client that
+        // POSTs a raw assertion straight to SAML/Auth (bypassing the rendered page) is now rejected.
+        if (_outcomes.TryRedeem(response?.Data, provider, DateTime.UtcNow) is not { } outcome)
         {
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
 
-        // Enforce the login allow-list here too, not only at the assertion-consumer page: a legacy caller
-        // can POST an assertion straight to this session-minting endpoint and skip the page, so checking it
-        // only there would be fail-open.
-        if (!SamlLoginPolicy.IsLoginAllowed(SamlAssertionValidator.GetAssertionRoles(samlResponse), config.Roles))
+        if (!CorrelateAndBind(provider, outcome.InResponseTo, bindingCookie, config.ValidateInResponseTo))
         {
-            if (_logger.IsEnabled(LogLevel.Warning))
-            {
-                _logger.LogWarning(
-                    "SAML user: {UserId} has insufficient roles at the session-minting endpoint; login denied.",
-                    samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty));
-            }
-
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
 
-        // Complete the assertion validation in the dedicated validator: the one-time replay consume and the
-        // non-empty-NameID guard, then — and only then — the verified identity through FromValidatedSaml
-        // (#496). A replay fails as an invalid response and a missing NameID as a denial.
-        if (!_validator.TryProduceVerifiedIdentity(config, provider, samlResponse, out var identity, out var rejection))
-        {
-            return LoginStatusMapper.ToActionResult(rejection);
-        }
-
+        // The assertion was already fully validated at the ACS callback (signature, time, audience, recipient,
+        // role gate, the one-time replay consume and the verified-identity construction), so NOTHING is
+        // re-parsed or re-validated here: only the browser binding remained, checked at this same-origin leg
+        // where the SameSite=Lax cookie is sent (the cross-site ACS POST could not carry it).
+        //
+        // From here the SAML and OpenID paths are one: the verified identity flows into the shared completion
+        // tail. SAML keys the link on the NameID and carries no email_verified claim, so AdoptionGate.None; the
+        // resolver's admin-adoption refusal (#218) still applies.
         return await _loginCompletion.CompleteAsync(
-            identity,
+            outcome.Identity,
             response,
             config,
             AdoptionGate.None,
@@ -520,8 +625,8 @@ internal sealed class SamlLoginService
     // is exactly the forced-login bypass the binding exists to close (login validity must never default to
     // true). The consume is the atomic claim of the outstanding request; the cookie match is checked at this
     // same-origin auth endpoint, not at the cross-site ACS POST which would not carry a SameSite=Lax cookie.
-    // Shared by the token-redeem mint path (on the stored outcome's InResponseTo) and the deprecation branch
-    // (on the freshly parsed response), so both enforce the identical correlation.
+    // Called by the token-redeem mint path on the stored outcome's InResponseTo (the sole caller since the
+    // pre-#251 deprecation branch was removed in #528).
     private bool CorrelateAndBind(string provider, string inResponseTo, string bindingCookie, bool validateInResponseTo)
     {
         if (!string.IsNullOrEmpty(inResponseTo))

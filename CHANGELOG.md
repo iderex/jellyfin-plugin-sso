@@ -4,6 +4,28 @@ All notable changes to this plugin are documented here. Versions follow the
 four-part `X.Y.Z.W` scheme described in the release policy (breaking / feature /
 bug-fix / security).
 
+## 4.2.0.0
+
+A breaking release.
+
+### Removed
+
+- **`SAML/Auth` no longer accepts a raw SAML assertion (BREAKING, #528).** #251
+  replaced the assertion browser round-trip with a one-time, server-side login
+  outcome token: the assertion-consumer callback (`SAML/post`) validates the
+  signed assertion once and hands the intermediate page only an opaque token,
+  and `SAML/Auth` redeems that token to mint the session without re-parsing the
+  assertion. For one release `SAML/Auth` also still accepted and fully
+  re-validated the pre-#251 shape — a full base64 assertion POSTed straight to
+  it — so a login already in flight during an upgrade would not break. That
+  deprecation window has now closed: `SAML/Auth` accepts **only** the opaque
+  outcome token. A scripted client that POSTs a raw assertion straight to
+  `SAML/Auth`, bypassing the rendered page, is now rejected fail-closed (a clean
+  400 in the uniform SAML body, nothing minted). The normal browser login and
+  linking flows are unaffected — the plugin has rendered only tokens for login
+  since #251. Callers that scripted the legacy direct-assertion POST must switch
+  to the callback-plus-token round-trip.
+
 ## 4.1.1.0
 
 A bug-fix release that restores plugin loading on Jellyfin 10.11. No

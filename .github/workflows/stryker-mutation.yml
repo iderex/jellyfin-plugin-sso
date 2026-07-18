@@ -1,0 +1,104 @@
+# Stryker.NET mutation testing — scoped to the SAML/OIDC validation and
+# login/role-mapping core (#169).
+#
+# Why mutation testing, and why non-blocking:
+#   Mutation score is our LOCAL test-quality signal. Stryker seeds faults
+#   (mutants) into the security-critical validators and checks that a test then
+#   fails; a SURVIVING mutant is a fault our tests would miss, i.e. a concrete
+#   test-writing prompt (kill it with a new negative test, or document why it is
+#   an equivalent/acceptable mutant). This deliberately does NOT add a raw
+#   line-coverage percentage gate — line coverage correlates weakly with fault
+#   detection. The standing bar stays "every security branch has a negative
+#   test"; mutation score measures whether we actually met it.
+#
+# NON-BLOCKING BY CONSTRUCTION (three independent reasons):
+#   1. No `pull_request` trigger. This workflow never runs as a PR check, so it
+#      is not — and cannot silently become — a required status check on the
+#      protected branch. It runs weekly and on manual dispatch only.
+#   2. `thresholds.break` is 0 in stryker-config.json, so `dotnet stryker` never
+#      exits non-zero on a low score. The score is reported, not enforced.
+#   3. The scan step is `continue-on-error: true` as a belt-and-braces guard, so
+#      even an infrastructure hiccup here can never turn a run red.
+#
+# Hardened per the repo workflow policy (see zizmor.yml): every action is
+# SHA-pinned with a version comment, checkout runs with persist-credentials:false,
+# and permissions are read-only. Stryker itself is version-pinned via the
+# committed tool manifest (.config/dotnet-tools.json) and restored with
+# `dotnet tool restore`, so the tool version is reproducible, not "latest".
+name: Stryker mutation testing
+
+on:
+  schedule:
+    # Weekly (Mondays). Offset from the Scorecard cron (27 4 * * 1) so the two
+    # scheduled runs do not contend for a runner at the same minute.
+    - cron: "41 5 * * 1"
+  # Let a maintainer run it on demand from the Actions tab.
+  workflow_dispatch:
+
+# Read-only: this job only reads the code and uploads a run artifact. It never
+# writes to the repo, a release, or the security dashboard.
+permissions:
+  contents: read
+
+# A newer run on the same ref supersedes an in-flight one — this is an
+# informational scan, so cancelling a superseded run is safe.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mutation:
+    name: Mutation testing (SAML/OIDC core)
+    runs-on: ubuntu-latest
+    # Mutation testing re-runs the suite once per mutant, so it is far slower
+    # than a normal test run; the scope is kept small (#169) to hold this down.
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          # No step pushes via git, so do not persist the GITHUB_TOKEN in
+          # .git/config (zizmor "artipacked" hardening).
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          # Both SDKs the multi-target build needs: net9.0 (Jellyfin 10.11 line)
+          # and net10.0 (Jellyfin 12.0 line). Stryker mutates the net9.0 leg
+          # (target-framework in stryker-config.json), but the tests reference
+          # both, so install both explicitly.
+          dotnet-version: |
+            9.0.x
+            10.0.x
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+
+      - name: Restore dependencies
+        # --locked-mode fails the restore if the committed packages.lock.json
+        # files would change, matching the main build job's supply-chain posture.
+        run: dotnet restore --locked-mode
+
+      - name: Restore pinned .NET tools (Stryker)
+        # Installs dotnet-stryker at the version pinned in .config/dotnet-tools.json.
+        run: dotnet tool restore
+
+      - name: Run Stryker (scoped, non-blocking)
+        # Never fail the run: break=0 in config already prevents a non-zero exit
+        # on a low score; continue-on-error is the second guard for any other
+        # failure. Run from the test project directory so Stryker picks up
+        # stryker-config.json and auto-detects the single project under test.
+        continue-on-error: true
+        working-directory: SSO-Auth.Tests
+        run: dotnet stryker
+
+      - name: Upload mutation report
+        # Publish the HTML/markdown report as a run artifact regardless of the
+        # scan outcome, so surviving mutants can be reviewed offline.
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: stryker-mutation-report
+          path: SSO-Auth.Tests/StrykerOutput/**/reports/**
+          retention-days: 14
+          if-no-files-found: warn

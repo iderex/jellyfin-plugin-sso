@@ -66,11 +66,11 @@ public class SamlLoginServiceTests
     [Fact]
     public async Task AuthenticateAsync_DisabledProvider_RejectsAsUnknownProvider()
     {
-        var (service, context) = Build(c => c.SamlConfigs["adfs"] = new SamlConfig { Enabled = false });
+        var (service, _) = Build(c => c.SamlConfigs["adfs"] = new SamlConfig { Enabled = false });
 
         // Guard precedes the state consume, so a disabled provider is rejected without touching any
         // collaborator — the same uniform body an unknown provider gets.
-        var result = await service.AuthenticateAsync("adfs", new AuthResponse { Data = "irrelevant" }, bindingCookie: null, context.Request, () => "127.0.0.1");
+        var result = await service.AuthenticateAsync("adfs", new AuthResponse { Data = "irrelevant" }, bindingCookie: null, () => "127.0.0.1");
 
         AssertUnknownProvider(result);
     }
@@ -78,11 +78,12 @@ public class SamlLoginServiceTests
     [Fact]
     public async Task AuthenticateAsync_MalformedResponse_RejectsAsInvalid()
     {
-        var (service, context) = Build(c => c.SamlConfigs["adfs"] = new SamlConfig { Enabled = true, DoNotValidateAudience = true });
+        var (service, _) = Build(c => c.SamlConfigs["adfs"] = new SamlConfig { Enabled = true, DoNotValidateAudience = true });
 
-        // A non-base64 / malformed response fails TryParse and is rejected the same way an invalid one is —
-        // a clean 4xx in the uniform SAML body, never an unhandled 500 (#199).
-        var result = await service.AuthenticateAsync("adfs", new AuthResponse { Data = "not-a-saml-response" }, bindingCookie: null, context.Request, () => "127.0.0.1");
+        // A non-base64 / malformed response is not a live outcome token, so it misses the one-time redeem and
+        // is rejected the same way an invalid one is — a clean 4xx in the uniform SAML body, never an
+        // unhandled 500 (#199).
+        var result = await service.AuthenticateAsync("adfs", new AuthResponse { Data = "not-a-saml-response" }, bindingCookie: null, () => "127.0.0.1");
 
         var content = Assert.IsType<ContentResult>(result);
         Assert.Equal(400, content.StatusCode);
