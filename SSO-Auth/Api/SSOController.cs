@@ -174,7 +174,7 @@ public class SSOController : ControllerBase
     {
         if (CanonicalBaseUrl.IsInvalidOverride(baseUrlOverride))
         {
-            throw new ArgumentException("The Base URL override must be an absolute http(s) URL such as https://jellyfin.example.com, or left blank.");
+            throw new ArgumentException("The Base URL override must be an absolute http(s) URL such as https://jellyfin.example.com, or left blank.", nameof(baseUrlOverride));
         }
     }
 
@@ -187,7 +187,7 @@ public class SSOController : ControllerBase
     {
         if (SamlCertificate.IsInvalid(certificateStr))
         {
-            throw new ArgumentException("The SAML signing certificate must be a Base64-encoded (DER) X.509 certificate, or left blank.");
+            throw new ArgumentException("The SAML signing certificate must be a Base64-encoded (DER) X.509 certificate, or left blank.", nameof(certificateStr));
         }
     }
 
@@ -200,7 +200,7 @@ public class SSOController : ControllerBase
     {
         if (SamlCertificate.IsInvalid(certificateStr))
         {
-            throw new ArgumentException("The SAML secondary signing certificate must be a Base64-encoded (DER) X.509 certificate, or left blank.");
+            throw new ArgumentException("The SAML secondary signing certificate must be a Base64-encoded (DER) X.509 certificate, or left blank.", nameof(certificateStr));
         }
     }
 
@@ -212,7 +212,7 @@ public class SSOController : ControllerBase
     {
         if (SamlSigningKey.IsInvalid(signingKeyPfx))
         {
-            throw new ArgumentException("The SAML request signing key must be a Base64-encoded, unencrypted PKCS#12 (PFX) blob containing an RSA or ECDSA private key, or left blank.");
+            throw new ArgumentException("The SAML request signing key must be a Base64-encoded, unencrypted PKCS#12 (PFX) blob containing an RSA or ECDSA private key, or left blank.", nameof(signingKeyPfx));
         }
     }
 
@@ -225,7 +225,7 @@ public class SSOController : ControllerBase
     {
         if (config is null)
         {
-            throw new ArgumentException("The provider configuration body must not be empty.");
+            throw new ArgumentException("The provider configuration body must not be empty.", nameof(config));
         }
     }
 
@@ -241,7 +241,7 @@ public class SSOController : ControllerBase
     {
         if (!providerExists && ProviderNameValidator.IsInvalid(provider))
         {
-            throw new ArgumentException("A new provider name must not contain control characters, a backslash, or any of % : / ? # [ ] @ ! $ & ' ( ) * + , ; = because the name becomes part of the callback URL registered with the identity provider.");
+            throw new ArgumentException("A new provider name must not contain control characters, a backslash, or any of % : / ? # [ ] @ ! $ & ' ( ) * + , ; = because the name becomes part of the callback URL registered with the identity provider.", nameof(provider));
         }
     }
 
@@ -951,7 +951,7 @@ public class SSOController : ControllerBase
     private static ProviderMode ParseMode(string mode) =>
         ProviderModeParser.TryParse(mode, out var parsed)
             ? parsed
-            : throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'");
+            : throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'", nameof(mode));
 
     // Fronts a rate-limited endpoint with the shared per-client gate (#128, #160, #382, #516): null when the
     // request may proceed, else the throttled outcome the single mapper renders (#474). The anonymous login
