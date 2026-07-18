@@ -239,7 +239,7 @@ const sleep = (milliseconds) => {
 
         // Strip out the protocol (http:// or https://) and convert the domain to Punycode
         var idnMapping = new IdnMapping();
-        var protocolSeparatorIndex = baseUrl.IndexOf("//");
+        var protocolSeparatorIndex = baseUrl.IndexOf("//", System.StringComparison.Ordinal);
         var protocol = baseUrl.Substring(0, protocolSeparatorIndex + 2);
         var domain = baseUrl.Substring(protocolSeparatorIndex + 2);
         var punycodeDomain = idnMapping.GetAscii(domain);
@@ -306,7 +306,7 @@ async function main() {
 
     var request = {deviceId, appName, appVersion, deviceName, data};
 
-    if (" + $"{isLinking}".ToLower() + @") {
+    if (" + (isLinking ? "true" : "false") + @") {
         // Surface a rejected link instead of swallowing it (#344): the link leg fail-closes with a
         // non-2xx when the provider is disabled (#343), the caller is not allowed, or the request is
         // throttled. Left silent, the page would fall through to the auth leg and show a misleading
