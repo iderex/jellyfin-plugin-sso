@@ -13,9 +13,11 @@ name: Publish JF12 Beta
 # The JF12 build METADATA (version 5.0, targetAbi 12.0.0.0, framework net10.0, and the net10 shipping
 # closure) lives in build-jf12.yaml, which this job copies over build.yaml before JPRM builds — the
 # committed build.yaml stays the JF10.11 metadata.
+# No push trigger: a beta is no longer minted on every merge to 4.2 (that spammed one release per PR).
+# nightly-betas.yml (the scheduler on the default branch) dispatches this workflow once a day; the gate
+# job below then skips the build unless 4.2 has advanced since the last JF12 beta. Still manually
+# runnable via workflow_dispatch.
 on:
-  push:
-    branches: [ 4.2 ]
   workflow_dispatch:
 
 # Explicit deny-all at workflow level; the job below opts into write access explicitly.
@@ -31,8 +33,48 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Publish only when 4.2 has advanced since the last JF12 beta, so a scheduled daily run on an
+  # unchanged branch does not mint a duplicate release. Compares the current 4.2 HEAD (github.sha) to
+  # the commit the newest 5.0.0-JF12-beta.<n> tag points at. If the base version is ever bumped (the
+  # JF12 line is 5.0 for now) no tag matches, last_sha is empty, and the build proceeds — the safe
+  # default is to publish, never to silently skip a real change.
+  gate:
+    name: Gate on new 4.2 commits
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+    steps:
+    - name: Compare 4.2 HEAD to the last JF12 beta
+      id: check
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        CUR: ${{ github.sha }}
+      # Fail-open: on any uncertainty (API error, no prior tag, unparseable sha) default to changed=true
+      # and build. Skipping a real change is worse than an occasional duplicate beta.
+      run: |
+        set -uo pipefail
+        last_tag=$(gh api "repos/${REPO}/git/matching-refs/tags/5.0.0-JF12-beta." \
+          --jq 'map(.ref | sub("refs/tags/"; "")) | sort_by(split(".") | last | tonumber) | last // ""' 2>/dev/null || echo "")
+        last_sha=""
+        if [ -n "$last_tag" ]; then
+          last_sha=$(gh api "repos/${REPO}/git/refs/tags/${last_tag}" --jq '.object.sha' 2>/dev/null || echo "")
+        fi
+        echo "current 4.2 HEAD: ${CUR}"
+        echo "last JF12 beta:   ${last_tag:-<none>} -> ${last_sha:-<none>}"
+        if [ -n "$last_sha" ] && [ "$last_sha" = "$CUR" ]; then
+          echo "No new commits since the last JF12 beta; skipping the build."
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+        else
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+        fi
+
   build:
     name: Build & publish JF12 beta
+    needs: gate
+    if: needs.gate.outputs.changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Creates the GitHub release and updates the manifest branch, so it opts into write access.
