@@ -307,18 +307,24 @@ async function main() {
     var request = {deviceId, appName, appVersion, deviceName, data};
 
     if (" + (isLinking ? "true" : "false") + @") {
-        // Surface a rejected link instead of swallowing it (#344): the link leg fail-closes with a
-        // non-2xx when the provider is disabled (#343), the caller is not allowed, or the request is
-        // throttled. Left silent, the page would fall through to the auth leg and show a misleading
-        // 'Login failed', so a rejected link stops here with its own message. A missing status
-        // (undefined: no stored credentials, or a network error) keeps the prior behavior of
-        // proceeding, since the outcome cannot be told apart from success.
+        // Linking is NOT a login round-trip, so a DEFINITIVE link outcome is terminal here — the page does
+        // NOT go on to post to .../Auth (#614). The Link leg one-time-consumes the assertion / state token,
+        // so the old unconditional follow-on Auth post could never redeem it: it fail-closed at the mint leg
+        // and rendered a misleading 'Login failed. Please try again.' even though the link itself had already
+        // succeeded on its own leg.
+        //   - A 2xx is a completed link: show success and stop (do not attempt a login).
+        //   - A non-2xx is a rejected link (#344): the provider is disabled (#343), the caller is not
+        //     allowed, or the request is throttled — surface it and stop, never fall through to a login.
+        //   - A missing status (undefined: no stored credentials, or a network error) keeps the prior
+        //     behavior of proceeding to the auth leg, since that outcome cannot be told apart from success.
         var linkStatus = await link(request);
-        if (linkStatus !== undefined && (linkStatus < 200 || linkStatus >= 300)) {
+        if (linkStatus !== undefined) {
             document.querySelector('p').textContent =
-                linkStatus === 429
-                    ? 'Too many attempts. Please wait a moment and try again.'
-                    : 'Could not link this account. The provider may be disabled, or linking is not permitted.';
+                linkStatus >= 200 && linkStatus < 300
+                    ? 'Account linked. You can now log in with SSO.'
+                    : linkStatus === 429
+                        ? 'Too many attempts. Please wait a moment and try again.'
+                        : 'Could not link this account. The provider may be disabled, or linking is not permitted.';
             return;
         }
     }
