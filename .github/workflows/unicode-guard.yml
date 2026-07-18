@@ -6,6 +6,7 @@ on:
   pull_request:
     branches: [main]
 
+# Read-only: the guard only greps the tracked tree, it never writes.
 permissions:
   contents: read
 

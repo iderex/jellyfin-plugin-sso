@@ -6,6 +6,7 @@ on:
   pull_request:
     branches: [ main ]
 
+# Read-only: build/test/scan only, no job here writes to the repo or a release.
 permissions:
   contents: read
 
@@ -16,6 +17,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # No `name:` on this job: the "Protect main" ruleset's required status check
+  # matches the literal check-run name, which defaults to the job id ("build")
+  # when no `name:` is set. Overriding it here would rename the check run and
+  # silently break the required-status-check gate.
   build:
 
     runs-on: ubuntu-latest
@@ -59,6 +64,7 @@ jobs:
   # member added after the floor would compile against the SDK but throw MissingMethodException at
   # login on an older 10.11 server (#142). Builds SSO-Auth against Jellyfin.* pinned to that floor.
   abi-floor:
+    name: ABI floor build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -85,6 +91,7 @@ jobs:
   # Verify the plugin actually packages as a loadable Jellyfin plugin (JPRM builds it against the
   # targeted ABI and produces the manifest) on every PR, not only at release time.
   package:
+    name: Package (JPRM)
     uses: ./.github/workflows/build.yml
     with:
       dotnet-version: "9.0.x"

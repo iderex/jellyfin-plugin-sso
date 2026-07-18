@@ -18,6 +18,8 @@ on:
   pull_request:
     branches: ["**"]
 
+# Explicit deny-all at workflow level; the job below grants only the read
+# access it needs to check out the tree.
 permissions: {}
 
 # Cancel a superseded run on the same ref so a new push / PR update does not
@@ -31,6 +33,7 @@ jobs:
     name: Enforce greppable invariants
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Only needs to read the checkout; the rule set is local and the scan is offline.
     permissions:
       contents: read
     env:
