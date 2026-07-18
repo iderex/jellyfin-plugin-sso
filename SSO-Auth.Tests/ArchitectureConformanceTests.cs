@@ -872,14 +872,14 @@ public class ArchitectureConformanceTests
         // fail-open (the server keeps the stored value; the admin can no longer harden it), so pin the
         // security-critical settings: each MUST remain a marked, correctly-typed persisting field. Extend
         // this roster in the same PR that surfaces a new security toggle in the admin form; a deliberately
-        // XML-only toggle (e.g. RequireVerifiedEmailForLogin #166) is not a form field and so stays out of
-        // this roster until it is surfaced (as RequireVerifiedEmailForAdoption was, #484/#488).
+        // XML-only toggle is not a form field and so stays out of this roster until it is surfaced (as
+        // RequireVerifiedEmailForAdoption was, #484/#488, and RequireVerifiedEmailForLogin was, #524).
         var securityCritical = new[]
         {
             "EnableAuthorization", "OidSecret", "DisableHttps", "DisablePushedAuthorization",
             "DoNotValidateEndpoints", "DoNotValidateIssuerName", "DoNotValidateResponseIssuer",
             "DoNotLoadProfile", "RequirePkce", "AllowExistingAccountLink",
-            "RequireVerifiedEmailForAdoption",
+            "RequireVerifiedEmailForAdoption", "RequireVerifiedEmailForLogin",
         };
         var unsaved = securityCritical.Where(p => !matchedIds.Contains(p)).ToList();
         Assert.True(
