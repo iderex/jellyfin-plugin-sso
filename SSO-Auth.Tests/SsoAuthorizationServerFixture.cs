@@ -5,6 +5,9 @@ using System.Net.Http;
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using System.Threading.Tasks;
+using Jellyfin.Data;
+using Jellyfin.Database.Implementations.Entities;
+using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.SSO_Auth;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using MediaBrowser.Common.Api;
@@ -21,6 +24,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -90,7 +94,7 @@ public sealed class SsoAuthorizationServerFixture : IAsyncDisposable
         // bodies (those are covered by the in-process SsoControllerHarness tests).
         builder.Services.AddSingleton(Substitute.For<ISessionManager>());
         builder.Services.AddSingleton(Substitute.For<IUserManager>());
-        builder.Services.AddSingleton(Substitute.For<IAuthorizationContext>());
+        builder.Services.AddSingleton(BuildAuthorizationContext());
         builder.Services.AddSingleton<ICryptoProvider>(new FakeCryptoProvider());
         builder.Services.AddSingleton(Substitute.For<IProviderManager>());
         builder.Services.AddSingleton(Substitute.For<IServerConfigurationManager>());
@@ -129,6 +133,26 @@ public sealed class SsoAuthorizationServerFixture : IAsyncDisposable
 
     /// <summary>The role name Jellyfin grants administrators; the elevation policy requires it.</summary>
     internal const string AdministratorRole = "Administrator";
+
+    /// <summary>
+    /// Resolves the caller to a real host user so the bare-<c>[Authorize]</c> canonical-link endpoints, which
+    /// run an in-body owner check (<see cref="Jellyfin.Plugin.SSO_Auth.Helpers.RequestHelpers.AssertCanUpdateUser"/>),
+    /// pass that check and reach their action bodies. That check is orthogonal to the MIDDLEWARE authorization
+    /// stage these tests target: it is covered directly by <c>RequestHelpersTests</c>. Leaving the caller
+    /// unresolved would make the helper deny (a clean 403) and make an in-body denial indistinguishable from a
+    /// mistaken elevation-gate; seeding an administrator with preference access isolates these tests to the
+    /// middleware so any remaining 401/403 is genuinely the attribute pipeline's doing.
+    /// </summary>
+    private static IAuthorizationContext BuildAuthorizationContext()
+    {
+        var hostUser = new User("test-caller", "SSO-Auth", "Default") { EnableUserPreferenceAccess = true };
+        hostUser.SetPermission(PermissionKind.IsAdministrator, true);
+
+        var authContext = Substitute.For<IAuthorizationContext>();
+        authContext.GetAuthorizationInfo(Arg.Any<HttpRequest>())
+            .Returns(Task.FromResult(new AuthorizationInfo { User = hostUser }));
+        return authContext;
+    }
 
     public async ValueTask DisposeAsync()
     {

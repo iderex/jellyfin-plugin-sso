@@ -30,9 +30,22 @@ public static class RequestHelpers
     /// <returns>A <see cref="bool"/> whether the user can update the entry.</returns>
     internal static async Task<bool> AssertCanUpdateUser(IAuthorizationContext authContext, HttpRequest requestContext, Guid userId)
     {
+        if (authContext is null)
+        {
+            return false;
+        }
+
         var auth = await authContext.GetAuthorizationInfo(requestContext).ConfigureAwait(false);
 
-        var authenticatedUser = auth.User;
+        var authenticatedUser = auth?.User;
+
+        // Fail closed on an unresolved caller: a null authorization result or unauthenticated request
+        // is an explicit deny, not a NullReferenceException that would surface as a 500. Every real
+        // caller sits behind [Authorize], so this only guards the ambiguous/misconfigured case.
+        if (authenticatedUser is null)
+        {
+            return false;
+        }
 
         // Updating the record of another user requires an administrator; every caller edits user
         // preferences, so the upstream restrictUserPreferences flag is folded in as always-on here.

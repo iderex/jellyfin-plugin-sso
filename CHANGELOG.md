@@ -4,6 +4,21 @@ All notable changes to this plugin are documented here. Versions follow the
 four-part `X.Y.Z.W` scheme described in the release policy (breaking / feature /
 bug-fix / security).
 
+## 4.2.1.0
+
+A bug-fix release.
+
+### Fixed
+
+- **Admin-or-self authorization now denies explicitly on a null auth context
+  (#626).** `RequestHelpers.AssertCanUpdateUser` previously failed closed by
+  throwing a `NullReferenceException` (which could surface as a 500) on a null
+  or ambiguous authorization context. It now returns an explicit `false` — a
+  clean, total deny. Normal authenticated requests are unaffected; the fix
+  removes a fragile reliance on an exception for a security-critical denial and
+  eliminates the internal-error surface. A masked test that had tolerated the
+  old exception was corrected to assert the explicit deny.
+
 ## 4.2.0.0
 
 A breaking release.
