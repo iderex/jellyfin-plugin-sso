@@ -382,6 +382,39 @@ provider is saved.
 > accepting multiple inbound IdP verification certificates during a rotation window, are tracked
 > separately and not yet implemented.
 
+## SAML service-provider metadata
+
+The plugin can publish standard SAML 2.0 **service-provider metadata** for a provider, so you can
+register this service provider at your identity provider by URL instead of typing the entity ID,
+assertion-consumer URL and signing certificate by hand:
+
+```
+GET <base URL>/sso/SAML/metadata/<ProviderName>
+```
+
+for example `https://jellyfin.example.com/sso/SAML/metadata/keycloak`. The response is an
+`application/samlmetadata+xml` `EntityDescriptor`/`SPSSODescriptor` carrying:
+
+- the **entityID**, which is the provider's configured client ID (`SamlClientId`) — the same value the
+  plugin sends as the `AuthnRequest` `Issuer`, so the identity provider correlates the two;
+- one **HTTP-POST `AssertionConsumerService`** at `<base URL>/sso/SAML/post/<ProviderName>`; and
+- a **`KeyDescriptor use="signing"`** carrying the SP's **public** request-signing certificate — but
+  **only when [request signing](#saml-request-signing-optional) (`SignAuthnRequests`) is enabled** for
+  that provider. Only the public certificate is published; the private key (`SamlSigningKeyPfx`) never
+  leaves the server. When signing is off, no `KeyDescriptor` is emitted and `AuthnRequestsSigned="false"`.
+
+The endpoint is **anonymous** — SP metadata is public information, and a real identity provider fetches
+it unauthenticated.
+
+**The published entity ID and ACS URL come only from the configured
+[canonical base URL](#canonical-base-url-recommended-hardening) (`BaseUrlOverride`), never from the
+request `Host` header.** This is deliberate and security-critical: metadata is consumed by the identity
+provider to decide where it POSTs assertions, so deriving the ACS from a spoofable (proxy-forwarded)
+host would let an attacker point your identity provider at an attacker-controlled endpoint. Therefore the
+endpoint **fails closed** — it returns `409 Conflict` and publishes nothing — when the provider has no
+`BaseUrlOverride` set (or no client ID, or request signing is on but the signing key cannot be loaded).
+Set the provider's `BaseUrlOverride` first, then fetch its metadata.
+
 ## SAML login browser binding
 
 Every SP-initiated SAML login (one started from Jellyfin, i.e. `SAML/start/...`) is bound to the

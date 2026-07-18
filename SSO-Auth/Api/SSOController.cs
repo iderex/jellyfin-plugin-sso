@@ -426,6 +426,30 @@ public class SSOController : ControllerBase
     }
 
     /// <summary>
+    /// Serves this service provider's SAML 2.0 metadata for <paramref name="provider"/> (#162), so an
+    /// administrator can register the SP at the identity provider by URL instead of hand-configuring the
+    /// entity id, assertion-consumer URL and signing certificate. Anonymous by design — SP metadata is
+    /// public (a real identity provider fetches it unauthenticated) — and deliberately request-free: the
+    /// published entity id and ACS URL are built only from the provider's configured canonical Base URL,
+    /// never the request Host.
+    /// </summary>
+    /// <param name="provider">The SAML provider whose metadata to serve.</param>
+    /// <returns>The SP metadata document, or a fail-closed rejection when the provider is unknown/disabled or its canonical Base URL is unconfigured.</returns>
+    [HttpGet("SAML/metadata/{provider}")]
+    public ActionResult SamlMetadata(string provider)
+    {
+        if (RateLimitCheck("metadata") is { } throttled)
+        {
+            return throttled;
+        }
+
+        // The SP metadata flow lives in the flow service (#160, #318): it resolves the entity id and
+        // assertion-consumer URL from the configured canonical Base URL (never the request Host) and emits
+        // the SPSSODescriptor, advertising the PUBLIC signing certificate only when request signing is on.
+        return _saml.Metadata(provider);
+    }
+
+    /// <summary>
     /// Adds a SAML configuration. If the provider already exists, overwrite it.
     /// </summary>
     /// <param name="provider">The provider name to add.</param>

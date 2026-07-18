@@ -374,6 +374,110 @@ internal sealed class SamlLoginService
     }
 
     /// <summary>
+    /// Serves this service provider's SAML 2.0 metadata for <paramref name="provider"/> (#162), so an
+    /// administrator can register the SP at the identity provider by URL rather than hand-configuring the
+    /// entity id, assertion-consumer URL and signing certificate. Anonymous by design — SP metadata is
+    /// public — and deliberately request-free: unlike the login flow, it refuses to derive the published
+    /// entity id/ACS from the request <c>Host</c>. Both are built ONLY from the provider's configured
+    /// canonical Base URL (<see cref="Config.ProviderConfigBase.BaseUrlOverride"/>, #139); if that is not
+    /// configured the endpoint fails closed rather than publish a spoofable ACS an attacker could point the
+    /// identity provider at (RFC 9700 sect. 4.1). The signing certificate is advertised only when request
+    /// signing is enabled, and only ever as the PUBLIC certificate.
+    /// </summary>
+    /// <param name="provider">The SAML provider whose metadata to serve.</param>
+    /// <returns>The SP metadata document, or a fail-closed rejection when the provider is unknown/disabled or its metadata prerequisites are unconfigured.</returns>
+    internal ActionResult Metadata(string provider)
+    {
+        // Unknown and disabled providers share the login flow's uniform rejection, so a disabled provider
+        // does not expose its entity id / signing certificate through this anonymous surface either.
+        var config = FindSamlConfig(provider);
+        if (config is not { Enabled: true })
+        {
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.UnknownProvider));
+        }
+
+        // The published ACS/entity id MUST be non-spoofable: build them ONLY from the configured canonical
+        // Base URL, never the request Host (which a reverse proxy forwarding an unfiltered X-Forwarded-Host
+        // could influence). With no canonical Base URL configured, fail closed rather than bake a
+        // request-derived value into metadata an identity provider consumes to decide where to POST
+        // assertions — the login flow may fall back to the request host, but published metadata must not.
+        if (!CanonicalBaseUrl.TryNormalize(config.BaseUrlOverride, out var baseUrl))
+        {
+            return FlowResponses.PlainTextError(
+                StatusCodes.Status409Conflict,
+                "SAML metadata is unavailable: configure this provider's canonical Base URL first, so the published assertion-consumer URL cannot be derived from a spoofable request host.");
+        }
+
+        // The entity id is the value the challenge sends as the AuthnRequest Issuer (the client id); an
+        // enabled SAML provider always has one, but guard fail-closed rather than emit metadata with an
+        // empty entityID.
+        var entityId = config.SamlClientId?.Trim();
+        if (string.IsNullOrEmpty(entityId))
+        {
+            return FlowResponses.PlainTextError(
+                StatusCodes.Status409Conflict,
+                "SAML metadata is unavailable: this provider has no client id (SP entity id) configured.");
+        }
+
+        // Advertise the canonical new-path ACS spelling; the SP accepts either spelling on the way back
+        // (SsoUrlBuilder.SamlExpectedAcsUrls), so publishing one is unambiguous for the identity provider.
+        var acsUrl = SsoUrlBuilder.SamlAcsUrl(baseUrl, newPath: true, provider);
+
+        if (!TryResolveSigningCertificate(config, out var signingCertificateBase64))
+        {
+            // Request signing is enabled but the key could not be loaded — the same fail-closed posture the
+            // signed challenge takes, so metadata never advertises signing the challenge would then fail to
+            // perform.
+            return FlowResponses.PlainTextError(
+                StatusCodes.Status409Conflict,
+                "SAML metadata is unavailable: request signing is enabled but the signing key could not be loaded.");
+        }
+
+        return new ContentResult
+        {
+            Content = SamlSpMetadataBuilder.Build(entityId, acsUrl, signingCertificateBase64),
+            ContentType = "application/samlmetadata+xml",
+            StatusCode = StatusCodes.Status200OK,
+        };
+    }
+
+    // Resolves the PUBLIC signing certificate to advertise in the metadata: null when request signing is
+    // off (no KeyDescriptor is emitted), the Base64 (DER) public certificate when it is on, and false (fail
+    // closed) when it is on but the key cannot be loaded/decrypted — mirroring BuildChallengeRedirectUrl.
+    // Only the certificate's public RawData is exported; the private key never leaves this method.
+    private static bool TryResolveSigningCertificate(SamlConfig config, out string signingCertificateBase64)
+    {
+        signingCertificateBase64 = null;
+        if (!config.SignAuthnRequests)
+        {
+            return true;
+        }
+
+        string revealed;
+        try
+        {
+            // The signing key is stored encrypted at rest (#158); reveal it at the point of use. A missing
+            // or corrupt key file throws CryptographicException — fail closed here rather than surface a 500.
+            revealed = SSOPlugin.Instance.Secrets.Reveal(config.SamlSigningKeyPfx);
+        }
+        catch (CryptographicException)
+        {
+            return false;
+        }
+
+        if (!SamlSigningKey.TryLoad(revealed, out var certificate))
+        {
+            return false;
+        }
+
+        using (certificate)
+        {
+            signingCertificateBase64 = Convert.ToBase64String(certificate.RawData);
+            return true;
+        }
+    }
+
+    /// <summary>
     /// The SAML session-minting authenticate leg: validates the signed response, correlates it to an
     /// AuthnRequest this server issued (browser binding, #156/#415), enforces the login allow-list and
     /// one-time replay consume, then hands the fully-verified identity to the shared completion tail. The
