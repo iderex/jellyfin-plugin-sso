@@ -797,6 +797,35 @@
                   </div>
                 </div>
 
+                <div
+                  class="checkboxContainer checkboxContainer-withDescription"
+                >
+                  <label>
+                    <input
+                      is="emby-checkbox"
+                      id="RequireVerifiedEmailForLogin"
+                      name="RequireVerifiedEmailForLogin"
+                      type="checkbox"
+                      class="sso-toggle"
+                    />
+                    <span>Require Verified Email For Login (Sensitive)</span>
+                  </label>
+                  <div class="fieldDescription checkboxFieldDescription">
+                    ⚠ Sensitive: requires every OpenID login for this provider
+                    to carry a provider-verified email (email_verified == true)
+                    — whether it adopts, creates, or signs in to an
+                    already-linked account — not only the adoption moment above.
+                    A login whose email_verified is not exactly true (absent,
+                    false, or unparseable) is refused. Needs the email scope so
+                    the provider actually returns email_verified; without it,
+                    every login is refused. Off by default so a deployment that
+                    does not set it, or an IdP that never emits the claim, is
+                    unaffected. Independent of Allow Adopting Existing Accounts
+                    and Require Verified Email For Adoption above (run either,
+                    both, or neither).
+                  </div>
+                </div>
+
                 <div class="inputContainer">
                   <label
                     class="inputLabel inputLabelUnfocused"
