@@ -11,9 +11,9 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 /// segment is read off the callback's own path. The previous expression tested for "/start/", a
 /// challenge-route segment that never occurs on callback routes, so the new-path flow sent a
 /// mismatched redirect_uri that spec-enforcing IdPs reject (#98). The route is now read off its
-/// <c>{protocol}/{path-kind}/{provider}</c> suffix — the same robust form as
-/// <see cref="ChallengePath.IsNewPath"/> — so a protocol-like reverse-proxy prefix cannot decide
-/// the spelling (#411).
+/// <c>{protocol}/{path-kind}/{provider}</c> suffix through the shared <see cref="RouteSuffix"/> reader —
+/// the same robust form as <see cref="ChallengePath.IsNewPath"/> — so a protocol-like reverse-proxy
+/// prefix cannot decide the spelling (#411, #509).
 /// </summary>
 internal static class OidcCallbackPath
 {
@@ -24,22 +24,13 @@ internal static class OidcCallbackPath
     /// <returns>"redirect" when the route's <c>OID/{path-kind}/{provider}</c> suffix names the "redirect" path-kind, otherwise "r".</returns>
     internal static string RedirectSegment(string? path)
     {
-        // The callback route always ends in {protocol}/{path-kind}/{provider}, so anchor to that
-        // three-segment suffix rather than the first "OID" token found anywhere in the path: a
-        // protocol-like reverse-proxy prefix (e.g. /OID/redirect/proxy/...) must not decide the
-        // spelling. Trim only boundary slashes so an internal empty segment (a doubled slash) shifts
-        // the suffix and fails to match rather than being silently collapsed into a valid route.
-        // Same suffix-anchored form as ChallengePath.IsNewPath (#411).
-        var segments = path?.Trim('/').Split('/');
-        if (segments is null || segments.Length < 3)
+        if (!RouteSuffix.TryRead(path, out var suffix))
         {
             return "r";
         }
 
-        var protocol = segments[^3];
-        var pathKind = segments[^2];
-        return string.Equals(protocol, "OID", StringComparison.OrdinalIgnoreCase)
-            && string.Equals(pathKind, "redirect", StringComparison.OrdinalIgnoreCase)
+        return string.Equals(suffix.Protocol, "OID", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(suffix.PathKind, "redirect", StringComparison.OrdinalIgnoreCase)
                 ? "redirect"
                 : "r";
     }
