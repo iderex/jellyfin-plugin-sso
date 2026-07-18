@@ -102,7 +102,7 @@ internal static class ProviderConfigValidator
         if (SamlSigningKey.IsInvalid(signingKeyPfx))
         {
             throw new ArgumentException(
-                $"SAML provider '{provider?.ReplaceLineEndings(string.Empty)}' has an invalid request signing key; it must be a Base64-encoded, unencrypted PKCS#12 (PFX) blob containing an RSA private key.");
+                $"SAML provider '{provider?.ReplaceLineEndings(string.Empty)}' has an invalid request signing key; it must be a Base64-encoded, unencrypted PKCS#12 (PFX) blob containing an RSA or ECDSA private key.");
         }
     }
 }

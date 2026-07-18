@@ -190,7 +190,7 @@ public class SSOController : ControllerBase
     {
         if (SamlSigningKey.IsInvalid(signingKeyPfx))
         {
-            throw new ArgumentException("The SAML request signing key must be a Base64-encoded, unencrypted PKCS#12 (PFX) blob containing an RSA private key, or left blank.");
+            throw new ArgumentException("The SAML request signing key must be a Base64-encoded, unencrypted PKCS#12 (PFX) blob containing an RSA or ECDSA private key, or left blank.");
         }
     }
 
