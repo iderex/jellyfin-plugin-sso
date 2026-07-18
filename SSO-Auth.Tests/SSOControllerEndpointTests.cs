@@ -23,7 +23,7 @@ public class SSOControllerEndpointTests
     {
         var harness = new SsoControllerHarness();
 
-        var result = await harness.Controller.OidPost("does-not-exist", "some-state");
+        var result = await harness.Controller.OidCallback("does-not-exist", "some-state");
 
         Assert.IsType<BadRequestObjectResult>(result);
     }
@@ -55,7 +55,7 @@ public class SSOControllerEndpointTests
     {
         var harness = new SsoControllerHarness();
 
-        var result = harness.Controller.SamlPost("does-not-exist");
+        var result = harness.Controller.SamlCallback("does-not-exist");
 
         AssertUnknownProvider(result);
     }
@@ -84,7 +84,7 @@ public class SSOControllerEndpointTests
     {
         var harness = new SsoControllerHarness(c => c.OidConfigs["keycloak"] = new OidConfig { Enabled = false });
 
-        var result = await harness.Controller.OidPost("keycloak", "some-state");
+        var result = await harness.Controller.OidCallback("keycloak", "some-state");
 
         // Assert the body, not just the type: a missing/invalid state also returns a 400, so pinning
         // the "no matching provider" message keeps this test on the disabled-provider fallthrough.
@@ -97,7 +97,7 @@ public class SSOControllerEndpointTests
     {
         var harness = new SsoControllerHarness(c => c.OidConfigs["keycloak"] = new OidConfig { Enabled = true });
 
-        var result = await harness.Controller.OidPost("keycloak", string.Empty);
+        var result = await harness.Controller.OidCallback("keycloak", string.Empty);
 
         var badRequest = Assert.IsType<BadRequestObjectResult>(result);
         Assert.Equal("Missing state", badRequest.Value);
@@ -108,7 +108,7 @@ public class SSOControllerEndpointTests
     {
         var harness = new SsoControllerHarness(c => c.OidConfigs["keycloak"] = new OidConfig { Enabled = true });
 
-        var result = await harness.Controller.OidPost("keycloak", "not-a-real-state-token");
+        var result = await harness.Controller.OidCallback("keycloak", "not-a-real-state-token");
 
         var badRequest = Assert.IsType<BadRequestObjectResult>(result);
         Assert.Equal("Invalid or expired state", badRequest.Value);

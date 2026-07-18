@@ -32,7 +32,7 @@ OidChallenge  (GET  OID/p/{provider}, OID/start/{provider})
   -> AuthorizeStateBinding                      -- binds the state to the initiating browser (cookie)
   -> redirect to the provider
 
-OidPost       (GET  OID/r/{provider}, OID/redirect/{provider})   -- the provider's callback
+OidCallback   (GET  OID/r/{provider}, OID/redirect/{provider})   -- the provider's callback
   -> OidcStateStore.PeekCurrent                 -- looks up the pending state (does not consume it)
   -> OidcClient.ProcessResponseAsync            -- token exchange + id_token signature validation
   -> OidcResponseIssuer.IsRejected              -- RFC 9207 issuer mix-up check
@@ -55,7 +55,7 @@ SamlChallenge (GET  SAML/p/{provider}, SAML/start/{provider})
   -> AuthorizeStateBinding                        -- binds the request to the initiating browser (cookie)
   -> redirect to the IdP
 
-SamlPost      (POST SAML/p/{provider}, SAML/post/{provider})    -- the IdP's ACS callback
+SamlCallback  (POST SAML/p/{provider}, SAML/post/{provider})    -- the IdP's ACS callback
   -> SamlResponseLoader.TryParse                  -- parses + validates the signed response (Saml.cs core)
   -> SamlLoginPolicy.IsLoginAllowed                -- role allow-list check
   -> renders the intermediate auth page (WebResponse.Generator)
@@ -138,6 +138,16 @@ reflection: the controller touches no provider link map directly
 (`Controller_NeverTouchesProviderLinkMaps` — that stays confined to
 `CanonicalLinkService` and `ServerManagedFields.Preserve`) and no raw
 socket/DNS surface (`Controller_NeverTouchesRawSocketsOrDns`).
+
+**Naming convention for new OpenID types (#370):** spell it `Oidc`, not `Oid`.
+`Oid*` (`OidConfig`, `OidChallenge`, `OidAdd`, …) survives only on the
+config/endpoint surface for backward compatibility with the serialized
+configuration and the existing route literals — neither is renamed by this
+convention. Every extracted OpenID helper already uses `Oidc*`
+(`OidcLoginService`, `OidcStateStore`, `OidcIdTokenValidator`, …); a new type
+should follow that spelling so a grep for either prefix does not miss half
+the OpenID surface. This is a naming convention only — no mass rename of
+existing serialized field names or routes.
 
 ### Target direction (#318) — not yet implemented
 

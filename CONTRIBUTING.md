@@ -177,7 +177,7 @@ We format all C# code according to the .NET formatter. Build with `dotnet build 
 
 We use [Prettier](https://prettier.io) to format these files. Run `npx prettier --write "**/*.{js,html,md,css,scss}"` before committing, and `npx prettier --check "**/*.{js,html,md,css,scss}"` to confirm — CI enforces the check (only `*.min.js` is exempt).
 
-Not every file under `SSO-Auth/Views` is project code. Check the provenance header before editing: `emby-restyle.css` and the minified `jellyfin-apiClient.esm.min.js` are **vendored** from jellyfin-web — update them by re-copying from upstream, not by editing in place — whereas `apiClient.js` is **project-maintained** code (loosely based on the linked upstream) that carries our own security logic and is edited here directly.
+Not every file under `SSO-Auth/Views` is project code. Check the provenance header before editing: `emby-restyle.css` and the minified `jellyfin-apiClient.esm.min.js` are **vendored** from jellyfin-web — update them by re-copying from upstream, not by editing in place — whereas `ApiClient.js` is **project-maintained** code (loosely based on the linked upstream) that carries our own security logic and is edited here directly.
 
 <!-- omit in toc -->
 

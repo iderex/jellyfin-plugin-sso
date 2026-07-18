@@ -62,11 +62,11 @@ public class SSOControllerAdminTests
             clientIp: IPAddress.Parse("8.8.8.8"));
 
         // The first call passes the limiter and spends the single-attempt budget (unknown provider -> 400).
-        var first = await harness.Controller.OidPost("does-not-exist", "s");
+        var first = await harness.Controller.OidCallback("does-not-exist", "s");
         Assert.IsType<BadRequestObjectResult>(first);
 
         // The second is over budget and throttled with a 429.
-        var throttled = await harness.Controller.OidPost("does-not-exist", "s");
+        var throttled = await harness.Controller.OidCallback("does-not-exist", "s");
         var content = Assert.IsType<ContentResult>(throttled);
         Assert.Equal(429, content.StatusCode);
     }

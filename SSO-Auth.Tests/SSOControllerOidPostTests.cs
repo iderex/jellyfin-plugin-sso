@@ -48,7 +48,7 @@ public class SSOControllerOidPostTests
         using var fixture = new OidcTokenFixture(Authority, "jf");
         var harness = ArrangeCallback(fixture, query: "?code=test-code&state=state-1");
 
-        var result = await harness.Controller.OidPost("kc", "state-1");
+        var result = await harness.Controller.OidCallback("kc", "state-1");
 
         // Reaching the intermediate HTML auth page (text/html) rather than a plain-text error proves the
         // token exchange, id_token signature validation, and sub resolution all succeeded.
@@ -67,7 +67,7 @@ public class SSOControllerOidPostTests
         // expiry.
         var harness = ArrangeCallback(fixture, query: "?code=test-code&state=state-1", bindingCookie: null);
 
-        var result = await harness.Controller.OidPost("kc", "state-1");
+        var result = await harness.Controller.OidCallback("kc", "state-1");
 
         Assert.Equal("Invalid or expired state", Assert.IsType<BadRequestObjectResult>(result).Value);
     }
@@ -85,13 +85,13 @@ public class SSOControllerOidPostTests
         // guard.
         var harness = ArrangeCallback(fixture, query: "?code=test-code&state=state-1", secondProvider: "kc2");
 
-        var crossContext = await harness.Controller.OidPost("kc2", "state-1");
+        var crossContext = await harness.Controller.OidCallback("kc2", "state-1");
         Assert.Equal("Invalid or expired state", Assert.IsType<BadRequestObjectResult>(crossContext).Value);
 
         // Positive control: PeekCurrent does not consume, so the same state still completes on the
         // provider it WAS minted for — proving the rejection above is the provider-context binding, not an
         // unrelated failure of the shared fixture.
-        var sameContext = await harness.Controller.OidPost("kc", "state-1");
+        var sameContext = await harness.Controller.OidCallback("kc", "state-1");
         Assert.Equal("text/html", Assert.IsType<ContentResult>(sameContext).ContentType);
     }
 
@@ -108,7 +108,7 @@ public class SSOControllerOidPostTests
         // end-to-end by OidAuth_ValidState_ProvisionsAccountReturnsOk_AndIsSingleUse).
         var harness = ArrangeCallback(fixture, query: "?code=test-code&state=state-1", bindingCookie: "attacker-other-browser-binding");
 
-        var result = await harness.Controller.OidPost("kc", "state-1");
+        var result = await harness.Controller.OidCallback("kc", "state-1");
 
         Assert.Equal("Invalid or expired state", Assert.IsType<BadRequestObjectResult>(result).Value);
     }
@@ -122,7 +122,7 @@ public class SSOControllerOidPostTests
         // rejected even though the token itself is valid.
         var harness = ArrangeCallback(fixture, query: "?code=test-code&state=state-1&iss=https://attacker.example.com");
 
-        var result = await harness.Controller.OidPost("kc", "state-1");
+        var result = await harness.Controller.OidCallback("kc", "state-1");
 
         Assert.Equal(400, Assert.IsType<ContentResult>(result).StatusCode);
     }
@@ -143,7 +143,7 @@ public class SSOControllerOidPostTests
             idToken: fixture.IdToken(subject: "sub-1", username: "alice", issuer: concreteIssuer),
             doNotValidateIssuerName: true);
 
-        var result = await harness.Controller.OidPost("kc", "state-1");
+        var result = await harness.Controller.OidCallback("kc", "state-1");
 
         Assert.Equal("text/html", Assert.IsType<ContentResult>(result).ContentType);
     }
@@ -156,7 +156,7 @@ public class SSOControllerOidPostTests
         // callback that omits `iss` is a downgrade and must be rejected — even though the id_token is valid.
         var harness = ArrangeCallback(fixture, query: "?code=test-code&state=state-1", responseIssuerRequired: true);
 
-        var result = await harness.Controller.OidPost("kc", "state-1");
+        var result = await harness.Controller.OidCallback("kc", "state-1");
 
         Assert.Equal(400, Assert.IsType<ContentResult>(result).StatusCode);
     }
@@ -170,7 +170,7 @@ public class SSOControllerOidPostTests
         // satisfied by a correct value, not merely by the flag being set.
         var harness = ArrangeCallback(fixture, query: $"?code=test-code&state=state-1&iss={Authority}", responseIssuerRequired: true);
 
-        var result = await harness.Controller.OidPost("kc", "state-1");
+        var result = await harness.Controller.OidCallback("kc", "state-1");
 
         Assert.Equal("text/html", Assert.IsType<ContentResult>(result).ContentType);
     }
@@ -184,7 +184,7 @@ public class SSOControllerOidPostTests
         // path RFC 9207 §2.4 preserves.
         var harness = ArrangeCallback(fixture, query: "?code=test-code&state=state-1");
 
-        var result = await harness.Controller.OidPost("kc", "state-1");
+        var result = await harness.Controller.OidCallback("kc", "state-1");
 
         Assert.Equal("text/html", Assert.IsType<ContentResult>(result).ContentType);
     }
@@ -197,7 +197,7 @@ public class SSOControllerOidPostTests
         // the callback is refused rather than minting a login.
         var harness = ArrangeCallback(fixture, query: "?code=test-code&state=state-1", tokenEndpointFails: true);
 
-        var result = await harness.Controller.OidPost("kc", "state-1");
+        var result = await harness.Controller.OidCallback("kc", "state-1");
 
         Assert.Equal(400, Assert.IsType<ContentResult>(result).StatusCode);
     }
@@ -210,7 +210,7 @@ public class SSOControllerOidPostTests
         // key the account link on, so the login is refused.
         var harness = ArrangeCallback(fixture, query: "?code=test-code&state=state-1", idToken: fixture.IdToken(subject: null, username: "alice"));
 
-        var result = await harness.Controller.OidPost("kc", "state-1");
+        var result = await harness.Controller.OidCallback("kc", "state-1");
 
         Assert.Equal(401, Assert.IsType<ContentResult>(result).StatusCode);
     }
@@ -225,7 +225,7 @@ public class SSOControllerOidPostTests
         var (harness, state) = await DriveAdvertisedChallenge(fixture);
         harness.Controller.HttpContext.Request.QueryString = new QueryString($"?code=test-code&state={state}");
 
-        var result = await harness.Controller.OidPost("kc", state);
+        var result = await harness.Controller.OidCallback("kc", state);
 
         // Pin the 400 to the RFC 9207 reject specifically, not the shared token-exchange-error 400: assert
         // the SsoResponseInvalid body so a 400 from a different source cannot satisfy this test.
@@ -243,7 +243,7 @@ public class SSOControllerOidPostTests
         var (harness, state) = await DriveAdvertisedChallenge(fixture);
         harness.Controller.HttpContext.Request.QueryString = new QueryString($"?code=test-code&state={state}&iss={Authority}");
 
-        var result = await harness.Controller.OidPost("kc", state);
+        var result = await harness.Controller.OidCallback("kc", state);
 
         Assert.Equal("text/html", Assert.IsType<ContentResult>(result).ContentType);
     }

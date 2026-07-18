@@ -98,9 +98,10 @@ internal sealed class SsoRateLimiter
         // forwarded headers Jellyfin has not been told to resolve ("Known proxies" unset), the
         // socket peer is the proxy's private/loopback address — one shared bucket for the entire
         // userbase — so no bucket is created at all. LAN/insider traffic is out of scope for a
-        // brute-force limiter aimed at the public edge. Reuses the avatar SSRF classifier:
-        // "not a public address" is the same predicate in both places.
-        if (AvatarUrlValidator.IsBlockedAddress(ip))
+        // brute-force limiter aimed at the public edge. Shares its predicate with the avatar SSRF
+        // guard (IpAddressClassifier, #370): "not a public address" is the same classification in
+        // both places.
+        if (IpAddressClassifier.IsBlockedAddress(ip))
         {
             return null;
         }
@@ -126,7 +127,7 @@ internal sealed class SsoRateLimiter
         // one already returned null) — this only re-buckets, never returns null, so throttling is
         // preserved (fail closed). A network-specific NAT64 prefix (RFC 6052 NSP) is not recognized
         // and falls through to /64 below, as does any non-transition IPv6.
-        if (AvatarUrlValidator.TryExtractEmbeddedIPv4(bytes, out var embedded))
+        if (IpAddressClassifier.TryExtractEmbeddedIPv4(bytes, out var embedded))
         {
             return embedded.ToString();
         }

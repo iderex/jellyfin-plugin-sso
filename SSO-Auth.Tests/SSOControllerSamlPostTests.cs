@@ -19,7 +19,7 @@ public class SSOControllerSamlPostTests
     {
         var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig { Enabled = false });
 
-        var result = harness.Controller.SamlPost("adfs", formSamlResponse: "irrelevant");
+        var result = harness.Controller.SamlCallback("adfs", formSamlResponse: "irrelevant");
 
         // Shares the unknown-provider body now (the unique "No active providers found" wording is
         // retired), so a disabled provider cannot be told apart from an unknown one (#318).
@@ -39,7 +39,7 @@ public class SSOControllerSamlPostTests
             SamlCertificate = SamlFixture.ForeignCertificateBase64(),
         });
 
-        var result = harness.Controller.SamlPost("adfs", formSamlResponse: fixture.EncodeResponse());
+        var result = harness.Controller.SamlCallback("adfs", formSamlResponse: fixture.EncodeResponse());
 
         Assert.Equal(400, Assert.IsType<ContentResult>(result).StatusCode);
     }
@@ -56,7 +56,7 @@ public class SSOControllerSamlPostTests
             Roles = new[] { "only-admins" },
         });
 
-        var result = harness.Controller.SamlPost("adfs", formSamlResponse: fixture.EncodeResponse());
+        var result = harness.Controller.SamlCallback("adfs", formSamlResponse: fixture.EncodeResponse());
 
         Assert.Equal(401, Assert.IsType<ContentResult>(result).StatusCode);
     }
@@ -72,7 +72,7 @@ public class SSOControllerSamlPostTests
             DoNotValidateAudience = true,
         });
 
-        var result = harness.Controller.SamlPost("adfs", formSamlResponse: fixture.EncodeResponse());
+        var result = harness.Controller.SamlCallback("adfs", formSamlResponse: fixture.EncodeResponse());
 
         // A valid assertion renders the intermediate HTML auth page (which then posts to SamlAuth).
         var page = Assert.IsType<ContentResult>(result);
