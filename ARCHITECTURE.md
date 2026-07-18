@@ -2,7 +2,7 @@
 
 A map for a new contributor working from a fork, a source tarball, or offline —
 so a first change can be placed onto the flow instead of reverse-engineered
-from `SSO-Auth/Api/SSOController.cs` (currently ~1,525 lines) and its ~45
+from `SSO-Auth/Api/SSOController.cs` (currently ~965 lines) and its ~45
 helper types. It complements, and does not replace, the wiki
 [Login Flow](https://github.com/iderex/jellyfin-plugin-sso/wiki/Login-Flow)
 page.
@@ -72,10 +72,10 @@ SamlAuth      (POST SAML/Auth/{provider})          -- the auth page posts back h
 
 Both auth endpoints call the identical two-step tail —
 `CanonicalLinkService.ResolveOrCreateAsync` then `SessionMinter.MintAsync` —
-today as two calls repeated at each of the four login/link sites (login +
-account-linking, per protocol), not through a shared extracted method. Folding
-that tail into one shared collaborator is target-direction step 11
-(`LoginCompletionService`, #318 §3) — not yet done.
+now folded into one shared collaborator, `LoginCompletionService`
+(`Api/Flows/LoginCompletionService.cs`, target-direction step 11, #318 §3 /
+#497). Both flow services call it instead of duplicating the tail at each
+login/link site.
 
 ### Process-wide stores
 
@@ -148,33 +148,36 @@ should follow that spelling so a grep for either prefix does not miss half
 the OpenID surface. This is a naming convention only — no mass rename of
 existing serialized field names or routes.
 
-### Target direction (#318) — not yet implemented
+### Target direction (#318) — delivered
 
 The [#318 target-architecture design note](https://github.com/iderex/jellyfin-plugin-sso/issues/318)
-plans a further decomposition on top of the same four tiers, landed as a
+laid out a further decomposition on top of the same four tiers, landed as a
 sequence of small, independently gated PRs (tracked on the
-[SSO Roadmap board](https://github.com/users/iderex/projects/1)):
+[SSO Roadmap board](https://github.com/users/iderex/projects/1)). All of it has
+now merged:
 
 - **A flow-service spine per protocol** — `OidcLoginService` / `SamlLoginService`
-  under a new `Api/Flows/` namespace, each owning its protocol's process-wide
+  under the `Api/Flows/` namespace, each owning its protocol's process-wide
   stores as its own `static readonly` fields (a pure relocation, not a
   lifetime change — no service registrator exists to promote them to DI). The
-  controller shrinks to route/model-binding plus one call into a flow
-  service.
+  controller is now route/model-binding plus one call into a flow service.
 - **`LoginCompletionService`** — the shared resolve → mint → audit → outcome
   tail described above, extracted once so both protocols call one
   collaborator instead of duplicating the same four call sites.
 - **`VerifiedIdentity`** — a protocol-agnostic record only the two protocol
   validators can construct (private constructor + factory), generalizing the
-  existing OIDC `RedeemedState`. `LoginCompletionService` accepts only a
+  earlier OIDC `RedeemedState`. `LoginCompletionService` accepts only a
   `VerifiedIdentity`, so reaching account-resolution with an unvalidated
-  response becomes a compile error rather than something a review has to
+  response is a compile error rather than something a review has to
   catch — the fail-closed keystone of the migration.
 
-None of the three exist in the tree yet. The ordered step list, the
-parallelization map, and the maintainer decisions still open are in the
-#318 design-note comment; this page is deliberately step 0 of that plan — a
-map of the current shape so later migration PRs and their reviews do not have
+All three now exist in the tree (`Api/Flows/OidcLoginService.cs` +
+`SamlLoginService.cs`, `Api/Flows/LoginCompletionService.cs`,
+`Api/VerifiedIdentity.cs`) and each structural property above is locked by a
+fitness function in `SSO-Auth.Tests/ArchitectureConformanceTests.cs`, so the
+architecture cannot silently regress. The ordered step list and the
+maintainer decisions that drove it are in the #318 design-note comment; this
+page is the map of the resulting shape so later PRs and their reviews do not have
 to reconstruct it from scratch.
 
 ## 3. Security invariants a change must not regress
