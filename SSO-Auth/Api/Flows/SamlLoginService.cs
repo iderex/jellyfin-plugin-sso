@@ -202,13 +202,13 @@ internal sealed class SamlLoginService
         }
 
         // Linking keeps the assertion-embedded page (#251 is scoped to the login round-trip): the page JS
-        // posts its data to BOTH SAML/Link and SAML/Auth. The link redeem (SamlLoginService.Link) consumes the
-        // assertion's one-time-use id on its own leg; the follow-on SAML/Auth post carries that same assertion
-        // (not a login-outcome token), so it does not redeem a live token and is rejected fail-closed at the
-        // mint leg — a harmless no-op, since the link already completed on its own leg. This was already the
-        // effective behaviour before #528: post-link the assertion's replay id was consumed, so the old
-        // deprecation branch rejected the follow-on post too. Removing that branch (#528) changes only WHERE
-        // the follow-on post is rejected (token-miss vs. a re-validated replay), not that it is rejected.
+        // posts its data to SAML/Link. The link redeem (SamlLoginService.Link) consumes the assertion's
+        // one-time-use id on its own leg. Since #614 a definitive Link outcome is TERMINAL on the page — a
+        // successful link (204) renders success and the page does NOT go on to post to SAML/Auth. That
+        // follow-on post could never have succeeded anyway: it carried the same, now-consumed assertion (not
+        // a login-outcome token), so it fail-closed at the mint leg — but left in place it rendered a
+        // misleading 'Login failed' over a link that had actually completed. Dropping the follow-on post
+        // removes that false failure without touching the Link leg's validation or its one-time consume.
         if (isLinking)
         {
             return FlowResponses.AuthPage(response, nonce =>
