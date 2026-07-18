@@ -1,5 +1,5 @@
 # Static analysis of the GitHub Actions workflows themselves (zizmor). The
-# workflow YAML is release-critical attack surface — publish-nightly.yml runs on
+# workflow YAML is release-critical attack surface — publish-beta.yml runs on
 # every push to main with contents:write — so it is audited like any other code.
 #
 # The gate runs zizmor's regular persona at --min-severity=low: it fails the

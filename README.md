@@ -55,20 +55,23 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 
 ## Installing
 
-Requires **Jellyfin 10.11.x**.
-
 **Install from the Jellyfin plugin catalog (recommended for testing):**
 
-1. In Jellyfin, go to **Dashboard → Plugins → Repositories** and add this repository URL:
+1. In Jellyfin, go to **Dashboard → Plugins → Repositories** and add the repository URL for your Jellyfin server generation and the channel you want. Add **one** of these:
 
-   ```
-   https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-release/manifest.json
-   ```
+   | Server             | Channel    | Repository URL                                                                                     |
+   | ------------------ | ---------- | -------------------------------------------------------------------------------------------------- |
+   | Jellyfin **10.11** | **stable** | `https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-release/manifest.json`      |
+   | Jellyfin **10.11** | **beta**   | `https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json`         |
+   | Jellyfin **10.12** | **stable** | `https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-jf12-release/manifest.json` |
+   | Jellyfin **10.12** | **beta**   | `https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-jf12-beta/manifest.json`    |
+   - **stable** ships tagged releases only. **beta** tracks `main` — every merge publishes an installable build, so betas move fast and may break; use them for testing, not production.
+   - The **10.12** URLs already exist so you can add them now, but they are **empty until Jellyfin 10.12 ships** — that generation runs on .NET 10 and needs its own build (there is no Jellyfin 10.12 SDK to build against yet). On **10.11**, use the 10.11 URLs.
 
 2. Go to **Dashboard → Plugins → Catalog**, find **SSO Authentication**, and install it.
 3. **Restart Jellyfin** to load the plugin.
 
-The plugin GUID is unchanged from the original `9p4` plugin, so a new version installs over an existing one in place and keeps your existing configuration.
+The plugin GUID is unchanged from the original `9p4` plugin, so a new version installs over an existing one in place and keeps your existing configuration. To switch channels, replace the repository URL and let the catalog offer the other channel's build.
 
 **Build from source (alternative):**
 
@@ -80,7 +83,7 @@ Copy the **full publish output** (`SSO-Auth.dll` and every dependency DLL beside
 
 **Client support:** SSO sign-in runs in the Jellyfin **Web UI** and in clients that support **Quick Connect** (the mobile and TV apps drive the login through Quick Connect). A native client that does not support Quick Connect cannot complete the browser redirect flow — use the Web UI or a Quick Connect client there.
 
-**Coming from the old plugin repository?** This project is the maintained continuation of the archived `9p4/jellyfin-plugin-sso`. If your Jellyfin still points at the old `9p4` manifest, it will not receive updates from here. Packaged releases have resumed: replace the old plugin-repository URL with this repository's manifest (`https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-release/manifest.json`) under **Dashboard → Plugins → Repositories**, then install **SSO Authentication** from the catalog. The plugin GUID is unchanged, so it updates in place and keeps your existing configuration.
+**Coming from the old plugin repository?** This project is the maintained continuation of the archived `9p4/jellyfin-plugin-sso`. If your Jellyfin still points at the old `9p4` manifest — or at any other now-dead SSO manifest URL, such as a former `jellyfin-plugin-sso-V2` one — it will not receive updates from here. Packaged releases have resumed: replace the stale plugin-repository URL with the 10.11 stable manifest (`https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-release/manifest.json`) under **Dashboard → Plugins → Repositories**, then install **SSO Authentication** from the catalog. The plugin GUID is unchanged, so it updates in place and keeps your existing configuration.
 
 ## Configuration
 

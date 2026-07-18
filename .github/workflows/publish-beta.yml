@@ -1,0 +1,134 @@
+name: Publish Beta
+
+# The JF10.11 BETA channel (#592). Every push to main publishes an installable
+# prerelease build into the `manifest-beta` branch, so beta testers on the beta
+# repository URL get the newest main automatically. This replaces the old hidden
+# `nightly` (which built a 0.0.0.9000 sentinel that every manifest filtered out,
+# so nothing was ever installable from it).
+#
+# Channel vs generation:
+#   - Channel is expressed by SEPARATE manifest branches, because Jellyfin has no
+#     in-manifest channel flag. Stable (publish.yml) writes `manifest-release`
+#     with ignorePrereleases: true; this beta job writes `manifest-beta` with
+#     ignorePrereleases: false, so the beta manifest surfaces the newest of the
+#     prerelease beta builds AND any stable release.
+#   - Generation (JF10.11 vs the future JF10.12) is a different BUILD. This job is
+#     the .NET 9 / Jellyfin 10.11 leg (OidcClient must stay 6.x, #590). The
+#     JF10.12 (.NET 10 / OidcClient 7.x) leg is added when a 10.12 SDK exists;
+#     it will feed `manifest-jf12-beta`.
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+# Explicit deny-all at workflow level; the job below opts into write access
+# explicitly rather than granting it workflow-wide.
+permissions: {}
+
+jobs:
+  build:
+    name: Build & publish beta
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # This job creates the GitHub release and updates the manifest branch, so it
+    # opts into write access explicitly rather than granting it workflow-wide.
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      with:
+        # The release/manifest steps authenticate with GITHUB_TOKEN via their action
+        # inputs, not the git remote, so the persisted checkout token is unneeded.
+        persist-credentials: false
+    - name: Setup .NET
+      uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+      with:
+        dotnet-version: 9.0.x
+        # No NuGet cache here: this job publishes a release with contents:write,
+        # so a poisoned restore cache would reach the published artifact. The
+        # --locked-mode restore below re-downloads against the committed lockfile.
+    - name: Restore dependencies
+      # Match the CI build: --locked-mode rejects a drifted or tampered dependency graph.
+      run: dotnet restore --locked-mode
+    - name: Build Dotnet
+      run: dotnet build --no-restore --warnaserror
+    - name: Derive the beta version
+      id: version
+      # Beta version = the release line from build.yaml (A.B.C) with the workflow
+      # run number as the fourth octet, e.g. 4.1.1.<run_number>. This is always
+      # ABOVE the last stable in that line (…․0) so a beta tester is offered it, and
+      # BELOW the next line's stable (a bump of A/B/C outranks any ….<run_number>),
+      # so cutting the next stable supersedes the beta cleanly. The build number is
+      # monotonic within this workflow, which is all Jellyfin's version precedence
+      # needs; the beta stays out of the stable manifest because it is a prerelease.
+      # The grep pins the four-part shape so a malformed build.yaml fails here rather
+      # than producing a bogus tag. RUN_NUMBER is passed via env (not inlined into the
+      # script) so no ${{ }} expansion is spliced into the shell.
+      env:
+        RUN_NUMBER: ${{ github.run_number }}
+      run: |
+        base=$(grep -E '^version:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+"' build.yaml \
+          | head -1 | sed -E 's/.*"([0-9]+\.[0-9]+\.[0-9]+)\.[0-9]+".*/\1/')
+        if [ -z "$base" ]; then
+          echo "::error::Could not read a four-part version from build.yaml"; exit 1
+        fi
+        echo "beta=${base}.${RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+    - name: "Set the beta version in build.yaml"
+      uses: fjogeleit/yaml-update-action@dffe9a5223d84653c13374032382f6bb5de8e5ef # v0.17.0
+      with:
+        valueFile: 'build.yaml'
+        propertyPath: 'version'
+        value: ${{ steps.version.outputs.beta }}
+        commitChange: false
+        updateFile: true
+    - name: "JPRM: Build"
+      id: jrpm
+      uses: oddstr13/jellyfin-plugin-repository-manager@9497a0a499416cc572ed2e07a391d9f943a37b4d # v1.1.1
+      with:
+        version: ${{ steps.version.outputs.beta }}
+        verbosity: debug
+        path: .
+        dotnet-target: "net9.0"
+        output: _dist
+    - name: Prepare GitHub Release assets
+      run: |-
+        pushd _dist
+        for file in ./*.zip; do
+          md5sum ${file#./} >> ${file%.*}.md5
+          sha256sum ${file#./} >> ${file%.*}.sha256
+        done
+        ls -l
+        popd
+    - name: Publish output artifacts
+      id: publish-assets
+      uses: softprops/action-gh-release@132dbbba49e22bd4837f09b46d32a8edaf6baa58 # unreleased commit between v3.0.1 and v3.0.2
+      with:
+          # Prerelease so publish.yml's stable manifest (ignorePrereleases: true)
+          # never picks it up; only the beta manifest below (ignorePrereleases:
+          # false) surfaces it. The rolling `nightly` tag is reused as the single
+          # moving prerelease pointer, so each build updates the one release in
+          # place rather than accreting a release per push.
+          prerelease: true
+          fail_on_unmatched_files: true
+          tag_name: nightly
+          files: |
+            _dist/*
+            build.yaml
+          body: |
+            Rolling Jellyfin 10.11 beta build (${{ steps.version.outputs.beta }}).
+            Install via the beta repository URL:
+            https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json
+      env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Publish Beta Plugin Manifest
+      # ignorePrereleases: false so the beta build is included. Writes the SEPARATE
+      # `manifest-beta` branch; the stable `manifest-release` is only ever written
+      # by publish.yml, so a beta build can never reach the stable channel.
+      uses: Kevinjil/jellyfin-plugin-repo-action@296850372cd569cbcc040e834222a5afed861485 # v0.4.3
+      with:
+        ignorePrereleases: false
+        githubToken: ${{ secrets.GITHUB_TOKEN }}
+        repository: ${{ github.repository }}
+        pagesBranch: manifest-beta
+        pagesFile: manifest.json
