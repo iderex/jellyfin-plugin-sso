@@ -16,9 +16,11 @@ name: Publish Beta
 #     the .NET 9 / Jellyfin 10.11 leg (OidcClient must stay 6.x, #590). The
 #     JF10.12 (.NET 10 / OidcClient 7.x) leg is added when a 10.12 SDK exists;
 #     it will feed `manifest-jf12-beta`.
+# No push trigger: a beta is no longer minted on every push to main (that spammed one release per
+# merge). nightly-betas.yml (the scheduler, also on the default branch) dispatches this once a day;
+# the gate job below then skips the build unless main has advanced since the last JF10.11 beta. Still
+# manually runnable via workflow_dispatch.
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
 
 # Explicit deny-all at workflow level; the job below opts into write access
@@ -36,8 +38,47 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Publish only when main has advanced since the last JF10.11 beta, so a scheduled daily run on an
+  # unchanged branch does not mint a duplicate release. The tag regex matches only the JF10.11 line
+  # (X.Y.Z-beta.<n>) and excludes the JF12 line (X.Y.Z-JF12-beta.<n>), independent of the base version.
+  # Fail-open: on any API error or missing prior tag it builds — skipping a real change is worse than
+  # an occasional duplicate beta.
+  gate:
+    name: Gate on new main commits
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+    steps:
+    - name: Compare main HEAD to the last JF10.11 beta
+      id: check
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        CUR: ${{ github.sha }}
+      run: |
+        set -uo pipefail
+        last_tag=$(gh api --paginate "repos/${REPO}/git/refs/tags" \
+          --jq '.[].ref | sub("refs/tags/"; "") | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+-beta\\.[0-9]+$"))' 2>/dev/null \
+          | sort -t. -k4 -n | tail -1 || echo "")
+        last_sha=""
+        if [ -n "$last_tag" ]; then
+          last_sha=$(gh api "repos/${REPO}/git/refs/tags/${last_tag}" --jq '.object.sha' 2>/dev/null || echo "")
+        fi
+        echo "current main HEAD: ${CUR}"
+        echo "last JF10.11 beta: ${last_tag:-<none>} -> ${last_sha:-<none>}"
+        if [ -n "$last_sha" ] && [ "$last_sha" = "$CUR" ]; then
+          echo "No new commits since the last JF10.11 beta; skipping the build."
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+        else
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+        fi
+
   build:
     name: Build & publish beta
+    needs: gate
+    if: needs.gate.outputs.changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # This job creates the GitHub release and updates the manifest branch, so it

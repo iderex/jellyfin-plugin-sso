@@ -1,0 +1,40 @@
+name: Nightly betas
+
+# Publish betas on a daily cadence instead of on every push (#632). GitHub `schedule` events only run
+# a workflow from the DEFAULT branch, so this single scheduler lives on main and dispatches both beta
+# legs: publish-beta.yml (JF10.11, on main) and publish-jf12-beta.yml (JF12, on the 4.2 branch,
+# dispatched with --ref 4.2). Each dispatched workflow has its own gate job that skips the build unless
+# its branch has advanced since that lineage's last beta, so an unchanged day mints nothing.
+on:
+  schedule:
+    - cron: "0 4 * * *" # 04:00 UTC, once daily
+  workflow_dispatch:
+
+# Deny-all at the workflow level; the job opts into the single grant it needs.
+permissions: {}
+
+# Never run two dispatchers at once; never cancel one mid-flight.
+concurrency:
+  group: nightly-betas
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    name: Dispatch the daily beta builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Only permission needed: workflow_dispatch the two publish workflows. REPO is passed via env so no
+    # ${{ }} expansion is spliced into the shell.
+    permissions:
+      actions: write
+    steps:
+      - name: Trigger the JF10.11 beta (main)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: gh workflow run publish-beta.yml --repo "$REPO" --ref main
+      - name: Trigger the JF12 beta (4.2)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: gh workflow run publish-jf12-beta.yml --repo "$REPO" --ref 4.2
