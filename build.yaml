@@ -41,6 +41,7 @@ artifacts:
   - "System.Security.Cryptography.Pkcs.dll"
   - "System.Formats.Asn1.dll"
 changelog: |
+  4.2.0.0: Feature release (BREAKING). SAML/Auth now accepts ONLY the one-time login-outcome token introduced in #251; the deprecation window that also accepted a raw pre-#251 assertion POSTed straight to SAML/Auth is removed (#528). A scripted client that posts a raw assertion, bypassing the rendered token page, is now rejected fail-closed. The normal browser login and linking flows are unaffected.
   4.1.1.0: Bug fix. Restore plugin loading on Jellyfin 10.11 (.NET 9). 4.1.0.0 pulled Duende.IdentityModel.OidcClient 7.x, whose assemblies reference the .NET 10 Microsoft.Extensions.Logging.Abstractions (10.0.0.0) that the host does not provide and the plugin does not ship, so it threw FileNotFoundException at construction and was disabled at startup. Pin OidcClient to the 6.x line (net9 ABI) and add a conformance test that no host-provided assembly is referenced above the .NET 9 floor. No configuration changes.
   4.1.0.0: Feature (BREAKING - on-disk secret format changed; forward-transparent, downgrade requires re-entering secrets). Security-parity hardening of the SAML and OpenID login path, secrets encrypted at rest, SAML AuthnRequest signing (RSA and ECDSA), admin-UI provider toggles, and the thin-controller architecture rework. See CHANGELOG.md.
   4.0.0.4: Fix security issue in SAML
