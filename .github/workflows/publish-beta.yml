@@ -26,7 +26,7 @@ on:
 permissions: {}
 
 # Serialize beta publishes: a burst of merges to main must not run two of these
-# concurrently, or their manifest-branch pushes / rolling-release updates race
+# concurrently, or their manifest-branch pushes / draft-publish steps race
 # (a transient non-fast-forward, or an out-of-order manifest regeneration).
 # cancel-in-progress is false on purpose — a publish must never be killed
 # mid-run (it holds contents:write and moves a release + a manifest branch),
@@ -117,27 +117,46 @@ jobs:
         done
         ls -l
         popd
-    - name: Publish output artifacts
+    - name: Upload beta assets to a draft release
       id: publish-assets
       uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
       with:
-          # Prerelease so publish.yml's stable manifest (ignorePrereleases: true)
-          # never picks it up; only the beta manifest below (ignorePrereleases:
-          # false) surfaces it. The rolling `nightly` tag is reused as the single
-          # moving prerelease pointer, so each build updates the one release in
-          # place rather than accreting a release per push.
+          # This repo has IMMUTABLE RELEASES on (deliberately — publish.yml relies on
+          # it). A published release is sealed, so assets cannot be attached after it
+          # is published: creating a published prerelease and then uploading its zip
+          # fails ("Cannot upload asset ... to an immutable release"). So attach the
+          # assets while the release is still a DRAFT (drafts are mutable), then
+          # publish the draft in the next step (which seals it WITH its assets).
+          #
+          # The tag is UNIQUE per build (beta-<version>), not a rolling pointer: an
+          # immutable published release cannot be updated in place, so a moving tag
+          # would fail on its second run. `beta-*` never matches publish.yml's
+          # v[0-9]+.[0-9]+.[0-9]+.[0-9]+ stable glob, so a beta never triggers the
+          # stable channel; and prerelease: true keeps it out of the stable manifest
+          # (ignorePrereleases: true) — only the beta manifest below surfaces it.
+          draft: true
           prerelease: true
           fail_on_unmatched_files: true
-          tag_name: nightly
+          tag_name: beta-${{ steps.version.outputs.beta }}
           files: |
             _dist/*
             build.yaml
           body: |
-            Rolling Jellyfin 10.11 beta build (${{ steps.version.outputs.beta }}).
+            Jellyfin 10.11 beta build (${{ steps.version.outputs.beta }}).
             Install via the beta repository URL:
             https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Publish the draft release
+      # Seal the draft — assets already attached — into an immutable published
+      # prerelease (fires release.published). A draft has no git tag yet, so it is
+      # published by its release id from the step above, not by tag name. -F sends
+      # draft as a typed boolean.
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RELEASE_ID: ${{ steps.publish-assets.outputs.id }}
+        REPO: ${{ github.repository }}
+      run: gh api "repos/${REPO}/releases/${RELEASE_ID}" -X PATCH -F draft=false
     - name: Publish Beta Plugin Manifest
       # ignorePrereleases: false so the beta build is included. Writes the SEPARATE
       # `manifest-beta` branch; the stable `manifest-release` is only ever written

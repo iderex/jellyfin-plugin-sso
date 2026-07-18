@@ -5,7 +5,7 @@ name: Publish Release
 # release from that tag in CI (action-gh-release creates the release when none
 # exists) — the release is never minted out of band, because a deleted immutable
 # release permanently burns its tag. The glob matches only our numeric four-part
-# tags, never the branch-triggered rolling beta prerelease (the `nightly` tag).
+# tags, never the branch-triggered beta prereleases (the `beta-*` tags).
 on:
   push:
     tags:
