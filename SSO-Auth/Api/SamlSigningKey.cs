@@ -6,11 +6,11 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 
 /// <summary>
 /// Loads this service provider's SAML signing key (#167). The key is supplied by the operator as a
-/// Base64-encoded, unencrypted PKCS#12 (PFX) blob carrying the certificate and its RSA private key — the
-/// same keypair whose public certificate the identity provider is configured to trust for "signed
-/// AuthnRequest" setups. Loading is fail-closed: a blank value is "no signing key configured" (valid,
-/// signing simply stays off), and a set-but-unloadable value is rejected rather than silently ignored, so
-/// an operator who turned signing on can never get a silent unsigned downgrade.
+/// Base64-encoded, unencrypted PKCS#12 (PFX) blob carrying the certificate and its private key — an RSA or
+/// ECDSA key (#493) — the same keypair whose public certificate the identity provider is configured to
+/// trust for "signed AuthnRequest" setups. Loading is fail-closed: a blank value is "no signing key
+/// configured" (valid, signing simply stays off), and a set-but-unloadable value is rejected rather than
+/// silently ignored, so an operator who turned signing on can never get a silent unsigned downgrade.
 /// </summary>
 internal static class SamlSigningKey
 {
@@ -68,10 +68,26 @@ internal static class SamlSigningKey
 
         using (certificate)
         {
-            // A PKCS#12 with no private key cannot sign, so it is as unusable as a garbage blob: reject it
-            // here rather than let it pass validation and then fail closed at every challenge.
-            using var privateKey = certificate.GetRSAPrivateKey();
+            // A PKCS#12 with no usable private key cannot sign, so it is as unusable as a garbage blob:
+            // reject it here rather than let it pass validation and then fail closed at every challenge.
+            using var privateKey = GetSigningKey(certificate);
             return privateKey is null;
         }
+    }
+
+    /// <summary>
+    /// Returns the service-provider signing key from the certificate — its RSA or ECDSA private key,
+    /// whichever it carries (#493) — or null when it has neither and so cannot sign. The caller owns the
+    /// returned key and must dispose it.
+    /// </summary>
+    /// <param name="certificate">The loaded signing certificate.</param>
+    /// <returns>The RSA or ECDSA private key, or null when the certificate cannot sign.</returns>
+    internal static AsymmetricAlgorithm GetSigningKey(X509Certificate2 certificate)
+    {
+        ArgumentNullException.ThrowIfNull(certificate);
+
+        // Prefer RSA (the common case and the byte-identical existing path); fall back to ECDSA. Any other
+        // key type returns null, which the callers treat as "unusable" and fail closed on.
+        return (AsymmetricAlgorithm)certificate.GetRSAPrivateKey() ?? certificate.GetECDsaPrivateKey();
     }
 }

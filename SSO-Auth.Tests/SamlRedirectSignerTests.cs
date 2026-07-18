@@ -1,5 +1,6 @@
 using System;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Jellyfin.Plugin.SSO_Auth;
 using Jellyfin.Plugin.SSO_Auth.Api;
@@ -16,6 +17,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 public class SamlRedirectSignerTests
 {
     private const string RsaSha256 = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256";
+    private const string EcdsaSha256 = "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256";
     private const string RsaSha1 = "http://www.w3.org/2000/09/xmldsig#rsa-sha1";
     private const string Endpoint = "https://idp.example.com/sso";
     private const string Message = "deflated+base64==/message";
@@ -116,6 +118,60 @@ public class SamlRedirectSignerTests
     }
 
     [Fact]
+    public void BuildSignedRedirectUrl_EcdsaKey_EmitsEcdsaSigAlg_AndSignatureVerifiesOverTheOctets()
+    {
+        using var ecdsa = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+
+        var url = SamlRedirectSigner.BuildSignedRedirectUrl(Endpoint, "SAMLRequest", Message, relayState: "linking", ecdsa);
+
+        // An ECDSA key selects ecdsa-sha256 (#493), on the same allowlist, never SHA-1.
+        Assert.Contains("&SigAlg=" + Uri.EscapeDataString(EcdsaSha256), url);
+        Assert.True(SamlSignatureAlgorithms.IsSignatureMethodAllowed(EcdsaSha256));
+        Assert.True(EcdsaSignatureVerifies(url, ecdsa, expectedRelayState: "linking"));
+    }
+
+    [Fact]
+    public void BuildSignedRedirectUrl_EcdsaKey_ForeignKey_DoesNotVerify()
+    {
+        using var signer = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using var attacker = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+
+        var url = SamlRedirectSigner.BuildSignedRedirectUrl(Endpoint, "SAMLRequest", Message, relayState: null, signer);
+
+        Assert.True(EcdsaSignatureVerifies(url, signer, expectedRelayState: null));
+        Assert.False(EcdsaSignatureVerifies(url, attacker, expectedRelayState: null));
+    }
+
+    [Fact]
+    public void BuildSignedRedirectUrl_EcdsaCertificateFromPkcs12_RoundTripsThroughTheLoader()
+    {
+        // The full production path: an ECDSA PKCS#12 loads, the key type is detected, and the emitted
+        // signature verifies against the certificate's ECDSA public key with SigAlg=ecdsa-sha256.
+        Assert.True(SamlSigningKey.TryLoad(SamlSigningKeyFactory.CreateEcdsaPfxBase64(), out var certificate));
+        using (certificate)
+        using (var signingKey = SamlSigningKey.GetSigningKey(certificate))
+        {
+            Assert.NotNull(signingKey);
+
+            var url = SamlRedirectSigner.BuildSignedRedirectUrl(Endpoint, "SAMLRequest", Message, relayState: null, signingKey);
+
+            Assert.Contains("&SigAlg=" + Uri.EscapeDataString(EcdsaSha256), url);
+            using var publicKey = certificate.GetECDsaPublicKey()!;
+            Assert.True(EcdsaSignatureVerifies(url, publicKey, expectedRelayState: null));
+        }
+    }
+
+    [Fact]
+    public void BuildSignedRedirectUrl_UnsupportedKeyType_ThrowsRatherThanSigningUnknown()
+    {
+        // A key that is neither RSA nor ECDSA is rejected, never silently left unsigned or signed weakly.
+        using var dsa = DSA.Create();
+
+        Assert.Throws<InvalidOperationException>(
+            () => { SamlRedirectSigner.BuildSignedRedirectUrl(Endpoint, "SAMLRequest", Message, relayState: null, dsa); });
+    }
+
+    [Fact]
     public void SignatureAlgorithm_IsOnTheInboundAllowlist_AndIsNotSha1()
     {
         using var rsa = RSA.Create(2048);
@@ -150,6 +206,25 @@ public class SamlRedirectSignerTests
         signedQuery += "&SigAlg=" + Uri.EscapeDataString(sigAlg);
 
         return publicKey.VerifyData(Encoding.UTF8.GetBytes(signedQuery), signature, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+    }
+
+    // The ECDSA counterpart of SignatureVerifies: the XML-DSig ecdsa-sha256 signature value is the raw
+    // IEEE P1363 r||s concatenation the signer emits, so verification must use the same format.
+    private static bool EcdsaSignatureVerifies(string url, ECDsa publicKey, string? expectedRelayState)
+    {
+        var samlRequest = ExtractQueryValue(url, "SAMLRequest");
+        var sigAlg = ExtractQueryValue(url, "SigAlg");
+        var signature = Convert.FromBase64String(ExtractQueryValue(url, "Signature"));
+
+        var signedQuery = "SAMLRequest=" + Uri.EscapeDataString(samlRequest);
+        if (!string.IsNullOrEmpty(expectedRelayState))
+        {
+            signedQuery += "&RelayState=" + Uri.EscapeDataString(expectedRelayState);
+        }
+
+        signedQuery += "&SigAlg=" + Uri.EscapeDataString(sigAlg);
+
+        return publicKey.VerifyData(Encoding.UTF8.GetBytes(signedQuery), signature, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
     }
 
     private static string ExtractQueryValue(string url, string name)
