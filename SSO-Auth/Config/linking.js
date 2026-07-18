@@ -1,9 +1,10 @@
 const ssoConfigLinking = {
   pluginUniqueId: "505ce9d1-d916-42fa-86ca-673ef241d7df",
 
-  // A single generic banner for a failed request on this page (existing-links load or unlink, #536).
-  // It never carries a status code or server message, so a rejection cannot leak an internal detail
-  // into the admin UI; it just tells the user the page is no longer trustworthy as shown.
+  // A single generic banner for a failed request on this page (GetNames load, existing-links load,
+  // or unlink, #536/#564). It never carries a status code or server message, so a rejection cannot
+  // leak an internal detail into the admin UI; it just tells the user the page is no longer
+  // trustworthy as shown.
   showError: () => {
     const banner = document.querySelector("#sso-linking-error");
     if (banner) {
@@ -17,19 +18,25 @@ const ssoConfigLinking = {
       );
       container.innerHTML = "";
 
-      fetch(
-        new Request(
-          ApiClient.getUrl(`sso/${provider_mode.toUpperCase()}/GetNames`),
-        ),
-      ).then((resp) => {
-        resp.json().then((config_names) => {
+      ApiClient.fetch(
+        {
+          type: "GET",
+          url: ApiClient.getUrl(`sso/${provider_mode.toUpperCase()}/GetNames`),
+        },
+        true,
+      )
+        .then((resp) => resp.json())
+        .then((config_names) => {
           ssoConfigLinking.loadProviderList(
             container,
             config_names,
             provider_mode,
           );
-        });
-      });
+        })
+        // ApiClient.fetch rejects on a non-2xx status (auth expiry, a server error, ...), the same as
+        // the existing-links load below, so a failed GetNames load surfaces the banner instead of
+        // silently rendering an empty provider list (#564).
+        .catch(() => ssoConfigLinking.showError());
     });
   },
   loadProviderList: (container, providers, provider_mode) => {
