@@ -329,6 +329,18 @@ internal sealed class OidcLoginService
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.InvalidState));
         }
 
+        // Verified-email login gate (#166): when the provider opts in, an OpenID login must carry
+        // email_verified == true. Absent, false, or unparseable all fail this check — fail closed — reusing
+        // the single value OidcAuthorizeStateBuilder already parsed and carried on the verified identity, so
+        // there is no second, divergent parse. Off by default, so a deployment that does not set it (or an
+        // IdP that omits the claim) is unaffected. Distinct from the adoption gate below (#218), which only
+        // guards same-name account adoption; this gates every login for the provider. Needs the email scope.
+        if (config.RequireVerifiedEmailForLogin && redeemed.Identity.EmailVerified != true)
+        {
+            _logger.LogWarning("OpenID login denied for provider {Provider}: RequireVerifiedEmailForLogin is set but the login did not carry email_verified == true (absent, false, or unparseable).", provider?.ReplaceLineEndings(string.Empty));
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.EmailNotVerified));
+        }
+
         // The redeemed state carries the fully-verified identity (#473); the OpenID adoption gate applies
         // the provider's verified-email requirement (#218). From here the OpenID and SAML paths are one.
         return await _loginCompletion.CompleteAsync(

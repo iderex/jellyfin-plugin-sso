@@ -28,4 +28,7 @@ internal enum PublicReason
 
     /// <summary>RequirePkce is set but the discovery document could not be read (#141). Operator-facing by design.</summary>
     PkceUnverifiable,
+
+    /// <summary>RequireVerifiedEmailForLogin is set but the login carried no verified email (absent/false/unparseable) (#166). Operator-facing by design.</summary>
+    EmailNotVerified,
 }
