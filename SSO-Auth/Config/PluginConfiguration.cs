@@ -328,7 +328,7 @@ public class OidConfig : ProviderConfigBase
     /// unverified emails cannot be used to sign in. Distinct from <see cref="RequireVerifiedEmailForAdoption"/>,
     /// which only gates same-name account adoption; this gates the login itself, before any account is
     /// resolved. Enabling it needs the <c>email</c> scope so the provider returns <c>email_verified</c>.
-    /// XML-only.
+    /// Settable in the admin provider form as well as the config XML (#524, #525).
     /// </summary>
     public bool RequireVerifiedEmailForLogin { get; set; }
 

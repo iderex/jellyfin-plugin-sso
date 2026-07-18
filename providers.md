@@ -118,8 +118,9 @@ expiry). A few provider settings must therefore match, or login is refused (fail
   or an IdP that never emits the claim — is unaffected on upgrade; and it needs the `email` scope in the
   provider's `OidScopes`, otherwise the claim is absent and **every** login is refused. It is
   independent of `AllowExistingAccountLink` / `RequireVerifiedEmailForAdoption` (you can run either, both,
-  or neither). **SAML** carries no `email_verified` claim, so this gate does not apply there. This flag
-  is currently set by editing the provider's `config.xml` directly (it is not yet in the admin form).
+  or neither). **SAML** carries no `email_verified` claim, so this gate does not apply there.
+  `RequireVerifiedEmailForLogin` is settable in the admin OpenID provider form, or by editing the
+  provider's `config.xml` directly.
 - **Upgrading from a username-keyed version — read this before you upgrade.** Links created by older
   plugin versions (up to and including 4.0.0.4) are keyed on the username. A username is something the
   identity provider can reassign, so following such a link is name-based account matching, governed by
