@@ -74,6 +74,54 @@ public class SecretStoreTests
     }
 
     [Fact]
+    public void Protect_ConfigHasEnvelopes_MissingKeyFile_RefusesToMintAndFailsClosed()
+    {
+        WithTempKeyPath(path =>
+        {
+            var store = new SecretStore(path); // no key file exists
+
+            // A well-formed envelope is present in the config but the key was lost: minting a fresh key would
+            // orphan that envelope (and mask the loss), so encrypting must fail closed instead.
+            Assert.Throws<CryptographicException>(() => store.Protect("new-plaintext", configHasEnvelopes: true));
+
+            Assert.False(File.Exists(path)); // no replacement key minted
+        });
+    }
+
+    [Fact]
+    public void Protect_CleanInstall_NoEnvelopes_MintsKeyAndEncrypts()
+    {
+        WithTempKeyPath(path =>
+        {
+            var store = new SecretStore(path); // no key file exists
+
+            var protectedValue = store.Protect("client-secret", configHasEnvelopes: false);
+
+            Assert.True(File.Exists(path)); // first run legitimately mints the key
+            Assert.True(SecretEnvelope.IsProtected(protectedValue));
+            Assert.Equal("client-secret", store.Reveal(protectedValue));
+        });
+    }
+
+    [Fact]
+    public void CreateKey_KeyFile_IsOwnerOnlyOnUnix()
+    {
+        WithTempKeyPath(path =>
+        {
+            new SecretStore(path).GetOrCreateKey();
+
+            Assert.True(File.Exists(path));
+
+            // The temp file is created with the restrictive mode atomically and File.Move preserves it, so the
+            // persisted key file is owner-only with no permissive window. The mode call is a no-op on Windows.
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(path));
+            }
+        });
+    }
+
+    [Fact]
     public void Protect_PlaintextStartingWithTheEnvelopePrefix_IsStillEncrypted()
     {
         WithTempKeyPath(path =>

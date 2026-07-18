@@ -18,8 +18,17 @@ internal static class ConfigSecretProtection
     /// </summary>
     /// <param name="configuration">The configuration about to be persisted.</param>
     /// <param name="store">The secret store providing the data-encryption key.</param>
+    /// <exception cref="System.Security.Cryptography.CryptographicException">
+    /// The configuration already holds encrypted envelopes but the key file is missing - a lost key that must
+    /// be restored deliberately rather than silently replaced (which would orphan those envelopes).
+    /// </exception>
     internal static void ProtectAll(PluginConfiguration configuration, SecretStore store)
     {
+        // Decide once, over the whole config, whether any encrypted envelope is already present. Passed into
+        // every Protect call so that minting a fresh key over a missing-key-but-envelopes-present config is
+        // refused (orphan-prevention), while a genuine first run (no envelopes anywhere) still creates a key.
+        var configHasEnvelopes = HasAnyEnvelope(configuration);
+
         if (configuration.OidConfigs != null)
         {
             foreach (var oid in configuration.OidConfigs.Values)
@@ -29,7 +38,7 @@ internal static class ConfigSecretProtection
                     continue;
                 }
 
-                oid.OidSecret = store.Protect(oid.OidSecret);
+                oid.OidSecret = store.Protect(oid.OidSecret, configHasEnvelopes);
             }
         }
 
@@ -42,8 +51,39 @@ internal static class ConfigSecretProtection
                     continue;
                 }
 
-                saml.SamlSigningKeyPfx = store.Protect(saml.SamlSigningKeyPfx);
+                saml.SamlSigningKeyPfx = store.Protect(saml.SamlSigningKeyPfx, configHasEnvelopes);
             }
         }
+    }
+
+    // True when any protected field already carries a well-formed envelope. Inspects exactly the fields
+    // ProtectAll encrypts (the OpenID client secrets and the SAML signing keys) - the only values this
+    // plugin ever writes as envelopes - so the presence signal is accurate to the data that could be
+    // orphaned.
+    private static bool HasAnyEnvelope(PluginConfiguration configuration)
+    {
+        if (configuration.OidConfigs != null)
+        {
+            foreach (var oid in configuration.OidConfigs.Values)
+            {
+                if (oid != null && SecretEnvelope.IsWellFormedEnvelope(oid.OidSecret))
+                {
+                    return true;
+                }
+            }
+        }
+
+        if (configuration.SamlConfigs != null)
+        {
+            foreach (var saml in configuration.SamlConfigs.Values)
+            {
+                if (saml != null && SecretEnvelope.IsWellFormedEnvelope(saml.SamlSigningKeyPfx))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 }
