@@ -712,6 +712,48 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void ProviderMode_IsThreadedTyped_NotAsARawStringToken()
+    {
+        // Locked in by #369: the route's {mode} token is parsed ONCE at the controller boundary into the
+        // ProviderMode enum, and the typed value is threaded inward — so no linking-tier method re-accepts
+        // the raw string to re-parse or re-compare it (the two former divergent dispatches, a
+        // culture-sensitive ToLower() switch and an invariant-lowercase one, that had to agree). Pin it
+        // structurally on the two types the token flows through:
+        //
+        // 1. CanonicalLinkService — the linking workflow: NO method (public or private) may take a parameter
+        //    named "mode" typed as string; it must be the ProviderMode enum. A revert to a string mode
+        //    parameter (reopening the re-parse-inward hole) fails HERE.
+        // 2. VerifiedIdentity.LinkMode — the identity the login path carries: must expose the protocol as the
+        //    typed ProviderMode, not a "oid"/"saml" string the mint path would have to re-compare.
+        const BindingFlags anyMethod = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+        var methods = typeof(CanonicalLinkService).GetMethods(anyMethod);
+
+        var stringModeParams = methods
+            .SelectMany(m => m.GetParameters().Select(p => (Method: m.Name, Param: p)))
+            .Where(x => x.Param.Name == "mode" && x.Param.ParameterType == typeof(string))
+            .Select(x => $"{x.Method}(string mode)")
+            .ToList();
+        Assert.True(
+            stringModeParams.Count == 0,
+            "CanonicalLinkService must take the parsed ProviderMode, never a raw string mode token, so the {mode} route string is parsed once at the boundary and threaded typed inward (#369): " + string.Join(", ", stringModeParams));
+
+        // Sentinel against a vacuous pass: a ProviderMode-typed mode parameter must actually exist on the
+        // surface, so a rename that dropped the parameter entirely does not pass for the wrong reason.
+        var typedModeExists = methods
+            .SelectMany(m => m.GetParameters())
+            .Any(p => p.Name == "mode" && p.ParameterType == typeof(ProviderMode));
+        Assert.True(
+            typedModeExists,
+            "No ProviderMode-typed \"mode\" parameter was found on CanonicalLinkService; the linking surface was renamed, so point this rule at the new shape so the typed-mode invariant keeps guarding #369.");
+
+        var linkMode = typeof(VerifiedIdentity).GetProperty("LinkMode", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.True(linkMode is not null, "VerifiedIdentity.LinkMode was renamed or removed; point this rule at the new property so the typed-mode invariant keeps guarding #369.");
+        Assert.True(
+            linkMode!.PropertyType == typeof(ProviderMode),
+            "VerifiedIdentity.LinkMode must be the typed ProviderMode, not a raw \"oid\"/\"saml\" string the mint path would re-compare (#369).");
+    }
+
+    [Fact]
     public void SSOPlugin_DeclaresNoConfigurationLogicBeyondTheStoreFacade()
     {
         // Locked in by the ProviderConfigStore extraction (#318): SSOPlugin is bootstrap + page
