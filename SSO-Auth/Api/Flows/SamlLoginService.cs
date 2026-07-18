@@ -182,14 +182,19 @@ internal sealed class SamlLoginService
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
 
-        if (!SamlLoginPolicy.IsLoginAllowed(SamlAssertionValidator.GetAssertionRoles(samlResponse), config.Roles))
+        // Evaluate the assertion's role attribute ONCE per response (#479): the same list feeds the allow-list
+        // gate here, the denied-path warning below, and the privilege derivation in TryProduceVerifiedIdentity
+        // on the mint path — the assertion is immutable here, so the role XPath runs once instead of at each use.
+        var assertionRoles = SamlAssertionValidator.GetAssertionRoles(samlResponse);
+
+        if (!SamlLoginPolicy.IsLoginAllowed(assertionRoles, config.Roles))
         {
             if (_logger.IsEnabled(LogLevel.Warning))
             {
                 _logger.LogWarning(
                     "SAML user: {UserId} has insufficient roles: {@Roles}. Expected any one of: {@ExpectedRoles}",
                     samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty),
-                    SamlAssertionValidator.GetAssertionRoles(samlResponse).Select(r => r?.ReplaceLineEndings(string.Empty)),
+                    assertionRoles.Select(r => r?.ReplaceLineEndings(string.Empty)),
                     config.Roles);
             }
 
@@ -258,7 +263,7 @@ internal sealed class SamlLoginService
         bool committed = false;
         try
         {
-            if (!_validator.TryProduceVerifiedIdentity(config, provider, samlResponse, out var identity, out var rejection))
+            if (!_validator.TryProduceVerifiedIdentity(config, provider, samlResponse, assertionRoles, out var identity, out var rejection))
             {
                 // A genuine replay (or an assertion with no usable NameID) still fails closed here, minting
                 // nothing — so moving the capacity check ahead of the consume never lets a replayed assertion
@@ -621,10 +626,15 @@ internal sealed class SamlLoginService
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
 
+        // Evaluate the assertion's role attribute ONCE (#479): the same list feeds the allow-list gate here
+        // and the privilege derivation in TryProduceVerifiedIdentity below, so the role XPath runs once for
+        // this legacy leg rather than once for the gate and again for the derivation.
+        var assertionRoles = SamlAssertionValidator.GetAssertionRoles(samlResponse);
+
         // Enforce the login allow-list here too, not only at the assertion-consumer page: a legacy caller
         // can POST an assertion straight to this session-minting endpoint and skip the page, so checking it
         // only there would be fail-open.
-        if (!SamlLoginPolicy.IsLoginAllowed(SamlAssertionValidator.GetAssertionRoles(samlResponse), config.Roles))
+        if (!SamlLoginPolicy.IsLoginAllowed(assertionRoles, config.Roles))
         {
             if (_logger.IsEnabled(LogLevel.Warning))
             {
@@ -639,7 +649,7 @@ internal sealed class SamlLoginService
         // Complete the assertion validation in the dedicated validator: the one-time replay consume and the
         // non-empty-NameID guard, then — and only then — the verified identity through FromValidatedSaml
         // (#496). A replay fails as an invalid response and a missing NameID as a denial.
-        if (!_validator.TryProduceVerifiedIdentity(config, provider, samlResponse, out var identity, out var rejection))
+        if (!_validator.TryProduceVerifiedIdentity(config, provider, samlResponse, assertionRoles, out var identity, out var rejection))
         {
             return LoginStatusMapper.ToActionResult(rejection);
         }
