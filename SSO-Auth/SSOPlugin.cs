@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using Duende.IdentityModel.OidcClient.Infrastructure;
+using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
@@ -17,6 +19,8 @@ namespace Jellyfin.Plugin.SSO_Auth;
 /// </summary>
 public class SSOPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
 {
+    private readonly Lazy<SecretStore> _secrets;
+
     /// <summary>
     /// Initializes static members of the <see cref="SSOPlugin"/> class.
     /// </summary>
@@ -43,6 +47,12 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
         // config path and loads the configuration lazily on first access, so nothing calls back into
         // UpdateConfiguration (and thus ConfigStore) before this assignment completes.
         ConfigStore = new ProviderConfigStore(() => Configuration, PersistBase, logger);
+
+        // Lazy with the default thread-safe mode: the SecretStore (and thus the data-encryption key) is
+        // built exactly once, even under concurrent first-use, so two callers can never generate two
+        // divergent keys. The key lives in the plugin data folder, separate from the config XML, and is
+        // created lazily on the first encrypt (a save) — never at load — so startup does no key I/O.
+        _secrets = new Lazy<SecretStore>(() => new SecretStore(Path.Combine(DataFolderPath, "sso-secret.key")));
         Instance = this;
     }
 
@@ -65,6 +75,14 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
     /// Gets the store that owns every configuration read and write (#318).
     /// </summary>
     internal ProviderConfigStore ConfigStore { get; }
+
+    /// <summary>
+    /// Gets the store that encrypts the plugin's at-rest secrets — the OpenID client secret and the SAML
+    /// signing key (#158). Its data-encryption key lives in a dedicated file in the plugin data folder,
+    /// separate from the config XML, so a leaked config alone cannot decrypt anything. The login flows
+    /// reveal a stored secret through this at the point of use.
+    /// </summary>
+    internal SecretStore Secrets => _secrets.Value;
 
     /// <summary>
     /// Applies a mutation to the live configuration under a single lock and persists it, so a
@@ -105,8 +123,21 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
 
     // The store's only road to disk: persistence stays with the plugin base class, and this named
     // bridge hands base.UpdateConfiguration to the store so a store save cannot re-enter the
-    // overridden pipeline above.
-    private void PersistBase(BasePluginConfiguration configuration) => base.UpdateConfiguration(configuration);
+    // overridden pipeline above. Every road to disk — the config-page Save and every Mutate (provider
+    // Add, login-path canonical-link writes) — funnels through here, so this is the single chokepoint
+    // where at-rest secret encryption belongs (#158): the config model is owned by the store, but the
+    // on-disk representation is owned by the persistence boundary, and that is where a secret becomes an
+    // ssoenc: envelope. ProtectAll is idempotent (an already-encrypted or empty value is left unchanged),
+    // so re-persisting is a no-op and a legacy plaintext value is rewritten encrypted on its next save.
+    private void PersistBase(BasePluginConfiguration configuration)
+    {
+        if (configuration is PluginConfiguration incoming)
+        {
+            ConfigSecretProtection.ProtectAll(incoming, Secrets);
+        }
+
+        base.UpdateConfiguration(configuration);
+    }
 
     // Both tables below are the plugin's public URL contract (#370): the first element of each Page()
     // pair is the name a caller (the admin config page, the linking page, SSOViewsController) requests

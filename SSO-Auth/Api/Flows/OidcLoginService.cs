@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
+using System.Security.Cryptography;
 using System.Threading.Tasks;
 using Duende.IdentityModel.OidcClient;
 using Jellyfin.Plugin.SSO_Auth.Api;
@@ -124,7 +125,13 @@ internal sealed class OidcLoginService
         // is IdentityModel's own GetDiscoveryDocumentAsync under this provider's DiscoveryPolicy (RequireHttps
         // / ValidateIssuerName / ValidateEndpoints), so the plugin-owned fetch honours the same channel and
         // endpoint validation the library would.
-        var options = BuildOidcOptions(config, redirectUri, BuildScopeString(config));
+        // BuildOidcOptions reveals the at-rest client secret (#158); fail closed here if it cannot be
+        // decrypted (missing/corrupt key file or a corrupt envelope) rather than letting the throw escape.
+        if (TryReveal(() => BuildOidcOptions(config, redirectUri, BuildScopeString(config)), provider, out var options) is { } secretError)
+        {
+            return secretError;
+        }
+
         var discovery = await OidcDiscoveryReader.ReadAsync(options, provider, _httpClientFactory, _logger).ConfigureAwait(false);
         if (!discovery.Available)
         {
@@ -237,7 +244,11 @@ internal sealed class OidcLoginService
             return new BadRequestObjectResult("Invalid or expired state");
         }
 
-        var oidcClient = CreateCallbackOidcClient(config, provider, request, pending.ProviderInformation);
+        if (TryReveal(() => CreateCallbackOidcClient(config, provider, request, pending.ProviderInformation), provider, out var oidcClient) is { } secretError)
+        {
+            return secretError;
+        }
+
         var result = await oidcClient.ProcessResponseAsync(request.QueryString.Value, pending.OidcState).ConfigureAwait(false);
 
         if (result.IsError)
@@ -439,6 +450,30 @@ internal sealed class OidcLoginService
         return newPath;
     }
 
+    // Runs an options/client build step that reveals the at-rest client secret (#158), failing closed if
+    // it cannot be decrypted. Secrets.Reveal (inside BuildOidcOptions) surfaces a missing or corrupt at-rest
+    // key file, or a corrupt envelope, as a CryptographicException/FormatException; this catches it and
+    // returns a clean 500 rather than letting it escape as an unhandled framework error — never proceeding
+    // with an empty or wrong secret. No key material or secret is logged (the message names only the key
+    // file). Mirrors the SAML challenge's signing-key fail-closed 500. Generic over the built value because
+    // the challenge builds the options (revealing the secret up front, before the discovery read) while the
+    // callback builds the whole client. Returns null on success (the built value is set); otherwise the
+    // fail-closed result to return.
+    private ContentResult TryReveal<T>(Func<T> build, string provider, out T built)
+    {
+        try
+        {
+            built = build();
+            return null;
+        }
+        catch (Exception ex) when (ex is CryptographicException or FormatException)
+        {
+            built = default;
+            _logger.LogError("OpenID login refused for provider {Provider}: the stored client secret could not be decrypted ({Reason}); the at-rest key file is missing or corrupt.", provider?.ReplaceLineEndings(string.Empty), ex.Message?.ReplaceLineEndings(string.Empty));
+            return FlowResponses.PlainTextError(StatusCodes.Status500InternalServerError, "Could not process login; the OpenID client secret could not be decrypted.");
+        }
+    }
+
     // Builds the OidcClient that both the challenge and the callback use. Pure mechanical assembly:
     // the redirect URI and the scope string are the only two inputs the endpoints derive differently,
     // so the caller supplies them. Constructed in the same order as before the extraction, so a null
@@ -482,7 +517,11 @@ internal sealed class OidcLoginService
         {
             Authority = config.OidEndpoint?.Trim(),
             ClientId = config.OidClientId?.Trim(),
-            ClientSecret = config.OidSecret?.Trim(),
+            // The client secret is stored encrypted at rest (#158); reveal it at the point of use. A legacy
+            // plaintext value passes through unchanged (transparent migration); a missing/corrupt key throws
+            // (CryptographicException) rather than returning a wrong or empty secret — the login then fails
+            // closed rather than silently attempting an unauthenticated token exchange.
+            ClientSecret = SSOPlugin.Instance.Secrets.Reveal(config.OidSecret)?.Trim(),
             RedirectUri = redirectUri,
             Scope = scope,
             DisablePushedAuthorization = config.DisablePushedAuthorization,

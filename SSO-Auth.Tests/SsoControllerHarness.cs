@@ -61,6 +61,11 @@ internal sealed class SsoControllerHarness
 
         var appPaths = Substitute.For<IApplicationPaths>();
         appPaths.PluginConfigurationsPath.Returns(Path.Combine(Path.GetTempPath(), "sso-test-" + Guid.NewGuid()));
+        // The plugin derives its at-rest secret key file from DataFolderPath (under PluginsPath) (#158);
+        // point it at a fresh temp directory so a test that persists a real secret can create the key and
+        // round-trip the encryption. The key is created lazily only when a non-empty secret is encrypted,
+        // so tests that persist no secret never touch disk here.
+        appPaths.PluginsPath.Returns(Path.Combine(Path.GetTempPath(), "sso-test-plugins-" + Guid.NewGuid()));
         var xml = Substitute.For<IXmlSerializer>();
         xml.DeserializeFromFile(Arg.Any<Type>(), Arg.Any<string>()).Returns(Configuration);
         // Constructing the plugin sets the static SSOPlugin.Instance the controller reads.
