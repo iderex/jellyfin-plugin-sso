@@ -1,0 +1,142 @@
+using System;
+using System.IO;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using System.Text;
+using Jellyfin.Plugin.SSO_Auth;
+using Jellyfin.Plugin.SSO_Auth.Api;
+using SharpFuzz;
+
+namespace Jellyfin.Plugin.SSO_Auth.Fuzz;
+
+/// <summary>
+/// Coverage-guided fuzz driver (#402) for the plugin's untrusted-input parse entry points — the
+/// functions that turn attacker-controlled bytes from the unauthenticated callback endpoints into
+/// objects, BEFORE any signature or claim is trusted. One target is selected per run via the
+/// <c>SSO_FUZZ_TARGET</c> environment variable so libFuzzer's single-input contract is honoured while
+/// the same executable covers every surface.
+///
+/// The property under test is uniform across targets: on ANY input the entry point must terminate with
+/// a fail-closed result (false / null / a rejection) OR one of the exceptions it explicitly maps — it
+/// must never leak an unmapped exception (which on the real callback path becomes an HTTP 500 / DoS)
+/// and must never hang. A "crash" libFuzzer records here is therefore a real finding: an exception type
+/// the fail-closed filters do not catch. Each finding is triaged as its own security issue, per #174 —
+/// never patched silently in-harness.
+/// </summary>
+internal static class Program
+{
+    // A single, valid, self-signed IdP certificate reused across the SAML iterations: TryParse loads it
+    // before it parses the body, so a stable good certificate keeps the fuzzer exercising the BODY parse
+    // (the untrusted surface) rather than repeatedly failing on the certificate. Random bytes cannot forge
+    // a signature that verifies against it, so IsValid stays fail-closed; the target is the parse/validate
+    // code path's robustness, not a signature bypass (which coverage-guided fuzzing cannot reach).
+    private static readonly string SamlCertificateBase64 = CreateSelfSignedCertificateBase64();
+
+    private static int Main(string[] args)
+    {
+        var target = Environment.GetEnvironmentVariable("SSO_FUZZ_TARGET") ?? "saml";
+
+        ReadOnlySpanAction run = target switch
+        {
+            "saml" => FuzzSamlResponse,
+            "discovery" => FuzzOidcDiscovery,
+            "idtoken" => FuzzOidcIdToken,
+            _ => throw new ArgumentException(
+                $"Unknown SSO_FUZZ_TARGET '{target}'. Expected one of: saml, discovery, idtoken."),
+        };
+
+        // Smoke mode replays the seed corpus through the selected target once and exits, WITHOUT libFuzzer.
+        // It proves the dispatch + parse wiring runs and that every seed is handled fail-closed (no unmapped
+        // throw), so the harness can be validated on any platform — including the maintainer's Windows box,
+        // where the Linux-only libFuzzer runtime is unavailable — and as a cheap CI sanity check. The real
+        // coverage-guided run is the default path below.
+        if (Environment.GetEnvironmentVariable("SSO_FUZZ_SMOKE") == "1")
+        {
+            return RunSmoke(run, target, args);
+        }
+
+        Fuzzer.LibFuzzer.Run(run);
+        return 0;
+    }
+
+    // Feeds every seed file in the target's corpus directory through the target once. Any unmapped
+    // exception propagates and fails the process — the same signal libFuzzer would record as a crash.
+    private static int RunSmoke(ReadOnlySpanAction run, string target, string[] args)
+    {
+        var corpus = args.Length > 0
+            ? args[0]
+            : Environment.GetEnvironmentVariable("SSO_FUZZ_CORPUS") ?? Path.Combine("corpus", target);
+
+        if (!Directory.Exists(corpus))
+        {
+            Console.Error.WriteLine($"Corpus directory not found: {corpus}");
+            return 2;
+        }
+
+        var count = 0;
+        foreach (var file in Directory.EnumerateFiles(corpus))
+        {
+            run(File.ReadAllBytes(file));
+            count++;
+        }
+
+        Console.WriteLine($"Smoke OK: {count} seed(s) for target '{target}' handled fail-closed with no unmapped exception.");
+        return 0;
+    }
+
+    // SAML: the base64 SAMLResponse form field from the anonymous assertion-consumer endpoint. Exercises
+    // SamlResponseLoader.TryParse (base64 decode + hardened XML DOM load + certificate load) and, on a
+    // successful parse, the full validate/claim-reader surface of SamlResponse — every one of which must
+    // stay fail-closed and never throw an unmapped exception.
+    private static void FuzzSamlResponse(ReadOnlySpan<byte> data)
+    {
+        var response = Encoding.UTF8.GetString(data);
+
+        if (!SamlResponseLoader.TryParse(SamlCertificateBase64, response, out var saml) || saml is null)
+        {
+            return;
+        }
+
+        // A parsed-but-untrusted response: drive validation and every getter the callback reads. None may
+        // throw. IsValid must stay false for fuzzer-generated bytes (no forged signature), but its RESULT
+        // is not asserted — a legitimately signed seed would return true; only an exception is a finding.
+        saml.IsValid();
+        _ = saml.GetSignatureAlgorithm();
+        _ = saml.GetNameID();
+        _ = saml.GetAssertionId();
+        _ = saml.GetNotOnOrAfter();
+        _ = saml.GetRecipient();
+        _ = saml.GetInResponseTo();
+        _ = saml.GetDestination();
+        _ = saml.GetCustomAttributes("Role");
+    }
+
+    // OpenID discovery document: the raw JSON the challenge fetches from the provider. Both pure readers
+    // that interpret it must fail closed/tolerant on any malformed or hostile document and never throw an
+    // unmapped exception (they catch only JsonException today).
+    private static void FuzzOidcDiscovery(ReadOnlySpan<byte> data)
+    {
+        var json = Encoding.UTF8.GetString(data);
+
+        _ = PkceDiscovery.SupportsS256(json);
+        _ = OidcResponseIssuer.DiscoveryAdvertisesResponseIssuer(json);
+    }
+
+    // OpenID id_token: the raw JWT string. IdTokenIssuer parses the token to read its issuer for the
+    // RFC 9207 mix-up check and must never throw on a degenerate/hostile token (it catches only
+    // ArgumentException / SecurityTokenException today).
+    private static void FuzzOidcIdToken(ReadOnlySpan<byte> data)
+    {
+        var token = Encoding.UTF8.GetString(data);
+
+        _ = OidcResponseIssuer.IdTokenIssuer(token);
+    }
+
+    private static string CreateSelfSignedCertificateBase64()
+    {
+        using var rsa = RSA.Create(2048);
+        var request = new CertificateRequest("CN=Fuzz SAML IdP", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        using var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(10));
+        return Convert.ToBase64String(certificate.Export(X509ContentType.Cert));
+    }
+}

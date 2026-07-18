@@ -158,7 +158,11 @@ internal sealed class OidcLoginService
             // and no metadata to build the authorization request from. Reject rather than fall back to a
             // second, divergent fetch or a silent tolerant default. This is not a new lockout: without
             // discovery, PrepareLoginAsync could not build the authorize redirect either.
-            _logger.LogWarning("OpenID login refused for provider {Provider}: the authorization server's discovery document could not be read.", provider?.ReplaceLineEndings(string.Empty));
+            if (_logger.IsEnabled(LogLevel.Warning))
+            {
+                _logger.LogWarning("OpenID login refused for provider {Provider}: the authorization server's discovery document could not be read.", provider?.ReplaceLineEndings(string.Empty));
+            }
+
             return FlowResponses.PlainTextError(StatusCodes.Status400BadRequest, "Error preparing login: the authorization server's discovery document could not be read.");
         }
 
@@ -171,7 +175,11 @@ internal sealed class OidcLoginService
         {
             if (config.RequirePkce)
             {
-                _logger.LogWarning("OpenID login refused for provider {Provider}: RequirePkce is set but the authorization server does not advertise PKCE (S256).", provider?.ReplaceLineEndings(string.Empty));
+                if (_logger.IsEnabled(LogLevel.Warning))
+                {
+                    _logger.LogWarning("OpenID login refused for provider {Provider}: RequirePkce is set but the authorization server does not advertise PKCE (S256).", provider?.ReplaceLineEndings(string.Empty));
+                }
+
                 return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.PkceNotSupported));
             }
 
@@ -216,7 +224,10 @@ internal sealed class OidcLoginService
         {
             if (shouldWarnCapacity)
             {
-                _logger.LogWarning("OpenID authorize state refused for provider {Provider}: a CSPRNG-token collision (effectively impossible) or the store is at capacity (warning throttled).", provider?.ReplaceLineEndings(string.Empty));
+                if (_logger.IsEnabled(LogLevel.Warning))
+                {
+                    _logger.LogWarning("OpenID authorize state refused for provider {Provider}: a CSPRNG-token collision (effectively impossible) or the store is at capacity (warning throttled).", provider?.ReplaceLineEndings(string.Empty));
+                }
             }
 
             return FlowResponses.PlainTextError(StatusCodes.Status500InternalServerError, "Could not start login; please retry.");
@@ -286,7 +297,11 @@ internal sealed class OidcLoginService
         if (!config.DoNotValidateResponseIssuer
             && OidcResponseIssuer.IsRejected(request.Query["iss"], oidcClient.Options.ProviderInformation?.IssuerName, result.IdentityToken, pending.ResponseIssuerRequired))
         {
-            _logger.LogWarning("OpenID login denied for provider {Provider}: the authorization-response issuer was absent-but-required or matched neither the discovery issuer nor the id_token issuer (RFC 9207 mix-up check).", provider?.ReplaceLineEndings(string.Empty));
+            if (_logger.IsEnabled(LogLevel.Warning))
+            {
+                _logger.LogWarning("OpenID login denied for provider {Provider}: the authorization-response issuer was absent-but-required or matched neither the discovery issuer nor the id_token issuer (RFC 9207 mix-up check).", provider?.ReplaceLineEndings(string.Empty));
+            }
+
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SsoResponseInvalid));
         }
 
@@ -303,7 +318,11 @@ internal sealed class OidcLoginService
         // keying on the mutable username.
         if (derived.Valid && string.IsNullOrWhiteSpace(derived.Subject))
         {
-            _logger.LogWarning("OpenID login denied for provider {Provider}: the id_token carried no 'sub' claim to key the account link on.", provider?.ReplaceLineEndings(string.Empty));
+            if (_logger.IsEnabled(LogLevel.Warning))
+            {
+                _logger.LogWarning("OpenID login denied for provider {Provider}: the id_token carried no 'sub' claim to key the account link on.", provider?.ReplaceLineEndings(string.Empty));
+            }
+
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
         }
 
@@ -312,11 +331,14 @@ internal sealed class OidcLoginService
             // The role gate did not pass: leave the Pending unpromoted (never redeemable — the redeem
             // requires a Ready) so it simply expires. Checked before Promote so no Ready is ever created
             // for a denied login.
-            _logger.LogWarning(
-                "OpenID login denied for {Username}: no role matched the allow-list, or the login resolved no username. Claims: {@Claims}. Roles expected (any one of): {@ExpectedClaims}",
-                derived.Username?.ReplaceLineEndings(string.Empty),
-                result.User.Claims.Select(o => new { Type = o.Type?.ReplaceLineEndings(string.Empty), Value = o.Value?.ReplaceLineEndings(string.Empty) }),
-                config.Roles);
+            if (_logger.IsEnabled(LogLevel.Warning))
+            {
+                _logger.LogWarning(
+                    "OpenID login denied for {Username}: no role matched the allow-list, or the login resolved no username. Claims: {@Claims}. Roles expected (any one of): {@ExpectedClaims}",
+                    derived.Username?.ReplaceLineEndings(string.Empty),
+                    result.User.Claims.Select(o => new { Type = o.Type?.ReplaceLineEndings(string.Empty), Value = o.Value?.ReplaceLineEndings(string.Empty) }),
+                    config.Roles);
+            }
 
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
         }
@@ -376,7 +398,11 @@ internal sealed class OidcLoginService
         // guards same-name account adoption; this gates every login for the provider. Needs the email scope.
         if (config.RequireVerifiedEmailForLogin && redeemed.Identity.EmailVerified != true)
         {
-            _logger.LogWarning("OpenID login denied for provider {Provider}: RequireVerifiedEmailForLogin is set but the login did not carry email_verified == true (absent, false, or unparseable).", provider?.ReplaceLineEndings(string.Empty));
+            if (_logger.IsEnabled(LogLevel.Warning))
+            {
+                _logger.LogWarning("OpenID login denied for provider {Provider}: RequireVerifiedEmailForLogin is set but the login did not carry email_verified == true (absent, false, or unparseable).", provider?.ReplaceLineEndings(string.Empty));
+            }
+
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.EmailNotVerified));
         }
 
@@ -531,7 +557,11 @@ internal sealed class OidcLoginService
         catch (Exception ex) when (ex is CryptographicException or FormatException)
         {
             built = default;
-            _logger.LogError("OpenID login refused for provider {Provider}: the stored client secret could not be decrypted ({Reason}); the at-rest key file is missing or corrupt.", provider?.ReplaceLineEndings(string.Empty), ex.Message?.ReplaceLineEndings(string.Empty));
+            if (_logger.IsEnabled(LogLevel.Error))
+            {
+                _logger.LogError("OpenID login refused for provider {Provider}: the stored client secret could not be decrypted ({Reason}); the at-rest key file is missing or corrupt.", provider?.ReplaceLineEndings(string.Empty), ex.Message?.ReplaceLineEndings(string.Empty));
+            }
+
             return FlowResponses.PlainTextError(StatusCodes.Status500InternalServerError, "Could not process login; the OpenID client secret could not be decrypted.");
         }
     }

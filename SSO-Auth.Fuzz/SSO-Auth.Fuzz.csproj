@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Out-of-band, coverage-guided fuzz harness for the untrusted-input parse surface (#402), the
+    prototype the weekly SharpFuzz job (#174) runs. It is DELIBERATELY NOT part of SSO-Auth.sln, so a
+    normal `dotnet build`/`dotnet test` (and every PR CI job) never restores SharpFuzz or builds this
+    project — it is compiled and run only by the scheduled Linux fuzzing job. See README.md for the
+    ClusterFuzzLite-vs-SharpFuzz evaluation, the feasibility finding, and how to run it.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <!-- Run on a newer major runtime when the exact 9.0 pack is absent (the test project does the same),
+         so the harness launches on a box/CI image that only ships the .NET 10 runtime. -->
+    <RollForward>Major</RollForward>
+    <RootNamespace>Jellyfin.Plugin.SSO_Auth.Fuzz</RootNamespace>
+    <AssemblyName>SSO-Auth.Fuzz</AssemblyName>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+    <!-- No CS1591 doc-comment gate on a non-shipping harness (matches the test project). -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- SharpFuzz instruments the target IL and drives it under libFuzzer. The managed package
+         compiles cross-platform (so this project builds on the maintainer's Windows box); the
+         `sharpfuzz` instrumentation CLI and libFuzzer runtime are Linux-only, so the actual fuzzing
+         runs in CI. -->
+    <PackageReference Include="SharpFuzz" Version="2.3.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SSO-Auth\SSO-Auth.csproj" />
+  </ItemGroup>
+
+</Project>

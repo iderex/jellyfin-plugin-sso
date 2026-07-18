@@ -301,11 +301,15 @@ internal sealed class CanonicalLinkService
     {
         if (candidates.SubjectLink.HasValue && candidates.SubjectIssuer == IssuerBinding.Mismatch)
         {
-            _logger.LogWarning(
-                "OpenID login for {Name} via {Mode}/{Provider} refused: the account link's stored issuer does not match the login's issuer (the provider entry may have been repointed at a different identity provider). Re-establish the link via the admin endpoints.",
-                username?.ReplaceLineEndings(string.Empty),
-                mode.ToToken(),
-                provider?.ReplaceLineEndings(string.Empty));
+            if (_logger.IsEnabled(LogLevel.Warning))
+            {
+                _logger.LogWarning(
+                    "OpenID login for {Name} via {Mode}/{Provider} refused: the account link's stored issuer does not match the login's issuer (the provider entry may have been repointed at a different identity provider). Re-establish the link via the admin endpoints.",
+                    username?.ReplaceLineEndings(string.Empty),
+                    mode.ToToken(),
+                    provider?.ReplaceLineEndings(string.Empty));
+            }
+
             throw new AccountLinkForbiddenException("The account link was minted under a different issuer; refusing to resolve it after an apparent provider repoint.");
         }
     }
@@ -326,11 +330,15 @@ internal sealed class CanonicalLinkService
         // forming a new one. Link an admin account explicitly via the admin endpoint instead.
         if (AdoptionEligibilityResolver.Resolve(existingAccount.HasPermission(PermissionKind.IsAdministrator), AdoptionGate.None) != AdoptionVerdict.Allow)
         {
-            _logger.LogWarning(
-                "SSO login for {Name} via {Mode}/{Provider} refused: a legacy username-keyed link points at an administrator account, which is not adopted by name. Link it explicitly via the admin endpoints.",
-                username?.ReplaceLineEndings(string.Empty),
-                mode.ToToken(),
-                provider?.ReplaceLineEndings(string.Empty));
+            if (_logger.IsEnabled(LogLevel.Warning))
+            {
+                _logger.LogWarning(
+                    "SSO login for {Name} via {Mode}/{Provider} refused: a legacy username-keyed link points at an administrator account, which is not adopted by name. Link it explicitly via the admin endpoints.",
+                    username?.ReplaceLineEndings(string.Empty),
+                    mode.ToToken(),
+                    provider?.ReplaceLineEndings(string.Empty));
+            }
+
             throw new AccountLinkForbiddenException();
         }
 
@@ -343,10 +351,14 @@ internal sealed class CanonicalLinkService
         // subject link is used as-is; the deleted-target edge resolves to null so the login falls
         // through to the create/adopt gate rather than binding to a dead account.
         var migratedUserId = MigrateAndResolveCanonicalLink(mode, provider, canonicalKey, username, issuer);
-        _logger.LogInformation(
-            "Migrated {Mode}/{Provider} canonical link from the legacy username key to the stable subject key.",
-            mode.ToToken(),
-            provider?.ReplaceLineEndings(string.Empty));
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation(
+                "Migrated {Mode}/{Provider} canonical link from the legacy username key to the stable subject key.",
+                mode.ToToken(),
+                provider?.ReplaceLineEndings(string.Empty));
+        }
+
         return migratedUserId;
     }
 
@@ -366,12 +378,16 @@ internal sealed class CanonicalLinkService
             adoptionGate);
         if (verdict != AdoptionVerdict.Allow)
         {
-            _logger.LogWarning(
-                "SSO login for {Name} via {Mode}/{Provider} refused adoption of a pre-existing account: {Reason}.",
-                username?.ReplaceLineEndings(string.Empty),
-                mode.ToToken(),
-                provider?.ReplaceLineEndings(string.Empty),
-                DescribeAdoptionRefusal(verdict));
+            if (_logger.IsEnabled(LogLevel.Warning))
+            {
+                _logger.LogWarning(
+                    "SSO login for {Name} via {Mode}/{Provider} refused adoption of a pre-existing account: {Reason}.",
+                    username?.ReplaceLineEndings(string.Empty),
+                    mode.ToToken(),
+                    provider?.ReplaceLineEndings(string.Empty),
+                    DescribeAdoptionRefusal(verdict));
+            }
+
             throw new AccountLinkForbiddenException();
         }
 
@@ -419,14 +435,21 @@ internal sealed class CanonicalLinkService
             // subject via the admin endpoints. See the upgrade runbook in providers.md. Throttled
             // through the shared once-per-interval gate (#362) so a login loop cannot flood it; the
             // account is still provisioned on every login regardless of whether the line is emitted.
-            _logger.LogWarning(
-                "SSO login for {Name} via {Mode}/{Provider}: a legacy username-keyed link exists but no live account bears the name (it was renamed on the Jellyfin side), so a fresh account is being provisioned and the original account is now orphaned. Re-link it to this subject via the admin endpoints.",
-                username?.ReplaceLineEndings(string.Empty),
-                mode.ToToken(),
-                provider?.ReplaceLineEndings(string.Empty));
+            if (_logger.IsEnabled(LogLevel.Warning))
+            {
+                _logger.LogWarning(
+                    "SSO login for {Name} via {Mode}/{Provider}: a legacy username-keyed link exists but no live account bears the name (it was renamed on the Jellyfin side), so a fresh account is being provisioned and the original account is now orphaned. Re-link it to this subject via the admin endpoints.",
+                    username?.ReplaceLineEndings(string.Empty),
+                    mode.ToToken(),
+                    provider?.ReplaceLineEndings(string.Empty));
+            }
         }
 
-        _logger.LogInformation("SSO user {Name} doesn't exist, creating...", username?.ReplaceLineEndings(string.Empty));
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("SSO user {Name} doesn't exist, creating...", username?.ReplaceLineEndings(string.Empty));
+        }
+
         var user = await _userManager.CreateUserAsync(username).ConfigureAwait(false);
         user.AuthenticationProviderId = typeof(SSOController).FullName;
         // https://jonathancrozier.com/blog/how-to-generate-a-cryptographically-secure-random-string-in-dot-net-with-c-sharp
@@ -455,20 +478,26 @@ internal sealed class CanonicalLinkService
             // still throws on every login regardless of whether this line is emitted.
             if (_legacyLinkWarnGate.TryEnter(_clock()))
             {
-                _logger.LogWarning(
-                    "SSO login for {Name} via {Mode}/{Provider} refused: a legacy username-keyed link is pending but AllowExistingAccountLink is off and a live account still bears the name. Enable AllowExistingAccountLink (a short controlled window) or link the account via the admin endpoints to migrate it.",
-                    username?.ReplaceLineEndings(string.Empty),
-                    mode.ToToken(),
-                    provider?.ReplaceLineEndings(string.Empty));
+                if (_logger.IsEnabled(LogLevel.Warning))
+                {
+                    _logger.LogWarning(
+                        "SSO login for {Name} via {Mode}/{Provider} refused: a legacy username-keyed link is pending but AllowExistingAccountLink is off and a live account still bears the name. Enable AllowExistingAccountLink (a short controlled window) or link the account via the admin endpoints to migrate it.",
+                        username?.ReplaceLineEndings(string.Empty),
+                        mode.ToToken(),
+                        provider?.ReplaceLineEndings(string.Empty));
+                }
             }
         }
         else
         {
-            _logger.LogWarning(
-                "SSO login for {Name} via {Mode}/{Provider} refused: a pre-existing unlinked Jellyfin account exists and AllowExistingAccountLink is disabled for this provider.",
-                username?.ReplaceLineEndings(string.Empty),
-                mode.ToToken(),
-                provider?.ReplaceLineEndings(string.Empty));
+            if (_logger.IsEnabled(LogLevel.Warning))
+            {
+                _logger.LogWarning(
+                    "SSO login for {Name} via {Mode}/{Provider} refused: a pre-existing unlinked Jellyfin account exists and AllowExistingAccountLink is disabled for this provider.",
+                    username?.ReplaceLineEndings(string.Empty),
+                    mode.ToToken(),
+                    provider?.ReplaceLineEndings(string.Empty));
+            }
         }
 
         return new AccountLinkForbiddenException();
