@@ -37,7 +37,7 @@ internal sealed class SsoRateLimiter
 
     // Serializes only the rare "new key" cap-check-and-insert so it is atomic; the hot "existing
     // key" path never touches it.
-    private readonly object _capLock = new object();
+    private readonly System.Threading.Lock _capLock = new();
 
     // Throttles the #195 observability signal to one drain per SignalInterval; the gate owns the atomic
     // cursor. The tally (_throttledHits) it drains stays a mutable field below — see RecordThrottledHit.
