@@ -88,36 +88,90 @@ internal sealed class SamlOutcomeStore
     internal static string NewToken() => Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
 
     /// <summary>
-    /// Registers a fully-verified login outcome under its CSPRNG token. At the cap a NEW token is refused
-    /// (that one login fails closed) rather than evicting an in-flight outcome — evicting would drop a user
-    /// already mid-login. On refusal, <paramref name="shouldWarnCapacity"/> is true for at most one caller
-    /// per interval; the warning line stays at the call site so the log-forging inline sanitizer never
-    /// crosses a helper boundary.
+    /// Reserves capacity for one outcome BEFORE its caller consumes the one-time SAML replay cache, so an
+    /// at-cap refusal fails closed WITHOUT the assertion having been burned — the login the store cannot yet
+    /// hold can be retried once the store drains, rather than being permanently lost to a replay-cache entry
+    /// recorded for an authentication that never completed (#539). Reserves the per-client sub-cap (#327) and
+    /// checks the global cap; on a true return the caller MUST pair it with exactly one <see cref="CommitReserved"/>
+    /// or <see cref="ReleaseReservation"/>. At the cap a fresh reservation is refused rather than evicting an
+    /// in-flight outcome — evicting would drop a user already mid-login. On refusal,
+    /// <paramref name="shouldWarnCapacity"/> is true for at most one caller per interval; the warning line stays
+    /// at the call site so the log-forging inline sanitizer never crosses a helper boundary.
+    /// </summary>
+    /// <param name="clientKey">The normalized client key whose sub-cap slot is reserved, or null for an exempt source.</param>
+    /// <param name="now">The reference time driving the throttled capacity warning.</param>
+    /// <param name="shouldWarnCapacity">True when the caller should emit the throttled capacity warning.</param>
+    /// <returns>True if a slot was reserved; false if refused (per-client sub-cap or global cap).</returns>
+    internal bool TryReserve(string clientKey, DateTime now, out bool shouldWarnCapacity)
+    {
+        // Per-client sub-cap (#327): reserve this client's slot BEFORE the global check so one source cannot
+        // fill the whole budget and lock out every other login. A null key is exempt.
+        if (!_perClient.TryReserve(clientKey))
+        {
+            shouldWarnCapacity = _capWarnGate.TryEnter(now);
+            return false;
+        }
+
+        // Global cap: at capacity a fresh reservation is refused, never an in-flight one evicted. The reserve
+        // holds only the per-client slot, so the global cap stays the store's documented APPROXIMATE ceiling —
+        // between this check and the paired CommitReserved a concurrent commit can transiently overshoot by at
+        // most the in-flight thread count, immaterial for a defense-in-depth memory bound (the per-client cap,
+        // the actual availability defense, remains exact via its CAS).
+        if (_outcomes.Count >= _maxEntries)
+        {
+            _perClient.Release(clientKey);
+            shouldWarnCapacity = _capWarnGate.TryEnter(now);
+            return false;
+        }
+
+        shouldWarnCapacity = false;
+        return true;
+    }
+
+    /// <summary>
+    /// Commits a reserved outcome into the store under its token. Reachable only after a successful
+    /// <see cref="TryReserve"/> for the same client key, so the capacity is already accounted; this can fail
+    /// only on the effectively-impossible CSPRNG-token collision losing the atomic add, in which case the
+    /// caller releases the reservation and fails closed.
+    /// </summary>
+    /// <param name="outcome">The verified outcome whose token keys the entry.</param>
+    /// <returns>True if the outcome was stored; false on the ~impossible token collision.</returns>
+    internal bool CommitReserved(SamlLoginOutcome outcome) => _outcomes.TryAdd(outcome.Token, outcome);
+
+    /// <summary>
+    /// Releases a reservation taken by <see cref="TryReserve"/> that is not being committed — a replayed or
+    /// otherwise invalid assertion, an assertion with no NameID, or the ~impossible token collision — so the
+    /// client's sub-cap slot does not leak. A null/exempt key reserved nothing, so it releases nothing.
+    /// </summary>
+    /// <param name="clientKey">The client key whose reserved slot is freed, or null (a no-op).</param>
+    internal void ReleaseReservation(string clientKey) => _perClient.Release(clientKey);
+
+    /// <summary>
+    /// Registers a fully-verified login outcome under its CSPRNG token in one atomic step — a convenience for
+    /// callers that need no work between the capacity reservation and the store insert; the ACS callback uses
+    /// the <see cref="TryReserve"/>/<see cref="CommitReserved"/> primitives directly so it can consume the
+    /// one-time replay cache between them (#539). At the cap a NEW token is refused (that one login fails
+    /// closed) rather than evicting an in-flight outcome.
     /// </summary>
     /// <param name="outcome">The verified outcome; its token keys the entry and its Created drives the throttled warning.</param>
     /// <param name="shouldWarnCapacity">True when the caller should emit the throttled capacity warning.</param>
     /// <returns>True if the outcome was registered; false if refused (per-client sub-cap, global cap, or token collision).</returns>
     internal bool TryAdd(SamlLoginOutcome outcome, out bool shouldWarnCapacity)
     {
-        // Per-client sub-cap (#327): reserve this client's slot BEFORE the global insert so one source
-        // cannot fill the whole budget and lock out every other login. A null key is exempt.
-        if (!_perClient.TryReserve(outcome.ClientKey))
+        if (!TryReserve(outcome.ClientKey, outcome.Created, out shouldWarnCapacity))
         {
+            return false;
+        }
+
+        if (!CommitReserved(outcome))
+        {
+            // The entry never entered the store (a CSPRNG-token collision losing the atomic add) — release the
+            // reservation so the client's bucket does not leak a slot, and warn as for any other refusal.
+            ReleaseReservation(outcome.ClientKey);
             shouldWarnCapacity = _capWarnGate.TryEnter(outcome.Created);
             return false;
         }
 
-        if ((_outcomes.Count >= _maxEntries && !_outcomes.ContainsKey(outcome.Token))
-            || !_outcomes.TryAdd(outcome.Token, outcome))
-        {
-            // The entry never entered the store (global cap, or a CSPRNG-token collision losing the atomic
-            // add) — release the reservation so the client's bucket does not leak a slot.
-            _perClient.Release(outcome.ClientKey);
-            shouldWarnCapacity = _capWarnGate.TryEnter(outcome.Created);
-            return false;
-        }
-
-        shouldWarnCapacity = false;
         return true;
     }
 

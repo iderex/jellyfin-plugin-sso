@@ -1,9 +1,15 @@
 name: Publish Release
 
+# A four-part version tag push (e.g. v4.1.0.0) is the ONLY publish trigger, per
+# docs/RELEASE-POLICY.md. The upload job below CREATES and publishes the GitHub
+# release from that tag in CI (action-gh-release creates the release when none
+# exists) — the release is never minted out of band, because a deleted immutable
+# release permanently burns its tag. The glob matches only our numeric four-part
+# tags, never the branch-triggered rolling `nightly` prerelease.
 on:
-  release:
-    types:
-      - released
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+.[0-9]+"
   workflow_dispatch:
 
 # Default to read-only; the jobs that create the release and update the
@@ -41,11 +47,16 @@ jobs:
         ls -l
     - name: Publish output artifacts
       id: publish-assets
-      uses: softprops/action-gh-release@132dbbba49e22bd4837f09b46d32a8edaf6baa58 # unreleased commit between v3.0.1 and v3.0.2
+      # Creates the release for the pushed tag if it does not exist yet, then
+      # uploads the assets. tag_name defaults to github.ref_name; set explicitly
+      # so intent is obvious. fail_on_unmatched_files stays true so a missing
+      # build asset fails the run rather than publishing an empty release.
+      uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
       with:
+          name: ${{ github.ref_name }}
           prerelease: false
           fail_on_unmatched_files: true
-          tag_name:  ${{ github.event.release.tag_name }}
+          tag_name: ${{ github.ref_name }}
           files: ./*
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
