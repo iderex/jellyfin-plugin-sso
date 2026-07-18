@@ -48,6 +48,12 @@ internal sealed class SamlAssertionValidator
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
+    // Test-only: clears the process-wide one-time replay cache between tests, the same static-state reset
+    // reason as the flow service's request/outcome resets — a test that consumed an assertion id must not
+    // leak it into a sibling test. Internal, reachable only through InternalsVisibleTo; never wired to an
+    // endpoint or DI, so it adds no runtime or security surface.
+    internal static void ResetReplaysForTests() => SamlReplays.Clear();
+
     /// <summary>
     /// Reads the assertion's role values under the one role-attribute definition, so the flow service's
     /// policy check and warning logs read the exact same attribute the derived privileges here do (#370).

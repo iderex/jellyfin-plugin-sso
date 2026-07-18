@@ -242,6 +242,39 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void SamlLoginOutcome_IsImmutable()
+    {
+        // Locked in by the SAML one-time outcome token (#251): the login outcome stored between the ACS
+        // callback and the mint leg is redeemed by an atomic remove of the WHOLE record, so a redeemer never
+        // observes a torn outcome. A settable property or writable instance field would reopen an in-place
+        // mutation window on a value that IS the proof the assertion passed every gate, so pin it structurally
+        // exactly as AuthorizeSession's variants are (#341). A get-only auto-property / positional record
+        // parameter compiles to a readonly (initonly) backing field and passes; a `{ get; set; }` or a plain
+        // writable field would be flagged.
+        var outcome = typeof(SamlLoginOutcome);
+        Assert.True(outcome.IsSealed, "SamlLoginOutcome must be a sealed leaf.");
+
+        const BindingFlags members = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+        var mutable = outcome.GetProperties(members)
+            .Where(p => p.SetMethod is not null && !IsInitOnlySetter(p.SetMethod))
+            .Select(p => $"{SimpleName(outcome)}.{p.Name} (settable property)")
+            .Concat(outcome.GetFields(members)
+                .Where(f => !f.IsInitOnly && !f.IsLiteral && !f.Name.Contains('<', StringComparison.Ordinal))
+                .Select(f => $"{SimpleName(outcome)}.{f.Name} (writable field)"))
+            .ToList();
+
+        Assert.True(
+            mutable.Count == 0,
+            "SamlLoginOutcome must be immutable (no settable property or writable instance field) so the store's one-time redeem stays torn-read-free (#251): " + string.Join(", ", mutable));
+    }
+
+    // A record's positional properties expose an `init` setter (SetMethod is non-null) but are immutable
+    // after construction; treat an init-only setter as read-only so a record's own positional members are
+    // not mis-flagged as mutable. An init-only setter carries the IsExternalInit modreq on its return type.
+    private static bool IsInitOnlySetter(MethodInfo setter) =>
+        setter.ReturnParameter.GetRequiredCustomModifiers().Any(m => m.FullName == "System.Runtime.CompilerServices.IsExternalInit");
+
+    [Fact]
     public void VerifiedIdentity_IsConstructedOnlyByProtocolValidators()
     {
         // Locked in by #473: VerifiedIdentity is the keystone the session-minting path is keyed on, and it

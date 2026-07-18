@@ -226,7 +226,7 @@ const sleep = (milliseconds) => {
     /// <summary>
     /// A generator for the web response that incorporates the data from the server.
     /// </summary>
-    /// <param name="data">The data of the auth flow. Is signed XML for SAML and a state ID for OpenID.</param>
+    /// <param name="data">The opaque value the page posts back to the mint leg: a one-time state token for OpenID and, since #251, a one-time login-outcome token for a SAML login (a base64 assertion only on the SAML linking / pre-#251 deprecation path).</param>
     /// <param name="provider">The name of the provider to callback to.</param>
     /// <param name="baseUrl">The base URL of the Jellyfin installation.</param>
     /// <param name="mode">The mode of the function; SAML or OID.</param>

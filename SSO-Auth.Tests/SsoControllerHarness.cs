@@ -51,6 +51,10 @@ internal sealed class SsoControllerHarness
         // outstanding-SAML-request cache is the same kind of static and is cleared for the same reason (#415).
         OidcLoginService.ResetOidStateForTests();
         SamlLoginService.ResetSamlRequestsForTests();
+        // The one-time SAML login-outcome store (#251) and the one-time replay cache are process-wide
+        // statics too; clear them so a prior test's stored outcome or consumed assertion id cannot leak in.
+        SamlLoginService.ResetSamlOutcomesForTests();
+        SamlAssertionValidator.ResetReplaysForTests();
 
         Configuration = new PluginConfiguration();
         configure?.Invoke(Configuration);
