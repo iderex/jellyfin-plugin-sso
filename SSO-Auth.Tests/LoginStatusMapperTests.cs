@@ -114,7 +114,7 @@ public class LoginStatusMapperTests
         var result = Assert.IsType<ContentResult>(LoginStatusMapper.ToActionResult(new LoginOutcome.Throttled(42), response));
 
         Assert.Equal(429, result.StatusCode);
-        Assert.Equal("Too many login attempts. Please wait a moment and try again.", result.Content);
+        Assert.Equal("Too many attempts. Please wait a moment and try again.", result.Content);
         Assert.Equal("text/plain", result.ContentType);
         Assert.Equal("42", response.Headers.RetryAfter.ToString());
     }

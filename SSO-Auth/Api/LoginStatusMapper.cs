@@ -28,10 +28,12 @@ internal static class LoginStatusMapper
     /// <summary>
     /// The rate-limit 429 body (#128, #474) — deliberately human-readable rather than a bare status, since
     /// the challenge/callback endpoints are navigated directly in the browser and a blank 429 would look
-    /// like a broken login (the XHR auth page reads the status, not this body). The Retry-After header
-    /// carries the machine-readable delay.
+    /// like a broken login (the XHR auth page reads the status, not this body). Worded generically rather
+    /// than "login attempts" because the same gate, and so the same body, also fronts the authenticated
+    /// admin link/unlink (#382) and unregister (#516) write surfaces, where nobody is logging in (#517).
+    /// The Retry-After header carries the machine-readable delay.
     /// </summary>
-    internal const string RateLimitedMessage = "Too many login attempts. Please wait a moment and try again.";
+    internal const string RateLimitedMessage = "Too many attempts. Please wait a moment and try again.";
 
     internal static ActionResult ToActionResult(LoginOutcome outcome) => outcome switch
     {
