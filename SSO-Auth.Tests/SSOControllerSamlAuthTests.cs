@@ -99,6 +99,49 @@ public class SSOControllerSamlAuthTests
     }
 
     [Fact]
+    public async Task SamlAuth_SignedBySecondaryCertificate_DuringRotation_ReturnsOk()
+    {
+        // Inbound verification-cert rotation (#491): the identity provider has rolled its signing key, so
+        // the primary now holds an unrelated (old) certificate and the response is signed by the key whose
+        // certificate the administrator staged in the secondary field. The full callback must authenticate
+        // it via the secondary, end-to-end through the real controller and config.
+        var fixture = SamlTestFactory.Create(nameId: "alice");
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig
+        {
+            Enabled = true,
+            SamlCertificate = SamlFixture.ForeignCertificateBase64(),
+            SamlSecondaryCertificate = fixture.CertificateBase64,
+            DoNotValidateAudience = true,
+            EnableAuthorization = false,
+            AllowExistingAccountLink = false,
+        });
+        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        harness.UserManager.CreateUserAsync("alice").Returns(user);
+        harness.UserManager.GetUserById(UserId).Returns(user);
+
+        Assert.IsType<OkObjectResult>(await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = fixture.EncodeResponse() }));
+    }
+
+    [Fact]
+    public async Task SamlAuth_NeitherCertificateVerifies_Returns400()
+    {
+        // Fail closed: with a secondary configured, a response signed by neither the primary nor the
+        // secondary is still rejected — "a certificate is configured" is never acceptance.
+        var fixture = SamlTestFactory.Create();
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig
+        {
+            Enabled = true,
+            SamlCertificate = SamlFixture.ForeignCertificateBase64(),
+            SamlSecondaryCertificate = SamlFixture.ForeignCertificateBase64(),
+            DoNotValidateAudience = true,
+        });
+
+        var result = await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = fixture.EncodeResponse() });
+
+        Assert.Equal(400, Assert.IsType<ContentResult>(result).StatusCode);
+    }
+
+    [Fact]
     public async Task SamlAuth_RoleNotAllowed_Returns401()
     {
         var fixture = SamlTestFactory.Create(role: "jellyfin-users");

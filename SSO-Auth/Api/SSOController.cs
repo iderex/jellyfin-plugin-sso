@@ -191,6 +191,19 @@ public class SSOController : ControllerBase
         }
     }
 
+    // Rejects a non-loadable inbound secondary verification certificate at the SAML/Add endpoint (#491),
+    // the same fail-closed door as the primary certificate guard above and for the same reason: a garbage
+    // secondary would persist and then throw a CryptographicException on every callback (an unhandled
+    // 500). It is the identity provider's PUBLIC certificate, so it is validated exactly like the primary.
+    // Blank is valid (no overlap window configured).
+    internal static void RejectInvalidSamlSecondaryCertificate(string certificateStr)
+    {
+        if (SamlCertificate.IsInvalid(certificateStr))
+        {
+            throw new ArgumentException("The SAML secondary signing certificate must be a Base64-encoded (DER) X.509 certificate, or left blank.");
+        }
+    }
+
     // Rejects a non-loadable service-provider signing key at the SAML/Add endpoint (#167), the same
     // fail-closed door as the inbound certificate guard above: a garbage or private-key-less PKCS#12 set
     // here would persist and then fail every signed challenge. Blank is valid (signing simply stays off,
@@ -504,6 +517,7 @@ public class SSOController : ControllerBase
         RejectNullProviderBody(newConfig);
         RejectInvalidBaseUrlOverride(newConfig.BaseUrlOverride);
         RejectInvalidSamlCertificate(newConfig.SamlCertificate);
+        RejectInvalidSamlSecondaryCertificate(newConfig.SamlSecondaryCertificate);
         RejectInvalidSamlSigningKey(newConfig.SamlSigningKeyPfx);
         RejectInvalidSamlSigningKey(newConfig.SamlRolloverSigningKeyPfx);
         SSOPlugin.Instance.MutateConfiguration(configuration =>

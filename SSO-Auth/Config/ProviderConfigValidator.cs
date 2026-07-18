@@ -45,6 +45,7 @@ internal static class ProviderConfigValidator
                 ValidateProviderName("SAML", kvp.Key, isNew: live?.SamlConfigs?.ContainsKey(kvp.Key) != true);
                 ValidateBaseUrlOverride("SAML", kvp.Key, kvp.Value?.BaseUrlOverride);
                 ValidateSamlCertificate(kvp.Key, kvp.Value?.SamlCertificate);
+                ValidateSamlSecondaryCertificate(kvp.Key, kvp.Value?.SamlSecondaryCertificate);
                 ValidateSamlSigningKey(kvp.Key, kvp.Value?.SamlSigningKeyPfx);
                 ValidateSamlSigningKey(kvp.Key, kvp.Value?.SamlRolloverSigningKeyPfx);
             }
@@ -91,6 +92,20 @@ internal static class ProviderConfigValidator
         {
             throw new ArgumentException(
                 $"SAML provider '{provider?.ReplaceLineEndings(string.Empty)}' has an invalid signing certificate; it must be a Base64-encoded (DER) X.509 certificate.");
+        }
+    }
+
+    // The optional inbound secondary verification certificate (#491) is the identity provider's PUBLIC
+    // certificate — the exact same kind of value as the primary, and rejected the exact same way: a
+    // set-but-unloadable value would be persisted and then throw a CryptographicException on every callback
+    // (an unhandled 500, #206). Blank is valid (no overlap window configured). Same inline line-ending
+    // strip as above.
+    internal static void ValidateSamlSecondaryCertificate(string provider, string certificate)
+    {
+        if (SamlCertificate.IsInvalid(certificate))
+        {
+            throw new ArgumentException(
+                $"SAML provider '{provider?.ReplaceLineEndings(string.Empty)}' has an invalid secondary signing certificate; it must be a Base64-encoded (DER) X.509 certificate.");
         }
     }
 

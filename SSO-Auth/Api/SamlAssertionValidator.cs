@@ -80,8 +80,11 @@ internal sealed class SamlAssertionValidator
     internal bool TryValidate(SamlConfig config, string provider, string requestBaseUrl, string rawResponse, out SamlResponse samlResponse)
     {
         // A malformed response (non-base64, malformed XML, prohibited DOCTYPE) fails TryParse and is
-        // rejected the same way an invalid one is — a clean 4xx, never an unhandled 500 (#199).
-        if (!SamlResponseLoader.TryParse(config.SamlCertificate, rawResponse, out samlResponse)
+        // rejected the same way an invalid one is — a clean 4xx, never an unhandled 500 (#199). The
+        // optional secondary certificate is passed alongside the primary so a response signed by either is
+        // accepted across an identity-provider signing-key overlap window (#491); when it is blank this is
+        // byte-for-byte the primary-only behavior.
+        if (!SamlResponseLoader.TryParse(config.SamlCertificate, config.SamlSecondaryCertificate, rawResponse, out samlResponse)
             || !IsResponseValid(config, provider, requestBaseUrl, samlResponse))
         {
             return false;
