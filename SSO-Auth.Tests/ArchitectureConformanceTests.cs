@@ -1013,7 +1013,9 @@ public class ArchitectureConformanceTests
         // throws FileNotFoundException the moment the host DI constructs the plugin against its own,
         // lower-versioned assembly — disabling it. That is exactly how OidcClient 7.x (which references
         // Logging.Abstractions 10.0.0.0) broke 4.1.0.0 on the .NET 9 host. The floor is the target's host
-        // .NET major: 9 for net9.0 (Jellyfin 10.11), 10 for net10.0 (Jellyfin 12.0).
+        // .NET major: 9 for net9.0 (Jellyfin 10.11), 10 for net10.0 (Jellyfin 12.0). When a net11 target
+        // is added, turn this into an #elif chain (NET11_0_OR_GREATER → 11) — NET10_0_OR_GREATER is also
+        // true on net11, so leaving it would pin the floor to 10 and spuriously fail the net11 build.
 #if NET10_0_OR_GREATER
         const int hostAbiMajor = 10;
 #else
