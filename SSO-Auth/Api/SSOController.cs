@@ -330,10 +330,12 @@ public class SSOController : ControllerBase
     }
 
     // Names of the enabled providers in a config map, materialized to a detached list (the caller holds
-    // the config lock). Shared by both GetNames twins so the enabled-only rule lives in one place.
+    // the config lock). Shared by both GetNames twins so the enabled-only rule lives in one place. A
+    // null-valued entry is skipped rather than dereferenced (#538) — the same fail-closed convention
+    // CanonicalLinkService already applies to these maps.
     private static List<string> EnabledProviderNames<TConfig>(SerializableDictionary<string, TConfig> configs)
         where TConfig : ProviderConfigBase =>
-        configs.Where(kvp => kvp.Value.Enabled).Select(kvp => kvp.Key).ToList();
+        configs.Where(kvp => kvp.Value is { Enabled: true }).Select(kvp => kvp.Key).ToList();
 
     /// <summary>
     /// This is a debug endpoint to list all running OpenID flows. Requires administrator privileges.
