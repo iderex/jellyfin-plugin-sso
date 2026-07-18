@@ -44,52 +44,31 @@ internal sealed class OidcIdTokenValidator : IIdentityTokenValidator
         var ephemeralKeys = new List<IDisposable>();
         try
         {
-            var parameters = new TokenValidationParameters
-            {
-                ValidIssuer = options.ProviderInformation.IssuerName,
-                ValidAudience = options.ClientId,
-                IssuerSigningKeys = ConvertSigningKeys(options.ProviderInformation.KeySet, ephemeralKeys),
-                ValidAlgorithms = AllowedSignatureAlgorithms,
-                ClockSkew = options.ClockSkew,
-                RequireSignedTokens = true,
-                RequireExpirationTime = true,
-                // The provider-level escape hatch (DoNotValidateIssuerName) exists for IdPs whose issuer
-                // legitimately differs from the discovery location; it relaxes ONLY the issuer match.
-                // Signature, audience and lifetime validation have no off switch.
-                ValidateIssuer = options.Policy.Discovery.ValidateIssuerName,
-                // The downstream claim scan compares raw JWT claim names ordinally ("preferred_username",
-                // "sub", the configured role-claim path), so the principal must carry the payload names
-                // verbatim — these two only name the identity's Name/Role accessors.
-                NameClaimType = "name",
-                RoleClaimType = "role",
-            };
-
-            // MapInboundClaims=false keeps the raw JWT claim types; the default mapping would rename
-            // "sub" and friends to SOAP-style URIs and break every ordinal claim comparison downstream.
+            // Signature (against the discovery JWKS, under the asymmetric-only allowlist), issuer,
+            // audience and lifetime are enforced atomically by the handler from the parameters built
+            // below; any failure rejects (fail closed). MapInboundClaims=false keeps the raw JWT claim
+            // types — the default mapping would rename "sub" and friends to SOAP-style URIs and break
+            // every ordinal claim comparison downstream.
             var handler = new JsonWebTokenHandler { MapInboundClaims = false };
-            var result = await handler.ValidateTokenAsync(identityToken, parameters).ConfigureAwait(false);
+            var result = await handler.ValidateTokenAsync(identityToken, BuildValidationParameters(options, ephemeralKeys)).ConfigureAwait(false);
             if (!result.IsValid)
             {
-                return new IdentityTokenValidationResult { Error = MapError(result.Exception) };
+                return Reject(MapError(result.Exception));
             }
 
             var token = (JsonWebToken)result.SecurityToken;
             var azp = result.ClaimsIdentity.FindFirst("azp")?.Value;
 
-            // azp (OIDC Core 3.1.3.7 rule 5): optional, but when present it MUST equal this client's id —
-            // a token authorized for a different party must not log in here.
-            if (azp != null && !string.Equals(azp, options.ClientId, StringComparison.Ordinal))
+            var authorizedPartyError = CheckAuthorizedParty(azp, options.ClientId);
+            if (authorizedPartyError != null)
             {
-                return new IdentityTokenValidationResult { Error = "Identity token validation failed: azp mismatch" };
+                return Reject(authorizedPartyError);
             }
 
-            // rules 3-4: with more than one audience the token MUST carry an azp (already pinned to this
-            // client above). A multi-audience token WITHOUT azp is rejected — it may have been minted for
-            // a different party that merely lists this client as a co-audience. ValidateAudience only
-            // checks that our id is among the audiences, so this closes the "additional audiences" clause.
-            if (azp == null && token.Audiences.Count() > 1)
+            var audienceError = CheckAudienceRestriction(azp, token);
+            if (audienceError != null)
             {
-                return new IdentityTokenValidationResult { Error = "Identity token validation failed: multiple audiences without azp" };
+                return Reject(audienceError);
             }
 
             return new IdentityTokenValidationResult
@@ -106,6 +85,50 @@ internal sealed class OidcIdTokenValidator : IIdentityTokenValidator
             }
         }
     }
+
+    // Signature / issuer / audience / lifetime configuration for the handler: the discovery JWKS as the
+    // only signing keys, the asymmetric-only algorithm allowlist, the discovery issuer, the client id as
+    // the audience, and the client's clock skew. Signed + expiring tokens are required (fail closed).
+    private static TokenValidationParameters BuildValidationParameters(OidcClientOptions options, List<IDisposable> ephemeralKeys) =>
+        new()
+        {
+            ValidIssuer = options.ProviderInformation.IssuerName,
+            ValidAudience = options.ClientId,
+            IssuerSigningKeys = ConvertSigningKeys(options.ProviderInformation.KeySet, ephemeralKeys),
+            ValidAlgorithms = AllowedSignatureAlgorithms,
+            ClockSkew = options.ClockSkew,
+            RequireSignedTokens = true,
+            RequireExpirationTime = true,
+            // The provider-level escape hatch (DoNotValidateIssuerName) exists for IdPs whose issuer
+            // legitimately differs from the discovery location; it relaxes ONLY the issuer match.
+            // Signature, audience and lifetime validation have no off switch.
+            ValidateIssuer = options.Policy.Discovery.ValidateIssuerName,
+            // The downstream claim scan compares raw JWT claim names ordinally ("preferred_username",
+            // "sub", the configured role-claim path), so the principal must carry the payload names
+            // verbatim — these two only name the identity's Name/Role accessors.
+            NameClaimType = "name",
+            RoleClaimType = "role",
+        };
+
+    // azp (OIDC Core 3.1.3.7 rule 5): optional, but when present it MUST equal this client's id —
+    // a token authorized for a different party must not log in here. Returns the rejection reason, or
+    // null when the check passes.
+    private static string? CheckAuthorizedParty(string? azp, string clientId) =>
+        azp != null && !string.Equals(azp, clientId, StringComparison.Ordinal)
+            ? "Identity token validation failed: azp mismatch"
+            : null;
+
+    // rules 3-4: with more than one audience the token MUST carry an azp (already pinned to this client
+    // by CheckAuthorizedParty). A multi-audience token WITHOUT azp is rejected — it may have been minted
+    // for a different party that merely lists this client as a co-audience. ValidateAudience only checks
+    // that our id is among the audiences, so this closes the "additional audiences" clause. Returns the
+    // rejection reason, or null when the check passes.
+    private static string? CheckAudienceRestriction(string? azp, JsonWebToken token) =>
+        azp == null && token.Audiences.Count() > 1
+            ? "Identity token validation failed: multiple audiences without azp"
+            : null;
+
+    private static IdentityTokenValidationResult Reject(string error) => new() { Error = error };
 
     // The exact string "invalid_signature" is the OidcClient contract: its response processor reacts
     // to it by refreshing the discovery JWKS and retrying once, which is what heals a signing-key
