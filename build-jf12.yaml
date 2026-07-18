@@ -1,0 +1,38 @@
+name: "SSO Authentication"
+# Same plugin GUID as the JF10.11 build (build.yaml) — one plugin, so a JF12 server updates it in
+# place. The targetAbi below gates it to the 12.0 line, so a 10.11 server never offers this build and
+# vice versa (the two generations live in separate manifest branches, manifest-jf12-* vs manifest-*).
+guid: "505ce9d1-d916-42fa-86ca-673ef241d7df"
+imageUrl: "https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/main/img/logo.png"
+# The JF12 (5.0) line's target version. The beta workflow overrides this to 5.0.0.<run> at build time;
+# a 5.0.0-JF12-stable tag releases 5.0.0. Bump per change class exactly like build.yaml's version.
+version: "5.0.0"
+# Jellyfin 12.0 moves the server to .NET 10; a 10.11-ABI plugin will not load there. This is the 12.0
+# line's ABI floor.
+targetAbi: "12.0.0.0"
+framework: "net10.0"
+owner: "iderex"
+overview: "Authenticate users against an SSO provider."
+description: |
+  This plugin allows users to sign in through an SSO provider (such as Google, Facebook, or your own provider). This enables one-click signin.
+  SSO sign-in works in the Jellyfin Web UI and in clients that support Quick Connect.
+  Review documentation at https://github.com/iderex/jellyfin-plugin-sso
+category: "Authentication"
+# The net10 shipping closure, empirically from `dotnet publish -f net10.0` (#135). It differs from the
+# net9 list in build.yaml: on .NET 10 the SAML crypto assemblies (System.Security.Cryptography.Xml /
+# .Pkcs, System.Formats.Asn1) and Microsoft.Bcl.Memory are framework-provided, so `dotnet publish`
+# does NOT copy them and they must NOT ship (shipping a host-provided assembly at a mismatched version
+# is the #590 class of failure). The id_token/JWT validator closure and Microsoft.Bcl.Cryptography are
+# still not in the .NET 10 ASP.NET shared framework, so they travel in the zip. Keep in sync with
+# `dotnet publish -f net10.0 -c Release` on every dependency change.
+artifacts:
+  - "SSO-Auth.dll"
+  - "Duende.IdentityModel.OidcClient.dll"
+  - "Duende.IdentityModel.dll"
+  - "Microsoft.IdentityModel.JsonWebTokens.dll"
+  - "Microsoft.IdentityModel.Tokens.dll"
+  - "Microsoft.IdentityModel.Logging.dll"
+  - "Microsoft.IdentityModel.Abstractions.dll"
+  - "Microsoft.Bcl.Cryptography.dll"
+changelog: |
+  5.0.0: Jellyfin 12.0 (.NET 10) line. First build targeting the Jellyfin 12.0 server generation — net10.0, OidcClient 7.x, targetAbi 12.0.0.0. Same feature set and login hardening as the 4.x (Jellyfin 10.11) line, retargeted for the .NET 10 host so SSO login keeps working after a 12.0 upgrade.

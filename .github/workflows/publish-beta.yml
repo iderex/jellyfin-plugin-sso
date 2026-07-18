@@ -12,10 +12,10 @@ name: Publish Beta
 #     with ignorePrereleases: true; this beta job writes `manifest-beta` with
 #     ignorePrereleases: false, so the beta manifest surfaces the newest of the
 #     prerelease beta builds AND any stable release.
-#   - Generation (JF10.11 vs the future JF10.12) is a different BUILD. This job is
-#     the .NET 9 / Jellyfin 10.11 leg (OidcClient must stay 6.x, #590). The
-#     JF10.12 (.NET 10 / OidcClient 7.x) leg is added when a 10.12 SDK exists;
-#     it will feed `manifest-jf12-beta`.
+#   - Generation (Jellyfin 10.11 vs 12.0) is a different BUILD, not a different manifest. This job is
+#     the .NET 9 / Jellyfin 10.11 leg (OidcClient must stay 6.x, #590). The Jellyfin 12.0 (.NET 10 /
+#     OidcClient 7.x, the 5.0 line) leg is publish-jf12-beta.yml, which builds from the `4.2` branch and
+#     regenerates this SAME manifest-beta — the server filters the two generations by targetAbi (#135).
 on:
   push:
     branches: [ main ]

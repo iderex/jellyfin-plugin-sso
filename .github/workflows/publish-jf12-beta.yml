@@ -1,0 +1,149 @@
+name: Publish JF12 Beta
+
+# The Jellyfin 12.0 (.NET 10) BETA channel — the 5.0 line (#135). Jellyfin 12.0 moves the server to
+# .NET 10 and a 10.11-ABI plugin will not load there, so upgraders need a 12-targeted build. The
+# multi-target codebase (net9.0;net10.0) lives on the `4.2` branch, so JF12 betas publish from 4.2:
+# every push to 4.2 builds the net10 target and publishes an installable prerelease into the SHARED
+# `manifest-beta` branch. Jellyfin filters plugin versions client-side by targetAbi, so one beta
+# manifest carries BOTH generations (4.x at targetAbi 10.11, 5.0 at 12.0) and each server installs only
+# its compatible build — no separate JF12 manifest is needed. (The JF10.11 beta is published from `main`
+# by publish-beta.yml; both regenerate the same manifest-beta from all prerelease releases.) When 4.2.0
+# releases (4.2 -> main), this leg moves to main with the multi-target codebase.
+#
+# The JF12 build METADATA (version 5.0, targetAbi 12.0.0.0, framework net10.0, and the net10 shipping
+# closure) lives in build-jf12.yaml, which this job copies over build.yaml before JPRM builds — the
+# committed build.yaml stays the JF10.11 metadata.
+on:
+  push:
+    branches: [ 4.2 ]
+  workflow_dispatch:
+
+# Explicit deny-all at workflow level; the job below opts into write access explicitly.
+permissions: {}
+
+# Serialize JF12 beta publishes so a burst of merges to 4.2 cannot race the manifest-branch push /
+# draft-publish. cancel-in-progress is false — a publish must never be killed mid-run.
+concurrency:
+  group: publish-jf12-beta
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build & publish JF12 beta
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Creates the GitHub release and updates the manifest branch, so it opts into write access.
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      with:
+        persist-credentials: false
+    - name: Setup .NET
+      uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+      with:
+        # Both SDKs: the multi-target restore/build needs net9.0, the JF12 package is net10.0.
+        # No NuGet cache: this job publishes with contents:write, so a poisoned cache could reach
+        # the artifact; the --locked-mode restore re-downloads against the committed lockfile.
+        dotnet-version: |
+          9.0.x
+          10.0.x
+    - name: Restore dependencies
+      run: dotnet restore --locked-mode
+    - name: Build Dotnet
+      run: dotnet build --no-restore --warnaserror
+    - name: Derive the JF12 beta version
+      id: version
+      # Beta version = build-jf12.yaml's `version` (the 5.0 line's next target) with the run number as
+      # the fourth octet: 5.0.0.<run>, released as "5.0.0-JF12-beta". Same monotonic-build-number model
+      # as publish-beta.yml; RUN_NUMBER via env (no ${{ }} spliced into the shell). Never rename this
+      # workflow without bumping build-jf12.yaml's version (github.run_number resets on rename).
+      env:
+        RUN_NUMBER: ${{ github.run_number }}
+      run: |
+        base=$(grep -E '^version:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"' build-jf12.yaml \
+          | head -1 | sed -E 's/.*"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/')
+        if [ -z "$base" ]; then
+          echo "::error::Could not read a three-part version from build-jf12.yaml"; exit 1
+        fi
+        echo "base=${base}" >> "$GITHUB_OUTPUT"
+        echo "beta=${base}.${RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+    - name: Use the JF12 build metadata
+      # JPRM reads build.yaml; swap in the JF12 metadata (version 5.0, targetAbi 12.0.0.0, framework
+      # net10.0, net10 artifacts) for this build only. The committed build.yaml is untouched on disk in
+      # the repo — this only rewrites the runner's checkout.
+      run: cp build-jf12.yaml build.yaml
+    - name: Set the JF12 beta version in build.yaml
+      uses: fjogeleit/yaml-update-action@dffe9a5223d84653c13374032382f6bb5de8e5ef # v0.17.0
+      with:
+        valueFile: 'build.yaml'
+        propertyPath: 'version'
+        value: ${{ steps.version.outputs.beta }}
+        commitChange: false
+        updateFile: true
+    - name: "JPRM: Build"
+      id: jrpm
+      uses: oddstr13/jellyfin-plugin-repository-manager@9497a0a499416cc572ed2e07a391d9f943a37b4d # v1.1.1
+      with:
+        version: ${{ steps.version.outputs.beta }}
+        verbosity: debug
+        path: .
+        dotnet-target: "net10.0"
+        output: _dist
+    - name: Prepare GitHub Release assets
+      run: |-
+        pushd _dist
+        for file in ./*.zip; do
+          md5sum ${file#./} >> ${file%.*}.md5
+          sha256sum ${file#./} >> ${file%.*}.sha256
+        done
+        ls -l
+        popd
+    - name: Upload JF12 beta assets to a draft release
+      id: publish-assets
+      uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+      with:
+          # Immutable-releases repo: attach assets while the release is a DRAFT, then publish the draft
+          # (same flow as publish-beta.yml). Release NAME is the clean 5.0.0-JF12-beta; the git TAG
+          # carries the build number (5.0.0-JF12-beta.<run>) to stay unique per run. The tag never
+          # matches publish.yml's [0-9]+.[0-9]+.[0-9]+-stable glob, so a JF12 beta never triggers the
+          # stable channel; prerelease: true keeps it out of any stable manifest. Installed plugin
+          # version is 5.0.0.<run> (hidden fourth octet keeps Jellyfin's update ordering monotonic).
+          draft: true
+          prerelease: true
+          name: ${{ steps.version.outputs.base }}-JF12-beta
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          tag_name: ${{ steps.version.outputs.base }}-JF12-beta.${{ github.run_number }}
+          files: |
+            _dist/*
+            build.yaml
+          body: |
+            Jellyfin 12.0 (.NET 10) beta ${{ steps.version.outputs.base }}-JF12-beta (plugin version ${{ steps.version.outputs.beta }}).
+            Install via the beta repository URL (a Jellyfin 12.0 server picks this build automatically by targetAbi):
+            https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json
+      env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Publish the draft release
+      # Seal the draft (assets attached) into an immutable published prerelease. A draft has no git tag
+      # yet, so publish by release id, not tag name. -F sends draft as a typed boolean.
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RELEASE_ID: ${{ steps.publish-assets.outputs.id }}
+        REPO: ${{ github.repository }}
+      run: gh api "repos/${REPO}/releases/${RELEASE_ID}" -X PATCH -F draft=false
+    - name: Publish Beta Plugin Manifest
+      # ignorePrereleases: false so the beta is included. Regenerates the SHARED manifest-beta from ALL
+      # prerelease releases — both this JF12 build (5.0.0.<run>, targetAbi 12.0.0.0) and the JF10.11
+      # betas published from main (4.x.<run>, targetAbi 10.11.0.0). Each release ships its own build.yaml,
+      # so every version lands in the manifest with its correct targetAbi, and a Jellyfin server installs
+      # only the build matching its generation. publish-beta.yml (on main) regenerates the same branch, so
+      # whichever generation publishes last leaves manifest-beta complete for both.
+      uses: Kevinjil/jellyfin-plugin-repo-action@296850372cd569cbcc040e834222a5afed861485 # v0.4.3
+      with:
+        ignorePrereleases: false
+        githubToken: ${{ secrets.GITHUB_TOKEN }}
+        repository: ${{ github.repository }}
+        pagesBranch: manifest-beta
+        pagesFile: manifest.json
