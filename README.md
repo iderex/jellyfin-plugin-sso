@@ -66,7 +66,7 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
    | Jellyfin **10.12** | **stable** | `https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-jf12-release/manifest.json` |
    | Jellyfin **10.12** | **beta**   | `https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-jf12-beta/manifest.json`    |
    - **stable** ships tagged releases only. **beta** tracks `main` — every merge publishes an installable build, so betas move fast and may break; use them for testing, not production.
-   - The **10.12** URLs already exist so you can add them now, but they are **empty until Jellyfin 10.12 ships** — that generation runs on .NET 10 and needs its own build (there is no Jellyfin 10.12 SDK to build against yet). On **10.11**, use the 10.11 URLs.
+   - The **10.12** URLs already exist so you can add them now, but they stay **empty until the 10.12 build leg is enabled** — that generation runs on .NET 10 and there is no Jellyfin 10.12 SDK to build against yet. When it lands, the **10.12 beta** fills first; the **10.12 stable** URL only carries a build once there is an actual 10.12 stable release. On **10.11**, use the 10.11 URLs.
 
 2. Go to **Dashboard → Plugins → Catalog**, find **SSO Authentication**, and install it.
 3. **Restart Jellyfin** to load the plugin.
