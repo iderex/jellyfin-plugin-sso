@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Http;
 using Jellyfin.Plugin.SSO_Auth;
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Api.Flows;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.Configuration;
@@ -45,10 +46,10 @@ internal sealed class SsoControllerHarness
         IPAddress? clientIp = null,
         Func<HttpRequestMessage, HttpResponseMessage>? httpResponder = null)
     {
-        // The controller keeps process-wide OpenID caches as private statics; clear them so a prior test
-        // that exercised the login flow cannot leak in-flight state into this one (#289). The
+        // The OpenID flow keeps process-wide caches as statics on OidcLoginService; clear them so a prior
+        // test that exercised the login flow cannot leak in-flight state into this one (#289). The
         // outstanding-SAML-request cache is the same kind of static and is cleared for the same reason (#415).
-        SSOController.ResetOidStateForTests();
+        OidcLoginService.ResetOidStateForTests();
         SSOController.ResetSamlRequestsForTests();
 
         Configuration = new PluginConfiguration();
