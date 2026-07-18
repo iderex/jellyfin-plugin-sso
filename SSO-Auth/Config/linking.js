@@ -23,43 +23,16 @@ const ssoConfigLinking = {
     });
   },
   loadProviderList: (container, providers, provider_mode) => {
+    // The server only offers enabled providers for new links (#344), so every name here gets an
+    // add button. A link the user still holds to a since-disabled provider is rendered separately
+    // below, from the links feed, so it stays visible and removable.
     providers.forEach((provider_name) => {
-      // Provider and canonical names are identity-provider/admin-controlled: build the DOM with
-      // createElement/textContent (never innerHTML), and feed them into selectors and URLs only
-      // through CSS.escape / encodeURIComponent, never raw.
-      const provider_config = document.createElement("div");
-      provider_config.classList.add("sso-provider-links-container");
-      provider_config.dataset.id = provider_name;
-
-      const title = document.createElement("label");
-      title.classList.add(
-        "inputLabel",
-        "inputLabelUnfocused",
-        "sso-provider-link-title",
+      ssoConfigLinking.appendProviderContainer(
+        container,
+        provider_name,
+        provider_mode,
+        true,
       );
-      title.textContent = provider_name;
-
-      const add_provider = document.createElement("a");
-      add_provider.classList.add(
-        "fab",
-        "emby-button",
-        "sso-provider-add-link",
-        "sso-provider",
-      );
-      const add_icon = document.createElement("span");
-      add_icon.classList.add("material-icons", "add");
-      add_icon.setAttribute("aria-hidden", "true");
-      add_provider.appendChild(add_icon);
-      add_provider.href = ApiClient.getUrl(
-        `/SSO/${provider_mode}/p/${encodeURIComponent(provider_name)}?isLinking=true`,
-      );
-
-      const existing_links = document.createElement("div");
-      existing_links.classList.add("sso-provider-existing-links-container");
-      existing_links.dataset.provider = provider_name;
-
-      provider_config.append(title, add_provider, existing_links);
-      container.appendChild(provider_config);
     });
 
     const currentUserId = ApiClient.getCurrentUserId();
@@ -74,11 +47,31 @@ const ssoConfigLinking = {
       ).then((resp) => {
         resp.json().then((provider_map) => {
           Object.keys(provider_map).forEach((provider_name) => {
-            const provider_container = container.querySelector(
+            let existing_links = container.querySelector(
               `.sso-provider-existing-links-container[data-provider="${CSS.escape(provider_name)}"]`,
             );
+
+            // No container means the provider is not offered for new links because it is disabled
+            // (it is absent from the enabled-only GetNames list, #344). The server still returns
+            // such links and still lets the user delete them (LinksByUser / TryRemoveLink pass
+            // requireEnabled:false — disabling then cleaning up is the intended workflow), so render
+            // a container without an add button, marked disabled, rather than dropping it and
+            // throwing on a null container. A disabled provider the user holds no link to (empty
+            // list, nothing to remove) is skipped.
+            if (!existing_links) {
+              if (provider_map[provider_name].length === 0) {
+                return;
+              }
+              existing_links = ssoConfigLinking.appendProviderContainer(
+                container,
+                provider_name,
+                provider_mode,
+                false,
+              );
+            }
+
             ssoConfigLinking.populateExistingLinks(
-              provider_container,
+              existing_links,
               provider_mode,
               provider_name,
               provider_map[provider_name],
@@ -87,6 +80,63 @@ const ssoConfigLinking = {
         });
       });
     }
+  },
+
+  // Builds one provider row (title, optional add button, existing-links container) and appends it,
+  // returning the existing-links container so the caller can populate it. When offerLink is false the
+  // provider is disabled: no add button is drawn (it cannot accept a new link) and the title is marked,
+  // but any link the user already holds stays listed and removable.
+  appendProviderContainer: (
+    container,
+    provider_name,
+    provider_mode,
+    offerLink,
+  ) => {
+    // Provider and canonical names are identity-provider/admin-controlled: build the DOM with
+    // createElement/textContent (never innerHTML), and feed them into selectors and URLs only
+    // through CSS.escape / encodeURIComponent, never raw.
+    const provider_config = document.createElement("div");
+    provider_config.classList.add("sso-provider-links-container");
+    provider_config.dataset.id = provider_name;
+
+    const title = document.createElement("label");
+    title.classList.add(
+      "inputLabel",
+      "inputLabelUnfocused",
+      "sso-provider-link-title",
+    );
+    title.textContent = provider_name;
+
+    const existing_links = document.createElement("div");
+    existing_links.classList.add("sso-provider-existing-links-container");
+    existing_links.dataset.provider = provider_name;
+
+    if (offerLink) {
+      const add_provider = document.createElement("a");
+      add_provider.classList.add(
+        "fab",
+        "emby-button",
+        "sso-provider-add-link",
+        "sso-provider",
+      );
+      const add_icon = document.createElement("span");
+      add_icon.classList.add("material-icons", "add");
+      add_icon.setAttribute("aria-hidden", "true");
+      add_provider.appendChild(add_icon);
+      add_provider.href = ApiClient.getUrl(
+        `/SSO/${provider_mode}/p/${encodeURIComponent(provider_name)}?isLinking=true`,
+      );
+      provider_config.append(title, add_provider, existing_links);
+    } else {
+      const disabled_note = document.createElement("span");
+      disabled_note.classList.add("sso-provider-disabled-note");
+      disabled_note.textContent = " (disabled)";
+      title.appendChild(disabled_note);
+      provider_config.append(title, existing_links);
+    }
+
+    container.appendChild(provider_config);
+    return existing_links;
   },
 
   populateExistingLinks: (
