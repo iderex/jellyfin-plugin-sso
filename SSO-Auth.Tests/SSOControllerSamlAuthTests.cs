@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Api.Flows;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Microsoft.AspNetCore.Mvc;
 using NSubstitute;
@@ -164,7 +165,7 @@ public class SSOControllerSamlAuthTests
         var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
         harness.UserManager.CreateUserAsync("alice").Returns(user);
         harness.UserManager.GetUserById(UserId).Returns(user);
-        SSOController.SeedSamlRequestForTests("adfs", AuthnRequestId, bindingId, DateTime.UtcNow.AddMinutes(15));
+        SamlLoginService.SeedSamlRequestForTests("adfs", AuthnRequestId, bindingId, DateTime.UtcNow.AddMinutes(15));
         return harness;
     }
 

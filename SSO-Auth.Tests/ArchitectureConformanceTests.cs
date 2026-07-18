@@ -260,8 +260,9 @@ public class ArchitectureConformanceTests
         // Sentinel + call-site pins. The factory NAMES are the contract; require both to exist (a rename
         // must consciously update this rule), then confine each factory's invocation to the file(s) that own
         // its protocol's validation. AuthorizeSession is where the OpenID identity is built (from the
-        // role-gate result); the SAML factory is invoked from the controller's SAML endpoint until a later
-        // #318 step extracts a dedicated SAML validator — at which point this allow-list moves with it.
+        // role-gate result); the SAML factory is invoked from the SAML flow service's session-minting leg
+        // (SamlLoginService), where it moved with the SAML flow extraction (#160, #318 step 13) — off the
+        // controller, as the earlier comment anticipated.
         const string oidcFactory = "FromOidcRedemption";
         const string samlFactory = "FromValidatedSaml";
         var factoryMethods = typeof(VerifiedIdentity)
@@ -274,9 +275,9 @@ public class ArchitectureConformanceTests
             $"VerifiedIdentity must expose the two named validation factories ({oidcFactory}, {samlFactory}); one was renamed, so update this rule and the source-scan allow-list with it (#473).");
 
         var oidcHome = SourceFilesDeclaring(new[] { typeof(AuthorizeSession) });
-        var samlHome = ControllerSourceFiles();
+        var samlHome = SourceFilesDeclaring(new[] { typeof(SamlLoginService) });
         AssertFactoryInvocationsConfinedTo("VerifiedIdentity." + oidcFactory + "(", oidcHome, "the OpenID redeem path (AuthorizeSession.Ready)");
-        AssertFactoryInvocationsConfinedTo("VerifiedIdentity." + samlFactory + "(", samlHome, "the SAML session-minting endpoint");
+        AssertFactoryInvocationsConfinedTo("VerifiedIdentity." + samlFactory + "(", samlHome, "the SAML session-minting leg (SamlLoginService)");
     }
 
     // Fails if the given factory-invocation token appears in any SSO-Auth source file outside the allowed
@@ -509,6 +510,81 @@ public class ArchitectureConformanceTests
         Assert.True(
             markers.All(m => oidcSource.Contains(m, StringComparison.Ordinal)),
             "OidcLoginService must own the OpenID challenge/callback flow and its authorize/discovery caches; otherwise the controller scan passes vacuously (#160).");
+    }
+
+    [Fact]
+    public void Controller_DelegatesSamlFlowToTheFlowService()
+    {
+        // Locked in by the SAML flow extraction (#160, #318 step 13), the mirror of the OpenID rule above:
+        // the SAML challenge, assertion-consumer callback, session-minting authenticate and manual-link
+        // bodies, together with the SAML-specific process-wide state (the replay cache and the
+        // outstanding-AuthnRequest cache), moved into SamlLoginService. The controller's SAML endpoints now
+        // apply the shared rate-limit gate and hand the request to that service, so a CONTROLLER neither
+        // holds those SAML caches nor drives the SAML challenge/validation protocol itself. Call-level
+        // property, so it is a source scan like the other controller rules above.
+        //
+        // The two cache tokens are nameof-derived, so a rename of either type fails to COMPILE this rule
+        // rather than passing vacuously; the two protocol tokens are the outgoing-request builder
+        // (SamlAuthnRequest, which the challenge constructs and signs) and the response validator
+        // (ValidateSaml). The shared per-client rate limiter is deliberately NOT a marker — it fronts BOTH
+        // protocols, so it legitimately stays a controller static, exactly as in the OpenID rule.
+        var replayToken = nameof(SamlReplayCache);
+        var requestToken = nameof(SamlRequestCache);
+        var markers = new[] { replayToken, requestToken, "SamlAuthnRequest", "ValidateSaml" };
+
+        var controllerHits = ControllerSourceFiles()
+            .SelectMany(path => File.ReadAllLines(path)
+                .Select((line, index) => (File: Path.GetFileName(path), Text: line.Trim(), Number: index + 1)))
+            .Where(l => markers.Any(m => l.Text.Contains(m, StringComparison.Ordinal)))
+            .Select(l => $"{l.File} line {l.Number}: {l.Text}")
+            .ToList();
+
+        Assert.True(
+            controllerHits.Count == 0,
+            "A controller must not hold the SAML replay/request caches or drive the SAML challenge/validation protocol; the SAML flow lives in SamlLoginService (#160). Found: " + string.Join(" | ", controllerHits));
+
+        // Liveness against a vacuous pass: the SAML flow must actually live in SamlLoginService — a move,
+        // not a silent removal — so the flow service's own source must contain every moved token.
+        var samlSource = string.Join(
+            "\n",
+            SourceFilesDeclaring(new[] { typeof(SamlLoginService) }).Select(File.ReadAllText));
+        Assert.True(
+            markers.All(m => samlSource.Contains(m, StringComparison.Ordinal)),
+            "SamlLoginService must own the SAML challenge/callback/authenticate/link flow and its replay/request caches; otherwise the controller scan passes vacuously (#160).");
+    }
+
+    [Fact]
+    public void SharedFlowResponses_OwnTheAuthPageErrorAndLinkWriteResults()
+    {
+        // Locked in by the shared-helper consolidation (#160, #500): the three HTTP result shapes both flow
+        // services need — the security-headered intermediate auth page (the CSP build), the plain-text flow
+        // error, and the manual-link write mapping — were duplicated (the controller's HtmlAuthPage +
+        // ReturnError, and the OpenID service's PlainTextError twin). They now live once in FlowResponses,
+        // which both flow services call, so a CONTROLLER neither builds the CSP auth page nor sets its
+        // defensive headers itself. Call-level property, so it is a source scan like the other controller
+        // rules above. Markers are the emission tokens: the CSP builder (AuthPageCsp.Build) and the two
+        // clickjacking/sniffing headers the auth page sets.
+        var markers = new[] { "AuthPageCsp.Build", "X-Frame-Options", "X-Content-Type-Options" };
+        var offenders = ControllerSourceFiles()
+            .SelectMany(path => File.ReadAllLines(path)
+                .Select((line, index) => (File: Path.GetFileName(path), Text: line.Trim(), Number: index + 1)))
+            .Where(l => markers.Any(m => l.Text.Contains(m, StringComparison.Ordinal)))
+            .Select(l => $"{l.File} line {l.Number}: {l.Text}")
+            .ToList();
+
+        Assert.True(
+            offenders.Count == 0,
+            "A controller must not build the CSP auth page or set its defensive headers directly; the shared flow-result shapes live in FlowResponses (#160). Found: " + string.Join(" | ", offenders));
+
+        // Liveness against a vacuous pass: the auth page must actually live in FlowResponses — a move, not a
+        // silent removal — so its own source must build the CSP and set the frame-options header.
+        var sharedSource = string.Join(
+            "\n",
+            Directory.EnumerateFiles(Path.Combine(RepoRoot(), "SSO-Auth", "Api", "Shared"), "*.cs", SearchOption.AllDirectories)
+                .Select(File.ReadAllText));
+        Assert.True(
+            sharedSource.Contains("AuthPageCsp.Build", StringComparison.Ordinal) && sharedSource.Contains("X-Frame-Options", StringComparison.Ordinal),
+            "FlowResponses must own the CSP auth-page render (AuthPageCsp.Build + the defensive headers); otherwise the controller scan passes vacuously (#160).");
     }
 
     [Fact]

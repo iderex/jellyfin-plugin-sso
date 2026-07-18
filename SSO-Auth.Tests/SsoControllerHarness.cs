@@ -50,7 +50,7 @@ internal sealed class SsoControllerHarness
         // test that exercised the login flow cannot leak in-flight state into this one (#289). The
         // outstanding-SAML-request cache is the same kind of static and is cleared for the same reason (#415).
         OidcLoginService.ResetOidStateForTests();
-        SSOController.ResetSamlRequestsForTests();
+        SamlLoginService.ResetSamlRequestsForTests();
 
         Configuration = new PluginConfiguration();
         configure?.Invoke(Configuration);
