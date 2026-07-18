@@ -9,7 +9,15 @@
     "owner": "iderex",
     "versions": [
       {
-        "changelog": "Jellyfin 10.11 beta build (4.1.1.2).\nInstall via the beta repository URL:\nhttps://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json\n",
+        "changelog": "Jellyfin 10.11 beta 4.1.1-beta (plugin version 4.1.1.3).\nInstall via the beta repository URL:\nhttps://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json\n\n\n## What's Changed\n* Three-part versions + X.Y.Z-<channel> release names + auto release notes by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/597\n\n\n**Full Changelog**: https://github.com/iderex/jellyfin-plugin-sso/compare/beta-4.1.1.2...4.1.1-beta.3",
+        "checksum": "a7b7e18dde83445b7118be3079c518ee",
+        "sourceUrl": "https://github.com/iderex/jellyfin-plugin-sso/releases/download/4.1.1-beta.3/sso-authentication_4.1.1.3.zip",
+        "targetAbi": "10.11.0.0",
+        "timestamp": "2026-07-18T18:50:33Z",
+        "version": "4.1.1.3"
+      },
+      {
+        "changelog": "Jellyfin 10.11 beta build (4.1.1.2).\r\nInstall via the beta repository URL:\r\nhttps://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json\r\n\r\n## What's Changed\r\n* Surface failed loads and unlink deletes on the linking page by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/565\r\n* Surface failed GetNames loads on the linking page by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/570\r\n* Decompose the ~210-line ResolveOrCreateAsync account-resolution method by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/568\r\n* Record the challenge NewPath through MutateConfiguration by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/571\r\n* Add advanced CodeQL workflow covering main and 4.2 by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/575\r\n* Use the new security-team artwork as the README banner by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/579\r\n* Add SharpFuzz harness prototype for the login-path parse surface by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/583\r\n* Guard computed logging arguments behind IsEnabled (net10 CA1873 prep) by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/586\r\n* Advance to Alpha and document the plugin-catalog install path by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/585\r\n* Pin OidcClient to 6.x to restore loading on Jellyfin 10.11 (4.1.1.0) by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/591\r\n* Release channels: JF10.11 beta manifest + JF10.12 placeholders (#592) by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/593\r\n* Fix beta publish under immutable releases (draft + unique tag) by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/594\r\n\r\n\r\n**Full Changelog**: https://github.com/iderex/jellyfin-plugin-sso/compare/v4.1.0.0...beta-4.1.1.2",
         "checksum": "9e522ee7dde9fdc1917ac22f54eb9b63",
         "sourceUrl": "https://github.com/iderex/jellyfin-plugin-sso/releases/download/beta-4.1.1.2/sso-authentication_4.1.1.2.zip",
         "targetAbi": "10.11.0.0",
@@ -25,7 +33,7 @@
         "version": "4.1.0.0"
       },
       {
-        "changelog": "Rolling Jellyfin 10.11 beta build (4.1.1.1).\nInstall via the beta repository URL:\nhttps://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json\n",
+        "changelog": "Rolling Jellyfin 10.11 beta build (4.1.1.1).\r\nInstall via the beta repository URL:\r\nhttps://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json\r\n\r\n**Full Changelog**: https://github.com/iderex/jellyfin-plugin-sso/commits/nightly",
         "checksum": "",
         "sourceUrl": "",
         "targetAbi": "10.8.0.0",
