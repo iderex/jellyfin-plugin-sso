@@ -2,9 +2,9 @@
 
 > [!WARNING]
 >
-> ## 🟠 In development — do NOT install this on a production system
+> ## 🟡 Alpha — for testing and evaluation only
 >
-> This plugin is at the **In-Development** stage — the first rung of its maturity ladder (**In-Development → Alpha → Beta → Release Candidate → Full Release**; see the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap)). It exists **exclusively for developers to test** — nothing else. Under **no circumstances** should it be installed on a production system or put in front of a real Jellyfin instance with real user accounts: it is a login path still under reconstruction, and you must expect **breaking changes, incomplete features, and security gaps that are still open**. Wait for a **Full Release** before using it anywhere that matters.
+> This plugin is at the **Alpha** stage — the second rung of its maturity ladder (**In-Development → Alpha → Beta → Release Candidate → Full Release**; see the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap)). It is now installable, but **for testing and evaluation only** — do **not** put it in front of a real Jellyfin instance with real user accounts, and do **not** run it in production. This is a login path still being hardened, so you must expect **bugs, breaking changes, and security gaps that are still open**. Wait for a **Full Release** before using it anywhere that matters.
 
 <h1 align="center">Jellyfin SSO Plugin</h1>
 
@@ -31,7 +31,7 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 >
 > This is a revival of [**9p4/jellyfin-plugin-sso**](https://github.com/9p4/jellyfin-plugin-sso), which its original author has since archived. It continues from the last upstream release (**4.0.0.x**, Jellyfin 10.11 / .NET 9) and is taken forward **security-first**. Its hardened sibling project, **`jellyfin-plugin-sso-V2`** (private), is the reference this repository draws on — ported across deliberately, one reviewed change at a time. Huge thanks to the original author and contributors for the foundation.
 >
-> **Status:** **In-Development** — the first stage of the maturity ladder. See the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap) for what each stage gates, and [Installing](#installing) — for now the only path is building from source; a packaged release follows once the security-hardening pass has advanced the maturity stages.
+> **Status:** **Alpha** — the second stage of the maturity ladder. See the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap) for what each stage gates, and [Installing](#installing) — a packaged release (**4.1.0.0**) is now installable from the Jellyfin plugin catalog, with build-from-source as the alternative.
 >
 > ### How this project is developed
 >
@@ -55,7 +55,22 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 
 ## Installing
 
-**Build from source (current recommended path):**
+Requires **Jellyfin 10.11.x**.
+
+**Install from the Jellyfin plugin catalog (recommended for testing):**
+
+1. In Jellyfin, go to **Dashboard → Plugins → Repositories** and add this repository URL:
+
+   ```
+   https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-release/manifest.json
+   ```
+
+2. Go to **Dashboard → Plugins → Catalog**, find **SSO Authentication**, and install it.
+3. **Restart Jellyfin** to load the plugin.
+
+The plugin GUID is unchanged from the original `9p4` plugin, so a new version installs over an existing one in place and keeps your existing configuration.
+
+**Build from source (alternative):**
 
 ```
 dotnet publish -c Release
@@ -63,11 +78,9 @@ dotnet publish -c Release
 
 Copy the **full publish output** (`SSO-Auth.dll` and every dependency DLL beside it — the OpenID client, the embedded library, and the other referenced assemblies) into your Jellyfin plugins directory under `config/plugins/sso/`, then restart Jellyfin. Copying only a subset can leave Jellyfin unable to load the plugin. [JPRM](https://github.com/oddstr13/jellyfin-plugin-repository-manager) packages the correct set for you if you prefer.
 
-A packaged release installable from a plugin repository will be published once the hardening pass reaches its first release milestone.
-
 **Client support:** SSO sign-in runs in the Jellyfin **Web UI** and in clients that support **Quick Connect** (the mobile and TV apps drive the login through Quick Connect). A native client that does not support Quick Connect cannot complete the browser redirect flow — use the Web UI or a Quick Connect client there.
 
-**Coming from the old plugin repository?** This project is the maintained continuation of the archived `9p4/jellyfin-plugin-sso`. If your Jellyfin still points at the old `9p4` manifest, it will not receive updates from here. Once packaged releases resume, switch the plugin-repository URL to this repository's manifest; until then, build from source as above. The plugin GUID is unchanged, so an in-place update keeps your existing configuration.
+**Coming from the old plugin repository?** This project is the maintained continuation of the archived `9p4/jellyfin-plugin-sso`. If your Jellyfin still points at the old `9p4` manifest, it will not receive updates from here. Packaged releases have resumed: replace the old plugin-repository URL with this repository's manifest (`https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-release/manifest.json`) under **Dashboard → Plugins → Repositories**, then install **SSO Authentication** from the catalog. The plugin GUID is unchanged, so it updates in place and keeps your existing configuration.
 
 ## Configuration
 
