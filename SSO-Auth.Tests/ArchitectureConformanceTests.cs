@@ -51,6 +51,17 @@ public class ArchitectureConformanceTests
         "Validator", "Cache", "Builder", "Mapper", "Policy", "Probe", "Store", "Revoker", "Extractor", "Gate", "State", "Resolver",
     };
 
+    // The login-path caches that converged on the shared bounding pattern — a hard global cap plus TWO
+    // distinct IntervalGates: "_pruneGate" (throttled expired-entry sweep, #452) and "_capWarnGate"
+    // (throttled cap-refusal capacity warning, #246/#327/#470). ONE canonical list, consumed by both the
+    // prune-gate rule and the cap-warn rule below, so a cache can never fall out of one rule's list but not
+    // the other's (which is exactly how SamlOutcomeStore was missed on first draft). A new cap-bounded
+    // login-path cache is added here once, and both fitness functions guard it.
+    private static readonly Type[] LoginPathCapWarnCaches =
+    {
+        typeof(SamlReplayCache), typeof(SamlRequestCache), typeof(OidcStateStore), typeof(SamlOutcomeStore),
+    };
+
     // Every production type, compiler-generated ones excluded — the base sequence for structural rules
     // that must cover interfaces/enums/structs/delegates too (e.g. the namespace boundary).
     private static IEnumerable<Type> AllPluginTypes =>
@@ -171,9 +182,10 @@ public class ArchitectureConformanceTests
         // "_pruneGate"), not merely some IntervalGate: the siblings also carry a "_capWarnGate", so keying
         // on the field type alone would miss a sibling that dropped its prune gate but kept cap-warn.
         // SamlRequestCache and OidcStateStore already had it (#246, #327); SamlReplayCache adopted it (#452).
+        // The cache set is the shared LoginPathCapWarnCaches list, so this rule and the cap-warn rule below
+        // can never disagree on which caches are login-path caches.
         const string pruneGateField = "_pruneGate";
-        var caches = new[] { typeof(SamlReplayCache), typeof(SamlRequestCache), typeof(OidcStateStore) };
-        var missing = caches
+        var missing = LoginPathCapWarnCaches
             .Where(t => !t.GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.DeclaredOnly)
                 .Any(f => f.FieldType == typeof(IntervalGate) && f.Name == pruneGateField))
             .Select(SimpleName)
@@ -182,6 +194,35 @@ public class ArchitectureConformanceTests
         Assert.True(
             missing.Count == 0,
             "Every login-path cache must throttle its expired-entry sweep through an IntervalGate field (#452): " + string.Join(", ", missing));
+    }
+
+    [Fact]
+    public void LoginPathCaches_ThrottleTheirCapacityWarningThroughItsOwnIntervalGate()
+    {
+        // Locked in by #470: every login-path cache that refuses fail-closed at its hard cap surfaces that
+        // refusal to the caller through a SEPARATE cap-warn IntervalGate ("_capWarnGate"), distinct from the
+        // prune gate ("_pruneGate"), so a full cache is observable to operators yet a flood of refusals
+        // cannot amplify into log volume (CWE-400). SamlRequestCache, OidcStateStore and SamlOutcomeStore
+        // already carried it (#246, #327, #251); SamlReplayCache adopted it here (#470). Require BOTH gates as
+        // distinct named fields so a later refactor cannot collapse the cap-warn signal onto the prune gate
+        // (which would re-couple the two intervals) or drop it and regress a cache to a silent cap refusal.
+        // The cache set is the shared LoginPathCapWarnCaches list, so it can never drift from the prune-gate
+        // rule above.
+        var missing = LoginPathCapWarnCaches
+            .Where(t =>
+            {
+                var gates = t.GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.DeclaredOnly)
+                    .Where(f => f.FieldType == typeof(IntervalGate))
+                    .Select(f => f.Name)
+                    .ToList();
+                return !gates.Contains("_pruneGate") || !gates.Contains("_capWarnGate");
+            })
+            .Select(SimpleName)
+            .ToList();
+
+        Assert.True(
+            missing.Count == 0,
+            "Every login-path cache must carry BOTH a _pruneGate and a distinct _capWarnGate IntervalGate (#470): " + string.Join(", ", missing));
     }
 
     [Fact]

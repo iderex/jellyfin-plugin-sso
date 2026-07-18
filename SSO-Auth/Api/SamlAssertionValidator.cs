@@ -105,7 +105,23 @@ internal sealed class SamlAssertionValidator
         var replayRetention = SamlReplayCache.ComputeRetention(samlNow, samlResponse.GetNotOnOrAfter());
         var assertionId = samlResponse.GetAssertionId();
         var replayKey = ProviderScopedKey.For(provider, assertionId);
-        return SamlReplays.TryConsume(replayKey, replayRetention, samlNow);
+        var consumed = SamlReplays.TryConsume(replayKey, replayRetention, samlNow, out var shouldWarnCapacity);
+        if (shouldWarnCapacity)
+        {
+            // The replay cache turned away a NEW assertion at its hard cap: the login already failed closed
+            // (consumed is false). This is the single observation point for every replay consume — the login
+            // mint, the deprecation-window mint leg, and the manual link redeem all funnel through here — so
+            // surfacing it here covers them all, throttled once per interval by the cache's own gate. A full
+            // replay cache is only reachable under extreme login volume or a compromised identity provider
+            // replaying signed assertions, so it is a genuine operator signal (#470). provider is
+            // identity-provider-routed input; strip line endings inline at the log call to prevent log forging
+            // (a helper-boundary sanitizer is not recognized by CodeQL).
+            _logger.LogWarning(
+                "SAML assertion replay cache refused a new assertion for provider {Provider}: the cache is at capacity (warning throttled). This indicates extreme login volume or an identity provider replaying signed assertions.",
+                provider?.ReplaceLineEndings(string.Empty));
+        }
+
+        return consumed;
     }
 
     /// <summary>
