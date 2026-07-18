@@ -259,10 +259,14 @@ internal sealed class SamlResponse
     // time. SignedXml.CheckSignature(cert, verifySignatureOnly: true) validates only the cryptography and
     // does NOT itself check the certificate dates, so this is the single place the window is enforced — an
     // expired or not-yet-valid certificate is fail-closed rejected (#491). NotBefore/NotAfter are exposed
-    // as local time, so both sides are compared in UTC.
+    // as local time, so both sides are compared in UTC. The same clock-skew tolerance every other time
+    // bound on this path uses (SamlAssertionTime.ClockSkew) is applied to both edges, so a small IdP/SP
+    // clock difference at a cutover — the moment a freshly staged certificate's NotBefore is a few minutes
+    // ahead of this server — does not spuriously reject an otherwise-valid signature.
     private static bool IsWithinValidityPeriod(X509Certificate2 certificate, DateTime utcNow)
     {
-        return utcNow >= certificate.NotBefore.ToUniversalTime() && utcNow <= certificate.NotAfter.ToUniversalTime();
+        return utcNow >= certificate.NotBefore.ToUniversalTime() - SamlAssertionTime.ClockSkew
+            && utcNow <= certificate.NotAfter.ToUniversalTime() + SamlAssertionTime.ClockSkew;
     }
 
     /// <summary>

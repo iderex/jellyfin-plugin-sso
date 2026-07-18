@@ -19,10 +19,11 @@ public class SamlSecondaryCertificateTests
         => new SamlResponse(primaryCertificateBase64, secondaryCertificateBase64, fixture.EncodeResponse());
 
     [Fact]
-    public void SecondaryUnset_PrimaryVerifies_ByteForBytePrimaryOnly()
+    public void SecondaryUnset_PrimaryOnly_MatchVerifies_MismatchRejected()
     {
-        // With no secondary configured, behavior is exactly today's: the primary must match, and a
-        // non-matching primary is rejected.
+        // With no secondary configured the trial narrows to the primary: a within-validity primary that
+        // matches verifies, and a non-matching primary is rejected. (The primary is additionally subject to
+        // the validity-window gate — see ExpiredPrimary_NoSecondary_Rejects.)
         var fixture = SamlTestFactory.Create();
 
         Assert.True(Load(fixture, fixture.CertificateBase64, null).IsValid());
@@ -142,6 +143,32 @@ public class SamlSecondaryCertificateTests
         subject.AppendChild(nameId);
         evil.AppendChild(subject);
         doc.DocumentElement!.PrependChild(evil);
+
+        Assert.False(Load(fixture, SamlFixture.ForeignCertificateBase64(), fixture.CertificateBase64).IsValid());
+    }
+
+    [Fact]
+    public void DoublySignedWithOneCorruptedSignature_RejectedEvenWithSecondaryConfigured()
+    {
+        // "Validate all, not first-wins" must hold with a secondary configured: a doubly-signed response
+        // whose Response-level signature is corrupted is rejected even though the honest Assertion-level
+        // signature verifies against the secondary. A decoy cannot slip because the corrupted signature
+        // fails against EVERY candidate certificate, and the loop still requires every position-bound
+        // signature to validate.
+        const string DsNs = "http://www.w3.org/2000/09/xmldsig#";
+        var fixture = SamlTestFactory.CreateDoublySigned();
+        var doc = fixture.Document;
+        foreach (XmlElement signature in doc.GetElementsByTagName("Signature", DsNs))
+        {
+            if (signature.ParentNode == doc.DocumentElement)
+            {
+                var signatureValue = (XmlElement)signature.GetElementsByTagName("SignatureValue", DsNs)[0]!;
+                var bytes = Convert.FromBase64String(signatureValue.InnerText.Trim());
+                bytes[0] ^= 0xFF;
+                signatureValue.InnerText = Convert.ToBase64String(bytes);
+                break;
+            }
+        }
 
         Assert.False(Load(fixture, SamlFixture.ForeignCertificateBase64(), fixture.CertificateBase64).IsValid());
     }

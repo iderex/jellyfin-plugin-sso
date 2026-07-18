@@ -431,9 +431,17 @@ second certificate:
   clear.
 
 **Expired certificates are rejected.** A certificate is used to verify only while it is within its own
-`[NotBefore, NotAfter]` validity window; an expired (or not-yet-valid) certificate never verifies a
-response, whether it is the primary or the secondary. This is what makes the overlap window **terminate**:
-once the identity provider's old certificate expires, it stops authenticating logins on its own.
+`[NotBefore, NotAfter]` validity window (with the same five-minute clock-skew tolerance the other SAML
+time-bounds use); an expired (or not-yet-valid) certificate never verifies a response, whether it is the
+primary or the secondary. This is what makes the overlap window **terminate**: once the identity
+provider's old certificate expires, it stops authenticating logins on its own.
+
+> **Upgrade note.** Earlier versions did **not** check the certificate's validity dates at all (XML-DSig
+> verification ignores them), so a deployment whose identity-provider signing certificate has **already
+> expired** — but whose key still signs — kept working. From this version such a certificate is rejected.
+> If logins for a SAML provider start failing right after upgrading, the primary `SamlCertificate` is
+> likely expired: obtain the identity provider's **current** certificate and set it (in `SamlCertificate`,
+> or in `SamlSecondaryCertificate` during a rotation).
 
 Both are set through the SAML provider configuration (the `SAML/Add` API, like the other SAML options —
 there is no admin-UI toggle yet); include them whenever you re-post a provider's config so a save does
