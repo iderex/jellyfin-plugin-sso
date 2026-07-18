@@ -554,6 +554,15 @@ public class SSOController : ControllerBase
             return StatusCode(StatusCodes.Status403Forbidden, "User is not allowed to link SSO providers.");
         }
 
+        // Throttle after the caller-authz guard (#382): the 403 stays first so an unauthorized caller is
+        // refused before the limiter is consulted (no rate-limit oracle), then the shared gate caps how fast
+        // an authorized caller can drive the config-XML disk writes this write surface performs. "link" is a
+        // distinct endpoint class, so its budget is independent of the anonymous login flows.
+        if (RateLimitCheck("link") is { } throttled)
+        {
+            return throttled;
+        }
+
         return ParseMode(mode) switch
         {
             ProviderMode.Saml => SamlLink(provider, jellyfinUserId, authResponse),
@@ -579,6 +588,14 @@ public class SSOController : ControllerBase
         if (!await RequestHelpers.AssertCanUpdateUser(_authContext, HttpContext.Request, jellyfinUserId).ConfigureAwait(false))
         {
             return StatusCode(StatusCodes.Status403Forbidden, "Current user is not allowed to unlink SSO providers for user ID.");
+        }
+
+        // Throttle after the caller-authz guard (#382): a name-miss DELETE still runs a full persist under the
+        // global config lock, so this endpoint is capped too. It shares the "link" budget with AddCanonicalLink
+        // — one bucket per client for the whole link/unlink write surface — while the 403 stays first.
+        if (RateLimitCheck("link") is { } throttled)
+        {
+            return throttled;
         }
 
         var removeResult = _canonicalLinks.TryRemoveLink(ParseMode(mode), provider, canonicalName, jellyfinUserId);
@@ -689,12 +706,13 @@ public class SSOController : ControllerBase
             ? parsed
             : throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'");
 
-    // Fronts an anonymous flow endpoint with the shared per-client rate-limit gate (#128, #160): null when
-    // the request may proceed, else the throttled outcome the single mapper renders (#474). The gate owns the
-    // one process-wide limiter and the whole check (config read, IP classifier, endpoint-class keying, the
-    // #195 observability signal); this wrapper only supplies the three request-scoped inputs it needs — the
-    // endpoint class, the connection's remote address, and the response the retry-delay header is set on — so
-    // the controller keeps no rate-limit state of its own.
+    // Fronts a rate-limited endpoint with the shared per-client gate (#128, #160, #382): null when the request
+    // may proceed, else the throttled outcome the single mapper renders (#474). The anonymous login endpoints
+    // pass their class (challenge/callback/auth); the authenticated link/unlink write surface passes "link"
+    // after its own authz guard. The gate owns the one process-wide limiter and the whole check (config read,
+    // IP classifier, endpoint-class keying, the #195 observability signal); this wrapper only supplies the
+    // three request-scoped inputs it needs — the endpoint class, the connection's remote address, and the
+    // response the retry-delay header is set on — so the controller keeps no rate-limit state of its own.
     private ActionResult RateLimitCheck(string endpointClass) =>
         SsoRateLimitGate.Check(endpointClass, HttpContext.Connection.RemoteIpAddress, _logger, Response);
 }
