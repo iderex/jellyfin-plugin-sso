@@ -620,14 +620,35 @@ public class SSOController : ControllerBase
             return throttled;
         }
 
-        var removeResult = _canonicalLinks.TryRemoveLink(ParseMode(mode), provider, canonicalName, jellyfinUserId);
-        return removeResult switch
+        var removal = _canonicalLinks.TryRemoveLink(ParseMode(mode), provider, canonicalName, jellyfinUserId);
+
+        // Terminate the user's already-issued tokens ONLY when this unlink removed their LAST canonical SSO
+        // link (#468) — the terminal "can no longer SSO in at all" state that matches the hard-lockdown
+        // posture of Unregister (#440). Removing the links only fails FUTURE logins closed; a token minted
+        // before the unlink stays valid until it expires, so a security-motivated unlink of a compromised
+        // identity must also kill live sessions. A user who unlinks a SECONDARY provider while still holding
+        // another link keeps a working SSO identity, so revoking there would be a self-inflicted mass-logout
+        // with no security gain — the availability-preserving choice is to revoke only at the last link
+        // (UserRetainsAnyLink evaluated atomically with the removal). Scoped strictly to this one user id;
+        // null revokes all of their tokens (including the caller's own, when an admin unlinks their own last
+        // link — the durable removal above is why that is safe). Runs AFTER the removal is persisted, so a
+        // revoke that throws leaves the unlink already complete rather than half-done. Per-provider disable
+        // deliberately does NOT revoke: Jellyfin attributes no live session to the originating SSO provider
+        // (RevokeUserTokens is per user id, not per provider), so revoking on disable would be an unscoped
+        // mass-logout of every linked user's password and other-provider sessions too (#468).
+        if (removal is { Result: CanonicalLinkRemoveResult.Removed, UserRetainsAnyLink: false })
+        {
+            await _sessionManager.RevokeUserTokens(jellyfinUserId, null).ConfigureAwait(false);
+            _logger.LogInformation("Removed the last SSO link for user {UserId} and revoked their active tokens.", jellyfinUserId);
+        }
+
+        return removal.Result switch
         {
             CanonicalLinkRemoveResult.Removed => Ok(),
             CanonicalLinkRemoveResult.NotFound => NotFound("No SSO link is registered for that canonical name."),
             CanonicalLinkRemoveResult.Mismatch => StatusCode(StatusCodes.Status409Conflict, "jellyfin UID does not match id registered to that canonical name."),
             CanonicalLinkRemoveResult.UnknownProvider => BadRequest(NoMatchingProviderMessage),
-            _ => throw new InvalidOperationException($"Unhandled canonical-link remove result: {removeResult}"),
+            _ => throw new InvalidOperationException($"Unhandled canonical-link remove result: {removal.Result}"),
         };
     }
 

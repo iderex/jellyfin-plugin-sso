@@ -204,6 +204,83 @@ public class SSOControllerLinkTests
     }
 
     [Fact]
+    public async Task DeleteCanonicalLink_RemovingTheUsersLastLink_RevokesTheirActiveTokens()
+    {
+        // #468: unlinking the user's ONLY canonical link severs their SSO identity entirely (they can no
+        // longer SSO in at all), so — matching Unregister's hard-lockdown posture (#440) — their already
+        // issued tokens are revoked, scoped strictly to this one user id (null revokes all of theirs).
+        var harness = ForCaller(isAdmin: true, callerId: Target, configure: c =>
+            c.OidConfigs["keycloak"] = new OidConfig
+            {
+                Enabled = true,
+                CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Target },
+            });
+
+        var result = await harness.Controller.DeleteCanonicalLink("oid", "keycloak", Target, "sub-1");
+
+        Assert.IsType<OkResult>(result);
+        await harness.SessionManager.Received(1).RevokeUserTokens(Target, null);
+    }
+
+    [Fact]
+    public async Task DeleteCanonicalLink_LastLinkRevoke_ScopedToTarget_LeavesOtherUsersTokensAlone()
+    {
+        // The revoke is scoped strictly to the resolved target — no other user's tokens may be swept even
+        // when their link lives on the same provider.
+        var harness = ForCaller(isAdmin: true, callerId: Target, configure: c =>
+            c.OidConfigs["keycloak"] = new OidConfig
+            {
+                Enabled = true,
+                CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Target, ["sub-other"] = Other },
+            });
+
+        await harness.Controller.DeleteCanonicalLink("oid", "keycloak", Target, "sub-1");
+
+        await harness.SessionManager.Received(1).RevokeUserTokens(Target, null);
+        await harness.SessionManager.DidNotReceive().RevokeUserTokens(Other, Arg.Any<string?>());
+    }
+
+    [Fact]
+    public async Task DeleteCanonicalLink_UserKeepsAnotherLink_DoesNotRevokeTokens()
+    {
+        // #468 availability guard: a user who still holds a link on ANOTHER provider can still SSO in, so
+        // unlinking a secondary provider must NOT revoke — that would be a self-inflicted mass-logout of a
+        // healthy multi-link user for no security gain.
+        var harness = ForCaller(isAdmin: true, callerId: Target, configure: c =>
+        {
+            c.OidConfigs["keycloak"] = new OidConfig
+            {
+                Enabled = true,
+                CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Target },
+            };
+            c.SamlConfigs["adfs"] = new SamlConfig
+            {
+                Enabled = true,
+                CanonicalLinks = new SerializableDictionary<string, Guid> { ["nameid-1"] = Target },
+            };
+        });
+
+        var result = await harness.Controller.DeleteCanonicalLink("oid", "keycloak", Target, "sub-1");
+
+        Assert.IsType<OkResult>(result);
+        await harness.SessionManager.DidNotReceive().RevokeUserTokens(Arg.Any<Guid>(), Arg.Any<string?>());
+    }
+
+    [Fact]
+    public async Task DeleteCanonicalLink_NoOpOutcomes_DoNotRevokeTokens()
+    {
+        // Only a real removal (Removed) can trigger a last-link revoke; a NotFound canonical name changes no
+        // state, so no tokens are revoked — the revoke is gated on the durable state change, never a miss.
+        var harness = ForCaller(isAdmin: true, callerId: Target, configure: c =>
+            c.OidConfigs["keycloak"] = new OidConfig { Enabled = true });
+
+        var result = await harness.Controller.DeleteCanonicalLink("oid", "keycloak", Target, "does-not-exist");
+
+        Assert.IsType<NotFoundObjectResult>(result);
+        await harness.SessionManager.DidNotReceive().RevokeUserTokens(Arg.Any<Guid>(), Arg.Any<string?>());
+    }
+
+    [Fact]
     public async Task DeleteCanonicalLink_AuthorizedButUidMismatch_Returns409()
     {
         var harness = ForCaller(isAdmin: true, callerId: Target, configure: c =>
