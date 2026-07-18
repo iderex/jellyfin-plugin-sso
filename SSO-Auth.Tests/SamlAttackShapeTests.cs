@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Xml;
 using Jellyfin.Plugin.SSO_Auth;
 using Xunit;
@@ -75,7 +76,7 @@ public class SamlAttackShapeTests
     }
 
     [Fact]
-    public void GetCustomAttribute_CommentSplitAttributeValue_IsNotTruncated()
+    public void GetCustomAttributes_CommentSplitAttributeValue_IsNotTruncated()
     {
         // The same truncation trick applied to a Role AttributeValue: an SP that truncated at the
         // comment could read "jellyfin-" instead of "jellyfin-users" (or drop a suffix that gates a
@@ -91,7 +92,7 @@ public class SamlAttackShapeTests
         var response = Load(fixture);
 
         Assert.True(response.IsValid());
-        Assert.Equal("jellyfin-users", response.GetCustomAttribute("Role"));
+        Assert.Equal(new List<string> { "jellyfin-users" }, response.GetCustomAttributes("Role"));
     }
 
     // --- Assertion injected before the signed one ---

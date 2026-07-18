@@ -58,7 +58,7 @@ public class SamlLoginServiceTests
     {
         var (service, context) = Build(c => c.SamlConfigs["adfs"] = new SamlConfig { Enabled = false });
 
-        var result = service.Post("adfs", relayState: null, formSamlResponse: null, context.Request, context.Response);
+        var result = service.Callback("adfs", relayState: null, formSamlResponse: null, context.Request, context.Response);
 
         AssertUnknownProvider(result);
     }

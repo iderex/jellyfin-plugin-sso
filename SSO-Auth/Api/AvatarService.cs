@@ -342,7 +342,7 @@ internal sealed class AvatarService
         var attempted = false;
         foreach (var address in addresses)
         {
-            if (AvatarUrlValidator.IsBlockedAddress(address))
+            if (IpAddressClassifier.IsBlockedAddress(address))
             {
                 continue;
             }

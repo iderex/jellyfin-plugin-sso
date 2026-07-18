@@ -197,10 +197,11 @@ internal sealed class OidcLoginService
     }
 
     /// <summary>
-    /// The OpenID redirect callback (a GET; named for consistency with the SAML sibling): validates the
-    /// browser-bound authorize state, exchanges the authorization code, validates the id_token and the RFC
-    /// 9207 response issuer, applies the role gate, promotes the state to redeemable, and renders the
-    /// intermediate auth page. The controller applies the shared rate-limit gate before delegating here.
+    /// The OpenID redirect callback (a GET, despite the HTTP verb the route methods below share with the SAML
+    /// callback): validates the browser-bound authorize state, exchanges the authorization code, validates the
+    /// id_token and the RFC 9207 response issuer, applies the role gate, promotes the state to redeemable, and
+    /// renders the intermediate auth page. The controller applies the shared rate-limit gate before delegating
+    /// here.
     /// </summary>
     /// <param name="provider">The provider name from the route.</param>
     /// <param name="state">The authorize-state token the callback presented (also the auth-page data).</param>
@@ -210,7 +211,7 @@ internal sealed class OidcLoginService
     internal async Task<ActionResult> CallbackAsync(string provider, string state, HttpRequest request, HttpResponse response)
     {
         // Unknown and disabled providers share one rejection so neither can be probed apart, matching
-        // the guard-clause form the SAML sibling (SamlPost) already uses.
+        // the guard-clause form the SAML sibling (SamlLoginService.Callback) already uses.
         var config = FindOidConfig(provider);
         if (config is not { Enabled: true })
         {

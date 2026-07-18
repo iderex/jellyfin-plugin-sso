@@ -40,6 +40,11 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Flows;
 /// </remarks>
 internal sealed class SamlLoginService
 {
+    // The SAML attribute name the whole RBAC design hinges on (the role allow-list check and the derived
+    // authorize-state privileges both read it). One definition site so every read agrees on the exact
+    // attribute the identity provider must send (#370).
+    private const string RoleAttributeName = "Role";
+
     // One-time-use tracking for consumed SAML assertion IDs (replay protection). One process-wide instance,
     // like the outstanding-request cache below and the OpenID caches the sibling flow service keeps.
     private static readonly SamlReplayCache SamlReplays = new SamlReplayCache();
@@ -98,7 +103,7 @@ internal sealed class SamlLoginService
     /// <param name="request">The current request; read for the assertion-consumer base URL.</param>
     /// <param name="response">The response the auth page's defensive headers are written to.</param>
     /// <returns>The rendered auth page on success, or a fail-closed rejection.</returns>
-    internal ActionResult Post(string provider, string relayState, string formSamlResponse, HttpRequest request, HttpResponse response)
+    internal ActionResult Callback(string provider, string relayState, string formSamlResponse, HttpRequest request, HttpResponse response)
     {
         // Unknown and disabled providers share one rejection so neither can be probed apart — this
         // retires the unique "No active providers found" wording that distinguished the disabled case
@@ -129,7 +134,7 @@ internal sealed class SamlLoginService
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
 
-        if (SamlLoginPolicy.IsLoginAllowed(samlResponse.GetCustomAttributes("Role"), config.Roles))
+        if (SamlLoginPolicy.IsLoginAllowed(samlResponse.GetCustomAttributes(RoleAttributeName), config.Roles))
         {
             return FlowResponses.AuthPage(response, nonce =>
                 WebResponse.Generator(
@@ -144,7 +149,7 @@ internal sealed class SamlLoginService
         _logger.LogWarning(
             "SAML user: {UserId} has insufficient roles: {@Roles}. Expected any one of: {@ExpectedRoles}",
             samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty),
-            samlResponse.GetCustomAttributes("Role").Select(r => r?.ReplaceLineEndings(string.Empty)),
+            samlResponse.GetCustomAttributes(RoleAttributeName).Select(r => r?.ReplaceLineEndings(string.Empty)),
             config.Roles);
         return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
     }
@@ -318,7 +323,7 @@ internal sealed class SamlLoginService
         // Enforce the login allow-list here too, not only at the assertion-consumer page: a caller
         // can POST an assertion straight to this session-minting endpoint and skip the page, so
         // checking it only there would be fail-open.
-        if (!SamlLoginPolicy.IsLoginAllowed(samlResponse.GetCustomAttributes("Role"), config.Roles))
+        if (!SamlLoginPolicy.IsLoginAllowed(samlResponse.GetCustomAttributes(RoleAttributeName), config.Roles))
         {
             _logger.LogWarning(
                 "SAML user: {UserId} has insufficient roles at the session-minting endpoint; login denied.",
@@ -340,7 +345,7 @@ internal sealed class SamlLoginService
         // the assertion's roles and the provider configuration. Login validity was already decided
         // above by SamlLoginPolicy and the username is the assertion's NameID, so neither is derived
         // here.
-        var derived = SamlAuthorizeStateBuilder.Build(samlResponse.GetCustomAttributes("Role"), config);
+        var derived = SamlAuthorizeStateBuilder.Build(samlResponse.GetCustomAttributes(RoleAttributeName), config);
 
         // Fail closed (#95): an assertion without a usable NameID carries no identity to log in —
         // reject it as an invalid login instead of failing downstream on a null canonical name.

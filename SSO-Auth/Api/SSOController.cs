@@ -119,9 +119,9 @@ public class SSOController : ControllerBase
     // Actually a GET: https://github.com/IdentityModel/IdentityModel.OidcClient/issues/325
     [HttpGet("OID/r/{provider}")]
     [HttpGet("OID/redirect/{provider}")]
-    public async Task<ActionResult> OidPost(
+    public async Task<ActionResult> OidCallback(
         [FromRoute] string provider,
-        [FromQuery] string state) // Although this is a GET function, this function is called `Post` for consistency with SAML
+        [FromQuery] string state)
     {
         if (RateLimitCheck("callback") is { } throttled)
         {
@@ -365,7 +365,7 @@ public class SSOController : ControllerBase
     /// <returns>A webpage that will complete the client-side flow.</returns>
     [HttpPost("SAML/p/{provider}")]
     [HttpPost("SAML/post/{provider}")]
-    public ActionResult SamlPost(string provider, [FromQuery] string relayState = null, [FromForm(Name = "SAMLResponse")] string formSamlResponse = null)
+    public ActionResult SamlCallback(string provider, [FromQuery] string relayState = null, [FromForm(Name = "SAMLResponse")] string formSamlResponse = null)
     {
         if (RateLimitCheck("callback") is { } throttled)
         {
@@ -375,7 +375,7 @@ public class SSOController : ControllerBase
         // The SAML assertion-consumer callback lives in the flow service (#160, #318): it validates the
         // signed response and, on a passing role gate, renders the security-headered intermediate auth
         // page on the response.
-        return _saml.Post(provider, relayState, formSamlResponse, Request, Response);
+        return _saml.Callback(provider, relayState, formSamlResponse, Request, Response);
     }
 
     /// <summary>

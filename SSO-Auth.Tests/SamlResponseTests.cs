@@ -324,10 +324,10 @@ public class SamlResponseTests
     }
 
     [Fact]
-    public void GetCustomAttribute_ValidResponse_ReturnsRole()
+    public void GetCustomAttributes_ValidResponse_ReturnsRole()
     {
         var fixture = SamlTestFactory.Create(role: "jellyfin-admins");
-        Assert.Equal("jellyfin-admins", Load(fixture).GetCustomAttribute("Role"));
+        Assert.Equal(new List<string> { "jellyfin-admins" }, Load(fixture).GetCustomAttributes("Role"));
     }
 
     [Fact]
@@ -338,10 +338,10 @@ public class SamlResponseTests
     }
 
     [Fact]
-    public void GetCustomAttribute_UnknownAttribute_ReturnsNull()
+    public void GetCustomAttributes_UnknownAttribute_ReturnsEmptyList()
     {
         var fixture = SamlTestFactory.Create();
-        Assert.Null(Load(fixture).GetCustomAttribute("NonExistent"));
+        Assert.Empty(Load(fixture).GetCustomAttributes("NonExistent"));
     }
 
     // --- Time-bound validation (fail-closed; F-2 fixed) ---

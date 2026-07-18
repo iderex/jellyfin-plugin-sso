@@ -452,17 +452,6 @@ internal sealed class SamlResponse
     }
 
     /// <summary>
-    /// Gets the first custom attribute from the XML response.
-    /// </summary>
-    /// <param name="attr">The custom attribute to query.</param>
-    /// <returns>The custom attribute.</returns>
-    public string GetCustomAttribute(string attr)
-    {
-        var node = _xmlDoc.SelectSingleNode("/samlp:Response/saml:Assertion[1]/saml:AttributeStatement/saml:Attribute[@Name='" + attr + "']/saml:AttributeValue", _xmlNameSpaceManager);
-        return node?.InnerText;
-    }
-
-    /// <summary>
     /// Gets the values for a custom attribute from the XML response.
     /// </summary>
     /// <param name="attr">The custom attribute to query.</param>
