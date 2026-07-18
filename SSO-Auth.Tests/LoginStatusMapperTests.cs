@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using MediaBrowser.Controller.Authentication;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Xunit;
 
@@ -99,5 +100,49 @@ public class LoginStatusMapperTests
         var result = Assert.IsType<OkObjectResult>(LoginStatusMapper.ToActionResult(new LoginOutcome.Success(session)));
 
         Assert.Same(session, result.Value);
+    }
+
+    [Fact]
+    public void Throttled_MapsToThe429WithRetryAfter_ByteIdenticalToTheFormerDirectEmission()
+    {
+        // Characterization of the pre-#474 rate-limit response, now produced only by the mapper: a 429 with
+        // the fixed plain-text body and the whole-seconds Retry-After header set to the outcome's value. A
+        // fixed retryAfterSeconds keeps the header assertion deterministic (the controller path derives the
+        // number from the clock; the exact string it emits is what this pins).
+        var response = new DefaultHttpContext().Response;
+
+        var result = Assert.IsType<ContentResult>(LoginStatusMapper.ToActionResult(new LoginOutcome.Throttled(42), response));
+
+        Assert.Equal(429, result.StatusCode);
+        Assert.Equal("Too many login attempts. Please wait a moment and try again.", result.Content);
+        Assert.Equal("text/plain", result.ContentType);
+        Assert.Equal("42", response.Headers.RetryAfter.ToString());
+    }
+
+    [Fact]
+    public void Throttled_ThroughThePureOverload_ThrowsInsteadOfEmittingA429WithoutRetryAfter()
+    {
+        // Fail closed: the pure overload cannot set Retry-After, so a Throttled that reaches it is a wiring
+        // fault and throws (500) rather than silently shipping a 429 with no retry hint.
+        Assert.Throws<InvalidOperationException>(() =>
+            LoginStatusMapper.ToActionResult(new LoginOutcome.Throttled(5)));
+    }
+
+    [Fact]
+    public void ResponseAwareOverload_DefersNonThrottledOutcomes_AndSetsNoRetryAfter()
+    {
+        // The response-aware overload is a superset a caller can route every outcome through: a non-Throttled
+        // outcome maps exactly as the pure overload does and leaves the response untouched (no Retry-After).
+        var response = new DefaultHttpContext().Response;
+
+        var denied = Assert.IsType<ContentResult>(LoginStatusMapper.ToActionResult(new LoginOutcome.Denied(), response));
+        Assert.Equal(401, denied.StatusCode);
+        Assert.Equal("Error. Check permissions.", denied.Content);
+
+        var session = new AuthenticationResult();
+        var success = Assert.IsType<OkObjectResult>(LoginStatusMapper.ToActionResult(new LoginOutcome.Success(session), response));
+        Assert.Same(session, success.Value);
+
+        Assert.False(response.Headers.ContainsKey("Retry-After"));
     }
 }
