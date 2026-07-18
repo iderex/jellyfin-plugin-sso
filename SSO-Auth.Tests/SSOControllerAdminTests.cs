@@ -18,7 +18,9 @@ public class SSOControllerAdminTests
     [Fact]
     public void OidDel_RemovesTheProvider()
     {
-        var harness = new SsoControllerHarness(c => c.OidConfigs["keycloak"] = new OidConfig());
+        // Seed it enabled so it would otherwise appear in the names list — the assertion then proves the
+        // delete removed it, not the enabled-only linking filter (#344) hiding a still-present provider.
+        var harness = new SsoControllerHarness(c => c.OidConfigs["keycloak"] = new OidConfig { Enabled = true });
 
         harness.Controller.OidDel("keycloak");
 
@@ -39,7 +41,7 @@ public class SSOControllerAdminTests
     [Fact]
     public void SamlDel_RemovesTheProvider_ReturnsOk()
     {
-        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig());
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig { Enabled = true });
 
         Assert.IsType<OkResult>(harness.Controller.SamlDel("adfs"));
 

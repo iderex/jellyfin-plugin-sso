@@ -125,12 +125,15 @@ public class SSOControllerEndpointTests
     }
 
     [Fact]
-    public void OidProviderNames_ReturnsSeededNames()
+    public void OidProviderNames_ReturnsEnabledProviders_ExcludesDisabled()
     {
+        // The linking page is the sole consumer (#344): enabled providers are offered, a disabled one is
+        // withheld because linking through it is rejected (#343), so an add button for it would dead-end.
         var harness = new SsoControllerHarness(c =>
         {
-            c.OidConfigs["keycloak"] = new OidConfig();
-            c.OidConfigs["authelia"] = new OidConfig();
+            c.OidConfigs["keycloak"] = new OidConfig { Enabled = true };
+            c.OidConfigs["authelia"] = new OidConfig { Enabled = true };
+            c.OidConfigs["retired"] = new OidConfig { Enabled = false };
         });
 
         var result = Assert.IsType<OkObjectResult>(harness.Controller.OidProviderNames());
@@ -138,16 +141,83 @@ public class SSOControllerEndpointTests
         Assert.Equal(2, names.Count);
         Assert.Contains("keycloak", names);
         Assert.Contains("authelia", names);
+        Assert.DoesNotContain("retired", names);
     }
 
     [Fact]
-    public void SamlProviderNames_ReturnsSeededNames()
+    public void SamlProviderNames_ReturnsEnabledProviders_ExcludesDisabled()
     {
-        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig());
+        var harness = new SsoControllerHarness(c =>
+        {
+            c.SamlConfigs["adfs"] = new SamlConfig { Enabled = true };
+            c.SamlConfigs["retired"] = new SamlConfig { Enabled = false };
+        });
 
         var result = Assert.IsType<OkObjectResult>(harness.Controller.SamlProviderNames());
         var names = Assert.IsType<List<string>>(result.Value);
         Assert.Equal(new[] { "adfs" }, names);
+    }
+
+    [Fact]
+    public void OidProviderNames_NullValuedEntry_SkipsItWithoutThrowing()
+    {
+        // A null provider value is reachable via a pre-#350 null-body add; GetNames must skip it (like
+        // LinksByUser) rather than NRE into a 500 on this anonymous endpoint, and still list the good one.
+        var harness = new SsoControllerHarness(c =>
+        {
+            c.OidConfigs["broken"] = null;
+            c.OidConfigs["keycloak"] = new OidConfig { Enabled = true };
+        });
+
+        var result = Assert.IsType<OkObjectResult>(harness.Controller.OidProviderNames());
+        var names = Assert.IsType<List<string>>(result.Value);
+        Assert.Equal(new[] { "keycloak" }, names);
+    }
+
+    [Fact]
+    public void SamlProviderNames_NullValuedEntry_SkipsItWithoutThrowing()
+    {
+        var harness = new SsoControllerHarness(c =>
+        {
+            c.SamlConfigs["broken"] = null;
+            c.SamlConfigs["adfs"] = new SamlConfig { Enabled = true };
+        });
+
+        var result = Assert.IsType<OkObjectResult>(harness.Controller.SamlProviderNames());
+        var names = Assert.IsType<List<string>>(result.Value);
+        Assert.Equal(new[] { "adfs" }, names);
+    }
+
+    [Fact]
+    public void ProviderNames_NoProvidersConfigured_ReturnEmpty()
+    {
+        var harness = new SsoControllerHarness();
+
+        Assert.Empty(Assert.IsType<List<string>>(Assert.IsType<OkObjectResult>(harness.Controller.OidProviderNames()).Value));
+        Assert.Empty(Assert.IsType<List<string>>(Assert.IsType<OkObjectResult>(harness.Controller.SamlProviderNames()).Value));
+    }
+
+    [Fact]
+    public void OidProviders_AdminGet_StillListsDisabledProviders()
+    {
+        // The enabled-only filter is scoped to the GetNames linking list (#344); the elevation-gated OID/Get
+        // admin surface reads the full map through SnapshotConfigs and must still expose a disabled provider
+        // so an administrator can see and re-enable it.
+        var harness = new SsoControllerHarness(c => c.OidConfigs["retired"] = new OidConfig { Enabled = false });
+
+        var result = Assert.IsType<OkObjectResult>(harness.Controller.OidProviders());
+        var configs = Assert.IsType<SerializableDictionary<string, OidConfig>>(result.Value);
+        Assert.True(configs.ContainsKey("retired"));
+    }
+
+    [Fact]
+    public void SamlProviders_AdminGet_StillListsDisabledProviders()
+    {
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["retired"] = new SamlConfig { Enabled = false });
+
+        var result = Assert.IsType<OkObjectResult>(harness.Controller.SamlProviders());
+        var configs = Assert.IsType<SerializableDictionary<string, SamlConfig>>(result.Value);
+        Assert.True(configs.ContainsKey("retired"));
     }
 
     [Fact]

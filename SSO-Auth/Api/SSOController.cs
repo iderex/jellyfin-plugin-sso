@@ -295,9 +295,11 @@ public class SSOController : ControllerBase
     [HttpGet("OID/GetNames")]
     public ActionResult OidProviderNames()
     {
-        // Materialize the keys under the lock (#157/F-10): returning the live KeyCollection lets the
-        // JSON formatter enumerate it outside the lock, tearing against a concurrent provider add/remove.
-        return Ok(SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs.Keys.ToList()));
+        // Enabled providers only (#344): the sole consumer is the self-service linking page, and a disabled
+        // provider is rejected by both link twins (#343), so listing it would render an active add button
+        // that dead-ends in a uniform 400. Materialized under the config lock (#157/F-10): returning a live
+        // view lets the JSON formatter enumerate it outside the lock, tearing against a concurrent add/remove.
+        return Ok(SSOPlugin.Instance.ReadConfiguration(c => EnabledProviderNames(c.OidConfigs)));
     }
 
     /// <summary>
@@ -307,8 +309,8 @@ public class SSOController : ControllerBase
     [HttpGet("SAML/GetNames")]
     public ActionResult SamlProviderNames()
     {
-        // Materialize under the lock (#157/F-10), as OID/GetNames does.
-        return Ok(SSOPlugin.Instance.ReadConfiguration(c => c.SamlConfigs.Keys.ToList()));
+        // Enabled-only and materialized under the lock, as OID/GetNames does (#344, #157/F-10).
+        return Ok(SSOPlugin.Instance.ReadConfiguration(c => EnabledProviderNames(c.SamlConfigs)));
     }
 
     /// <summary>
@@ -673,6 +675,18 @@ public class SSOController : ControllerBase
 
         return copy;
     }
+
+    // The enabled provider names for the linking page (#344), materialized into a detached list under the
+    // config lock like SnapshotConfigs (#157/F-10) so the JSON formatter never enumerates the live
+    // dictionary against a concurrent add/remove. Only enabled providers are listed because a disabled one
+    // is rejected by both link twins (#343); the admin surfaces that need the full set (OID/Get, SAML/Get,
+    // the config page) read the whole map through SnapshotConfigs, not here, so they still see disabled ones.
+    // A null-valued entry (reachable via a pre-#350 null-body add) fails the property pattern and is
+    // skipped rather than dereferenced — the same fail-closed treatment LinksByUser gives it, so this
+    // anonymous endpoint cannot NRE into a 500 on a state the write side once produced.
+    private static List<string> EnabledProviderNames<TConfig>(SerializableDictionary<string, TConfig> configs)
+        where TConfig : ProviderConfigBase
+        => configs.Where(entry => entry.Value is { Enabled: true }).Select(entry => entry.Key).ToList();
 
     /// <summary>
     /// Validate a saml link request and create the link if it is valid.

@@ -11,34 +11,62 @@ const ssoConfigLinking = {
         new Request(
           ApiClient.getUrl(`sso/${provider_mode.toUpperCase()}/GetNames`),
         ),
-      ).then((resp) => {
-        resp.json().then((config_names) => {
+      )
+        // The global fetch resolves even on a non-2xx status, so gate on resp.ok before reading the body:
+        // a swallowed rejection would otherwise leave the section silently empty instead of telling the
+        // user something failed (#344).
+        .then((resp) => {
+          if (!resp.ok) {
+            throw new Error("provider list request failed");
+          }
+          return resp.json();
+        })
+        .then((config_names) => {
           ssoConfigLinking.loadProviderList(
             container,
             config_names,
             provider_mode,
           );
-        });
-      });
+        })
+        .catch(() => ssoConfigLinking.showError());
     });
   },
-  loadProviderList: (container, providers, provider_mode) => {
-    providers.forEach((provider_name) => {
-      // Provider and canonical names are identity-provider/admin-controlled: build the DOM with
-      // createElement/textContent (never innerHTML), and feed them into selectors and URLs only
-      // through CSS.escape / encodeURIComponent, never raw.
-      const provider_config = document.createElement("div");
-      provider_config.classList.add("sso-provider-links-container");
-      provider_config.dataset.id = provider_name;
 
-      const title = document.createElement("label");
-      title.classList.add(
-        "inputLabel",
-        "inputLabelUnfocused",
-        "sso-provider-link-title",
-      );
-      title.textContent = provider_name;
+  // A single generic banner for any failed request on this page — it never carries a status code or
+  // server message, so a rejection cannot leak an internal detail into the admin UI (#344).
+  showError: () => {
+    const banner = document.querySelector("#sso-linking-error");
+    if (banner) {
+      banner.hidden = false;
+    }
+  },
+  // Builds one provider row (title + optional add button + an empty existing-links container) and
+  // appends it, returning that container. The add button is offered only for a provider on the
+  // enabled add-list (#344): a disabled provider must not start a NEW link (the challenge/link twins
+  // reject it, #343), but a row without the button still lets its already-created links be removed —
+  // the deliberate disable-then-clean-up workflow (#380). Provider names are identity-provider/
+  // admin-controlled: the DOM is built with createElement/textContent (never innerHTML) and names reach
+  // selectors/URLs only through CSS.escape / encodeURIComponent, never raw.
+  createProviderRow: (
+    container,
+    provider_name,
+    provider_mode,
+    withAddButton,
+  ) => {
+    const provider_config = document.createElement("div");
+    provider_config.classList.add("sso-provider-links-container");
+    provider_config.dataset.id = provider_name;
 
+    const title = document.createElement("label");
+    title.classList.add(
+      "inputLabel",
+      "inputLabelUnfocused",
+      "sso-provider-link-title",
+    );
+    title.textContent = provider_name;
+    provider_config.appendChild(title);
+
+    if (withAddButton) {
       const add_provider = document.createElement("a");
       add_provider.classList.add(
         "fab",
@@ -53,13 +81,26 @@ const ssoConfigLinking = {
       add_provider.href = ApiClient.getUrl(
         `/SSO/${provider_mode}/p/${encodeURIComponent(provider_name)}?isLinking=true`,
       );
+      provider_config.appendChild(add_provider);
+    }
 
-      const existing_links = document.createElement("div");
-      existing_links.classList.add("sso-provider-existing-links-container");
-      existing_links.dataset.provider = provider_name;
+    const existing_links = document.createElement("div");
+    existing_links.classList.add("sso-provider-existing-links-container");
+    existing_links.dataset.provider = provider_name;
+    provider_config.appendChild(existing_links);
 
-      provider_config.append(title, add_provider, existing_links);
-      container.appendChild(provider_config);
+    container.appendChild(provider_config);
+    return existing_links;
+  },
+
+  loadProviderList: (container, providers, provider_mode) => {
+    providers.forEach((provider_name) => {
+      ssoConfigLinking.createProviderRow(
+        container,
+        provider_name,
+        provider_mode,
+        true,
+      );
     });
 
     const currentUserId = ApiClient.getCurrentUserId();
@@ -71,21 +112,40 @@ const ssoConfigLinking = {
           url: ApiClient.getUrl(`sso/${provider_mode}/links/${currentUserId}`),
         },
         true,
-      ).then((resp) => {
-        resp.json().then((provider_map) => {
+      )
+        .then((resp) => resp.json())
+        .then((provider_map) => {
           Object.keys(provider_map).forEach((provider_name) => {
-            const provider_container = container.querySelector(
+            const canonical_names = provider_map[provider_name];
+            let provider_container = container.querySelector(
               `.sso-provider-existing-links-container[data-provider="${CSS.escape(provider_name)}"]`,
             );
+            if (!provider_container) {
+              // The links endpoint reports every provider, including disabled ones the enabled-only
+              // add-list omitted (#344). Surface a disabled provider only when the user actually has
+              // links to remove — otherwise skip it, so a disabled provider is neither offered nor
+              // clutters the page — and render it without an add button (#380).
+              if (!canonical_names || canonical_names.length === 0) {
+                return;
+              }
+              provider_container = ssoConfigLinking.createProviderRow(
+                container,
+                provider_name,
+                provider_mode,
+                false,
+              );
+            }
             ssoConfigLinking.populateExistingLinks(
               provider_container,
               provider_mode,
               provider_name,
-              provider_map[provider_name],
+              canonical_names,
             );
           });
-        });
-      });
+        })
+        // ApiClient.fetch rejects on a non-2xx status, so a failed existing-links load surfaces the same
+        // generic banner rather than silently omitting the user's current links (#344).
+        .catch(() => ssoConfigLinking.showError());
     }
   },
 
@@ -173,9 +233,13 @@ const ssoConfigLinking = {
         });
       });
 
-    Promise.all(delete_requests).then((values) => {
-      window.location.reload();
-    });
+    Promise.all(delete_requests)
+      .then(() => {
+        window.location.reload();
+      })
+      // A rejected unlink used to reload the page anyway, presenting a failure as success; show the
+      // generic banner instead so the stale links stay visible and the user knows nothing changed (#344).
+      .catch(() => ssoConfigLinking.showError());
   },
 };
 

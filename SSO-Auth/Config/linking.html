@@ -46,6 +46,15 @@
               >${Help}</a
             >
           </div>
+          <!-- Generic failure banner (#344): revealed by linking.js when a request on this page is
+               rejected, so a non-2xx is no longer a silent no-op. The text is deliberately generic and
+               carries no server detail. -->
+          <p id="sso-linking-error" role="alert" hidden>
+            <strong
+              >Something went wrong. Please reload the page and try
+              again.</strong
+            >
+          </p>
           <p>
             Use the
             <span class="fab" aria-hidden="true">
