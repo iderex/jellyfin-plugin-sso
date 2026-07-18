@@ -224,7 +224,7 @@ public class SSOControllerChallengeTests
         // header whose value falls within the configured window.
         var throttled = Assert.IsType<ContentResult>(harness.Controller.SamlChallenge("does-not-exist"));
         Assert.Equal(429, throttled.StatusCode);
-        Assert.Equal("Too many login attempts. Please wait a moment and try again.", throttled.Content);
+        Assert.Equal("Too many attempts. Please wait a moment and try again.", throttled.Content);
         Assert.Equal("text/plain", throttled.ContentType);
 
         var retryAfter = harness.Controller.Response.Headers.RetryAfter.ToString();

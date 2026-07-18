@@ -141,7 +141,7 @@ public class SSOControllerUnregisterTests
         // single mapper (#474), carrying the machine-readable Retry-After.
         var throttled = Assert.IsType<ContentResult>(await harness.Controller.Unregister("alice", "Jellyfin"));
         Assert.Equal(429, throttled.StatusCode);
-        Assert.Equal("Too many login attempts. Please wait a moment and try again.", throttled.Content);
+        Assert.Equal("Too many attempts. Please wait a moment and try again.", throttled.Content);
 
         var retryAfter = harness.Controller.Response.Headers.RetryAfter.ToString();
         Assert.True(

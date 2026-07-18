@@ -451,7 +451,7 @@ public class SSOControllerLinkTests
         var throttled = Assert.IsType<ContentResult>(
             await harness.Controller.AddCanonicalLink("oid", "does-not-exist", Target, new AuthResponse { Data = "state-token" }));
         Assert.Equal(429, throttled.StatusCode);
-        Assert.Equal("Too many login attempts. Please wait a moment and try again.", throttled.Content);
+        Assert.Equal("Too many attempts. Please wait a moment and try again.", throttled.Content);
 
         var retryAfter = harness.Controller.Response.Headers.RetryAfter.ToString();
         Assert.True(
