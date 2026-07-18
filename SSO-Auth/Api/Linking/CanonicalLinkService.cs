@@ -371,7 +371,7 @@ internal sealed class CanonicalLinkService
                 username?.ReplaceLineEndings(string.Empty),
                 mode.ToToken(),
                 provider?.ReplaceLineEndings(string.Empty),
-                verdict);
+                DescribeAdoptionRefusal(verdict));
             throw new AccountLinkForbiddenException();
         }
 
@@ -386,6 +386,21 @@ internal sealed class CanonicalLinkService
 
         return adoptedUserId;
     }
+
+    // Maps an adoption refusal verdict to a fixed, non-PII reason phrase for the log line above. The
+    // AdoptionVerdict is a reason CODE (RefusePrivileged / RefuseUnverifiedEmail), never an email or any
+    // user data — but logging the enum value directly makes CodeQL's cs/exposure-of-private-information
+    // heuristic trip on the "Email" in the RefuseUnverifiedEmail member name (a false positive, latent on
+    // main and surfaced only once the log moved into this small helper where the flow is interprocedural).
+    // Returning a literal phrase per arm keeps the refusal reason in the audit line — and reads clearer than
+    // the raw enum name — while cutting the data flow the heuristic followed. The Allow arm is unreachable
+    // (the caller logs only on a refusal); it is a belt for a future verdict value.
+    private static string DescribeAdoptionRefusal(AdoptionVerdict verdict) => verdict switch
+    {
+        AdoptionVerdict.RefusePrivileged => "the target account is an administrator; link it explicitly via the admin endpoints",
+        AdoptionVerdict.RefuseUnverifiedEmail => "the provider requires a verified email for adoption and the login carried none",
+        _ => "the account is not eligible for name-based adoption",
+    };
 
     // Provisions a fresh Jellyfin account for this identity and links it on the subject key, warning first
     // when a now-orphaned legacy link is being left behind.
