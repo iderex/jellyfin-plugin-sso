@@ -750,7 +750,10 @@ public class SSOController : ControllerBase
         // the #232 in-flight re-check, not a substitute: this kills existing sessions, #232 closes the mint race.
         await _sessionManager.RevokeUserTokens(user.Id, null).ConfigureAwait(false);
 
-        _logger.LogInformation("Unregistered SSO for user {UserId}: removed {Count} canonical link(s) and revoked active tokens.", user.Id, revoked);
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("Unregistered SSO for user {UserId}: removed {Count} canonical link(s) and revoked active tokens.", user.Id, revoked);
+        }
 
         return Ok();
     }
@@ -837,7 +840,10 @@ public class SSOController : ControllerBase
         if (removal is { Result: CanonicalLinkRemoveResult.Removed, UserRetainsAnyLink: false })
         {
             await _sessionManager.RevokeUserTokens(jellyfinUserId, null).ConfigureAwait(false);
-            _logger.LogInformation("Removed the last SSO link for user {UserId} and revoked their active tokens.", jellyfinUserId);
+            if (_logger.IsEnabled(LogLevel.Information))
+            {
+                _logger.LogInformation("Removed the last SSO link for user {UserId} and revoked their active tokens.", jellyfinUserId);
+            }
         }
 
         return removal.Result switch

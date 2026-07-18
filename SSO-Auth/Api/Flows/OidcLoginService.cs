@@ -349,7 +349,11 @@ internal sealed class OidcLoginService
         // a state that is gone), so the auth page is returned regardless.
         StateStore.Promote(pending, derived);
 
-        _logger.LogInformation("Is request linking: {IsLinking}", pending.IsLinking);
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("Is request linking: {IsLinking}", pending.IsLinking);
+        }
+
         return FlowResponses.AuthPage(response, nonce => WebResponse.Generator(data: state, provider: provider, baseUrl: RequestBaseUrl(request, config), mode: "OID", nonce: nonce, isLinking: pending.IsLinking));
     }
 

@@ -82,7 +82,10 @@ internal sealed class SessionMinter
         if (!string.IsNullOrEmpty(parameters.DefaultProvider))
         {
             user.AuthenticationProviderId = parameters.DefaultProvider;
-            _logger.LogInformation("Set default login provider to {DefaultProvider}", parameters.DefaultProvider);
+            if (_logger.IsEnabled(LogLevel.Information))
+            {
+                _logger.LogInformation("Set default login provider to {DefaultProvider}", parameters.DefaultProvider);
+            }
         }
 
         await _userManager.UpdateUserAsync(user).ConfigureAwait(false);

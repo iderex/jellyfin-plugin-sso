@@ -1,7 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <!-- Multi-target both live Jellyfin generations from one codebase (#135): net9.0 for the
+         Jellyfin 10.11 line (host provides .NET 9), net10.0 for the Jellyfin 12.0 line (host provides
+         .NET 10). The OidcClient version and the Jellyfin SDK are conditioned on the TFM below; the
+         publish pipeline builds each target into its own package with its own targetAbi. -->
+    <TargetFrameworks>net9.0;net10.0</TargetFrameworks>
     <RootNamespace>Jellyfin.Plugin.SSO_Auth</RootNamespace>
     <AssemblyVersion>4.1.1.0</AssemblyVersion>
     <FileVersion>4.1.1.0</FileVersion>
@@ -25,7 +29,8 @@
     <!-- The shipping build compiles against this SDK; the abi-floor CI job overrides it to the
          build.yaml targetAbi floor to prove the used API surface also exists on the oldest claimed
          server (#142). The committed lockfile pins the default, so a locked-mode restore is unaffected. -->
-    <JellyfinVersion Condition="'$(JellyfinVersion)' == ''">10.11.11</JellyfinVersion>
+    <JellyfinVersion Condition="'$(JellyfinVersion)' == '' and '$(TargetFramework)' == 'net9.0'">10.11.11</JellyfinVersion>
+    <JellyfinVersion Condition="'$(JellyfinVersion)' == '' and '$(TargetFramework)' == 'net10.0'">12.0.0-rc2</JellyfinVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -48,17 +53,21 @@
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
-    <!-- OidcClient is pinned to the 6.x line, NOT 7.x, on purpose (#590). The 7.x assemblies are
-         built against the .NET 10 framework and reference Microsoft.Extensions.Logging.Abstractions
-         10.0.0.0 in their manifest. That assembly is host-provided (Jellyfin 10.11 runs on .NET 9 and
-         ships 9.0.0.0) so it is deliberately NOT in build.yaml's artifacts, and .NET does not roll a
-         host assembly DOWN a major version — so a 7.x build loads on the server only to throw
-         FileNotFoundException for Logging.Abstractions 10.0.0.0 the moment the plugin is constructed,
-         disabling it (the 4.1.0.0 field regression). 6.0.1's manifest references Logging.Abstractions
-         8.0.0.0, which rolls FORWARD onto the host's 9.0.0.0 cleanly. The
-         ArchitectureConformanceTests.HostProvidedFrameworkAssemblies_StayOnTheHostNet9Abi test locks
-         this in: no host-provided Microsoft.Extensions.* assembly may be referenced above the .NET 9 floor. -->
-    <PackageReference Include="Duende.IdentityModel.OidcClient" Version="6.0.1" />
+    <!-- OidcClient is version-matched to the target's .NET host (#590, #135). Its assemblies reference
+         Microsoft.Extensions.Logging.Abstractions — a HOST-PROVIDED assembly, deliberately not shipped —
+         and .NET rolls a host assembly reference FORWARD but never DOWN a major version. So the compiled
+         reference must not exceed the host's:
+           - net9.0 (Jellyfin 10.11, host ships Logging.Abstractions 9.0.0.0): OidcClient 6.0.1, whose
+             manifest references 8.0.0.0 (rolls forward onto 9.0.0.0). 7.x here references 10.0.0.0 and
+             throws FileNotFoundException at construction — the 4.1.0.0 field regression.
+           - net10.0 (Jellyfin 12.0, host ships 10.0.0.0): OidcClient 7.1.0, whose 10.0.0.0 reference the
+             .NET 10 host satisfies exactly. 6.x would also work (8.0.0.0 rolls forward) but 7.x is the
+             current, maintained line for the .NET 10 target.
+         ArchitectureConformanceTests.HostProvidedFrameworkAssemblies_StayOnTheHostAbi locks this in per
+         TFM: no host-provided Microsoft.Extensions.* assembly may be referenced above the target host's
+         .NET major. -->
+    <PackageReference Include="Duende.IdentityModel.OidcClient" Version="6.0.1" Condition="'$(TargetFramework)' == 'net9.0'" />
+    <PackageReference Include="Duende.IdentityModel.OidcClient" Version="7.1.0" Condition="'$(TargetFramework)' == 'net10.0'" />
     <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinVersion)" />
     <!-- id_token validation (#134): OidcClient 7.x carries no JWT validation stack of its own. -->
     <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.19.1" />

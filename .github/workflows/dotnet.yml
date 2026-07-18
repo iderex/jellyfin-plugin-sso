@@ -35,7 +35,12 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
       with:
-        dotnet-version: 9.0.x
+        # Both SDKs the multi-target build needs (#135): net9.0 for the Jellyfin 10.11 line, net10.0 for
+        # the Jellyfin 12.0 line. `dotnet build`/`test` (no -f) build and test every TargetFramework, so
+        # install both explicitly rather than relying on whatever the runner image happens to ship.
+        dotnet-version: |
+          9.0.x
+          10.0.x
         # Cache the NuGet global-packages folder keyed on the committed lockfiles,
         # so a clean --locked-mode restore is a cache hit.
         cache: true
@@ -84,9 +89,16 @@ jobs:
     - name: Build against the ABI floor
       # A deliberately different Jellyfin version than the shipping build, so locked-mode is off here;
       # --warnaserror turns any missing or changed API on the floor into a hard failure.
+      #
+      # Pinned to -f net9.0: build.yaml's targetAbi (10.11.0.0) is the .NET 9 / Jellyfin 10.11 line's
+      # floor, so this check is a net9-line concept. Without -f, `dotnet build` on the multi-target
+      # csproj would also build the net10.0 leg against Jellyfin 10.11.0.0 — which proves nothing about
+      # the net10/JF12 floor AND needs a net10 SDK this job does not install (#135 review). The net10 leg
+      # is fully built + tested by the primary `build` job; its own JF12 ABI floor lands with the JF12
+      # publish pipeline.
       env:
         FLOOR: ${{ steps.floor.outputs.version }}
-      run: dotnet build SSO-Auth/SSO-Auth.csproj -c Release --warnaserror -p:JellyfinVersion="$FLOOR" -p:RestoreLockedMode=false
+      run: dotnet build SSO-Auth/SSO-Auth.csproj -f net9.0 -c Release --warnaserror -p:JellyfinVersion="$FLOOR" -p:RestoreLockedMode=false
 
   # Verify the plugin actually packages as a loadable Jellyfin plugin (JPRM builds it against the
   # targeted ABI and produces the manifest) on every PR, not only at release time.

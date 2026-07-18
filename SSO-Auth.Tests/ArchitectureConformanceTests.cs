@@ -1002,22 +1002,25 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
-    public void HostProvidedFrameworkAssemblies_StayOnTheHostNet9Abi()
+    public void HostProvidedFrameworkAssemblies_StayOnTheHostAbi()
     {
-        // Locked in by #590 (the 4.1.0.0 field regression). Jellyfin 10.11 runs on .NET 9, so every
-        // assembly the ASP.NET Core shared framework provides — the whole Microsoft.Extensions.* family
-        // (logging, DI, configuration, …) — is host-provided and is deliberately NOT in build.yaml's
-        // artifacts. .NET rolls a host assembly reference FORWARD to a newer host but never DOWN a major
-        // version, so if a dependency drags one of these to the .NET 10 line (10.0.0.0) the plugin still
-        // compiles and `dotnet test` stays green (both run against the full publish output, which carries
-        // the 10.x DLL), yet the packaged plugin throws FileNotFoundException the moment the host DI
-        // constructs it against its own 9.0.0.0 assembly — disabling it. That is exactly how OidcClient
-        // 7.x (whose manifest references Logging.Abstractions 10.0.0.0) broke 4.1.0.0. Pin the compiled
-        // reference here: no Microsoft.Extensions.* assembly SSO-Auth.dll references may be newer than the
-        // .NET 9 host provides, so a future dependency bump that re-crosses the floor fails at build time
-        // rather than in the field. Raise hostAbiMajor in lockstep with build.yaml's `framework` only when
-        // the oldest supported Jellyfin server moves to a newer .NET.
+        // Locked in by #590 (the 4.1.0.0 field regression) and generalized per target (#135). Each
+        // Jellyfin generation the plugin targets provides the whole Microsoft.Extensions.* family from its
+        // ASP.NET Core shared framework — host-provided, deliberately NOT in build.yaml's artifacts. .NET
+        // rolls a host assembly reference FORWARD to a newer host but never DOWN a major version, so a
+        // dependency dragging one of these ABOVE the target host's .NET major compiles and keeps
+        // `dotnet test` green (both run against the full publish output, which carries the newer DLL) yet
+        // throws FileNotFoundException the moment the host DI constructs the plugin against its own,
+        // lower-versioned assembly — disabling it. That is exactly how OidcClient 7.x (which references
+        // Logging.Abstractions 10.0.0.0) broke 4.1.0.0 on the .NET 9 host. The floor is the target's host
+        // .NET major: 9 for net9.0 (Jellyfin 10.11), 10 for net10.0 (Jellyfin 12.0). When a net11 target
+        // is added, turn this into an #elif chain (NET11_0_OR_GREATER → 11) — NET10_0_OR_GREATER is also
+        // true on net11, so leaving it would pin the floor to 10 and spuriously fail the net11 build.
+#if NET10_0_OR_GREATER
+        const int hostAbiMajor = 10;
+#else
         const int hostAbiMajor = 9;
+#endif
         var references = typeof(SSOPlugin).Assembly.GetReferencedAssemblies();
 
         var overshoot = references
@@ -1028,7 +1031,7 @@ public class ArchitectureConformanceTests
 
         Assert.True(
             overshoot.Count == 0,
-            $"SSO-Auth references a host-provided Microsoft.Extensions.* assembly above the .NET {hostAbiMajor} host ABI; Jellyfin 10.11 provides only {hostAbiMajor}.x and .NET does not roll a host assembly down, so the packaged plugin would throw FileNotFoundException at construction and be disabled (#590): " + string.Join(", ", overshoot));
+            $"SSO-Auth references a host-provided Microsoft.Extensions.* assembly above the .NET {hostAbiMajor} host ABI; this target's Jellyfin host provides only {hostAbiMajor}.x and .NET does not roll a host assembly down, so the packaged plugin would throw FileNotFoundException at construction and be disabled (#590): " + string.Join(", ", overshoot));
 
         // Sentinel against a vacuous pass: the keystone that broke 4.1.0.0 is
         // Microsoft.Extensions.Logging.Abstractions — SSOPlugin's ILogger<> constructor dependency, the
