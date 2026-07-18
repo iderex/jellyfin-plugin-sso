@@ -1,15 +1,18 @@
 name: Publish Release
 
-# A four-part version tag push (e.g. v4.1.0.0) is the ONLY publish trigger, per
-# docs/RELEASE-POLICY.md. The upload job below CREATES and publishes the GitHub
-# release from that tag in CI (action-gh-release creates the release when none
-# exists) — the release is never minted out of band, because a deleted immutable
-# release permanently burns its tag. The glob matches only our numeric four-part
-# tags, never the branch-triggered beta prereleases (the `beta-*` tags).
+# A three-part stable tag push (e.g. 4.1.1-stable) is the ONLY publish trigger,
+# per docs/RELEASE-POLICY.md. The channel/generation is the tag SUFFIX — this is
+# the JF10.11 line, so `X.Y.Z-stable`; the JF12 line publishes from `X.Y.Z-JF12-stable`
+# on its own branch. The numeric X.Y.Z is the plugin version Jellyfin installs (it
+# must be numeric — the suffix lives only in the tag + release name); it must match
+# build.yaml's `version` (checked in the upload job). The glob matches only the
+# `-stable` tags, never the beta prereleases (`X.Y.Z-beta.*`). The upload job CREATES
+# and publishes the release from the tag in CI — never minted out of band, because a
+# deleted immutable release permanently burns its tag.
 on:
   push:
     tags:
-      - "v[0-9]+.[0-9]+.[0-9]+.[0-9]+"
+      - "[0-9]+.[0-9]+.[0-9]+-stable"
   workflow_dispatch:
 
 # Default to read-only; the jobs that create the release and update the
@@ -55,6 +58,9 @@ jobs:
       with:
           name: ${{ github.ref_name }}
           prerelease: false
+          # Always auto-generate the release notes from the merged PRs/commits since
+          # the previous tag, on every release.
+          generate_release_notes: true
           fail_on_unmatched_files: true
           tag_name: ${{ github.ref_name }}
           files: ./*
