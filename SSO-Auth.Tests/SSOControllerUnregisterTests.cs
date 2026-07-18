@@ -1,8 +1,13 @@
 using System;
+using System.Net;
+using System.Reflection;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Plugin.SSO_Auth;
+using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Config;
+using MediaBrowser.Common.Api;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using NSubstitute;
 using Xunit;
@@ -111,6 +116,76 @@ public class SSOControllerUnregisterTests
         Assert.False(links.ContainsKey("sub-alice"));
         Assert.Equal("Jellyfin", user.AuthenticationProviderId);
         await harness.UserManager.Received(1).UpdateUserAsync(user);
+    }
+
+    [Fact]
+    public async Task Unregister_AuthorizedOverRateLimit_Returns429()
+    {
+        // #516: the admin SSO-revoke is throttled by the shared gate under its own "unregister" class. A burst
+        // past the configured budget is refused with the same 429 the login path renders, before any work runs.
+        var harness = new SsoControllerHarness(
+            c =>
+            {
+                c.EnableRateLimit = true;
+                c.RateLimitMaxAttempts = 1;
+                c.RateLimitWindowSeconds = 60;
+            },
+            // A dedicated public address so the process-static limiter counter is this test's alone.
+            clientIp: IPAddress.Parse("8.8.4.20"));
+        var user = SeedUser(harness);
+
+        // The first call passes the limiter, spends the single-attempt budget, and completes the revoke (Ok).
+        Assert.IsType<OkResult>(await harness.Controller.Unregister("alice", "Jellyfin"));
+
+        // The second is over budget and throttled before any work: a 429 from LoginOutcome.Throttled via the
+        // single mapper (#474), carrying the machine-readable Retry-After.
+        var throttled = Assert.IsType<ContentResult>(await harness.Controller.Unregister("alice", "Jellyfin"));
+        Assert.Equal(429, throttled.StatusCode);
+        Assert.Equal("Too many login attempts. Please wait a moment and try again.", throttled.Content);
+
+        var retryAfter = harness.Controller.Response.Headers.RetryAfter.ToString();
+        Assert.True(
+            int.TryParse(retryAfter, out var seconds) && seconds >= 1 && seconds <= 60,
+            $"Retry-After must be whole seconds within the 60s window; was '{retryAfter}'.");
+
+        // The throttled call did no work: only the first revoke touched the session manager (#440 untouched by the 429).
+        await harness.SessionManager.Received(1).RevokeUserTokens(UserId, null);
+    }
+
+    [Fact]
+    public async Task Unregister_AuthorizedUnderRateLimit_NotThrottled()
+    {
+        // With rate limiting enabled but the budget generous (the default 30/60s), a normal admin unregister is
+        // unaffected: it revokes SSO and returns Ok, never a 429, and the #440 session revocation still fires.
+        var harness = new SsoControllerHarness(
+            c =>
+            {
+                c.EnableRateLimit = true;
+                c.RateLimitMaxAttempts = 30;
+                c.RateLimitWindowSeconds = 60;
+            },
+            clientIp: IPAddress.Parse("8.8.4.21"));
+        SeedUser(harness);
+
+        var result = await harness.Controller.Unregister("alice", "Jellyfin");
+
+        Assert.IsType<OkResult>(result);
+        await harness.SessionManager.Received(1).RevokeUserTokens(UserId, null);
+    }
+
+    [Fact]
+    public void Unregister_IsGuardedByTheElevationPolicy_SoUnauthorizedNeverReachesTheLimiter()
+    {
+        // The in-process harness calls the action directly, bypassing MVC's authorization filters, so the
+        // "unauthorized never 429" property is pinned structurally instead: the [Authorize(RequiresElevation)]
+        // filter rejects a non-elevated caller (401/403) BEFORE the action body — and thus before the
+        // RateLimitCheck the body fronts itself with — runs. So no 429 can ever precede the auth rejection: a
+        // hammering unauthorized caller is refused, never throttled, and never consumes the "unregister" budget.
+        var authorize = typeof(SSOController).GetMethod(nameof(SSOController.Unregister))!
+            .GetCustomAttribute<AuthorizeAttribute>();
+
+        Assert.NotNull(authorize);
+        Assert.Equal(Policies.RequiresElevation, authorize!.Policy);
     }
 
     // Registers a user with the harness's mocked IUserManager so GetUserByName resolves it.

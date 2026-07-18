@@ -502,6 +502,18 @@ public class SSOController : ControllerBase
     [HttpPost("Unregister/{username}")]
     public async Task<ActionResult> Unregister(string username, [FromBody] string provider)
     {
+        // Throttle after the elevation guard, before any work (#516): the [Authorize] filter rejects a
+        // non-elevated caller before the body runs, so an unauthorized request is refused (401/403) and never
+        // reaches — or is judged by — the limiter (no rate-limit oracle). Once past it, the shared gate caps
+        // how fast an authorized admin can drive this heavy revoke, which removes the user's canonical links
+        // everywhere, persists a provider switch, and revokes the user's active sessions (#440). Its own
+        // "unregister" class carries an independent budget, so it neither starves nor is starved by the
+        // link/unlink write surface's "link" bucket (#382) or the anonymous login flows.
+        if (RateLimitCheck("unregister") is { } throttled)
+        {
+            return throttled;
+        }
+
         var user = _userManager.GetUserByName(username);
         if (user is null)
         {
@@ -706,10 +718,11 @@ public class SSOController : ControllerBase
             ? parsed
             : throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'");
 
-    // Fronts a rate-limited endpoint with the shared per-client gate (#128, #160, #382): null when the request
-    // may proceed, else the throttled outcome the single mapper renders (#474). The anonymous login endpoints
-    // pass their class (challenge/callback/auth); the authenticated link/unlink write surface passes "link"
-    // after its own authz guard. The gate owns the one process-wide limiter and the whole check (config read,
+    // Fronts a rate-limited endpoint with the shared per-client gate (#128, #160, #382, #516): null when the
+    // request may proceed, else the throttled outcome the single mapper renders (#474). The anonymous login
+    // endpoints pass their class (challenge/callback/auth); the authenticated link/unlink write surface passes
+    // "link" after its own authz guard, and the admin SSO-revoke passes "unregister" after its elevation
+    // guard. The gate owns the one process-wide limiter and the whole check (config read,
     // IP classifier, endpoint-class keying, the #195 observability signal); this wrapper only supplies the
     // three request-scoped inputs it needs — the endpoint class, the connection's remote address, and the
     // response the retry-delay header is set on — so the controller keeps no rate-limit state of its own.
