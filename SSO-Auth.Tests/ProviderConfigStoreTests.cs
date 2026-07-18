@@ -204,7 +204,8 @@ public class ProviderConfigStoreTests
         // store must serialize each read-then-maybe-write so every call completes cleanly and the
         // provider map is never left in a corrupted or partially-written state.
         var (store, live, _) = CreateStore();
-        live.OidConfigs["kc"] = new OidConfig { Enabled = true };
+        var seeded = new OidConfig { Enabled = true };
+        live.OidConfigs["kc"] = seeded;
         var ct = TestContext.Current.CancellationToken;
 
         const int concurrency = 50;
@@ -226,9 +227,13 @@ public class ProviderConfigStoreTests
 
         await Task.WhenAll(tasks); // throws if any callback threw or the store deadlocked
 
-        // Either spelling is a legitimate race outcome; what matters is that the provider entry survived
-        // concurrent access intact rather than a corrupted/missing entry.
-        Assert.True(store.Read(c => c.OidConfigs.ContainsKey("kc")));
+        // Either spelling is a legitimate race outcome, but the entry itself must have survived
+        // concurrent access intact: exactly one "kc" entry, the SAME object instance (never replaced or
+        // duplicated by an interleaved write), with every OTHER field untouched by the race — proof the
+        // concurrent NewPath writes never corrupted the surrounding provider record.
+        Assert.Equal(1, store.Read(c => c.OidConfigs.Count));
+        Assert.Same(seeded, store.Read(c => c.OidConfigs["kc"]));
+        Assert.True(store.Read(c => c.OidConfigs["kc"].Enabled));
     }
 
     [Fact]
