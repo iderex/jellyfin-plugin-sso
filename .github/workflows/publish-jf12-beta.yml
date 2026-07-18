@@ -119,6 +119,14 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           tag_name: ${{ steps.version.outputs.base }}-JF12-beta.${{ github.run_number }}
+          # Anchor the tag to the 4.2 commit this build ran on. Without this, the create-release API
+          # defaults target_commitish to the repository DEFAULT branch (main) — which is not where JF12
+          # publishing happens — so every JF12 beta tag was created on main's stale HEAD (stuck at #606)
+          # instead of the 4.2 commit that triggered the run. That made generate_release_notes compute
+          # its "What's Changed" from main's history (always the last main-merge, #606) rather than the
+          # 4.2 changes actually shipped. Pinning it to github.sha (the pushed 4.2 commit) tags the
+          # correct commit and lets the auto-notes diff the real 4.2 range against the previous JF12 beta.
+          target_commitish: ${{ github.sha }}
           files: |
             _dist/*
             build.yaml
