@@ -279,6 +279,43 @@ public sealed class OidcIdTokenValidatorTests : IDisposable
         Assert.False(result.IsError, result.Error);
     }
 
+    [Fact]
+    public async Task MalformedEcCoordinateInSet_IsSkipped_GoodKeyStillValidates()
+    {
+        // The EC conversion has its own skip-on-malformed path (non-base64url x/y throws FormatException,
+        // an invalid point throws CryptographicException): a broken EC key must be dropped, not 500 the
+        // login, leaving the good RSA key to validate. Guards the EC branch the RSA-only case above misses.
+        var p = _rsa.ExportParameters(false);
+        var options = Options(jwks: $$"""
+            {"keys":[
+              {"kty":"EC","use":"sig","kid":"broken-ec","crv":"P-256","x":"!!not-base64url!!","y":"!!nope!!"},
+              {"kty":"RSA","use":"sig","kid":"{{KeyId}}",
+               "n":"{{Base64UrlEncoder.Encode(p.Modulus)}}","e":"{{Base64UrlEncoder.Encode(p.Exponent)}}"}]}
+            """);
+
+        var result = await _validator.ValidateAsync(CreateToken(), options, TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsError, result.Error);
+    }
+
+    [Fact]
+    public async Task UnsupportedEcCurveInSet_IsSkipped_GoodKeyStillValidates()
+    {
+        // An EC key on a curve outside the P-256/384/521 set (TryGetCurve returns false) is not a key we
+        // handle: it is skipped rather than converted, and the good RSA key still validates the login.
+        var p = _rsa.ExportParameters(false);
+        var options = Options(jwks: $$"""
+            {"keys":[
+              {"kty":"EC","use":"sig","kid":"unsupported-curve","crv":"P-192","x":"ZZ","y":"ZZ"},
+              {"kty":"RSA","use":"sig","kid":"{{KeyId}}",
+               "n":"{{Base64UrlEncoder.Encode(p.Modulus)}}","e":"{{Base64UrlEncoder.Encode(p.Exponent)}}"}]}
+            """);
+
+        var result = await _validator.ValidateAsync(CreateToken(), options, TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsError, result.Error);
+    }
+
     // --- helpers ---
 
     private OidcClientOptions Options(string? jwks = null)
