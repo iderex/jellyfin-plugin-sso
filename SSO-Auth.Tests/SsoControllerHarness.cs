@@ -41,6 +41,13 @@ internal sealed class SsoControllerHarness
 
     public PluginConfiguration Configuration { get; }
 
+    /// <summary>
+    /// Gets the mocked XML serializer the plugin persists through. Exposed so a test can assert on
+    /// <c>SerializeToFile</c> call counts — e.g. to prove a config write actually reached the store's
+    /// persist step (#412), or that a no-op resolution did not pay for one.
+    /// </summary>
+    public IXmlSerializer Xml { get; }
+
     public SsoControllerHarness(
         Action<PluginConfiguration>? configure = null,
         IPAddress? clientIp = null,
@@ -66,10 +73,10 @@ internal sealed class SsoControllerHarness
         // round-trip the encryption. The key is created lazily only when a non-empty secret is encrypted,
         // so tests that persist no secret never touch disk here.
         appPaths.PluginsPath.Returns(Path.Combine(Path.GetTempPath(), "sso-test-plugins-" + Guid.NewGuid()));
-        var xml = Substitute.For<IXmlSerializer>();
-        xml.DeserializeFromFile(Arg.Any<Type>(), Arg.Any<string>()).Returns(Configuration);
+        Xml = Substitute.For<IXmlSerializer>();
+        Xml.DeserializeFromFile(Arg.Any<Type>(), Arg.Any<string>()).Returns(Configuration);
         // Constructing the plugin sets the static SSOPlugin.Instance the controller reads.
-        _ = new SSOPlugin(appPaths, xml, Substitute.For<ILogger<SSOPlugin>>());
+        _ = new SSOPlugin(appPaths, Xml, Substitute.For<ILogger<SSOPlugin>>());
 
         UserManager = Substitute.For<IUserManager>();
         SessionManager = Substitute.For<ISessionManager>();

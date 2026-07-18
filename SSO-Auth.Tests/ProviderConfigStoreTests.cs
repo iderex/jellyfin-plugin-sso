@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using MediaBrowser.Model.Plugins;
 using Microsoft.Extensions.Logging;
@@ -166,6 +167,68 @@ public class ProviderConfigStoreTests
         store.Save(incoming);
 
         Assert.Single(persisted);
+    }
+
+    [Fact]
+    public async Task Mutate_ConcurrentReadModifyWrites_NeverLoseAnUpdate()
+    {
+        // Race regression for #412: the challenge flow now records the server-managed NewPath spelling
+        // through Mutate instead of an unsynchronized field write, specifically so two concurrent
+        // challenges cannot race a read-modify-write and lose one another's update. This pins the
+        // general property that guarantee rests on: every Mutate call is a fully serialized
+        // read-modify-write, so N concurrent increments through the store are never dropped — if the
+        // store's lock were removed (or a caller bypassed it, as the pre-fix NewPath write did), some
+        // increments would race and the final count would fall short of N.
+        var (store, live, _) = CreateStore();
+        live.RateLimitMaxAttempts = 0; // the constructor default (30) would otherwise fold into the count
+        var ct = TestContext.Current.CancellationToken;
+
+        const int concurrency = 64;
+        var tasks = new Task[concurrency];
+        for (var i = 0; i < concurrency; i++)
+        {
+            tasks[i] = Task.Run(() => store.Mutate(c => c.RateLimitMaxAttempts++), ct);
+        }
+
+        await Task.WhenAll(tasks);
+
+        Assert.Equal(concurrency, live.RateLimitMaxAttempts);
+    }
+
+    [Fact]
+    public async Task Mutate_ConcurrentChallengeStyleReadThenWrite_NeverThrows_AndSettlesOnADerivedSpelling()
+    {
+        // Mirrors OidcLoginService/SamlLoginService.ResolveChallengeNewPath's shape (#412): a fast Read,
+        // then a Mutate only when the derived spelling differs from what is stored — never a bare field
+        // write outside the lock. Concurrent callers alternate between the two derivable spellings; the
+        // store must serialize each read-then-maybe-write so every call completes cleanly and the
+        // provider map is never left in a corrupted or partially-written state.
+        var (store, live, _) = CreateStore();
+        live.OidConfigs["kc"] = new OidConfig { Enabled = true };
+        var ct = TestContext.Current.CancellationToken;
+
+        const int concurrency = 50;
+        var tasks = new Task[concurrency];
+        for (var i = 0; i < concurrency; i++)
+        {
+            var derived = i % 2 == 0;
+            tasks[i] = Task.Run(
+                () =>
+                {
+                    var stored = store.Read(c => c.OidConfigs["kc"].NewPath);
+                    if (stored != derived)
+                    {
+                        store.Mutate(c => c.OidConfigs["kc"].NewPath = derived);
+                    }
+                },
+                ct);
+        }
+
+        await Task.WhenAll(tasks); // throws if any callback threw or the store deadlocked
+
+        // Either spelling is a legitimate race outcome; what matters is that the provider entry survived
+        // concurrent access intact rather than a corrupted/missing entry.
+        Assert.True(store.Read(c => c.OidConfigs.ContainsKey("kc")));
     }
 
     [Fact]

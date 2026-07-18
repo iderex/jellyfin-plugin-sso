@@ -292,7 +292,7 @@ internal sealed class SamlLoginService
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.UnknownProvider));
         }
 
-        bool newPath = ResolveChallengeNewPath(config, isLinking, request);
+        bool newPath = ResolveChallengeNewPath(provider, config, isLinking, request);
 
         string redirectUri = SsoUrlBuilder.SamlAcsUrl(GetRequestBase(request, config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), newPath, provider);
         string relayState = null;
@@ -563,18 +563,41 @@ internal sealed class SamlLoginService
     // flow — which cannot know which redirect path the identity provider has registered — reuses the last
     // login's spelling. A linking challenge only reads the stored value. (See SamlAssertionValidator's
     // ExpectedAcsUrls for the same reason this value is remembered across requests.) Mirrors
-    // OidcLoginService.ResolveChallengeNewPath —
-    // the type is known here, so the record is a direct assignment.
-    private static bool ResolveChallengeNewPath(SamlConfig config, bool isLinking, HttpRequest request)
+    // OidcLoginService.ResolveChallengeNewPath.
+    //
+    // The record itself goes through MutateConfiguration rather than a bare field assignment (#412): the
+    // `config` the caller passes in was read under ReadConfiguration's lock, which is released before this
+    // runs, so writing straight into it raced a concurrent challenge for the same provider and never went
+    // through the write path every other config mutation uses. The Mutate delegate re-resolves the
+    // provider by name instead of trusting the outer `config` reference, so one deleted/disabled in that
+    // race window is not written into. The common case — the derived spelling already matches what is
+    // stored, which is every login after the first on a given route — is served by a plain comparison with
+    // no write, so an ordinary login does not pay a config persist on every challenge, mirroring
+    // CanonicalLinkService.ResolveOrCreateAsync's read-first, persist-only-on-change shape.
+    private static bool ResolveChallengeNewPath(string provider, SamlConfig config, bool isLinking, HttpRequest request)
     {
         if (isLinking)
         {
             return config.NewPath;
         }
 
-        var newPath = ChallengePath.IsNewPath(request.Path.Value);
-        config.NewPath = newPath;
-        return newPath;
+        var derived = ChallengePath.IsNewPath(request.Path.Value);
+        if (derived == config.NewPath)
+        {
+            return derived;
+        }
+
+        return SSOPlugin.Instance.MutateConfiguration(configuration =>
+        {
+            if (configuration.SamlConfigs.TryGetValue(provider, out var liveConfig) && liveConfig is { Enabled: true })
+            {
+                liveConfig.NewPath = derived;
+            }
+
+            // The current redirect always uses `derived` regardless of whether the write above landed —
+            // it reflects this request's own path, exactly like a read-only resolution would have.
+            return derived;
+        });
     }
 
     // Builds the redirect URL to the identity provider, signing the outgoing AuthnRequest when the provider
