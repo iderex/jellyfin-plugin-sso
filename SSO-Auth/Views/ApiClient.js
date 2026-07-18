@@ -90,11 +90,11 @@ export async function serverAddress({ basePath = "/web" }) {
 }
 
 // The browser-to-device-name derivation is defined once, in the server-rendered auth-completion
-// page (WebResponse.cs). This linking view is not a login client, so it does not re-derive that
-// value; it registers under a fixed placeholder identifier. This is kept byte-identical to the
-// prior behavior on purpose - deriving a real device name here would change the name SSO-view
-// sessions register under, which is a separate, deliberate behavior change.
-const deviceName = "DUMMY";
+// page (WebResponse.cs), and is ~150 lines of inlined browser sniffing that is not reusable from
+// here without a much larger refactor (issue #310). This linking view only opens briefly to manage
+// provider links, so a fixed, descriptive, non-PII label is clearer in Jellyfin's device list than a
+// per-browser guess would be, and it keeps this asset dependency-free.
+const deviceName = "SSO Account Linking";
 
 function getDeviceId() {
   return localStorage.getItem("_deviceId2");
