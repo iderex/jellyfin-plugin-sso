@@ -35,7 +35,12 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
       with:
-        dotnet-version: 9.0.x
+        # Both SDKs the multi-target build needs (#135): net9.0 for the Jellyfin 10.11 line, net10.0 for
+        # the Jellyfin 12.0 line. `dotnet build`/`test` (no -f) build and test every TargetFramework, so
+        # install both explicitly rather than relying on whatever the runner image happens to ship.
+        dotnet-version: |
+          9.0.x
+          10.0.x
         # Cache the NuGet global-packages folder keyed on the committed lockfiles,
         # so a clean --locked-mode restore is a cache hit.
         cache: true
