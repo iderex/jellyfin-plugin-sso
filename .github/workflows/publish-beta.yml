@@ -72,7 +72,7 @@ jobs:
       # so cutting the next stable supersedes the beta cleanly. The build number is
       # monotonic within this workflow, which is all Jellyfin's version precedence
       # needs; the beta stays out of the stable manifest because it is a prerelease.
-      # The grep pins the four-part shape so a malformed build.yaml fails here rather
+      # The grep pins the three-part shape so a malformed build.yaml fails here rather
       # than producing a bogus tag. RUN_NUMBER is passed via env (not inlined into the
       # script) so no ${{ }} expansion is spliced into the shell.
       #
@@ -85,11 +85,12 @@ jobs:
       env:
         RUN_NUMBER: ${{ github.run_number }}
       run: |
-        base=$(grep -E '^version:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+"' build.yaml \
-          | head -1 | sed -E 's/.*"([0-9]+\.[0-9]+\.[0-9]+)\.[0-9]+".*/\1/')
+        base=$(grep -E '^version:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"' build.yaml \
+          | head -1 | sed -E 's/.*"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/')
         if [ -z "$base" ]; then
-          echo "::error::Could not read a four-part version from build.yaml"; exit 1
+          echo "::error::Could not read a three-part version from build.yaml"; exit 1
         fi
+        echo "base=${base}" >> "$GITHUB_OUTPUT"
         echo "beta=${base}.${RUN_NUMBER}" >> "$GITHUB_OUTPUT"
     - name: "Set the beta version in build.yaml"
       uses: fjogeleit/yaml-update-action@dffe9a5223d84653c13374032382f6bb5de8e5ef # v0.17.0
@@ -128,21 +129,27 @@ jobs:
           # assets while the release is still a DRAFT (drafts are mutable), then
           # publish the draft in the next step (which seals it WITH its assets).
           #
-          # The tag is UNIQUE per build (beta-<version>), not a rolling pointer: an
-          # immutable published release cannot be updated in place, so a moving tag
-          # would fail on its second run. `beta-*` never matches publish.yml's
-          # v[0-9]+.[0-9]+.[0-9]+.[0-9]+ stable glob, so a beta never triggers the
-          # stable channel; and prerelease: true keeps it out of the stable manifest
-          # (ignorePrereleases: true) — only the beta manifest below surfaces it.
+          # Release NAME is the clean three-part X.Y.Z-beta; the git TAG carries the
+          # build number (X.Y.Z-beta.<run>) to stay UNIQUE per run — an immutable
+          # published release cannot be updated in place, so a rolling tag would fail
+          # on its second run. The tag never matches publish.yml's
+          # [0-9]+.[0-9]+.[0-9]+-stable glob, so a beta never triggers the stable
+          # channel; and prerelease: true keeps it out of the stable manifest
+          # (ignorePrereleases: true) — only the beta manifest below surfaces it. The
+          # INSTALLED plugin version is X.Y.Z.<run> (the hidden fourth octet keeps
+          # Jellyfin's update ordering monotonic across betas).
           draft: true
           prerelease: true
+          name: ${{ steps.version.outputs.base }}-beta
+          # Always auto-generate the release notes from the commits since the previous tag.
+          generate_release_notes: true
           fail_on_unmatched_files: true
-          tag_name: beta-${{ steps.version.outputs.beta }}
+          tag_name: ${{ steps.version.outputs.base }}-beta.${{ github.run_number }}
           files: |
             _dist/*
             build.yaml
           body: |
-            Jellyfin 10.11 beta build (${{ steps.version.outputs.beta }}).
+            Jellyfin 10.11 beta ${{ steps.version.outputs.base }}-beta (plugin version ${{ steps.version.outputs.beta }}).
             Install via the beta repository URL:
             https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json
       env:
