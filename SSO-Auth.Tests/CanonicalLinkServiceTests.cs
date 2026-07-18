@@ -585,7 +585,7 @@ public class CanonicalLinkServiceTests
 
         var result = service.TryRemoveLink(ProviderMode.Oid, "broken", "sub-1", Existing);
 
-        Assert.Equal(CanonicalLinkRemoveResult.UnknownProvider, result);
+        Assert.Equal(CanonicalLinkRemoveResult.UnknownProvider, result.Result);
     }
 
     [Fact]
@@ -623,7 +623,7 @@ public class CanonicalLinkServiceTests
         Assert.Equal(new[] { "sub-1" }, listed["kc"]);
 
         var result = service.TryRemoveLink(ProviderMode.Oid, "kc", "sub-1", Existing);
-        Assert.Equal(CanonicalLinkRemoveResult.Removed, result);
+        Assert.Equal(CanonicalLinkRemoveResult.Removed, result.Result);
         Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("sub-1"));
     }
 
@@ -638,7 +638,7 @@ public class CanonicalLinkServiceTests
 
         var result = service.TryRemoveLink(ProviderMode.Oid, "kc", "sub-1", Existing);
 
-        Assert.Equal(CanonicalLinkRemoveResult.Removed, result);
+        Assert.Equal(CanonicalLinkRemoveResult.Removed, result.Result);
         Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("sub-1"));
     }
 
@@ -655,8 +655,86 @@ public class CanonicalLinkServiceTests
 
         var result = service.TryRemoveLink(ProviderMode.Saml, "adfs", "alice", Existing);
 
-        Assert.Equal(CanonicalLinkRemoveResult.Removed, result);
+        Assert.Equal(CanonicalLinkRemoveResult.Removed, result.Result);
         Assert.False(cfg.SamlConfigs["adfs"].CanonicalLinks.ContainsKey("alice"));
+    }
+
+    [Fact]
+    public void TryRemoveLink_RemovingTheUsersLastLink_ReportsNoRemainingLink()
+    {
+        // #468: removing the user's only canonical link leaves them unable to SSO at all, so the removal
+        // reports UserRetainsAnyLink=false — the signal the controller uses to revoke live tokens.
+        var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+
+        var result = service.TryRemoveLink(ProviderMode.Oid, "kc", "sub-1", Existing);
+
+        Assert.Equal(CanonicalLinkRemoveResult.Removed, result.Result);
+        Assert.False(result.UserRetainsAnyLink);
+    }
+
+    [Fact]
+    public void TryRemoveLink_UserKeepsALinkOnAnotherProvider_ReportsRemainingLink()
+    {
+        // #468: the user still holds a link on a DIFFERENT provider (even a different protocol), so they can
+        // still SSO in — the removal reports UserRetainsAnyLink=true, and the controller must NOT revoke
+        // (avoiding a self-inflicted mass-logout of a healthy multi-link user).
+        var (service, _, _, _) = Build(c =>
+        {
+            c.OidConfigs["kc"] = new OidConfig
+            {
+                Enabled = true,
+                CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+            };
+            c.SamlConfigs["adfs"] = new SamlConfig
+            {
+                Enabled = true,
+                CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
+            };
+        });
+
+        var result = service.TryRemoveLink(ProviderMode.Oid, "kc", "sub-1", Existing);
+
+        Assert.Equal(CanonicalLinkRemoveResult.Removed, result.Result);
+        Assert.True(result.UserRetainsAnyLink);
+    }
+
+    [Fact]
+    public void TryRemoveLink_UserKeepsASecondLinkOnTheSameProvider_ReportsRemainingLink()
+    {
+        // #468: two identities on the same provider point at the same user; removing one leaves the other,
+        // so the user keeps SSO access and the removal reports UserRetainsAnyLink=true.
+        var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing, ["sub-2"] = Existing },
+        });
+
+        var result = service.TryRemoveLink(ProviderMode.Oid, "kc", "sub-1", Existing);
+
+        Assert.Equal(CanonicalLinkRemoveResult.Removed, result.Result);
+        Assert.True(result.UserRetainsAnyLink);
+    }
+
+    [Fact]
+    public void TryRemoveLink_AnotherUsersRemainingLink_DoesNotCountAsThisUsersRemainder()
+    {
+        // #468: the remainder is scoped to the UNLINKED user's id — a different user's surviving link on the
+        // same provider must not be read as this user retaining SSO access, or the controller would skip a
+        // required revoke (an under-revoke leaving the severed identity's tokens alive).
+        var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing, ["sub-other"] = Other },
+        });
+
+        var result = service.TryRemoveLink(ProviderMode.Oid, "kc", "sub-1", Existing);
+
+        Assert.Equal(CanonicalLinkRemoveResult.Removed, result.Result);
+        Assert.False(result.UserRetainsAnyLink);
     }
 
     [Fact]
@@ -666,7 +744,7 @@ public class CanonicalLinkServiceTests
 
         var result = service.TryRemoveLink(ProviderMode.Oid, "kc", "does-not-exist", Existing);
 
-        Assert.Equal(CanonicalLinkRemoveResult.NotFound, result);
+        Assert.Equal(CanonicalLinkRemoveResult.NotFound, result.Result);
     }
 
     [Fact]
@@ -680,7 +758,7 @@ public class CanonicalLinkServiceTests
 
         var result = service.TryRemoveLink(ProviderMode.Oid, "kc", "sub-1", Other);
 
-        Assert.Equal(CanonicalLinkRemoveResult.Mismatch, result);
+        Assert.Equal(CanonicalLinkRemoveResult.Mismatch, result.Result);
         Assert.Equal(Existing, cfg.OidConfigs["kc"].CanonicalLinks["sub-1"]); // untouched
     }
 
@@ -691,7 +769,7 @@ public class CanonicalLinkServiceTests
 
         var result = service.TryRemoveLink(ProviderMode.Oid, "does-not-exist", "sub-1", Existing);
 
-        Assert.Equal(CanonicalLinkRemoveResult.UnknownProvider, result);
+        Assert.Equal(CanonicalLinkRemoveResult.UnknownProvider, result.Result);
     }
 
     [Fact]
@@ -969,7 +1047,7 @@ public class CanonicalLinkServiceTests
 
         var result = service.TryRemoveLink(ProviderMode.Oid, "kc", "sub-1", Existing);
 
-        Assert.Equal(CanonicalLinkRemoveResult.Removed, result);
+        Assert.Equal(CanonicalLinkRemoveResult.Removed, result.Result);
         Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("sub-1"));
     }
 

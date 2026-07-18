@@ -48,6 +48,22 @@ internal enum CanonicalLinkRemoveResult
 }
 
 /// <summary>
+/// The outcome of a manual unlink, together with whether the target user still holds any other canonical
+/// SSO link after it. The remainder is meaningful only when <see cref="Result"/> is
+/// <see cref="CanonicalLinkRemoveResult.Removed"/> (the other outcomes change no state); the controller
+/// uses it to revoke the user's active tokens ONLY when the unlink removed their LAST link, matching the
+/// hard-lockdown posture of Unregister (#440/#468) without logging out a user who still has a working SSO
+/// identity.
+/// </summary>
+/// <param name="Result">The remove outcome.</param>
+/// <param name="UserRetainsAnyLink">
+/// Whether any SAML or OpenID provider still holds a canonical link pointing at the unlinked user,
+/// evaluated in the SAME transaction as the removal. Only defined when <paramref name="Result"/> is
+/// <see cref="CanonicalLinkRemoveResult.Removed"/>; false on the no-op outcomes.
+/// </param>
+internal readonly record struct CanonicalLinkRemoval(CanonicalLinkRemoveResult Result, bool UserRetainsAnyLink);
+
+/// <summary>
 /// The account-linking workflow behind the SSO login and admin endpoints: it resolves an SSO identity
 /// to a Jellyfin account (reusing an existing canonical link, adopting a pre-existing account, or
 /// creating one), migrates legacy username-keyed links to the stable subject key (#155), and revokes
@@ -379,14 +395,14 @@ internal sealed class CanonicalLinkService
     /// <param name="provider">The provider the link belongs to.</param>
     /// <param name="canonicalName">The provider-side identity key whose link is removed.</param>
     /// <param name="jellyfinUserId">The Jellyfin user the link must belong to.</param>
-    /// <returns>The remove outcome.</returns>
-    internal CanonicalLinkRemoveResult TryRemoveLink(ProviderMode mode, string provider, string canonicalName, Guid jellyfinUserId)
+    /// <returns>The remove outcome, plus whether the user retains any other link (#468).</returns>
+    internal CanonicalLinkRemoval TryRemoveLink(ProviderMode mode, string provider, string canonicalName, Guid jellyfinUserId)
     {
-        // Kept as ONE Mutate (find, ownership check, and remove cannot interleave). A no-result outcome
-        // still persists the unchanged config. For NotFound / Mismatch that already matched the old
-        // controller code (its mutate callback ran to completion and persisted a no-op); for
-        // UnknownProvider it is a deliberate small delta — the old code threw KeyNotFoundException out of
-        // the callback before the persist, so the unknown-provider DELETE did not write, whereas this
+        // Kept as ONE Mutate (find, ownership check, remove, and the last-link check cannot interleave). A
+        // no-result outcome still persists the unchanged config. For NotFound / Mismatch that already
+        // matched the old controller code (its mutate callback ran to completion and persisted a no-op);
+        // for UnknownProvider it is a deliberate small delta — the old code threw KeyNotFoundException out
+        // of the callback before the persist, so the unknown-provider DELETE did not write, whereas this
         // returns UnknownProvider normally and Mutate<T> then persists. The config content and the HTTP
         // response are byte-identical either way, it is admin-gated, and it adds no new capability (the
         // valid-provider + bogus-name DELETE already forced the same no-op write). A read-probe-then-
@@ -398,21 +414,28 @@ internal sealed class CanonicalLinkService
             // fail-open nothing while blocking exactly that cleanup (#380). Only absence is unknown here.
             if (!TryGetLinks(configuration, mode, provider, requireEnabled: false, out var links))
             {
-                return CanonicalLinkRemoveResult.UnknownProvider;
+                return new CanonicalLinkRemoval(CanonicalLinkRemoveResult.UnknownProvider, UserRetainsAnyLink: false);
             }
 
             if (!links.TryGetValue(canonicalName, out var linkedId))
             {
-                return CanonicalLinkRemoveResult.NotFound;
+                return new CanonicalLinkRemoval(CanonicalLinkRemoveResult.NotFound, UserRetainsAnyLink: false);
             }
 
             if (linkedId != jellyfinUserId)
             {
-                return CanonicalLinkRemoveResult.Mismatch;
+                return new CanonicalLinkRemoval(CanonicalLinkRemoveResult.Mismatch, UserRetainsAnyLink: false);
             }
 
             links.Remove(canonicalName);
-            return CanonicalLinkRemoveResult.Removed;
+
+            // Whether the user keeps any other canonical link across ALL providers, read in the SAME
+            // transaction as the removal (#468): computing it here rather than in a second lock acquisition
+            // means a concurrent link add/remove cannot interleave between the remove and the check and
+            // mislead the controller's last-link revocation decision. Fail toward availability at the exact
+            // boundary — the user is deemed to still have SSO access unless this proves otherwise.
+            var retainsAnyLink = UserHasAnyLink(configuration, jellyfinUserId);
+            return new CanonicalLinkRemoval(CanonicalLinkRemoveResult.Removed, retainsAnyLink);
         });
     }
 
@@ -480,6 +503,25 @@ internal sealed class CanonicalLinkService
 
             return removed;
         });
+    }
+
+    // Whether any SAML or OpenID provider still holds a canonical link pointing at the user, read under the
+    // caller's already-held config lock (#468). A provider stored with a null config object (reachable via
+    // the null-body add, #350) holds no links and is skipped rather than dereferenced — the same fail-closed
+    // treatment TryGetLinks / RemoveUserEverywhere give it. Short-circuits on the first match. Static and
+    // parameterized on the live configuration so it composes inside an existing Read/Mutate transaction
+    // without taking the lock again.
+    private static bool UserHasAnyLink(PluginConfiguration configuration, Guid userId)
+    {
+        foreach (var config in configuration.SamlConfigs.Values.Concat<ProviderConfigBase>(configuration.OidConfigs.Values))
+        {
+            if (config?.CanonicalLinks is { } links && links.ContainsValue(userId))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

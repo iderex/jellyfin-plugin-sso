@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Jellyfin.Plugin.SSO_Auth;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Microsoft.AspNetCore.Mvc;
+using NSubstitute;
 using Xunit;
 
 namespace Jellyfin.Plugin.SSO_Auth.Tests;
@@ -218,5 +220,28 @@ public class SSOControllerAddTests
 
         Assert.Throws<ArgumentException>(() => harness.Controller.OidAdd("kc=prod", new OidConfig()));
         Assert.False(SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs.ContainsKey("kc=prod")));
+    }
+
+    [Fact]
+    public async Task OidAdd_DisablingAProviderWithLinkedUsers_DoesNotRevokeAnyTokens()
+    {
+        // #468 documented decision — per-provider disable is intentionally NOT a token-revocation trigger.
+        // Jellyfin attributes no live session to the originating SSO provider (RevokeUserTokens is scoped to
+        // a user id, not a provider), so revoking on disable would be an unscoped mass-logout of every linked
+        // user's password and other-provider sessions too. Disabling only fails FUTURE logins closed (#343);
+        // pin that no revoke fires for the linked user when a provider is switched off via a re-add.
+        var harness = new SsoControllerHarness(c => c.OidConfigs["keycloak"] = new OidConfig
+        {
+            Enabled = true,
+            OidClientId = "client-1",
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = User },
+        });
+
+        // The config page's disable path re-adds the provider with Enabled=false; server-managed links are
+        // preserved (ServerManagedFields.Preserve), so the user stays linked but the provider is off.
+        harness.Controller.OidAdd("keycloak", new OidConfig { Enabled = false, OidClientId = "client-1" });
+
+        Assert.False(SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs["keycloak"].Enabled));
+        await harness.SessionManager.DidNotReceive().RevokeUserTokens(Arg.Any<Guid>(), Arg.Any<string?>());
     }
 }
