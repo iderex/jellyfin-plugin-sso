@@ -279,9 +279,9 @@ public class ArchitectureConformanceTests
         // Sentinel + call-site pins. The factory NAMES are the contract; require both to exist (a rename
         // must consciously update this rule), then confine each factory's invocation to the file(s) that own
         // its protocol's validation. AuthorizeSession is where the OpenID identity is built (from the
-        // role-gate result); the SAML factory is invoked from the SAML flow service's session-minting leg
-        // (SamlLoginService), where it moved with the SAML flow extraction (#160, #318 step 13) — off the
-        // controller, as the earlier comment anticipated.
+        // role-gate result); the SAML factory is invoked from the dedicated SamlAssertionValidator, the
+        // single home the SAML inbound validation moved into (#496) — downstream of every gate, so the
+        // "constructed only after complete validation" invariant is local to the validator.
         const string oidcFactory = "FromOidcRedemption";
         const string samlFactory = "FromValidatedSaml";
         var factoryMethods = typeof(VerifiedIdentity)
@@ -294,9 +294,9 @@ public class ArchitectureConformanceTests
             $"VerifiedIdentity must expose the two named validation factories ({oidcFactory}, {samlFactory}); one was renamed, so update this rule and the source-scan allow-list with it (#473).");
 
         var oidcHome = SourceFilesDeclaring(new[] { typeof(AuthorizeSession) });
-        var samlHome = SourceFilesDeclaring(new[] { typeof(SamlLoginService) });
+        var samlHome = SourceFilesDeclaring(new[] { typeof(SamlAssertionValidator) });
         AssertFactoryInvocationsConfinedTo("VerifiedIdentity." + oidcFactory + "(", oidcHome, "the OpenID redeem path (AuthorizeSession.Ready)");
-        AssertFactoryInvocationsConfinedTo("VerifiedIdentity." + samlFactory + "(", samlHome, "the SAML session-minting leg (SamlLoginService)");
+        AssertFactoryInvocationsConfinedTo("VerifiedIdentity." + samlFactory + "(", samlHome, "the SAML assertion validator (SamlAssertionValidator)");
     }
 
     // Fails if the given factory-invocation token appears in any SSO-Auth source file outside the allowed
@@ -562,16 +562,19 @@ public class ArchitectureConformanceTests
 
         Assert.True(
             controllerHits.Count == 0,
-            "A controller must not hold the SAML replay/request caches or drive the SAML challenge/validation protocol; the SAML flow lives in SamlLoginService (#160). Found: " + string.Join(" | ", controllerHits));
+            "A controller must not hold the SAML replay/request caches or drive the SAML challenge/validation protocol; the SAML flow lives in SamlLoginService and SamlAssertionValidator (#160, #496). Found: " + string.Join(" | ", controllerHits));
 
-        // Liveness against a vacuous pass: the SAML flow must actually live in SamlLoginService — a move,
-        // not a silent removal — so the flow service's own source must contain every moved token.
+        // Liveness against a vacuous pass: the SAML flow must actually live in the SAML flow tier — a move,
+        // not a silent removal — so its own source must contain every moved token. The tier is now two types:
+        // SamlLoginService owns the challenge/callback orchestration and the outstanding-request cache
+        // (SamlRequestCache, SamlAuthnRequest), and the dedicated SamlAssertionValidator owns the inbound
+        // validation and the replay cache (SamlReplayCache, ValidateSaml) it moved into (#496) — so scan both.
         var samlSource = string.Join(
             "\n",
-            SourceFilesDeclaring(new[] { typeof(SamlLoginService) }).Select(File.ReadAllText));
+            SourceFilesDeclaring(new[] { typeof(SamlLoginService), typeof(SamlAssertionValidator) }).Select(File.ReadAllText));
         Assert.True(
             markers.All(m => samlSource.Contains(m, StringComparison.Ordinal)),
-            "SamlLoginService must own the SAML challenge/callback/authenticate/link flow and its replay/request caches; otherwise the controller scan passes vacuously (#160).");
+            "The SAML flow tier (SamlLoginService + SamlAssertionValidator) must own the SAML challenge/callback/authenticate/link flow, its replay/request caches, and the inbound validation; otherwise the controller scan passes vacuously (#160, #496).");
     }
 
     [Fact]
