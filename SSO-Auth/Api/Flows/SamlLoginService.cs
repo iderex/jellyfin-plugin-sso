@@ -23,13 +23,14 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Flows;
 /// than inline on the controller.
 /// </summary>
 /// <remarks>
-/// The two SAML-specific process-wide caches live here as <c>static readonly</c> fields, one instance for the
-/// whole process exactly as they were on the controller (a fresh per-request controller reconstructs the
-/// service, so an instance field would lose the in-flight state between the challenge and its callback):
-/// <list type="bullet">
-/// <item>the one-time-use replay cache of consumed assertion IDs (<see cref="SamlReplayCache"/>), and</item>
-/// <item>the outstanding-AuthnRequest cache for InResponseTo correlation and the browser binding (<see cref="SamlRequestCache"/>, #156/#415).</item>
-/// </list>
+/// The outstanding-AuthnRequest cache for InResponseTo correlation and the browser binding
+/// (<see cref="SamlRequestCache"/>, #156/#415) lives here as a <c>static readonly</c> field, one instance for
+/// the whole process exactly as it was on the controller (a fresh per-request controller reconstructs the
+/// service, so an instance field would lose the in-flight state between the challenge and its callback). The
+/// inbound-assertion validation — signature/time/audience/recipient, the one-time replay cache, and the sole
+/// SAML <see cref="VerifiedIdentity"/> construction — moved into the dedicated
+/// <see cref="SamlAssertionValidator"/> (#496); this service keeps the InResponseTo correlation because that
+/// is request-issued session-fixation correlation, not assertion validation.
 /// The shared per-client rate limiter is deliberately NOT here — it also fronts the OpenID flow, so it lives
 /// in the shared <see cref="SsoRateLimitGate"/> (Api/Shared) that the controller's endpoints front this
 /// service with, rather than as a per-flow static (#160). The methods take the
@@ -40,15 +41,6 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Flows;
 /// </remarks>
 internal sealed class SamlLoginService
 {
-    // The SAML attribute name the whole RBAC design hinges on (the role allow-list check and the derived
-    // authorize-state privileges both read it). One definition site so every read agrees on the exact
-    // attribute the identity provider must send (#370).
-    private const string RoleAttributeName = "Role";
-
-    // One-time-use tracking for consumed SAML assertion IDs (replay protection). One process-wide instance,
-    // like the outstanding-request cache below and the OpenID caches the sibling flow service keeps.
-    private static readonly SamlReplayCache SamlReplays = new SamlReplayCache();
-
     // Outstanding SAML AuthnRequest IDs, for InResponseTo correlation of solicited responses (#156) and the
     // browser binding (#415). One process-wide instance.
     private static readonly SamlRequestCache SamlRequests = new SamlRequestCache();
@@ -67,6 +59,12 @@ internal sealed class SamlLoginService
     // manual-link redeem; the controller keeps the caller-authz guard and the one-time-use consume around it.
     private readonly CanonicalLinkService _canonicalLinks;
 
+    // The dedicated inbound-assertion validator (#496): parse + signature/time/audience/recipient/algorithm
+    // validation, the one-time replay consume, the non-empty-NameID guard, and the sole SAML
+    // FromValidatedSaml construction site. Constructed per request with this service, but it owns the
+    // process-wide replay cache as a static, so replay state survives the two-step post-then-authenticate legs.
+    private readonly SamlAssertionValidator _validator;
+
     private readonly ILogger _logger;
 
     internal SamlLoginService(
@@ -77,6 +75,7 @@ internal sealed class SamlLoginService
         _loginCompletion = loginCompletion ?? throw new ArgumentNullException(nameof(loginCompletion));
         _canonicalLinks = canonicalLinks ?? throw new ArgumentNullException(nameof(canonicalLinks));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _validator = new SamlAssertionValidator(logger);
     }
 
     // Test-only: clears the outstanding-SAML-request cache so a prior test's seeded or in-flight entry
@@ -126,21 +125,22 @@ internal sealed class SamlLoginService
         // content-type binds null (the form value provider is skipped, so Request.Form is never
         // touched and cannot throw the InvalidOperationException that escaped as a 500, #206), and a
         // null body is rejected the same way as any other malformed response — a clean 400.
-        if (!SamlResponseLoader.TryParse(config.SamlCertificate, formSamlResponse, out var samlResponse)
-            || !IsSamlResponseValid(request, samlResponse, config, provider))
+        var requestBase = GetRequestBase(request, config.SchemeOverride, config.PortOverride, config.BaseUrlOverride);
+        if (!_validator.TryValidate(config, provider, requestBase, formSamlResponse, out var samlResponse))
         {
-            // A malformed response (non-base64, malformed XML, prohibited DOCTYPE) fails TryLoad and
-            // is rejected the same way an invalid one is — a clean 4xx, never an unhandled 500 (#199).
+            // A malformed response (non-base64, malformed XML, prohibited DOCTYPE) or a failed
+            // signature/time/audience/recipient check is rejected the same way — a clean 4xx, never an
+            // unhandled 500 (#199).
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
 
-        if (SamlLoginPolicy.IsLoginAllowed(samlResponse.GetCustomAttributes(RoleAttributeName), config.Roles))
+        if (SamlLoginPolicy.IsLoginAllowed(SamlAssertionValidator.GetAssertionRoles(samlResponse), config.Roles))
         {
             return FlowResponses.AuthPage(response, nonce =>
                 WebResponse.Generator(
                     data: Convert.ToBase64String(Encoding.UTF8.GetBytes(samlResponse.Xml)),
                     provider: provider,
-                    baseUrl: GetRequestBase(request, config.SchemeOverride, config.PortOverride, config.BaseUrlOverride),
+                    baseUrl: requestBase,
                     mode: "SAML",
                     nonce: nonce,
                     isLinking: isLinking));
@@ -149,7 +149,7 @@ internal sealed class SamlLoginService
         _logger.LogWarning(
             "SAML user: {UserId} has insufficient roles: {@Roles}. Expected any one of: {@ExpectedRoles}",
             samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty),
-            samlResponse.GetCustomAttributes(RoleAttributeName).Select(r => r?.ReplaceLineEndings(string.Empty)),
+            SamlAssertionValidator.GetAssertionRoles(samlResponse).Select(r => r?.ReplaceLineEndings(string.Empty)),
             config.Roles);
         return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
     }
@@ -277,8 +277,8 @@ internal sealed class SamlLoginService
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.UnknownProvider));
         }
 
-        if (!SamlResponseLoader.TryParse(config.SamlCertificate, response?.Data, out var samlResponse)
-            || !IsSamlResponseValid(request, samlResponse, config, provider))
+        var requestBase = GetRequestBase(request, config.SchemeOverride, config.PortOverride, config.BaseUrlOverride);
+        if (!_validator.TryValidate(config, provider, requestBase, response?.Data, out var samlResponse))
         {
             // Malformed input is rejected the same way an invalid response is — clean 4xx, not 500 (#199).
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
@@ -323,7 +323,7 @@ internal sealed class SamlLoginService
         // Enforce the login allow-list here too, not only at the assertion-consumer page: a caller
         // can POST an assertion straight to this session-minting endpoint and skip the page, so
         // checking it only there would be fail-open.
-        if (!SamlLoginPolicy.IsLoginAllowed(samlResponse.GetCustomAttributes(RoleAttributeName), config.Roles))
+        if (!SamlLoginPolicy.IsLoginAllowed(SamlAssertionValidator.GetAssertionRoles(samlResponse), config.Roles))
         {
             _logger.LogWarning(
                 "SAML user: {UserId} has insufficient roles at the session-minting endpoint; login denied.",
@@ -331,41 +331,20 @@ internal sealed class SamlLoginService
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
         }
 
-        // Enforce one-time use so a captured assertion cannot be replayed to mint another session.
-        // Enforced only here (the session-minting endpoint), not at the SAML/post ACS which merely
-        // renders the intermediate page, so the two-step post-then-auth flow consumes the id once. A
-        // replay is a client-caused 400 in the uniform SAML body — it no longer discloses the replay
-        // cache to the attacker who replayed, and the log-side diagnosis is unchanged.
-        if (!TryConsumeSamlReplay(samlResponse, provider))
+        // Complete the assertion validation in the dedicated validator: the one-time replay consume and the
+        // non-empty-NameID guard, then — and only then — the verified identity through FromValidatedSaml
+        // (#496). A replay fails as an invalid response and a missing NameID as a denial, the same outcomes
+        // this endpoint returned when those checks were inline. From here the SAML and OpenID paths are one:
+        // the verified identity flows into the shared completion tail (SAML keys the link on the NameID and
+        // carries no email_verified claim, so AdoptionGate.None; the resolver's admin-adoption refusal, #218,
+        // still applies).
+        if (!_validator.TryProduceVerifiedIdentity(config, provider, samlResponse, out var identity, out var rejection))
         {
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
+            return LoginStatusMapper.ToActionResult(rejection);
         }
 
-        // Derive the authorize-state privileges (admin, Live TV, Live TV management, folders) from
-        // the assertion's roles and the provider configuration. Login validity was already decided
-        // above by SamlLoginPolicy and the username is the assertion's NameID, so neither is derived
-        // here.
-        var derived = SamlAuthorizeStateBuilder.Build(samlResponse.GetCustomAttributes(RoleAttributeName), config);
-
-        // Fail closed (#95): an assertion without a usable NameID carries no identity to log in —
-        // reject it as an invalid login instead of failing downstream on a null canonical name.
-        // Whitespace-only counts as unresolved (Jellyfin's username validation rejects it anyway).
-        var nameId = samlResponse.GetNameID();
-        if (string.IsNullOrWhiteSpace(nameId))
-        {
-            _logger.LogWarning("SAML login denied: the assertion resolved no NameID.");
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
-        }
-
-        // All SAML validation has now passed — signature, time bounds, audience, recipient, InResponseTo
-        // correlation, the login allow-list, replay one-time-use, and the non-empty-NameID guard — so this
-        // is the point at which the response becomes a fully-verified SAML identity (#473). SAML keys the
-        // link directly on the NameID (subject and username are the same value; no migration path needed)
-        // and carries no email_verified claim, so the verified-email gate is not applicable
-        // (AdoptionGate.None); the resolver's unconditional admin-adoption refusal (#218) still applies.
-        // From here the SAML and OpenID paths are one.
         return await _loginCompletion.CompleteAsync(
-            VerifiedIdentity.FromValidatedSaml(provider, nameId, derived),
+            identity,
             response,
             config,
             AdoptionGate.None,
@@ -393,8 +372,8 @@ internal sealed class SamlLoginService
             return new BadRequestObjectResult(LoginStatusMapper.NoMatchingProviderMessage);
         }
 
-        if (!SamlResponseLoader.TryParse(config.SamlCertificate, response?.Data, out var samlResponse)
-            || !IsSamlResponseValid(request, samlResponse, config, provider))
+        var requestBase = GetRequestBase(request, config.SchemeOverride, config.PortOverride, config.BaseUrlOverride);
+        if (!_validator.TryValidate(config, provider, requestBase, response?.Data, out var samlResponse))
         {
             // Malformed input is rejected the same way an invalid response is — clean 4xx, not 500 (#199).
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
@@ -405,7 +384,7 @@ internal sealed class SamlLoginService
         // so InResponseTo is not correlated here — the replay cache is the applicable one-time-use
         // control. A replay is a client-caused 400 in the uniform SAML body, never a 500, and no longer
         // discloses the replay cache to the attacker who replayed.
-        if (!TryConsumeSamlReplay(samlResponse, provider))
+        if (!_validator.TryConsumeReplay(samlResponse, provider))
         {
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
@@ -429,8 +408,9 @@ internal sealed class SamlLoginService
     // server-managed runtime state on the provider config. A non-linking challenge derives the spelling
     // from the request path (a `.../start/...` route means the new path) and stores it, so a later linking
     // flow — which cannot know which redirect path the identity provider has registered — reuses the last
-    // login's spelling. A linking challenge only reads the stored value. (See ExpectedAcsUrls for the same
-    // reason this value is remembered across requests.) Mirrors OidcLoginService.ResolveChallengeNewPath —
+    // login's spelling. A linking challenge only reads the stored value. (See SamlAssertionValidator's
+    // ExpectedAcsUrls for the same reason this value is remembered across requests.) Mirrors
+    // OidcLoginService.ResolveChallengeNewPath —
     // the type is known here, so the record is a direct assignment.
     private static bool ResolveChallengeNewPath(SamlConfig config, bool isLinking, HttpRequest request)
     {
@@ -471,84 +451,6 @@ internal sealed class SamlLoginService
 
             return request.GetSignedRedirectUrl(endpoint, relayState, signingKey);
         }
-    }
-
-    // Consumes the SAML assertion's ID against the provider-scoped replay cache for one-time use.
-    // Returns false when the assertion was already used (or carries no ID — a missing ID stays empty,
-    // so TryConsume fails closed). The key is scoped by provider so two IdPs emitting the same assertion
-    // ID cannot block each other. Shared by the session mint and the account linking (#219).
-    private static bool TryConsumeSamlReplay(SamlResponse samlResponse, string provider)
-    {
-        var samlNow = DateTime.UtcNow;
-        var replayRetention = SamlReplayCache.ComputeRetention(samlNow, samlResponse.GetNotOnOrAfter());
-        var assertionId = samlResponse.GetAssertionId();
-        var replayKey = ProviderScopedKey.For(provider, assertionId);
-        return SamlReplays.TryConsume(replayKey, replayRetention, samlNow);
-    }
-
-    // Validates the SAML response and, on failure, logs the declared signature algorithm plus the
-    // weak-algorithm remediation hint. This lets an operator tell a rejected SHA-1 signature - the
-    // expected post-upgrade lockout of a legacy IdP - apart from a bad certificate, an expired
-    // assertion, or an audience mismatch, all of which otherwise surface as the same opaque error.
-    private bool IsSamlResponseValid(HttpRequest request, SamlResponse samlResponse, SamlConfig config, string provider)
-    {
-        if (!ValidateSaml(samlResponse, config))
-        {
-            // The algorithm URI is identity-provider-controlled; strip line endings inline at the log
-            // call to prevent log forging (a helper-boundary sanitizer is not recognized by CodeQL).
-            _logger.LogWarning(
-                "SAML response validation failed (signature algorithm: {Algorithm}). SHA-1 is rejected; if that is the identity provider's algorithm, reconfigure it to sign with RSA/ECDSA-SHA-256 or stronger.",
-                samlResponse.GetSignatureAlgorithm()?.ReplaceLineEndings(string.Empty));
-            return false;
-        }
-
-        // Endpoint binding (#156, opt-in): the signed assertion must be addressed to this service
-        // provider's assertion-consumer URL, so an assertion minted for a different endpoint (or a
-        // different SP sharing the identity provider) cannot be presented here.
-        if (config.ValidateRecipient
-            && !SamlRecipientValidator.IsBound(samlResponse.GetRecipient(), samlResponse.GetDestination(), ExpectedAcsUrls(request, config, provider)))
-        {
-            _logger.LogWarning("SAML response rejected: the assertion Recipient or Response Destination does not match this server's assertion-consumer URL.");
-            return false;
-        }
-
-        return true;
-    }
-
-    // The assertion-consumer URLs this service provider advertises for the provider — the same value
-    // Challenge puts in the AuthnRequest's AssertionConsumerServiceURL, so a signed Recipient (or
-    // Destination) must equal one. Both the new ("post") and legacy ("p") path spellings are returned:
-    // config.NewPath is process-wide mutable state a concurrent challenge can flip, and the Recipient
-    // reflects whichever the AuthnRequest advertised at challenge time, so accepting either avoids
-    // rejecting a valid login on a path-form flip; both are this provider's own ACS URLs.
-    //
-    // The host comes from GetRequestBase. With BaseUrlOverride set (#139) it is the pinned canonical
-    // host, so this binding is exact regardless of the request Host. Without it the host is the request
-    // Host, so the binding is only as strong as host resolution: behind a reverse proxy, configure
-    // Jellyfin's Known/Trusted Proxies (or set BaseUrlOverride) so the Host cannot be spoofed, or an
-    // attacker controlling the Host can make the expected URL match a captured assertion's Recipient
-    // (defense-in-depth, not a hard guarantee).
-    private static string[] ExpectedAcsUrls(HttpRequest request, SamlConfig config, string provider) =>
-        SsoUrlBuilder.SamlExpectedAcsUrls(GetRequestBase(request, config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), provider);
-
-    // Validates a SAML response: signature + time bounds always, plus AudienceRestriction binding to
-    // this SP unless explicitly opted out. Expected audience is the configured SamlAudience, falling
-    // back to the SamlClientId (SP entity id). Both are trimmed so the comparison matches the trimmed
-    // Issuer sent in the AuthnRequest, and an empty SamlAudience falls through to the client id.
-    internal static bool ValidateSaml(SamlResponse samlResponse, SamlConfig config)
-    {
-        if (config.DoNotValidateAudience)
-        {
-            return samlResponse.IsValid();
-        }
-
-        var expected = config.SamlAudience?.Trim();
-        if (string.IsNullOrEmpty(expected))
-        {
-            expected = config.SamlClientId?.Trim();
-        }
-
-        return samlResponse.IsValid(expected);
     }
 
     // Thin adapter feeding the live request values into the pure CanonicalBaseUrl.Resolve decision (#242) —
