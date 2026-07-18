@@ -58,21 +58,41 @@ internal enum CanonicalLinkRemoveResult
 /// </summary>
 internal sealed class CanonicalLinkService
 {
+    // The once-per-interval throttle for the two terminal pending-legacy-link warnings (the
+    // CreateNewAccount-orphan and RejectNameTaken-migratable branches). It is PROCESS-WIDE (static) on
+    // purpose: this service is constructed per request by the controller, so an instance field would
+    // reset every login and throttle nothing. During an upgrade window a hot login loop for a
+    // not-yet-migrated user would otherwise re-emit the same warning on every attempt (CWE-400,
+    // log-volume — #362/#358); the shared gate bounds that to one line per interval across all requests.
+    // A one-minute interval matches the sibling cap-warn gates (OidcStateStore / SamlRequestCache, #246).
+    // Tests inject a fresh gate + a fake clock so the throttle is deterministic and never leaks its cursor
+    // across cases.
+    private static readonly IntervalGate SharedLegacyLinkWarnGate = new(TimeSpan.FromMinutes(1));
+
     private readonly IUserManager _userManager;
     private readonly ICryptoProvider _cryptoProvider;
     private readonly ProviderConfigStore _configStore;
     private readonly ILogger _logger;
+    private readonly IntervalGate _legacyLinkWarnGate;
+    private readonly Func<DateTime> _clock;
 
     internal CanonicalLinkService(
         IUserManager userManager,
         ICryptoProvider cryptoProvider,
         ProviderConfigStore configStore,
-        ILogger logger)
+        ILogger logger,
+        IntervalGate legacyLinkWarnGate = null,
+        Func<DateTime> clock = null)
     {
         _userManager = userManager ?? throw new ArgumentNullException(nameof(userManager));
         _cryptoProvider = cryptoProvider ?? throw new ArgumentNullException(nameof(cryptoProvider));
         _configStore = configStore ?? throw new ArgumentNullException(nameof(configStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+
+        // Production leaves both null and gets the process-wide gate + wall clock; tests pass a fresh gate
+        // and a fake clock so the throttle stays deterministic and isolated per case.
+        _legacyLinkWarnGate = legacyLinkWarnGate ?? SharedLegacyLinkWarnGate;
+        _clock = clock ?? (() => DateTime.UtcNow);
     }
 
     /// <summary>
@@ -195,10 +215,11 @@ internal sealed class CanonicalLinkService
         // fresh-account creation (the name was freed by a rename), and only the outcome
         // branch below can label it accurately — the fresh-account case is a SUCCESSFUL login that
         // silently orphans the original account, not a "refused" one, so a single pre-gate line would
-        // mislabel exactly the event an operator most needs to see. Each terminal branch emits one
-        // line (not deduplicated: a cross-request throttle would need process-wide state on this
-        // per-request service, which would leak across tests), so during an upgrade window it is a
-        // stream — enough to identify who still needs migrating, scanned expecting volume.
+        // mislabel exactly the event an operator most needs to see. Each terminal branch emits its one
+        // line through the shared once-per-interval gate (#362): a hot login loop for a not-yet-migrated
+        // user is bounded to one warning per interval instead of one per attempt, so an upgrade window is
+        // a heartbeat naming who still needs migrating rather than a flood. Only the WARNING FREQUENCY is
+        // throttled — the refusal throw and the fresh-account creation still run on every login.
 
         // Adoption of a pre-existing unlinked account still matches on the display name resolved above.
         var decision = AccountLinkResolver.Resolve(linkedUserId, existingAccountUserId, allowExistingAccountLink);
@@ -244,7 +265,7 @@ internal sealed class CanonicalLinkService
 
             case AccountLinkAction.CreateNewAccount:
             {
-                if (legacyLink.HasValue)
+                if (legacyLink.HasValue && _legacyLinkWarnGate.TryEnter(_clock()))
                 {
                     // The dangerous, previously-silent case (#354/#361): a legacy username-keyed link
                     // exists and its target still exists, but no live account bears the name anymore (the
@@ -254,7 +275,9 @@ internal sealed class CanonicalLinkService
                     // provision a FRESH account under this subject, leaving the original — the one the
                     // legacy key points at — orphaned from this identity. This warning is the single
                     // observable signal of that outcome; recover by linking the original account to this
-                    // subject via the admin endpoints. See the upgrade runbook in providers.md.
+                    // subject via the admin endpoints. See the upgrade runbook in providers.md. Throttled
+                    // through the shared once-per-interval gate (#362) so a login loop cannot flood it; the
+                    // account is still provisioned on every login regardless of whether the line is emitted.
                     _logger.LogWarning(
                         "SSO login for {Name} via {Mode}/{Provider}: a legacy username-keyed link exists but no live account bears the name (it was renamed on the Jellyfin side), so a fresh account is being provisioned and the original account is now orphaned. Re-link it to this subject via the admin endpoints.",
                         username?.ReplaceLineEndings(string.Empty),
@@ -280,12 +303,17 @@ internal sealed class CanonicalLinkService
                 {
                     // Refused, but specifically because a legacy username-keyed link (#354) is pending
                     // and a live account still bears the name — the migratable case, distinct from an
-                    // ordinary #95 name collision. One line, so the reject path is not double-logged.
-                    _logger.LogWarning(
-                        "SSO login for {Name} via {Mode}/{Provider} refused: a legacy username-keyed link is pending but AllowExistingAccountLink is off and a live account still bears the name. Enable AllowExistingAccountLink (a short controlled window) or link the account via the admin endpoints to migrate it.",
-                        username?.ReplaceLineEndings(string.Empty),
-                        mode.ToToken(),
-                        provider?.ReplaceLineEndings(string.Empty));
+                    // ordinary #95 name collision. Throttled through the shared once-per-interval gate
+                    // (#362) so a login loop for a not-yet-migrated user cannot flood it; the refusal below
+                    // still throws on every login regardless of whether this line is emitted.
+                    if (_legacyLinkWarnGate.TryEnter(_clock()))
+                    {
+                        _logger.LogWarning(
+                            "SSO login for {Name} via {Mode}/{Provider} refused: a legacy username-keyed link is pending but AllowExistingAccountLink is off and a live account still bears the name. Enable AllowExistingAccountLink (a short controlled window) or link the account via the admin endpoints to migrate it.",
+                            username?.ReplaceLineEndings(string.Empty),
+                            mode.ToToken(),
+                            provider?.ReplaceLineEndings(string.Empty));
+                    }
                 }
                 else
                 {

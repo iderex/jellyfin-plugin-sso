@@ -40,7 +40,12 @@ public class CanonicalLinkServiceTests
         var store = new ProviderConfigStore(() => cfg, _ => { }, new CapturingLogger());
         var users = Substitute.For<IUserManager>();
         var log = new CapturingLogger();
-        var service = new CanonicalLinkService(users, new FakeCryptoProvider(), store, log);
+
+        // Inject a FRESH legacy-link-warning gate per service so the process-wide static gate (#362) never
+        // leaks its cursor across cases: a fresh gate starts at MinValue, so the single warning each of the
+        // legacy-link tests provokes always enters. The dedicated throttle test below drives its own gate +
+        // fake clock to pin the once-per-interval bound.
+        var service = new CanonicalLinkService(users, new FakeCryptoProvider(), store, log, new IntervalGate(TimeSpan.FromMinutes(1)));
         return (service, cfg, users, log);
     }
 
@@ -209,6 +214,60 @@ public class CanonicalLinkServiceTests
         Assert.Single(warnings);
         Assert.Contains("orphaned", warnings[0].Message, StringComparison.Ordinal);
         Assert.DoesNotContain("refused", warnings[0].Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_PendingLegacyLinkWarning_IsThrottledToOncePerInterval()
+    {
+        // #362 (CWE-400, log-volume): the terminal pending-legacy-link warning must be bounded to one line
+        // per interval so a hot login loop for a not-yet-migrated user cannot flood the log. The reject
+        // branch is idempotent (it throws and writes nothing), so repeating the same login re-enters the
+        // warning site every time — exactly the loop the gate must throttle. A fresh gate + a fake clock the
+        // test advances pins the once-per-interval bound deterministically, and the refusal must still throw
+        // on every attempt regardless of whether the line is emitted.
+        var cfg = new PluginConfiguration();
+        cfg.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
+        };
+        var store = new ProviderConfigStore(() => cfg, _ => { }, new CapturingLogger());
+        var users = Substitute.For<IUserManager>();
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
+        var log = new CapturingLogger();
+
+        var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var service = new CanonicalLinkService(
+            users,
+            new FakeCryptoProvider(),
+            store,
+            log,
+            new IntervalGate(TimeSpan.FromMinutes(1)),
+            () => now);
+
+        async Task AttemptRefusedLogin() =>
+            await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
+                service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "attacker-sub", "alice", allowExistingAccountLink: false));
+
+        int LegacyWarnings() => log.Entries
+            .FindAll(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning
+                && e.Message.Contains("legacy username-keyed link", StringComparison.Ordinal))
+            .Count;
+
+        // Three refused logins inside one interval: the first enters the gate, the next two are throttled.
+        await AttemptRefusedLogin();
+        now = now.AddSeconds(10);
+        await AttemptRefusedLogin();
+        now = now.AddSeconds(49); // t0 + 59s, still within the 1-minute interval
+        await AttemptRefusedLogin();
+        Assert.Equal(1, LegacyWarnings());
+
+        // Past the interval, one more login re-opens the gate: a second line, so the signal still surfaces
+        // periodically for triage rather than being suppressed forever.
+        now = now.AddSeconds(2); // t0 + 61s
+        await AttemptRefusedLogin();
+        Assert.Equal(2, LegacyWarnings());
     }
 
     [Fact]

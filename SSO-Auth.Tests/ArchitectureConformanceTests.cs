@@ -185,6 +185,24 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void CanonicalLinkService_ThrottlesTheLegacyLinkWarningThroughAStaticIntervalGate()
+    {
+        // Locked in by #362 (CWE-400, log-volume): the terminal pending-legacy-link warnings live in a
+        // service the controller constructs PER REQUEST, so the once-per-interval throttle must be a
+        // PROCESS-WIDE (static) IntervalGate — an instance field would reset every login and throttle
+        // nothing, letting a hot login loop for a not-yet-migrated user flood the log. Pin the static gate
+        // so a later refactor cannot silently demote it to an instance field (which compiles and passes the
+        // unit tests, because those inject a fresh gate) and reopen the flood.
+        var staticGate = typeof(CanonicalLinkService)
+            .GetFields(BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.DeclaredOnly)
+            .Any(f => f.FieldType == typeof(IntervalGate));
+
+        Assert.True(
+            staticGate,
+            "CanonicalLinkService must throttle its pending-legacy-link warning through a static IntervalGate (#362), because the service is constructed per request and an instance gate would throttle nothing.");
+    }
+
+    [Fact]
     public void AuthorizeStates_AreImmutableVariants()
     {
         // Locked in by #341: the in-flight OpenID authorize state is a CLOSED, IMMUTABLE sum — an
