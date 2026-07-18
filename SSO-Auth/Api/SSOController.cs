@@ -4,9 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Mime;
-using System.Security.Cryptography;
-using System.Security.Cryptography.X509Certificates;
-using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data;
 using Jellyfin.Database.Implementations.Entities;
@@ -65,17 +62,11 @@ public class SSOController : ControllerBase
     // store and the discovery-facts cache) as its own statics; the controller's OpenID endpoints apply the
     // shared rate-limit gate below and delegate here. New'd per request like the other collaborators.
     private readonly Flows.OidcLoginService _oidc;
-
-    // One-time-use tracking for consumed SAML assertion IDs (replay protection).
-    private static readonly SamlReplayCache SamlReplays = new SamlReplayCache();
-
-    // Outstanding SAML AuthnRequest IDs, for InResponseTo correlation of solicited responses (#156).
-    private static readonly SamlRequestCache SamlRequests = new SamlRequestCache();
-
-    // How long an issued SAML AuthnRequest ID stays valid for correlation — the interactive leg
-    // (challenge -> IdP login/MFA -> POST back -> mint), matching the OpenID authorize-state lifetime the
-    // flow service keeps.
-    private static readonly TimeSpan SamlRequestLifetime = TimeSpan.FromMinutes(15);
+    // The SAML login flow (#160, #318 step 13): challenge, assertion-consumer callback, session-minting
+    // authenticate, and manual link. It owns the SAML-specific process-wide caches (the replay cache and
+    // the outstanding-AuthnRequest cache) as its own statics; the controller's SAML endpoints apply the
+    // shared rate-limit gate below and delegate here. New'd per request like the other collaborators.
+    private readonly Flows.SamlLoginService _saml;
 
     // Opt-in per-client rate limiter over the anonymous SSO flow endpoints (#128).
     private static readonly SsoRateLimiter RateLimiter = new SsoRateLimiter();
@@ -113,6 +104,7 @@ public class SSOController : ControllerBase
         var sessionMinter = new SessionMinter(userManager, avatarService, sessionManager, logger);
         _loginCompletion = new LoginCompletionService(_canonicalLinks, sessionMinter, logger);
         _oidc = new Flows.OidcLoginService(_loginCompletion, _canonicalLinks, httpClientFactory, loggerFactory, logger);
+        _saml = new Flows.SamlLoginService(_loginCompletion, _canonicalLinks, logger);
         _logger.LogInformation("SSO Controller initialized");
     }
 
@@ -136,8 +128,8 @@ public class SSOController : ControllerBase
 
         // The OpenID redirect callback lives in the flow service (#160, #318): it validates the
         // browser-bound state, exchanges the code, validates the id_token and RFC 9207 response issuer,
-        // applies the role gate, and renders the security-headered intermediate auth page (passed in).
-        return await _oidc.CallbackAsync(provider, state, Request, HtmlAuthPage).ConfigureAwait(false);
+        // applies the role gate, and renders the security-headered intermediate auth page on the response.
+        return await _oidc.CallbackAsync(provider, state, Request, Response).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -159,48 +151,6 @@ public class SSOController : ControllerBase
         // PKCE gate, prepares the authorization request, registers the browser-bound authorize state, and
         // redirects to the identity provider (setting the binding cookie on the response).
         return await _oidc.ChallengeAsync(provider, isLinking, Request, Response).ConfigureAwait(false);
-    }
-
-    // Test-only: clears the outstanding-SAML-request cache so a prior test's seeded or in-flight entry
-    // (e.g. one left behind by a signature-failing response that returns before the consume) cannot leak
-    // into the next test. Same test-only surface as OidcLoginService.ResetOidStateForTests (internal,
-    // InternalsVisibleTo).
-    internal static void ResetSamlRequestsForTests() => SamlRequests.Clear();
-
-    // Test-only seed of an outstanding SAML AuthnRequest so a test can exercise SamlAuth's browser
-    // binding (#415) — normally populated by the SamlChallenge redirect leg — without deriving the
-    // random request id from the emitted AuthnRequest. Same test-only surface as SeedOidStateForTests
-    // (internal, InternalsVisibleTo, no endpoint/DI); never reachable in production.
-    internal static void SeedSamlRequestForTests(string provider, string requestId, string bindingId, DateTime expiryUtc) =>
-        SamlRequests.Register(ProviderScopedKey.For(provider, requestId), bindingId, expiryUtc, DateTime.UtcNow, clientKey: null, out _);
-
-    // Reads a provider's config under the config lock, so an anonymous login-path lookup does not race an
-    // admin Add/Del mutating the live provider dictionary in place — a Dictionary read-during-write is
-    // undefined behaviour in .NET (throw, misread, or a spin on a corrupted chain during a resize) (#252).
-    // Returns null for an unknown provider so call sites branch on a null check instead of catching
-    // KeyNotFoundException as control flow (#241). An uncontended lock is nanoseconds; it is only held long
-    // during a first-login/admin persist, which is exactly when a consistent read matters. (The OpenID twin
-    // moved into the flow service with the OID flow, #160.)
-    private static SamlConfig FindSamlConfig(string provider) =>
-        SSOPlugin.Instance.ReadConfiguration(configuration => configuration.SamlConfigs.TryGetValue(provider, out var config) ? config : null);
-
-    // Resolves whether this challenge uses the "new", more descriptive redirect path, and records that
-    // as server-managed runtime state on the provider config. A non-linking challenge derives the
-    // spelling from the request path (a `.../start/...` route means the new path) and stores it through
-    // `record`, so a later linking flow — which cannot know which redirect path the identity provider
-    // has registered — reuses the last login's spelling. A linking challenge only reads the stored
-    // value and records nothing. `record` is passed because OidConfig and SamlConfig do not share a
-    // base type. (See ExpectedAcsUrls for the same reason this value is remembered across requests.)
-    private bool ResolveChallengeNewPath(bool currentNewPath, bool isLinking, Action<bool> record)
-    {
-        if (isLinking)
-        {
-            return currentNewPath;
-        }
-
-        var newPath = ChallengePath.IsNewPath(Request.Path.Value);
-        record(newPath);
-        return newPath;
     }
 
     // Rejects a malformed canonical base-URL override (#139) at the OID/SAML Add endpoints. These persist
@@ -420,53 +370,10 @@ public class SSOController : ControllerBase
             return throttled;
         }
 
-        // Unknown and disabled providers share one rejection so neither can be probed apart — this
-        // retires the unique "No active providers found" wording that distinguished the disabled case
-        // (a disabled provider now short-circuits before the relayState log line).
-        var config = FindSamlConfig(provider);
-        if (config is not { Enabled: true })
-        {
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.UnknownProvider));
-        }
-
-        bool isLinking = string.Equals(relayState, "linking", StringComparison.Ordinal);
-
-        // relayState is attacker-controllable; strip line endings inline at the log call to prevent
-        // log forging (structured logging alone does not sanitize a newline-bearing value).
-        _logger.LogInformation(
-            "SAML request has relayState of {RelayState}",
-            relayState?.ReplaceLineEndings(string.Empty));
-
-        // Bind SAMLResponse via [FromForm] rather than reading Request.Form directly: a non-form
-        // content-type binds null (the form value provider is skipped, so Request.Form is never
-        // touched and cannot throw the InvalidOperationException that escaped as a 500, #206), and a
-        // null body is rejected the same way as any other malformed response — a clean 400.
-        if (!SamlResponseLoader.TryParse(config.SamlCertificate, formSamlResponse, out var samlResponse)
-            || !IsSamlResponseValid(samlResponse, config, provider))
-        {
-            // A malformed response (non-base64, malformed XML, prohibited DOCTYPE) fails TryLoad and
-            // is rejected the same way an invalid one is — a clean 4xx, never an unhandled 500 (#199).
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
-        }
-
-        if (SamlLoginPolicy.IsLoginAllowed(samlResponse.GetCustomAttributes("Role"), config.Roles))
-        {
-            return HtmlAuthPage(nonce =>
-                WebResponse.Generator(
-                    data: Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(samlResponse.Xml)),
-                    provider: provider,
-                    baseUrl: GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride),
-                    mode: "SAML",
-                    nonce: nonce,
-                    isLinking: isLinking));
-        }
-
-        _logger.LogWarning(
-            "SAML user: {UserId} has insufficient roles: {@Roles}. Expected any one of: {@ExpectedRoles}",
-            samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty),
-            samlResponse.GetCustomAttributes("Role").Select(r => r?.ReplaceLineEndings(string.Empty)),
-            config.Roles);
-        return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
+        // The SAML assertion-consumer callback lives in the flow service (#160, #318): it validates the
+        // signed response and, on a passing role gate, renders the security-headered intermediate auth
+        // page on the response.
+        return _saml.Post(provider, relayState, formSamlResponse, Request, Response);
     }
 
     /// <summary>
@@ -484,121 +391,10 @@ public class SSOController : ControllerBase
             return throttled;
         }
 
-        // Unknown and disabled providers share one rejection so neither can be probed apart, and the
-        // answer no longer depends on host middleware mapping a thrown ArgumentException (#318).
-        var config = FindSamlConfig(provider);
-        if (config is not { Enabled: true })
-        {
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.UnknownProvider));
-        }
-
-        bool newPath = ResolveChallengeNewPath(config.NewPath, isLinking, value => config.NewPath = value);
-
-        string redirectUri = SsoUrlBuilder.SamlAcsUrl(GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), newPath, provider);
-        string relayState = null;
-        if (isLinking)
-        {
-            relayState = "linking";
-        }
-
-        var request = new SamlAuthnRequest(
-            config.SamlClientId.Trim(),
-            redirectUri);
-
-        // Bind this login to the initiating browser (#415): mint a binding id, set it as a cookie, and
-        // record it against the request id so the session-mint endpoint (SamlAuth) can require the
-        // response's browser to be the one that started the flow — closing the SP-initiated forced-login
-        // / session-fixation vector, the SAML analogue of #326. Only for login flows: the linking
-        // callback (SamlLink) is a separate flow that does not consume the outstanding request, so a
-        // linking registration would only leave an id to expire unused. Registration now happens for
-        // every login challenge (not only under ValidateInResponseTo), so the binding is enforced for
-        // every SOLICITED login this plugin initiated — the case ValidateInResponseTo alone left open.
-        // It does NOT bind an unsolicited (IdP-initiated) response, which carries no matching request;
-        // fully closing forced login for an IdP that issues unsolicited responses additionally requires
-        // ValidateInResponseTo (which refuses them). Because the cookie is __Host-/Secure, the browser
-        // only returns it over HTTPS — SP-initiated SAML now needs HTTPS at the browser edge, as OIDC
-        // already does.
-        if (!isLinking)
-        {
-            var bindingId = AuthorizeStateBinding.NewId();
-
-            // The client key bounds how much of the request cache one source can occupy (#327); a
-            // proxy/private source normalizes to null and is exempt.
-            var clientKey = SsoRateLimiter.NormalizeClientKey(HttpContext.Connection.RemoteIpAddress);
-            if (!SamlRequests.Register(
-                    ProviderScopedKey.For(provider, request.Id),
-                    bindingId,
-                    DateTime.UtcNow + SamlRequestLifetime,
-                    DateTime.UtcNow,
-                    clientKey,
-                    out var shouldWarnCapacity))
-            {
-                // The per-client sub-cap or the global cap refused this login's outstanding-request
-                // entry (#327). Fail closed HERE rather than redirect to the IdP for a login that could
-                // then only be refused at the callback (no correlation entry). The store throttles the
-                // capacity warning to one signal per interval so a flood cannot amplify into log volume
-                // (CWE-400) — parity with the OpenID challenge refusal.
-                if (shouldWarnCapacity)
-                {
-                    _logger.LogWarning("SAML request refused for provider {Provider}: the per-client sub-cap or the outstanding-request cache is at capacity (warning throttled).", provider?.ReplaceLineEndings(string.Empty));
-                }
-
-                return ReturnError(StatusCodes.Status500InternalServerError, "Could not start login; please retry.");
-            }
-
-            Response.Cookies.Append(
-                AuthorizeStateBinding.SamlCookieName,
-                bindingId,
-                AuthorizeStateBinding.CookieOptions(SamlRequestLifetime));
-        }
-
-        string redirectUrl;
-        try
-        {
-            redirectUrl = BuildChallengeRedirectUrl(config, request, relayState);
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or CryptographicException)
-        {
-            // Signing is enabled for this provider but the request could not be signed: the key is
-            // missing/unusable (InvalidOperationException), the endpoint is empty (ArgumentException from
-            // the signer), or the platform key store refused the signing operation (CryptographicException).
-            // ANY of these fails closed with a clean 500 — never a silent unsigned request — rather than
-            // escaping as a raw host 500. The key material is not part of the message, so nothing sensitive
-            // is logged.
-            _logger.LogError("SAML challenge for provider {Provider} could not sign the AuthnRequest: {Reason}", provider?.ReplaceLineEndings(string.Empty), ex.Message);
-            return ReturnError(StatusCodes.Status500InternalServerError, "Could not start login; the SAML request signing key is misconfigured.");
-        }
-
-        return Redirect(redirectUrl);
-    }
-
-    // Builds the redirect URL to the identity provider, signing the outgoing AuthnRequest when the provider
-    // opts in (#167). Fail-closed: signing enabled but the signing key missing/unloadable throws, so the
-    // caller returns an error rather than silently sending an unsigned request — an operator who turned
-    // signing on never gets a silent downgrade. Default off is byte-for-byte the previous unsigned URL.
-    private static string BuildChallengeRedirectUrl(SamlConfig config, SamlAuthnRequest request, string relayState)
-    {
-        var endpoint = config.SamlEndpoint.Trim();
-        if (!config.SignAuthnRequests)
-        {
-            return request.GetRedirectUrl(endpoint, relayState);
-        }
-
-        if (!SamlSigningKey.TryLoad(config.SamlSigningKeyPfx, out var signingCertificate))
-        {
-            throw new InvalidOperationException("Outgoing SAML request signing is enabled but the signing key could not be loaded.");
-        }
-
-        using (signingCertificate)
-        using (var signingKey = signingCertificate.GetRSAPrivateKey())
-        {
-            if (signingKey is null)
-            {
-                throw new InvalidOperationException("Outgoing SAML request signing is enabled but the signing key has no RSA private key.");
-            }
-
-            return request.GetSignedRedirectUrl(endpoint, relayState, signingKey);
-        }
+        // The SAML challenge lives in the flow service (#160, #318): it builds the AuthnRequest, binds it
+        // to the initiating browser (setting the binding cookie on the response), signs it when the
+        // provider opts in (#167), and redirects to the identity provider.
+        return _saml.Challenge(provider, isLinking, Request, Response);
     }
 
     /// <summary>
@@ -681,106 +477,16 @@ public class SSOController : ControllerBase
             return throttled;
         }
 
-        // Unknown and disabled providers share one rejection so neither can be probed apart — this
-        // unifies the previously JSON unknown-provider body and the disabled provider's 500.
-        var config = FindSamlConfig(provider);
-        if (config is not { Enabled: true })
-        {
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.UnknownProvider));
-        }
-
-        if (!SamlResponseLoader.TryParse(config.SamlCertificate, response?.Data, out var samlResponse)
-            || !IsSamlResponseValid(samlResponse, config, provider))
-        {
-            // Malformed input is rejected the same way an invalid response is — clean 4xx, not 500 (#199).
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
-        }
-
-        // Correlate the response to an AuthnRequest this server issued (#156, #415), and enforce the
-        // browser binding for a solicited login. A NON-EMPTY InResponseTo means the response claims to
-        // answer a request this server issued, so it must actually correlate to a live outstanding
-        // request AND carry that request's binding cookie — anything less fails closed. Crucially, a
-        // non-empty InResponseTo whose entry is gone (expired past the 15-minute window, evicted at the
-        // cap, lost to a restart or a non-sticky multi-node hop) is a LOST correlation, not an
-        // unsolicited response: treating it as unsolicited would let a signature-valid response mint a
-        // session with no binding check when ValidateInResponseTo is off, which is exactly the
-        // forced-login bypass the binding exists to close (login validity must never default to true).
-        //
-        // The binding is checked AFTER the atomic claim (unlike the OpenID state, #326) and that is safe:
-        // the response already passed signature validation above and the InResponseTo is read from that
-        // validated document, so an attacker cannot mint a signature-valid response carrying a victim's
-        // request id to burn their outstanding entry. The cookie is checked here (the same-origin auth
-        // endpoint), not at the cross-site ACS POST which would not carry a SameSite=Lax cookie.
-        var inResponseTo = samlResponse.GetInResponseTo();
-        if (!string.IsNullOrEmpty(inResponseTo))
-        {
-            var requestKey = ProviderScopedKey.For(provider, inResponseTo);
-            if (!SamlRequests.TryConsume(requestKey, DateTime.UtcNow, out var storedBindingId)
-                || !AuthorizeStateBinding.Matches(storedBindingId, Request.Cookies[AuthorizeStateBinding.SamlCookieName]))
-            {
-                _logger.LogWarning("SAML login denied: a solicited response did not correlate to a live outstanding request from the initiating browser (binding mismatch, expiry, or lost correlation).");
-                return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
-            }
-        }
-        else if (config.ValidateInResponseTo)
-        {
-            // No InResponseTo at all: a genuinely unsolicited (IdP-initiated) response. It is refused
-            // only when the opt-in solicited-only mode is on; otherwise it proceeds — unchanged and
-            // non-breaking for IdP-initiated deployments. The rejection is a client-caused 400 in the
-            // uniform SAML body, never a 500, and the diagnosis stays in the warning log.
-            _logger.LogWarning("SAML login denied: the response was not solicited by this server (no InResponseTo).");
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
-        }
-
-        // Enforce the login allow-list here too, not only at the assertion-consumer page: a caller
-        // can POST an assertion straight to this session-minting endpoint and skip the page, so
-        // checking it only there would be fail-open.
-        if (!SamlLoginPolicy.IsLoginAllowed(samlResponse.GetCustomAttributes("Role"), config.Roles))
-        {
-            _logger.LogWarning(
-                "SAML user: {UserId} has insufficient roles at the session-minting endpoint; login denied.",
-                samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty));
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
-        }
-
-        // Enforce one-time use so a captured assertion cannot be replayed to mint another session.
-        // Enforced only here (the session-minting endpoint), not at the SAML/post ACS which merely
-        // renders the intermediate page, so the two-step post-then-auth flow consumes the id once. A
-        // replay is a client-caused 400 in the uniform SAML body — it no longer discloses the replay
-        // cache to the attacker who replayed, and the log-side diagnosis is unchanged.
-        if (!TryConsumeSamlReplay(samlResponse, provider))
-        {
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
-        }
-
-        // Derive the authorize-state privileges (admin, Live TV, Live TV management, folders) from
-        // the assertion's roles and the provider configuration. Login validity was already decided
-        // above by SamlLoginPolicy and the username is the assertion's NameID, so neither is derived
-        // here.
-        var derived = SamlAuthorizeStateBuilder.Build(samlResponse.GetCustomAttributes("Role"), config);
-
-        // Fail closed (#95): an assertion without a usable NameID carries no identity to log in —
-        // reject it as an invalid login instead of failing downstream on a null canonical name.
-        // Whitespace-only counts as unresolved (Jellyfin's username validation rejects it anyway).
-        var nameId = samlResponse.GetNameID();
-        if (string.IsNullOrWhiteSpace(nameId))
-        {
-            _logger.LogWarning("SAML login denied: the assertion resolved no NameID.");
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
-        }
-
-        // All SAML validation has now passed — signature, time bounds, audience, recipient, InResponseTo
-        // correlation, the login allow-list, replay one-time-use, and the non-empty-NameID guard — so this
-        // is the point at which the response becomes a fully-verified SAML identity (#473). SAML keys the
-        // link directly on the NameID (subject and username are the same value; no migration path needed)
-        // and carries no email_verified claim, so the verified-email gate is not applicable
-        // (AdoptionGate.None); the resolver's unconditional admin-adoption refusal (#218) still applies.
-        // From here the SAML and OpenID paths are one.
-        return await _loginCompletion.CompleteAsync(
-            VerifiedIdentity.FromValidatedSaml(provider, nameId, derived),
+        // The SAML session-minting authenticate leg lives in the flow service (#160, #318): it validates
+        // the signed response, correlates it to an AuthnRequest this server issued (browser binding),
+        // enforces the login allow-list and one-time replay consume, and hands the verified identity to the
+        // shared completion tail. The controller passes the presented binding cookie and the
+        // HttpContext-derived remote endpoint in, keeping the flow tier HttpContext-free (#177).
+        return await _saml.AuthenticateAsync(
+            provider,
             response,
-            config,
-            AdoptionGate.None,
+            Request.Cookies[AuthorizeStateBinding.SamlCookieName],
+            Request,
             () => HttpContext.GetNormalizedRemoteIP().ToString()).ConfigureAwait(false);
     }
 
@@ -950,41 +656,12 @@ public class SSOController : ControllerBase
     /// </param>
     /// <param name="response">The data passed to the client to ensure it is the right one.</param>
     /// <returns>JSON for the client to populate information with.</returns>
-    // No [Consumes]/[Produces]: ASP.NET Core honors content-negotiation filters only on public action
-    // methods, and this is a private helper invoked directly from AddCanonicalLink, which carries its
-    // own. The attributes were inert metadata here (#393).
-    private ActionResult SamlLink(string provider, Guid jellyfinUserId, AuthResponse response)
-    {
-        // A disabled provider must neither create a link nor consume the assertion's one-time-use ID
-        // (#343): an administrator disabling a provider takes effect immediately for linking, and the
-        // unknown and disabled cases share one response so neither can be probed apart.
-        var config = FindSamlConfig(provider);
-        if (config is not { Enabled: true })
-        {
-            return BadRequest(NoMatchingProviderMessage);
-        }
-
-        if (!SamlResponseLoader.TryParse(config.SamlCertificate, response?.Data, out var samlResponse)
-            || !IsSamlResponseValid(samlResponse, config, provider))
-        {
-            // Malformed input is rejected the same way an invalid response is — clean 4xx, not 500 (#199).
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
-        }
-
-        // Enforce one-time use here too (#219): without it, a captured, still-valid assertion could be
-        // replayed to bind its NameID to the caller's account. The linking flow issues no AuthnRequest,
-        // so InResponseTo is not correlated here — the replay cache is the applicable one-time-use
-        // control. A replay is a client-caused 400 in the uniform SAML body, never a 500, and no longer
-        // discloses the replay cache to the attacker who replayed.
-        if (!TryConsumeSamlReplay(samlResponse, provider))
-        {
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
-        }
-
-        string providerUserId = samlResponse.GetNameID();
-
-        return MapWrite(_canonicalLinks.TryCreateLink("saml", provider, providerUserId, jellyfinUserId));
-    }
+    // The SAML manual-link redeem (validate the signed response, consume its one-time-use assertion id,
+    // create the link on the NameID) lives on the flow service; the controller keeps the caller-authz
+    // guard (AddCanonicalLink) and hands the request in (#160). The former [Consumes]/[Produces] on this
+    // private helper were inert (AddCanonicalLink owns the content negotiation, #393).
+    private ActionResult SamlLink(string provider, Guid jellyfinUserId, AuthResponse response) =>
+        _saml.Link(provider, jellyfinUserId, response, Request);
 
     /// <summary>
     /// Validate an OIDC link request and create the link if it is valid.
@@ -996,23 +673,12 @@ public class SSOController : ControllerBase
     /// </param>
     /// <param name="response">The data passed to the client to ensure it is the right one.</param>
     /// <returns>JSON for the client to populate information with.</returns>
-    // No [Consumes]/[Produces]: inert on a private helper (see SamlLink) — AddCanonicalLink owns the
-    // content negotiation (#393). The OID link redeem (which consumes the flow service's authorize state)
-    // lives on the flow service; the controller keeps the caller-authz guard (AddCanonicalLink) and the
-    // write-result-to-HTTP mapping it shares with SamlLink (#160).
+    // The OID link redeem (which consumes the flow service's authorize state) lives on the flow service;
+    // the controller keeps the caller-authz guard (AddCanonicalLink) and hands the binding cookie in. Both
+    // flow services now map the write result through the shared FlowResponses home (#160). The former
+    // [Consumes]/[Produces] were inert on this private helper (#393).
     private ActionResult OidLink(string provider, Guid jellyfinUserId, AuthResponse response) =>
-        _oidc.Link(provider, jellyfinUserId, response, Request.Cookies[AuthorizeStateBinding.CookieName], MapWrite);
-
-    // The HTTP boundary for a manual link creation: maps the service's closed write result to a response.
-    // The empty-key and unknown-provider refusals keep distinct bodies (the service checks the empty key
-    // first), and an unhandled result throws rather than silently returning a wrong status.
-    private ActionResult MapWrite(CanonicalLinkWriteResult result) => result switch
-    {
-        CanonicalLinkWriteResult.Created => NoContent(),
-        CanonicalLinkWriteResult.EmptyKey => BadRequest("The SSO login did not resolve an identity."),
-        CanonicalLinkWriteResult.UnknownProvider => BadRequest(NoMatchingProviderMessage),
-        _ => throw new InvalidOperationException($"Unhandled canonical-link write result: {result}"),
-    };
+        _oidc.Link(provider, jellyfinUserId, response, Request.Cookies[AuthorizeStateBinding.CookieName]);
 
     // Applies the opt-in per-client rate limit (#128) on an anonymous flow endpoint: null when the
     // request may proceed, else the throttled outcome rendered by the single mapper (#474). Reads the
@@ -1058,112 +724,5 @@ public class SSOController : ControllerBase
         // status, plain-text body and the retry-delay header all originate there, so the controller no
         // longer emits a bare rate-limit ContentResult or sets the delay header itself.
         return LoginStatusMapper.ToActionResult(new LoginOutcome.Throttled(retryAfterSeconds), Response);
-    }
-
-    // Consumes the SAML assertion's ID against the provider-scoped replay cache for one-time use.
-    // Returns false when the assertion was already used (or carries no ID — a missing ID stays empty,
-    // so TryConsume fails closed). The key is scoped by provider so two IdPs emitting the same assertion
-    // ID cannot block each other. Shared by SamlAuth (session mint) and SamlLink (account linking, #219).
-    private bool TryConsumeSamlReplay(SamlResponse samlResponse, string provider)
-    {
-        var samlNow = DateTime.UtcNow;
-        var replayRetention = SamlReplayCache.ComputeRetention(samlNow, samlResponse.GetNotOnOrAfter());
-        var assertionId = samlResponse.GetAssertionId();
-        var replayKey = ProviderScopedKey.For(provider, assertionId);
-        return SamlReplays.TryConsume(replayKey, replayRetention, samlNow);
-    }
-
-    // Validates the SAML response and, on failure, logs the declared signature algorithm plus the
-    // weak-algorithm remediation hint. This lets an operator tell a rejected SHA-1 signature - the
-    // expected post-upgrade lockout of a legacy IdP - apart from a bad certificate, an expired
-    // assertion, or an audience mismatch, all of which otherwise surface as the same opaque error.
-    private bool IsSamlResponseValid(SamlResponse samlResponse, SamlConfig config, string provider)
-    {
-        if (!ValidateSaml(samlResponse, config))
-        {
-            // The algorithm URI is identity-provider-controlled; strip line endings inline at the log
-            // call to prevent log forging (a helper-boundary sanitizer is not recognized by CodeQL).
-            _logger.LogWarning(
-                "SAML response validation failed (signature algorithm: {Algorithm}). SHA-1 is rejected; if that is the identity provider's algorithm, reconfigure it to sign with RSA/ECDSA-SHA-256 or stronger.",
-                samlResponse.GetSignatureAlgorithm()?.ReplaceLineEndings(string.Empty));
-            return false;
-        }
-
-        // Endpoint binding (#156, opt-in): the signed assertion must be addressed to this service
-        // provider's assertion-consumer URL, so an assertion minted for a different endpoint (or a
-        // different SP sharing the identity provider) cannot be presented here.
-        if (config.ValidateRecipient
-            && !SamlRecipientValidator.IsBound(samlResponse.GetRecipient(), samlResponse.GetDestination(), ExpectedAcsUrls(config, provider)))
-        {
-            _logger.LogWarning("SAML response rejected: the assertion Recipient or Response Destination does not match this server's assertion-consumer URL.");
-            return false;
-        }
-
-        return true;
-    }
-
-    // The assertion-consumer URLs this service provider advertises for the provider — the same value
-    // SamlChallenge puts in the AuthnRequest's AssertionConsumerServiceURL, so a signed Recipient (or
-    // Destination) must equal one. Both the new ("post") and legacy ("p") path spellings are returned:
-    // config.NewPath is process-wide mutable state a concurrent challenge can flip, and the Recipient
-    // reflects whichever the AuthnRequest advertised at challenge time, so accepting either avoids
-    // rejecting a valid login on a path-form flip; both are this provider's own ACS URLs.
-    //
-    // The host comes from GetRequestBase. With BaseUrlOverride set (#139) it is the pinned canonical
-    // host, so this binding is exact regardless of the request Host. Without it the host is the request
-    // Host, so the binding is only as strong as host resolution: behind a reverse proxy, configure
-    // Jellyfin's Known/Trusted Proxies (or set BaseUrlOverride) so the Host cannot be spoofed, or an
-    // attacker controlling the Host can make the expected URL match a captured assertion's Recipient
-    // (defense-in-depth, not a hard guarantee).
-    private string[] ExpectedAcsUrls(SamlConfig config, string provider) =>
-        SsoUrlBuilder.SamlExpectedAcsUrls(GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), provider);
-
-    // Validates a SAML response: signature + time bounds always, plus AudienceRestriction binding to
-    // this SP unless explicitly opted out. Expected audience is the configured SamlAudience, falling
-    // back to the SamlClientId (SP entity id). Both are trimmed so the comparison matches the trimmed
-    // Issuer sent in the AuthnRequest, and an empty SamlAudience falls through to the client id.
-    internal static bool ValidateSaml(SamlResponse samlResponse, SamlConfig config)
-    {
-        if (config.DoNotValidateAudience)
-        {
-            return samlResponse.IsValid();
-        }
-
-        var expected = config.SamlAudience?.Trim();
-        if (string.IsNullOrEmpty(expected))
-        {
-            expected = config.SamlClientId?.Trim();
-        }
-
-        return samlResponse.IsValid(expected);
-    }
-
-    // Thin wrapper feeding the live request values into the pure CanonicalBaseUrl.Resolve decision (#242).
-    private string GetRequestBase(string schemeOverride = null, int? portOverride = null, string baseUrlOverride = null) =>
-        CanonicalBaseUrl.Resolve(baseUrlOverride, Request.Scheme, Request.Host.Host, Request.Host.Port, Request.PathBase, schemeOverride, portOverride);
-
-    private static ContentResult ReturnError(int code, string message)
-    {
-        var errorResult = new ContentResult();
-        errorResult.Content = message;
-        errorResult.ContentType = MediaTypeNames.Text.Plain;
-        errorResult.StatusCode = code;
-        return errorResult;
-    }
-
-    // Returns the rendered auth page as HTML with defensive response headers. The page carries the
-    // one-time state token / signed assertion and completes the login from an inline script, so it
-    // must not be framed (clickjacking), MIME-sniffed, cached, or leak its URL via Referer. A strict
-    // Content-Security-Policy locks it to a single nonce'd inline script and style and same-origin
-    // fetch/frame; the same per-response nonce is threaded into the rendered page via the delegate.
-    private ContentResult HtmlAuthPage(Func<string, string> render)
-    {
-        var nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
-        Response.Headers.ContentSecurityPolicy = AuthPageCsp.Build(nonce);
-        Response.Headers["X-Frame-Options"] = "DENY";
-        Response.Headers["X-Content-Type-Options"] = "nosniff";
-        Response.Headers["Referrer-Policy"] = "no-referrer";
-        Response.Headers.CacheControl = "no-store";
-        return Content(render(nonce), MediaTypeNames.Text.Html);
     }
 }

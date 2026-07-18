@@ -2,10 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
-using System.Net.Mime;
 using System.Threading.Tasks;
 using Duende.IdentityModel.OidcClient;
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Api.Shared;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using MediaBrowser.Controller.Providers;
 using Microsoft.AspNetCore.Http;
@@ -156,7 +156,7 @@ internal sealed class OidcLoginService
 
         if (state.IsError)
         {
-            return PlainTextError(StatusCodes.Status400BadRequest, $"Error preparing login: {state.Error} - {state.ErrorDescription}");
+            return FlowResponses.PlainTextError(StatusCodes.Status400BadRequest, $"Error preparing login: {state.Error} - {state.ErrorDescription}");
         }
 
         // Bind this authorize state to the browser that started it (#326): record a fresh random id on
@@ -186,7 +186,7 @@ internal sealed class OidcLoginService
                 _logger.LogWarning("OpenID authorize state refused for provider {Provider}: a CSPRNG-token collision (effectively impossible) or the store is at capacity (warning throttled).", provider?.ReplaceLineEndings(string.Empty));
             }
 
-            return PlainTextError(StatusCodes.Status500InternalServerError, "Could not start login; please retry.");
+            return FlowResponses.PlainTextError(StatusCodes.Status500InternalServerError, "Could not start login; please retry.");
         }
 
         // Set the cookie only after the state is registered, so a refused challenge leaves no cookie.
@@ -199,15 +199,14 @@ internal sealed class OidcLoginService
     /// The OpenID redirect callback (a GET; named for consistency with the SAML sibling): validates the
     /// browser-bound authorize state, exchanges the authorization code, validates the id_token and the RFC
     /// 9207 response issuer, applies the role gate, promotes the state to redeemable, and renders the
-    /// intermediate auth page. The controller applies the shared rate-limit gate before delegating here and
-    /// supplies the security-headered page renderer.
+    /// intermediate auth page. The controller applies the shared rate-limit gate before delegating here.
     /// </summary>
     /// <param name="provider">The provider name from the route.</param>
     /// <param name="state">The authorize-state token the callback presented (also the auth-page data).</param>
     /// <param name="request">The current request; read for the base URL, the callback route, the code-exchange query string, the response `iss`, and the binding cookie.</param>
-    /// <param name="renderAuthPage">The controller's security-headered HTML auth-page renderer (nonce → body).</param>
+    /// <param name="response">The response the auth page's defensive headers are written to.</param>
     /// <returns>The rendered auth page on success, or a fail-closed rejection.</returns>
-    internal async Task<ActionResult> CallbackAsync(string provider, string state, HttpRequest request, Func<Func<string, string>, ContentResult> renderAuthPage)
+    internal async Task<ActionResult> CallbackAsync(string provider, string state, HttpRequest request, HttpResponse response)
     {
         // Unknown and disabled providers share one rejection so neither can be probed apart, matching
         // the guard-clause form the SAML sibling (SamlPost) already uses.
@@ -234,7 +233,7 @@ internal sealed class OidcLoginService
 
         if (result.IsError)
         {
-            return PlainTextError(StatusCodes.Status400BadRequest, $"Error logging in: {result.Error} - {result.ErrorDescription}");
+            return FlowResponses.PlainTextError(StatusCodes.Status400BadRequest, $"Error logging in: {result.Error} - {result.ErrorDescription}");
         }
 
         // RFC 9207 (#125, hardened #210): the library parses the authorization-response `iss` but never
@@ -288,7 +287,7 @@ internal sealed class OidcLoginService
         StateStore.Promote(pending, derived);
 
         _logger.LogInformation("Is request linking: {IsLinking}", pending.IsLinking);
-        return renderAuthPage(nonce => WebResponse.Generator(data: state, provider: provider, baseUrl: RequestBaseUrl(request, config), mode: "OID", nonce: nonce, isLinking: pending.IsLinking));
+        return FlowResponses.AuthPage(response, nonce => WebResponse.Generator(data: state, provider: provider, baseUrl: RequestBaseUrl(request, config), mode: "OID", nonce: nonce, isLinking: pending.IsLinking));
     }
 
     /// <summary>
@@ -347,9 +346,8 @@ internal sealed class OidcLoginService
     /// <param name="jellyfinUserId">The Jellyfin account to link (already authorized by the controller).</param>
     /// <param name="response">The client information carrying the state token in <c>Data</c>.</param>
     /// <param name="bindingCookie">The browser-binding cookie value the redeem presented (#326).</param>
-    /// <param name="mapWrite">The controller's mapping from a canonical-link write result to an HTTP response.</param>
     /// <returns>The link-creation result, or a fail-closed rejection.</returns>
-    internal ActionResult Link(string provider, Guid jellyfinUserId, AuthResponse response, string bindingCookie, Func<CanonicalLinkWriteResult, ActionResult> mapWrite)
+    internal ActionResult Link(string provider, Guid jellyfinUserId, AuthResponse response, string bindingCookie)
     {
         if (string.IsNullOrEmpty(response?.Data))
         {
@@ -377,7 +375,7 @@ internal sealed class OidcLoginService
 
         // Manual linking keys on the stable subject (#155), matching the auto-login path, so a
         // later provider-side rename does not orphan the link the user just created.
-        return mapWrite(_canonicalLinks.TryCreateLink("oid", provider, redeemed.Identity.Subject, jellyfinUserId));
+        return FlowResponses.MapCanonicalLinkWrite(_canonicalLinks.TryCreateLink("oid", provider, redeemed.Identity.Subject, jellyfinUserId));
     }
 
     // Builds the space-delimited OpenID scope string, always leading with the base "openid profile".
@@ -481,19 +479,8 @@ internal sealed class OidcLoginService
     }
 
     // Resolves the canonical base URL from the live request and the provider's overrides — the same pure
-    // CanonicalBaseUrl.Resolve decision (#242) the controller's shared GetRequestBase feeds for SAML. Kept
-    // as a thin local read rather than a controller round-trip so this flow tier is self-contained.
+    // CanonicalBaseUrl.Resolve decision (#242) SamlLoginService.GetRequestBase feeds for SAML. Kept as a
+    // thin local read so this flow tier is self-contained.
     private static string RequestBaseUrl(HttpRequest request, OidConfig config) =>
         CanonicalBaseUrl.Resolve(config.BaseUrlOverride, request.Scheme, request.Host.Host, request.Host.Port, request.PathBase, config.SchemeOverride, config.PortOverride);
-
-    // A plain-text error result, reproducing the controller's ReturnError shape exactly (ContentResult,
-    // text/plain), so the two non-outcome OpenID errors (a PrepareLogin failure, a store-capacity refusal)
-    // stay byte-identical on the wire after the move. The SAML challenge keeps the controller's own copy for
-    // its signing-key failure; a shared home for both is deferred to the SAML extraction step (#160).
-    private static ContentResult PlainTextError(int code, string message) => new ContentResult
-    {
-        Content = message,
-        ContentType = MediaTypeNames.Text.Plain,
-        StatusCode = code,
-    };
 }
