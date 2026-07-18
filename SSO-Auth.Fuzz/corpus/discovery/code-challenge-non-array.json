@@ -1,0 +1,1 @@
+{"issuer":"https://idp.example.com","code_challenge_methods_supported":"S256","authorization_response_iss_parameter_supported":"yes"}
