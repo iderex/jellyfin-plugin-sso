@@ -376,7 +376,7 @@ internal sealed class OidcLoginService
 
         // Manual linking keys on the stable subject (#155), matching the auto-login path, so a
         // later provider-side rename does not orphan the link the user just created.
-        return FlowResponses.MapCanonicalLinkWrite(_canonicalLinks.TryCreateLink("oid", provider, redeemed.Identity.Subject, jellyfinUserId));
+        return FlowResponses.MapCanonicalLinkWrite(_canonicalLinks.TryCreateLink(ProviderMode.Oid, provider, redeemed.Identity.Subject, jellyfinUserId));
     }
 
     // Builds the space-delimited OpenID scope string, always leading with the base "openid profile".

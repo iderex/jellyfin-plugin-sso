@@ -34,7 +34,7 @@ internal sealed record VerifiedIdentity
     // the sole construction sites, and each stands for a completed protocol validation. Anything that
     // holds a VerifiedIdentity therefore holds proof the login was verified (#473).
     private VerifiedIdentity(
-        string linkMode,
+        ProviderMode linkMode,
         string auditProtocol,
         string provider,
         string subject,
@@ -59,8 +59,8 @@ internal sealed record VerifiedIdentity
         AvatarUrl = avatarUrl;
     }
 
-    /// <summary>Gets the account-link namespace ("oid"/"saml") the canonical-link store keys this identity under.</summary>
-    internal string LinkMode { get; }
+    /// <summary>Gets the protocol the canonical-link store keys this identity under (#369).</summary>
+    internal ProviderMode LinkMode { get; }
 
     /// <summary>Gets the protocol label ("OpenID"/"SAML") recorded in the login audit line.</summary>
     internal string AuditProtocol { get; }
@@ -105,7 +105,7 @@ internal sealed record VerifiedIdentity
     /// <returns>The verified OpenID identity.</returns>
     internal static VerifiedIdentity FromOidcRedemption(string provider, OidcAuthorizeStateBuilder.OidcAuthorizeState derived) =>
         new(
-            "oid",
+            ProviderMode.Oid,
             "OpenID",
             provider,
             derived.Subject!,
@@ -130,7 +130,7 @@ internal sealed record VerifiedIdentity
     /// <returns>The verified SAML identity.</returns>
     internal static VerifiedIdentity FromValidatedSaml(string provider, string nameId, SamlAuthorizeStateBuilder.SamlAuthorizeState privileges) =>
         new(
-            "saml",
+            ProviderMode.Saml,
             "SAML",
             provider,
             nameId,

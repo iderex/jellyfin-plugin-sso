@@ -554,15 +554,12 @@ public class SSOController : ControllerBase
             return StatusCode(StatusCodes.Status403Forbidden, "User is not allowed to link SSO providers.");
         }
 
-        switch (mode.ToLower())
+        return ParseMode(mode) switch
         {
-            case "saml":
-                return SamlLink(provider, jellyfinUserId, authResponse);
-            case "oid":
-                return OidLink(provider, jellyfinUserId, authResponse);
-            default:
-                throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'");
-        }
+            ProviderMode.Saml => SamlLink(provider, jellyfinUserId, authResponse),
+            ProviderMode.Oid => OidLink(provider, jellyfinUserId, authResponse),
+            _ => throw new ArgumentOutOfRangeException(nameof(mode)),
+        };
     }
 
     /// <summary>
@@ -584,7 +581,7 @@ public class SSOController : ControllerBase
             return StatusCode(StatusCodes.Status403Forbidden, "Current user is not allowed to unlink SSO providers for user ID.");
         }
 
-        var removeResult = _canonicalLinks.TryRemoveLink(mode, provider, canonicalName, jellyfinUserId);
+        var removeResult = _canonicalLinks.TryRemoveLink(ParseMode(mode), provider, canonicalName, jellyfinUserId);
         return removeResult switch
         {
             CanonicalLinkRemoveResult.Removed => Ok(),
@@ -610,7 +607,7 @@ public class SSOController : ControllerBase
             return StatusCode(StatusCodes.Status403Forbidden, "Non-admin is not allowed to query other user's mappings.");
         }
 
-        return _canonicalLinks.LinksByUser("saml", jellyfinUserId);
+        return _canonicalLinks.LinksByUser(ProviderMode.Saml, jellyfinUserId);
     }
 
     /// <summary>
@@ -628,7 +625,7 @@ public class SSOController : ControllerBase
             return StatusCode(StatusCodes.Status403Forbidden, "Non-admin is not allowed to query other user's mappings.");
         }
 
-        return _canonicalLinks.LinksByUser("oid", jellyfinUserId);
+        return _canonicalLinks.LinksByUser(ProviderMode.Oid, jellyfinUserId);
     }
 
     // A shallow copy of a provider map, taken under the config lock so the admin list endpoints
@@ -681,6 +678,16 @@ public class SSOController : ControllerBase
     // [Consumes]/[Produces] were inert on this private helper (#393).
     private ActionResult OidLink(string provider, Guid jellyfinUserId, AuthResponse response) =>
         _oidc.Link(provider, jellyfinUserId, response, Request.Cookies[AuthorizeStateBinding.CookieName]);
+
+    // Parse the {mode} route token once, at the HTTP boundary (#369): every link endpoint routes its raw
+    // route string through here, so the protocol is validated in exactly one place and the typed
+    // ProviderMode is threaded inward — no inner layer re-parses or re-compares the string. Fail closed: an
+    // unknown token throws (an ArgumentException, surfacing as the same rejection the two former divergent
+    // ToLower()/ToLowerInvariant() dispatches produced), never defaulting to a protocol.
+    private static ProviderMode ParseMode(string mode) =>
+        ProviderModeParser.TryParse(mode, out var parsed)
+            ? parsed
+            : throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'");
 
     // Fronts an anonymous flow endpoint with the shared per-client rate-limit gate (#128, #160): null when
     // the request may proceed, else the throttled outcome the single mapper renders (#474). The gate owns the

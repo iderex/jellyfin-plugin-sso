@@ -36,7 +36,7 @@ public class VerifiedIdentityTests
         var identity = VerifiedIdentity.FromOidcRedemption("keycloak", derived);
 
         // The two protocol-facing labels drive the link namespace and the audit line.
-        Assert.Equal("oid", identity.LinkMode);
+        Assert.Equal(ProviderMode.Oid, identity.LinkMode);
         Assert.Equal("OpenID", identity.AuditProtocol);
         Assert.Equal("keycloak", identity.Provider);
 
@@ -62,7 +62,7 @@ public class VerifiedIdentityTests
 
         var identity = VerifiedIdentity.FromValidatedSaml("okta", "alice@example.com", privileges);
 
-        Assert.Equal("saml", identity.LinkMode);
+        Assert.Equal(ProviderMode.Saml, identity.LinkMode);
         Assert.Equal("SAML", identity.AuditProtocol);
         Assert.Equal("okta", identity.Provider);
 

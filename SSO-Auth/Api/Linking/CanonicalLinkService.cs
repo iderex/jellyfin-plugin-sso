@@ -80,7 +80,7 @@ internal sealed class CanonicalLinkService
     /// the provider's policy, and returns its id. Throws <see cref="AccountLinkForbiddenException"/> when
     /// the login must be refused (no identity resolved, or a pre-existing account may not be adopted).
     /// </summary>
-    /// <param name="mode">The protocol mode token, "oid" or "saml".</param>
+    /// <param name="mode">The protocol the operation applies to, parsed once at the controller boundary (#369).</param>
     /// <param name="provider">The provider the login authenticated against.</param>
     /// <param name="canonicalKey">The stable identity key (OpenID sub / SAML NameID).</param>
     /// <param name="username">The display name the account is provisioned/adopted under.</param>
@@ -91,7 +91,7 @@ internal sealed class CanonicalLinkService
     /// (<see cref="AdoptionGate.None"/>) is the SAML/legacy posture: admin refusal only.
     /// </param>
     /// <returns>The resolved Jellyfin user id.</returns>
-    internal async Task<Guid> ResolveOrCreateAsync(string mode, string provider, string canonicalKey, string username, bool allowExistingAccountLink, AdoptionGate adoptionGate = default)
+    internal async Task<Guid> ResolveOrCreateAsync(ProviderMode mode, string provider, string canonicalKey, string username, bool allowExistingAccountLink, AdoptionGate adoptionGate = default)
     {
         // Defense in depth (#95, #155): a login that resolved no stable identity key (OpenID sub /
         // SAML NameID) or no username must never create, adopt, or look up an account. Both callbacks
@@ -169,7 +169,7 @@ internal sealed class CanonicalLinkService
                 _logger.LogWarning(
                     "SSO login for {Name} via {Mode}/{Provider} refused: a legacy username-keyed link points at an administrator account, which is not adopted by name. Link it explicitly via the admin endpoints.",
                     username?.ReplaceLineEndings(string.Empty),
-                    mode,
+                    mode.ToToken(),
                     provider?.ReplaceLineEndings(string.Empty));
                 throw new AccountLinkForbiddenException();
             }
@@ -185,7 +185,7 @@ internal sealed class CanonicalLinkService
             linkedUserId = MigrateAndResolveCanonicalLink(mode, provider, canonicalKey, username);
             _logger.LogInformation(
                 "Migrated {Mode}/{Provider} canonical link from the legacy username key to the stable subject key.",
-                mode,
+                mode.ToToken(),
                 provider?.ReplaceLineEndings(string.Empty));
         }
 
@@ -225,7 +225,7 @@ internal sealed class CanonicalLinkService
                     _logger.LogWarning(
                         "SSO login for {Name} via {Mode}/{Provider} refused adoption of a pre-existing account: {Reason}.",
                         username?.ReplaceLineEndings(string.Empty),
-                        mode,
+                        mode.ToToken(),
                         provider?.ReplaceLineEndings(string.Empty),
                         verdict);
                     throw new AccountLinkForbiddenException();
@@ -236,7 +236,7 @@ internal sealed class CanonicalLinkService
                 var (adoptedUserId, wrote) = LinkCanonicalIfAbsent(mode, provider, canonicalKey, decision.UserId);
                 if (wrote)
                 {
-                    SsoAudit.AccountAdopted(_logger, string.Equals(mode, "oid", StringComparison.Ordinal) ? "OpenID" : "SAML", provider, username);
+                    SsoAudit.AccountAdopted(_logger, mode == ProviderMode.Oid ? "OpenID" : "SAML", provider, username);
                 }
 
                 return adoptedUserId;
@@ -258,7 +258,7 @@ internal sealed class CanonicalLinkService
                     _logger.LogWarning(
                         "SSO login for {Name} via {Mode}/{Provider}: a legacy username-keyed link exists but no live account bears the name (it was renamed on the Jellyfin side), so a fresh account is being provisioned and the original account is now orphaned. Re-link it to this subject via the admin endpoints.",
                         username?.ReplaceLineEndings(string.Empty),
-                        mode,
+                        mode.ToToken(),
                         provider?.ReplaceLineEndings(string.Empty));
                 }
 
@@ -284,7 +284,7 @@ internal sealed class CanonicalLinkService
                     _logger.LogWarning(
                         "SSO login for {Name} via {Mode}/{Provider} refused: a legacy username-keyed link is pending but AllowExistingAccountLink is off and a live account still bears the name. Enable AllowExistingAccountLink (a short controlled window) or link the account via the admin endpoints to migrate it.",
                         username?.ReplaceLineEndings(string.Empty),
-                        mode,
+                        mode.ToToken(),
                         provider?.ReplaceLineEndings(string.Empty));
                 }
                 else
@@ -292,7 +292,7 @@ internal sealed class CanonicalLinkService
                     _logger.LogWarning(
                         "SSO login for {Name} via {Mode}/{Provider} refused: a pre-existing unlinked Jellyfin account exists and AllowExistingAccountLink is disabled for this provider.",
                         username?.ReplaceLineEndings(string.Empty),
-                        mode,
+                        mode.ToToken(),
                         provider?.ReplaceLineEndings(string.Empty));
                 }
 
@@ -307,12 +307,12 @@ internal sealed class CanonicalLinkService
     /// Creates a manual canonical link (admin/self linking) from a provider-side identity to a Jellyfin
     /// user, under the config lock. HTTP-free: the controller maps the returned result to a response.
     /// </summary>
-    /// <param name="mode">The protocol mode token, "oid" or "saml".</param>
+    /// <param name="mode">The protocol the operation applies to, parsed once at the controller boundary (#369).</param>
     /// <param name="provider">The provider the link belongs to.</param>
     /// <param name="providerUserId">The provider-side identity key (OpenID sub / SAML NameID).</param>
     /// <param name="jellyfinUserId">The Jellyfin user to link the identity to.</param>
     /// <returns>The write outcome.</returns>
-    internal CanonicalLinkWriteResult TryCreateLink(string mode, string provider, string providerUserId, Guid jellyfinUserId)
+    internal CanonicalLinkWriteResult TryCreateLink(ProviderMode mode, string provider, string providerUserId, Guid jellyfinUserId)
     {
         // Fail closed (#95), linking-side choke point: an SSO identity that did not resolve must not
         // create a link — an empty or whitespace key would persist a dead link no login can ever redeem.
@@ -347,12 +347,12 @@ internal sealed class CanonicalLinkService
     /// ownership check, and removal are one read-modify-write so they cannot interleave with a concurrent
     /// write to the same map.
     /// </summary>
-    /// <param name="mode">The protocol mode token, "oid" or "saml".</param>
+    /// <param name="mode">The protocol the operation applies to, parsed once at the controller boundary (#369).</param>
     /// <param name="provider">The provider the link belongs to.</param>
     /// <param name="canonicalName">The provider-side identity key whose link is removed.</param>
     /// <param name="jellyfinUserId">The Jellyfin user the link must belong to.</param>
     /// <returns>The remove outcome.</returns>
-    internal CanonicalLinkRemoveResult TryRemoveLink(string mode, string provider, string canonicalName, Guid jellyfinUserId)
+    internal CanonicalLinkRemoveResult TryRemoveLink(ProviderMode mode, string provider, string canonicalName, Guid jellyfinUserId)
     {
         // Kept as ONE Mutate (find, ownership check, and remove cannot interleave). A no-result outcome
         // still persists the unchanged config. For NotFound / Mismatch that already matched the old
@@ -394,10 +394,10 @@ internal sealed class CanonicalLinkService
     /// result is a detached snapshot that cannot tear against a concurrent login writing a link during
     /// JSON serialization.
     /// </summary>
-    /// <param name="mode">The protocol mode token, "oid" or "saml".</param>
+    /// <param name="mode">The protocol the operation applies to, parsed once at the controller boundary (#369).</param>
     /// <param name="jellyfinUserId">The Jellyfin user whose links are listed.</param>
     /// <returns>A provider -> link-key-list map.</returns>
-    internal SerializableDictionary<string, IEnumerable<string>> LinksByUser(string mode, Guid jellyfinUserId)
+    internal SerializableDictionary<string, IEnumerable<string>> LinksByUser(ProviderMode mode, Guid jellyfinUserId)
     {
         return _configStore.Read(configuration =>
         {
@@ -406,7 +406,7 @@ internal sealed class CanonicalLinkService
             // today via #350's null-body add) yields null links and is skipped rather than dereferenced —
             // same fail-closed treatment TryGetLinks gives it, so the read side cannot NRE into a 500 on
             // a state the write side can produce.
-            var providerLinks = string.Equals(mode, "saml", StringComparison.Ordinal)
+            var providerLinks = mode == ProviderMode.Saml
                 ? configuration.SamlConfigs.Select(p => (p.Key, p.Value?.CanonicalLinks))
                 : configuration.OidConfigs.Select(p => (p.Key, p.Value?.CanonicalLinks));
 
@@ -473,12 +473,12 @@ internal sealed class CanonicalLinkService
     /// resolves to false (missing/whitespace key, missing or disabled provider, missing/mismatched link,
     /// deleted target), so it is fail closed.
     /// </remarks>
-    /// <param name="mode">The protocol mode token, "oid" or "saml".</param>
+    /// <param name="mode">The protocol the operation applies to, parsed once at the controller boundary (#369).</param>
     /// <param name="provider">The provider the login authenticated against.</param>
     /// <param name="canonicalKey">The stable identity key the link is stored under (OpenID sub / SAML NameID).</param>
     /// <param name="userId">The Jellyfin user the login resolved to.</param>
     /// <returns>True only when a live, enabled link for this identity still points at the user.</returns>
-    internal bool IsIdentityStillLinked(string mode, string provider, string canonicalKey, Guid userId)
+    internal bool IsIdentityStillLinked(ProviderMode mode, string provider, string canonicalKey, Guid userId)
     {
         if (string.IsNullOrWhiteSpace(canonicalKey))
         {
@@ -498,7 +498,7 @@ internal sealed class CanonicalLinkService
     // reports WroteLink=false (so the caller does not re-emit the adoption audit). The link write goes
     // straight into the config (no discarded ActionResult), so a failure to persist propagates rather
     // than falling through as a successful adoption.
-    private (Guid EffectiveUserId, bool WroteLink) LinkCanonicalIfAbsent(string mode, string provider, string canonicalKey, Guid candidateUserId)
+    private (Guid EffectiveUserId, bool WroteLink) LinkCanonicalIfAbsent(ProviderMode mode, string provider, string canonicalKey, Guid candidateUserId)
     {
         return _configStore.Mutate(configuration =>
         {
@@ -535,7 +535,7 @@ internal sealed class CanonicalLinkService
     // only a dangling one (its target user deleted), which would otherwise block the hand-off on every
     // subsequent login. Returns null only when neither key resolves a live account (the dangling edge), so
     // the login fails closed into the create/adopt gate rather than binding to a dead account.
-    private Guid? MigrateAndResolveCanonicalLink(string mode, string provider, string canonicalKey, string legacyKey)
+    private Guid? MigrateAndResolveCanonicalLink(ProviderMode mode, string provider, string canonicalKey, string legacyKey)
     {
         return _configStore.Mutate<Guid?>(configuration =>
         {
@@ -581,22 +581,21 @@ internal sealed class CanonicalLinkService
     // like a deleted one (#380), while removal passes false because revoking must keep working on a
     // disabled provider (disable-then-clean-up). The map is
     // self-healing (CanonicalLinks lazily creates and stores it), so mutating the returned map persists
-    // directly; callers must hold the config lock (Read / Mutate) while touching it. An unrecognized mode
-    // is not an unknown provider but a caller contract violation, so it throws — note the DELETE route
-    // forwards mode unvalidated (unlike the AddCanonicalLink dispatch), so that throw is reachable there;
-    // #369 tracks parsing mode once at the HTTP boundary into an internal enum.
-    private static bool TryGetLinks(PluginConfiguration configuration, string mode, string provider, bool requireEnabled, out SerializableDictionary<string, Guid> links)
+    // directly; callers must hold the config lock (Read / Mutate) while touching it. The mode is the typed
+    // ProviderMode the controller parsed once at the HTTP boundary (#369), so both dispatch arms are reached
+    // only with a validated value; the default throw stays as a belt against an out-of-range enum value.
+    private static bool TryGetLinks(PluginConfiguration configuration, ProviderMode mode, string provider, bool requireEnabled, out SerializableDictionary<string, Guid> links)
     {
-        switch (mode.ToLowerInvariant())
+        switch (mode)
         {
-            case "saml":
+            case ProviderMode.Saml:
                 return TryGetLinks(configuration.SamlConfigs, provider, requireEnabled, out links);
 
-            case "oid":
+            case ProviderMode.Oid:
                 return TryGetLinks(configuration.OidConfigs, provider, requireEnabled, out links);
 
             default:
-                throw new ArgumentException($"{mode} is not a valid choice between 'saml' and 'oid'");
+                throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unknown provider mode.");
         }
     }
 

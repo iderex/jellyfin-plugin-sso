@@ -54,7 +54,7 @@ public class CanonicalLinkServiceTests
         });
         users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
 
-        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: false);
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: false);
 
         Assert.Equal(Existing, resolved);
         await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
@@ -69,7 +69,7 @@ public class CanonicalLinkServiceTests
         users.CreateUserAsync("alice").Returns(created);
         users.GetUserById(Other).Returns(created);
 
-        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: false);
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: false);
 
         Assert.Equal(Other, resolved);
         await users.Received(1).CreateUserAsync("alice");
@@ -83,7 +83,7 @@ public class CanonicalLinkServiceTests
         users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
         users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
 
-        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true);
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: true);
 
         Assert.Equal(Existing, resolved);
         await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
@@ -100,7 +100,7 @@ public class CanonicalLinkServiceTests
         users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
-            service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: false));
+            service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: false));
 
         await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
         Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("sub-1"));
@@ -118,7 +118,7 @@ public class CanonicalLinkServiceTests
         var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
-            service.ResolveOrCreateAsync("oid", "kc", canonicalKey, username, allowExistingAccountLink: true));
+            service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", canonicalKey, username, allowExistingAccountLink: true));
 
         await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
     }
@@ -137,7 +137,7 @@ public class CanonicalLinkServiceTests
         users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
         users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
 
-        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true);
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: true);
 
         Assert.Equal(Existing, resolved);
         var links = cfg.OidConfigs["kc"].CanonicalLinks;
@@ -161,7 +161,7 @@ public class CanonicalLinkServiceTests
         users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
-            service.ResolveOrCreateAsync("oid", "kc", "attacker-sub", "alice", allowExistingAccountLink: false));
+            service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "attacker-sub", "alice", allowExistingAccountLink: false));
 
         await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
         var links = cfg.OidConfigs["kc"].CanonicalLinks;
@@ -194,7 +194,7 @@ public class CanonicalLinkServiceTests
         users.CreateUserAsync("alice").Returns(created);
         users.GetUserById(Other).Returns(created);
 
-        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "attacker-sub", "alice", allowExistingAccountLink: false);
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "attacker-sub", "alice", allowExistingAccountLink: false);
 
         Assert.Equal(Other, resolved);
         await users.Received(1).CreateUserAsync("alice");
@@ -231,7 +231,7 @@ public class CanonicalLinkServiceTests
         users.CreateUserAsync("oldname").Returns(created);
         users.GetUserById(Other).Returns(created);
 
-        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "attacker-sub", "oldname", allowExistingAccountLink: true);
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "attacker-sub", "oldname", allowExistingAccountLink: true);
 
         Assert.Equal(Other, resolved); // a fresh account, NOT the renamed victim (Existing)
         await users.Received(1).CreateUserAsync("oldname");
@@ -262,7 +262,7 @@ public class CanonicalLinkServiceTests
         users.GetUserByName("oldname").Returns(UserNamed("oldname", Other)); // a different account now holds the name
         users.GetUserById(Other).Returns(UserNamed("oldname", Other));
 
-        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "attacker-sub", "oldname", allowExistingAccountLink: true);
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "attacker-sub", "oldname", allowExistingAccountLink: true);
 
         Assert.Equal(Other, resolved); // adopts the current name-holder, NOT the renamed victim (Existing)
         await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
@@ -285,7 +285,7 @@ public class CanonicalLinkServiceTests
         });
         users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
 
-        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "opaque-sub-123", "opaque-sub-123", allowExistingAccountLink: false);
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "opaque-sub-123", "opaque-sub-123", allowExistingAccountLink: false);
 
         Assert.Equal(Existing, resolved);
         Assert.Equal(Existing, cfg.OidConfigs["kc"].CanonicalLinks["opaque-sub-123"]); // untouched, not re-keyed
@@ -303,7 +303,7 @@ public class CanonicalLinkServiceTests
         users.GetUserByName("alice").Returns((User?)null); // name is free -> the create arm would fire
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
-            service.ResolveOrCreateAsync("oid", "deleted-provider", "sub-1", "alice", allowExistingAccountLink: true));
+            service.ResolveOrCreateAsync(ProviderMode.Oid, "deleted-provider", "sub-1", "alice", allowExistingAccountLink: true));
 
         await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
     }
@@ -339,7 +339,7 @@ public class CanonicalLinkServiceTests
         var service = new CanonicalLinkService(users, new FakeCryptoProvider(), store, new CapturingLogger());
 
         var ex = await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
-            service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true));
+            service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: true));
 
         // Pin the MIGRATE guard specifically, not just any fail-closed throw: the three login-path guards
         // carry distinct messages, so if the provider were dropped during the wrong transaction the test
@@ -363,7 +363,7 @@ public class CanonicalLinkServiceTests
         var store = new ProviderConfigStore(() => cfg, _ => persists++, new CapturingLogger());
         var service = new CanonicalLinkService(users, new FakeCryptoProvider(), store, new CapturingLogger());
 
-        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: false);
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: false);
 
         Assert.Equal(Existing, resolved);
         Assert.Equal(0, persists); // no write on the hot path
@@ -384,7 +384,7 @@ public class CanonicalLinkServiceTests
         var store = new ProviderConfigStore(() => cfg, _ => persists++, new CapturingLogger());
         var service = new CanonicalLinkService(users, new FakeCryptoProvider(), store, new CapturingLogger());
 
-        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true);
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: true);
 
         Assert.Equal(Existing, resolved);
         Assert.Equal(1, persists); // one mutation for the migration, not two
@@ -427,7 +427,7 @@ public class CanonicalLinkServiceTests
             new CapturingLogger());
         var service = new CanonicalLinkService(users, new FakeCryptoProvider(), store, new CapturingLogger());
 
-        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true);
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: true);
 
         Assert.Equal(Existing, resolved); // bound to the winner's live subject link
         var final = cfg.OidConfigs["kc"].CanonicalLinks;
@@ -442,7 +442,7 @@ public class CanonicalLinkServiceTests
     {
         var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
 
-        var result = service.TryCreateLink("oid", "kc", "sub-1", Existing);
+        var result = service.TryCreateLink(ProviderMode.Oid, "kc", "sub-1", Existing);
 
         Assert.Equal(CanonicalLinkWriteResult.Created, result);
         Assert.Equal(Existing, cfg.OidConfigs["kc"].CanonicalLinks["sub-1"]);
@@ -455,7 +455,7 @@ public class CanonicalLinkServiceTests
     {
         var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
 
-        var result = service.TryCreateLink("oid", "kc", providerUserId, Existing);
+        var result = service.TryCreateLink(ProviderMode.Oid, "kc", providerUserId, Existing);
 
         Assert.Equal(CanonicalLinkWriteResult.EmptyKey, result);
         Assert.Empty(cfg.OidConfigs["kc"].CanonicalLinks);
@@ -466,7 +466,7 @@ public class CanonicalLinkServiceTests
     {
         var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
 
-        var result = service.TryCreateLink("oid", "does-not-exist", "sub-1", Existing);
+        var result = service.TryCreateLink(ProviderMode.Oid, "does-not-exist", "sub-1", Existing);
 
         Assert.Equal(CanonicalLinkWriteResult.UnknownProvider, result);
     }
@@ -479,7 +479,7 @@ public class CanonicalLinkServiceTests
         // runs first). Locks the check ordering the controller's distinct 400 bodies depend on.
         var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
 
-        var result = service.TryCreateLink("oid", "does-not-exist", "   ", Existing);
+        var result = service.TryCreateLink(ProviderMode.Oid, "does-not-exist", "   ", Existing);
 
         Assert.Equal(CanonicalLinkWriteResult.EmptyKey, result);
     }
@@ -496,7 +496,7 @@ public class CanonicalLinkServiceTests
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
         });
 
-        var result = service.TryCreateLink("oid", "kc", "sub-1", Other);
+        var result = service.TryCreateLink(ProviderMode.Oid, "kc", "sub-1", Other);
 
         Assert.Equal(CanonicalLinkWriteResult.Created, result);
         Assert.Equal(Other, cfg.OidConfigs["kc"].CanonicalLinks["sub-1"]); // rebound to the new user
@@ -512,7 +512,7 @@ public class CanonicalLinkServiceTests
         users.GetUserByName("alice").Returns((User?)null); // name is free -> the create arm would fire if it fell through
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
-            service.ResolveOrCreateAsync("oid", "broken", "sub-1", "alice", allowExistingAccountLink: true));
+            service.ResolveOrCreateAsync(ProviderMode.Oid, "broken", "sub-1", "alice", allowExistingAccountLink: true));
 
         await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
     }
@@ -524,7 +524,7 @@ public class CanonicalLinkServiceTests
         // as absent, not dereferenced into a 500 — same fail-closed treatment as a missing provider.
         var (service, _, _, _) = Build(c => c.OidConfigs["broken"] = null);
 
-        var result = service.TryRemoveLink("oid", "broken", "sub-1", Existing);
+        var result = service.TryRemoveLink(ProviderMode.Oid, "broken", "sub-1", Existing);
 
         Assert.Equal(CanonicalLinkRemoveResult.UnknownProvider, result);
     }
@@ -540,7 +540,7 @@ public class CanonicalLinkServiceTests
             c.OidConfigs["broken"] = null;
         });
 
-        var oid = service.LinksByUser("oid", Existing);
+        var oid = service.LinksByUser(ProviderMode.Oid, Existing);
 
         Assert.Equal(new[] { "sub-1" }, oid["kc"]);
         Assert.DoesNotContain("broken", oid.Keys); // the null-config provider is skipped, not thrown on
@@ -555,7 +555,7 @@ public class CanonicalLinkServiceTests
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
         });
 
-        var result = service.TryRemoveLink("oid", "kc", "sub-1", Existing);
+        var result = service.TryRemoveLink(ProviderMode.Oid, "kc", "sub-1", Existing);
 
         Assert.Equal(CanonicalLinkRemoveResult.Removed, result);
         Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("sub-1"));
@@ -572,7 +572,7 @@ public class CanonicalLinkServiceTests
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
         });
 
-        var result = service.TryRemoveLink("saml", "adfs", "alice", Existing);
+        var result = service.TryRemoveLink(ProviderMode.Saml, "adfs", "alice", Existing);
 
         Assert.Equal(CanonicalLinkRemoveResult.Removed, result);
         Assert.False(cfg.SamlConfigs["adfs"].CanonicalLinks.ContainsKey("alice"));
@@ -583,7 +583,7 @@ public class CanonicalLinkServiceTests
     {
         var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
 
-        var result = service.TryRemoveLink("oid", "kc", "does-not-exist", Existing);
+        var result = service.TryRemoveLink(ProviderMode.Oid, "kc", "does-not-exist", Existing);
 
         Assert.Equal(CanonicalLinkRemoveResult.NotFound, result);
     }
@@ -597,7 +597,7 @@ public class CanonicalLinkServiceTests
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
         });
 
-        var result = service.TryRemoveLink("oid", "kc", "sub-1", Other);
+        var result = service.TryRemoveLink(ProviderMode.Oid, "kc", "sub-1", Other);
 
         Assert.Equal(CanonicalLinkRemoveResult.Mismatch, result);
         Assert.Equal(Existing, cfg.OidConfigs["kc"].CanonicalLinks["sub-1"]); // untouched
@@ -608,7 +608,7 @@ public class CanonicalLinkServiceTests
     {
         var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
 
-        var result = service.TryRemoveLink("oid", "does-not-exist", "sub-1", Existing);
+        var result = service.TryRemoveLink(ProviderMode.Oid, "does-not-exist", "sub-1", Existing);
 
         Assert.Equal(CanonicalLinkRemoveResult.UnknownProvider, result);
     }
@@ -623,7 +623,7 @@ public class CanonicalLinkServiceTests
             c.SamlConfigs["adfs"] = new SamlConfig { Enabled = true, CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing } };
         });
 
-        var oid = service.LinksByUser("oid", Existing);
+        var oid = service.LinksByUser(ProviderMode.Oid, Existing);
 
         Assert.Equal(new[] { "sub-1" }, oid["kc"]); // the other user's sub-2 is excluded
         Assert.Equal(new[] { "sub-3" }, oid["authelia"]);
@@ -647,7 +647,7 @@ public class CanonicalLinkServiceTests
             c.OidConfigs["kc"] = new OidConfig { Enabled = true, CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing } };
         });
 
-        var saml = service.LinksByUser("saml", Existing);
+        var saml = service.LinksByUser(ProviderMode.Saml, Existing);
 
         Assert.Equal(new[] { "alice" }, saml["adfs"]); // the other user's "bob" is excluded
         Assert.DoesNotContain("kc", saml.Keys); // OID provider is not in the SAML projection
@@ -682,7 +682,7 @@ public class CanonicalLinkServiceTests
         });
         users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
 
-        Assert.True(service.IsIdentityStillLinked("oid", "kc", "sub-1", Existing));
+        Assert.True(service.IsIdentityStillLinked(ProviderMode.Oid, "kc", "sub-1", Existing));
     }
 
     [Fact]
@@ -696,7 +696,7 @@ public class CanonicalLinkServiceTests
         });
         users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
 
-        Assert.True(service.IsIdentityStillLinked("saml", "adfs", "alice", Existing));
+        Assert.True(service.IsIdentityStillLinked(ProviderMode.Saml, "adfs", "alice", Existing));
     }
 
     [Fact]
@@ -713,7 +713,7 @@ public class CanonicalLinkServiceTests
 
         service.RemoveUserEverywhere(Existing);
 
-        Assert.False(service.IsIdentityStillLinked("oid", "kc", "sub-1", Existing));
+        Assert.False(service.IsIdentityStillLinked(ProviderMode.Oid, "kc", "sub-1", Existing));
     }
 
     [Fact]
@@ -729,7 +729,7 @@ public class CanonicalLinkServiceTests
         users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
         cfg.OidConfigs["kc"].Enabled = false;
 
-        Assert.False(service.IsIdentityStillLinked("oid", "kc", "sub-1", Existing));
+        Assert.False(service.IsIdentityStillLinked(ProviderMode.Oid, "kc", "sub-1", Existing));
     }
 
     [Fact]
@@ -737,7 +737,7 @@ public class CanonicalLinkServiceTests
     {
         var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
 
-        Assert.False(service.IsIdentityStillLinked("oid", "does-not-exist", "sub-1", Existing));
+        Assert.False(service.IsIdentityStillLinked(ProviderMode.Oid, "does-not-exist", "sub-1", Existing));
     }
 
     [Fact]
@@ -749,7 +749,7 @@ public class CanonicalLinkServiceTests
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
         });
 
-        Assert.False(service.IsIdentityStillLinked("oid", "kc", "sub-unknown", Existing));
+        Assert.False(service.IsIdentityStillLinked(ProviderMode.Oid, "kc", "sub-unknown", Existing));
     }
 
     [Fact]
@@ -764,7 +764,7 @@ public class CanonicalLinkServiceTests
         });
         users.GetUserById(Other).Returns(UserNamed("bob", Other));
 
-        Assert.False(service.IsIdentityStillLinked("oid", "kc", "sub-1", Existing));
+        Assert.False(service.IsIdentityStillLinked(ProviderMode.Oid, "kc", "sub-1", Existing));
     }
 
     [Fact]
@@ -778,7 +778,7 @@ public class CanonicalLinkServiceTests
         });
         users.GetUserById(Existing).Returns((User?)null);
 
-        Assert.False(service.IsIdentityStillLinked("oid", "kc", "sub-1", Existing));
+        Assert.False(service.IsIdentityStillLinked(ProviderMode.Oid, "kc", "sub-1", Existing));
     }
 
     [Theory]
@@ -789,7 +789,7 @@ public class CanonicalLinkServiceTests
     {
         var (service, _, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
 
-        Assert.False(service.IsIdentityStillLinked("oid", "kc", canonicalKey, Existing));
+        Assert.False(service.IsIdentityStillLinked(ProviderMode.Oid, "kc", canonicalKey, Existing));
     }
 
     [Fact]
@@ -806,7 +806,7 @@ public class CanonicalLinkServiceTests
         users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
-            service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true));
+            service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: true));
 
         await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
         Assert.Equal(Existing, cfg.OidConfigs["kc"].CanonicalLinks["sub-1"]); // link untouched
@@ -827,7 +827,7 @@ public class CanonicalLinkServiceTests
         });
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
-            service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true));
+            service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: true));
 
         Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("sub-1")); // no link written
     }
@@ -855,7 +855,7 @@ public class CanonicalLinkServiceTests
         users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
-            service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true));
+            service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: true));
 
         Assert.True(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("alice")); // not re-keyed
         Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("sub-1"));
@@ -869,7 +869,7 @@ public class CanonicalLinkServiceTests
         // gate and this transaction must not gain a dormant link that would mint on re-enable.
         var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = false });
 
-        var result = service.TryCreateLink("oid", "kc", "sub-1", Existing);
+        var result = service.TryCreateLink(ProviderMode.Oid, "kc", "sub-1", Existing);
 
         Assert.Equal(CanonicalLinkWriteResult.UnknownProvider, result);
         Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("sub-1"));
@@ -886,7 +886,7 @@ public class CanonicalLinkServiceTests
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
         });
 
-        var result = service.TryRemoveLink("oid", "kc", "sub-1", Existing);
+        var result = service.TryRemoveLink(ProviderMode.Oid, "kc", "sub-1", Existing);
 
         Assert.Equal(CanonicalLinkRemoveResult.Removed, result);
         Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("sub-1"));
@@ -902,7 +902,7 @@ public class CanonicalLinkServiceTests
         users.GetUserByName("admin").Returns(AdminUserNamed("admin", Existing));
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
-            service.ResolveOrCreateAsync("oid", "kc", "attacker-sub", "admin", allowExistingAccountLink: true, new AdoptionGate(RequireVerifiedEmail: true, EmailVerified: true)));
+            service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "attacker-sub", "admin", allowExistingAccountLink: true, new AdoptionGate(RequireVerifiedEmail: true, EmailVerified: true)));
 
         await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
         Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("attacker-sub"));
@@ -917,7 +917,7 @@ public class CanonicalLinkServiceTests
         users.GetUserByName("admin").Returns(AdminUserNamed("admin", Existing));
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
-            service.ResolveOrCreateAsync("saml", "idp", "admin", "admin", allowExistingAccountLink: true, AdoptionGate.None));
+            service.ResolveOrCreateAsync(ProviderMode.Saml, "idp", "admin", "admin", allowExistingAccountLink: true, AdoptionGate.None));
 
         await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
         Assert.False(cfg.SamlConfigs["idp"].CanonicalLinks.ContainsKey("admin"));
@@ -932,7 +932,7 @@ public class CanonicalLinkServiceTests
         users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
         users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
 
-        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true, new AdoptionGate(RequireVerifiedEmail: true, EmailVerified: true));
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: true, new AdoptionGate(RequireVerifiedEmail: true, EmailVerified: true));
 
         Assert.Equal(Existing, resolved);
         Assert.Equal(Existing, cfg.OidConfigs["kc"].CanonicalLinks["sub-1"]);
@@ -949,7 +949,7 @@ public class CanonicalLinkServiceTests
         users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
-            service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true, new AdoptionGate(RequireVerifiedEmail: true, EmailVerified: emailVerified)));
+            service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: true, new AdoptionGate(RequireVerifiedEmail: true, EmailVerified: emailVerified)));
 
         await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
         Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("sub-1"));
@@ -970,7 +970,7 @@ public class CanonicalLinkServiceTests
         users.GetUserByName("admin").Returns(AdminUserNamed("admin", Existing));
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
-            service.ResolveOrCreateAsync("oid", "kc", "attacker-sub", "admin", allowExistingAccountLink: true));
+            service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "attacker-sub", "admin", allowExistingAccountLink: true));
 
         var links = cfg.OidConfigs["kc"].CanonicalLinks;
         Assert.True(links.ContainsKey("admin"));       // legacy key not re-keyed
@@ -988,7 +988,7 @@ public class CanonicalLinkServiceTests
         users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
         users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
 
-        var resolved = await service.ResolveOrCreateAsync("oid", "kc", "sub-1", "alice", allowExistingAccountLink: true, new AdoptionGate(RequireVerifiedEmail: false, EmailVerified: null));
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: true, new AdoptionGate(RequireVerifiedEmail: false, EmailVerified: null));
 
         Assert.Equal(Existing, resolved);
         Assert.Equal(Existing, cfg.OidConfigs["kc"].CanonicalLinks["sub-1"]);

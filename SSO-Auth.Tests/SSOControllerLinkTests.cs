@@ -92,6 +92,32 @@ public class SSOControllerLinkTests
     }
 
     [Fact]
+    public async Task DeleteCanonicalLink_AuthorizedButInvalidMode_Throws()
+    {
+        // #369: the DELETE route parses {mode} at the same boundary as the add route, so an unknown mode is
+        // rejected there once — fail closed, exactly like AddCanonicalLink — rather than being forwarded raw
+        // to the service to throw deep inside TryGetLinks. Pins the previously-untested DELETE invalid-mode path.
+        var harness = ForCaller(isAdmin: true, callerId: Target);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            harness.Controller.DeleteCanonicalLink("ldap", "keycloak", Target, "sub-1"));
+    }
+
+    [Fact]
+    public async Task AddCanonicalLink_MixedCaseMode_RoutesToTheRightFlow()
+    {
+        // #369: the single boundary parse is case-insensitive and culture-independent, so a mixed-case token
+        // routes to the same protocol the lowercase one does — the two former divergent dispatches (one
+        // culture-sensitive) can no longer disagree. "SAML" routes to the SAML link path, proven by its
+        // clean unknown-provider 400 (SamlLink checks the provider before touching the response).
+        var harness = ForCaller(isAdmin: true, callerId: Target);
+
+        var result = await harness.Controller.AddCanonicalLink("SAML", "does-not-exist", Target, new AuthResponse { Data = "irrelevant" });
+
+        Assert.IsType<BadRequestObjectResult>(result);
+    }
+
+    [Fact]
     public async Task DeleteCanonicalLink_AuthorizedButUnknownCanonicalName_ReturnsNotFound()
     {
         var harness = ForCaller(isAdmin: true, callerId: Target, configure: c =>

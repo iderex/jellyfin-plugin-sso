@@ -407,7 +407,7 @@ internal sealed class SamlLoginService
 
         string providerUserId = samlResponse.GetNameID();
 
-        return FlowResponses.MapCanonicalLinkWrite(_canonicalLinks.TryCreateLink("saml", provider, providerUserId, jellyfinUserId));
+        return FlowResponses.MapCanonicalLinkWrite(_canonicalLinks.TryCreateLink(ProviderMode.Saml, provider, providerUserId, jellyfinUserId));
     }
 
     // Reads a provider's config under the config lock, so an anonymous login-path lookup does not race an
