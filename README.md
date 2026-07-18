@@ -9,7 +9,7 @@
 <h1 align="center">Jellyfin SSO Plugin</h1>
 
 <p align="center">
-<img alt="Logo" src="https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/main/img/logo.png"/>
+<img alt="Jellyfin SSO Plugin" src="https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/main/img/banner.png" width="820"/>
 <br/>
 <br/>
 <a href="https://github.com/iderex/jellyfin-plugin-sso/blob/main/LICENSE.txt">
