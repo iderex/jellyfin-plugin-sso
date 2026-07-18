@@ -25,6 +25,16 @@ on:
 # explicitly rather than granting it workflow-wide.
 permissions: {}
 
+# Serialize beta publishes: a burst of merges to main must not run two of these
+# concurrently, or their manifest-branch pushes / rolling-release updates race
+# (a transient non-fast-forward, or an out-of-order manifest regeneration).
+# cancel-in-progress is false on purpose — a publish must never be killed
+# mid-run (it holds contents:write and moves a release + a manifest branch),
+# matching the never-cancel posture noted in zizmor.yml.
+concurrency:
+  group: publish-beta
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Build & publish beta
@@ -65,6 +75,13 @@ jobs:
       # The grep pins the four-part shape so a malformed build.yaml fails here rather
       # than producing a bogus tag. RUN_NUMBER is passed via env (not inlined into the
       # script) so no ${{ }} expansion is spliced into the shell.
+      #
+      # CONSTRAINT: github.run_number is keyed to THIS workflow file's identity, so
+      # renaming this file resets it to 1. That is safe only while build.yaml's A.B.C
+      # has moved on since the last betas — otherwise a reset emits a LOWER fourth
+      # octet than testers already have and Jellyfin never offers the newer build,
+      # stranding them. So: never rename this workflow without bumping build.yaml's
+      # A.B.C in the same change.
       env:
         RUN_NUMBER: ${{ github.run_number }}
       run: |
@@ -102,7 +119,7 @@ jobs:
         popd
     - name: Publish output artifacts
       id: publish-assets
-      uses: softprops/action-gh-release@132dbbba49e22bd4837f09b46d32a8edaf6baa58 # unreleased commit between v3.0.1 and v3.0.2
+      uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
       with:
           # Prerelease so publish.yml's stable manifest (ignorePrereleases: true)
           # never picks it up; only the beta manifest below (ignorePrereleases:
