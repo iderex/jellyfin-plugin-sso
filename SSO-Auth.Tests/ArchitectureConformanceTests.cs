@@ -154,12 +154,14 @@ public class ArchitectureConformanceTests
         // scattered cap/lifetime/sweep conventions. The former SSOController.DiscoveryFactsCache moved into a
         // *Cache type in #449 and was then removed entirely in #450 (discovery is now read once per challenge
         // and fed to the login, with nothing cached), so no discovery-facts dictionary remains to exempt.
-        // One documented exemption remains:
+        // Two documented exemptions remain, both persisted account-link config state:
         // - ProviderConfigBase._canonicalLinks: the persisted account-link map — serialized plugin
         //   configuration mutated only under the config lock, so a runtime store type would be the
         //   wrong home; it is config state, not in-flight state.
+        // - OidConfig._canonicalLinkIssuers: the per-link issuer binding (#186), the exact parallel of
+        //   _canonicalLinks — serialized config mutated only under the config lock, same rationale.
         var storeLike = new[] { "Store", "Cache", "Limiter" };
-        var exemptions = new[] { "ProviderConfigBase._canonicalLinks" };
+        var exemptions = new[] { "ProviderConfigBase._canonicalLinks", "OidConfig._canonicalLinkIssuers" };
 
         var offenders = PluginClasses
             .Where(t => !storeLike.Any(s => SimpleName(t).EndsWith(s, StringComparison.Ordinal)))
@@ -410,25 +412,37 @@ public class ArchitectureConformanceTests
         // the "call-level invariants stay with CodeQL" note in the class summary).
         //
         // Sentinel against a vacuous pass (#388): a zero-occurrence scan only means something while its
-        // target token still names the link map. A property rename (CanonicalLinks -> anything) would make
-        // the scan match nothing and pass for the wrong reason, so pin the property by reflection — a rename
-        // fails HERE and forces a conscious update of `linkMapProperty` (and the scanned token with it).
-        const string linkMapProperty = "CanonicalLinks";
-        Assert.True(
-            typeof(ProviderConfigBase).GetProperty(linkMapProperty, BindingFlags.Public | BindingFlags.Instance) is not null,
-            $"ProviderConfigBase.{linkMapProperty} was renamed or removed; point this rule at the new provider link-map property so the scan keeps guarding it (#388).");
+        // target token still names a link map. A property rename (CanonicalLinks -> anything) would make
+        // the scan match nothing and pass for the wrong reason, so pin each property by reflection — a
+        // rename fails HERE and forces a conscious update of the roster (and the scanned token with it).
+        // BOTH server-managed link maps are guarded: the account-link map (ProviderConfigBase.CanonicalLinks,
+        // #157) and its per-link issuer binding (OidConfig.CanonicalLinkIssuers, #186). Both are owned by
+        // CanonicalLinkService and ServerManagedFields.Preserve; a controller must touch neither directly.
+        var linkMapProperties = new[]
+        {
+            (Declaring: typeof(ProviderConfigBase), Name: "CanonicalLinks"),
+            (Declaring: typeof(OidConfig), Name: "CanonicalLinkIssuers"),
+        };
+        foreach (var (declaring, name) in linkMapProperties)
+        {
+            Assert.True(
+                declaring.GetProperty(name, BindingFlags.Public | BindingFlags.Instance) is not null,
+                $"{declaring.Name}.{name} was renamed or removed; point this rule at the new provider link-map property so the scan keeps guarding it (#388).");
+        }
 
-        var token = "." + linkMapProperty;
+        // The two tokens are disjoint substrings (".CanonicalLinkIssuers" does not contain ".CanonicalLinks"
+        // — the char after "Link" is "I", not "s"), so scanning for both cannot cross-match.
+        var tokens = linkMapProperties.Select(p => "." + p.Name).ToList();
         var linkMapLines = ControllerSourceFiles()
             .SelectMany(path => File.ReadAllLines(path)
                 .Select((line, index) => (File: Path.GetFileName(path), Text: line.Trim(), Number: index + 1)))
-            .Where(l => l.Text.Contains(token, StringComparison.Ordinal))
+            .Where(l => tokens.Any(t => l.Text.Contains(t, StringComparison.Ordinal)))
             .Select(l => $"{l.File} line {l.Number}: {l.Text}")
             .ToList();
 
         Assert.True(
             linkMapLines.Count == 0,
-            "A controller must not access a provider CanonicalLinks map directly; route link-map access through CanonicalLinkService and server-managed re-injection through ServerManagedFields.Preserve. Found: " + string.Join(" | ", linkMapLines));
+            "A controller must not access a provider link map (CanonicalLinks / CanonicalLinkIssuers) directly; route link-map access through CanonicalLinkService and server-managed re-injection through ServerManagedFields.Preserve. Found: " + string.Join(" | ", linkMapLines));
     }
 
     [Fact]

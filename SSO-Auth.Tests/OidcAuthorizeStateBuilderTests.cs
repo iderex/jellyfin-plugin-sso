@@ -48,6 +48,30 @@ public class OidcAuthorizeStateBuilderTests
     }
 
     [Fact]
+    public void Issuer_PassedFromTheRawToken_IsCarriedForTheLinkBinding()
+    {
+        // #186: the validated id_token's issuer is passed in by the callback (read from the raw token, since
+        // OidcClient filters `iss` out of result.User) and carried onto the derived state so the canonical
+        // link can be issuer-bound.
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(("preferred_username", "alice"), ("sub", "sub-1")),
+            Config(_ => { }),
+            issuer: "https://issuer.example");
+
+        Assert.Equal("https://issuer.example", result.Issuer);
+    }
+
+    [Fact]
+    public void NoIssuerPassed_ResolvesToNull_SoTheLinkStaysUnstamped()
+    {
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(("preferred_username", "alice"), ("sub", "sub-1")),
+            Config(_ => { }));
+
+        Assert.Null(result.Issuer);
+    }
+
+    [Fact]
     public void PreferredUsernameClaim_NoRolesConfigured_IsValid()
     {
         var result = OidcAuthorizeStateBuilder.Build(Claims(("preferred_username", "alice")), Config(_ => { }));

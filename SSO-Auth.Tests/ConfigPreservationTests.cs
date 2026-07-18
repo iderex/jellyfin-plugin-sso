@@ -93,6 +93,81 @@ public class ConfigPreservationTests
         Assert.Null(exception);
     }
 
+    // --- Per-link issuer binding + repoint belt (#186) ---
+
+    [Fact]
+    public void Preserve_OidEndpointUnchanged_KeepsLinksAndIssuerBindings()
+    {
+        // Criterion 3 (#186): while the provider endpoint is unchanged, both the links and their issuer
+        // bindings are carried over verbatim, so existing links keep working across an unrelated save.
+        var live = new PluginConfiguration();
+        live.OidConfigs["idp"] = new OidConfig
+        {
+            OidEndpoint = "https://idp/.well-known",
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = User },
+            CanonicalLinkIssuers = new SerializableDictionary<string, string> { ["sub-1"] = "https://idp" },
+        };
+        var incoming = new PluginConfiguration();
+        incoming.OidConfigs["idp"] = new OidConfig { OidEndpoint = "https://idp/.well-known" };
+
+        ServerManagedFields.Preserve(incoming, live);
+
+        Assert.Equal(User, incoming.OidConfigs["idp"].CanonicalLinks["sub-1"]);
+        Assert.Equal("https://idp", incoming.OidConfigs["idp"].CanonicalLinkIssuers["sub-1"]);
+    }
+
+    [Fact]
+    public void Preserve_OidEndpointChanged_ClearsLinksAndIssuerBindings_TheRepointBelt()
+    {
+        // Criterion 1 (#186), the belt: repointing the endpoint at a (potentially) different IdP drops the
+        // accumulated sub-keyed links AND their issuer bindings rather than carrying them across, so a
+        // new-IdP user whose sub collides with an old link cannot inherit the old account — even an
+        // un-stamped legacy link (a user who had not logged in since the upgrade) is protected here.
+        var live = new PluginConfiguration();
+        live.OidConfigs["idp"] = new OidConfig
+        {
+            OidEndpoint = "https://idp/.well-known",
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["1"] = User },
+            CanonicalLinkIssuers = new SerializableDictionary<string, string> { ["1"] = "https://idp" },
+        };
+        var incoming = new PluginConfiguration();
+        incoming.OidConfigs["idp"] = new OidConfig { OidEndpoint = "https://other-idp/.well-known" };
+
+        ServerManagedFields.Preserve(incoming, live);
+
+        Assert.Empty(incoming.OidConfigs["idp"].CanonicalLinks);
+        Assert.Empty(incoming.OidConfigs["idp"].CanonicalLinkIssuers);
+    }
+
+    [Fact]
+    public void CanonicalLinkIssuers_AreOmittedFromJson_ButKeptInXml()
+    {
+        // The issuer map is server-managed exactly like CanonicalLinks (#186/#157): withheld from JSON so it
+        // cannot be read back or set via a config PUT, but persisted in the config XML so bindings survive a
+        // restart. This also pins the SerializableDictionary&lt;string,string&gt; XML round-trip shape.
+        var config = new OidConfig
+        {
+            OidClientId = "client",
+            CanonicalLinkIssuers = new SerializableDictionary<string, string> { ["sub-secret"] = "https://issuer.example" },
+        };
+
+        var json = System.Text.Json.JsonSerializer.Serialize(config);
+        Assert.DoesNotContain("CanonicalLinkIssuers", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("issuer.example", json, StringComparison.Ordinal);
+
+        var serializer = new XmlSerializer(typeof(OidConfig));
+        using var writer = new System.IO.StringWriter();
+        serializer.Serialize(writer, config);
+        var xml = writer.ToString();
+        Assert.Contains("CanonicalLinkIssuers", xml, StringComparison.Ordinal);
+        Assert.Contains("sub-secret", xml, StringComparison.Ordinal);
+        Assert.Contains("https://issuer.example", xml, StringComparison.Ordinal);
+
+        // Round-trips back with the value intact.
+        var back = RoundTripXml(config);
+        Assert.Equal("https://issuer.example", back.CanonicalLinkIssuers["sub-secret"]);
+    }
+
     [Fact]
     public void CanonicalLinks_AreOmittedFromJson_ButKeptInXml()
     {

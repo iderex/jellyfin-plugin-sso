@@ -68,7 +68,8 @@ internal sealed class LoginCompletionService
                 identity.Subject,
                 identity.Username,
                 config.AllowExistingAccountLink,
-                adoptionGate).ConfigureAwait(false);
+                adoptionGate,
+                identity.Issuer).ConfigureAwait(false);
         }
         catch (AccountLinkForbiddenException)
         {

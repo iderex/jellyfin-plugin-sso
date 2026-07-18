@@ -284,10 +284,36 @@ public class SamlConfig : ProviderConfigBase
 [XmlRoot("PluginConfiguration")]
 public class OidConfig : ProviderConfigBase
 {
+    private SerializableDictionary<string, string> _canonicalLinkIssuers;
+
     /// <summary>
     /// Gets or sets the OpenID well-known information endpoint.
     /// </summary>
     public string OidEndpoint { get; set; }
+
+    /// <summary>
+    /// Gets or sets, per canonical link, the discovered issuer the link was minted under (#186). Keyed
+    /// by the same stable subject (<c>sub</c>) as <see cref="ProviderConfigBase.CanonicalLinks"/>, the
+    /// value is the id_token issuer that asserted that subject when the link was created. At login the
+    /// resolved link's stored issuer is compared to the current login's issuer and a mismatch refuses the
+    /// login (fail closed), so an admin repointing this provider entry at a DIFFERENT identity provider
+    /// (same discovery URL, new issuer) can no longer silently map a new-IdP user whose <c>sub</c>
+    /// collides with an old link onto the old user's account. A link that carries no stored issuer (one
+    /// minted before this store existed) is stamped with the current issuer on its next successful login
+    /// (trust-on-first-use), so existing links keep working while the provider is unchanged and gain the
+    /// binding transparently — no userbase lockout on upgrade. OpenID only; SAML is out of scope.
+    /// </summary>
+    // Server-managed exactly like CanonicalLinks: persisted in the config XML but withheld from every JSON
+    // response ([JsonIgnore]) so it cannot be read back or set via a config PUT, self-healing lazy init so
+    // a direct index assignment persists, and preserved on save by ServerManagedFields.Preserve (which
+    // also CLEARS it, alongside the links, when OidEndpoint changes — the repoint belt, #186).
+    [XmlElement("CanonicalLinkIssuers")]
+    [System.Text.Json.Serialization.JsonIgnore]
+    public SerializableDictionary<string, string> CanonicalLinkIssuers
+    {
+        get => _canonicalLinkIssuers ??= new SerializableDictionary<string, string>();
+        set => _canonicalLinkIssuers = value;
+    }
 
     /// <summary>
     /// Gets or sets OpenID client ID.

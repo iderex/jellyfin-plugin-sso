@@ -230,7 +230,7 @@ public class SSOControllerOidAuthTests
         var ready = new AuthorizeSession.Ready(
             pending,
             new OidcAuthorizeStateBuilder.OidcAuthorizeState(
-                Username: "alice", Subject: "sub-1", EmailVerified: emailVerified, Valid: true, Admin: false,
+                Username: "alice", Subject: "sub-1", Issuer: null, EmailVerified: emailVerified, Valid: true, Admin: false,
                 EnableLiveTv: false, EnableLiveTvManagement: false, Folders: new List<string>(), AvatarUrl: null));
         OidcLoginService.SeedOidStateForTests(token, ready);
 

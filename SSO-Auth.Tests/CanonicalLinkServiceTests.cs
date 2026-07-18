@@ -1137,6 +1137,263 @@ public class CanonicalLinkServiceTests
         await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
     }
 
+    // --- OpenID canonical-link issuer binding (#186) ---
+
+    private const string OldIssuer = "https://old-idp.example";
+    private const string NewIssuer = "https://new-idp.example";
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_SubjectLinkStampedWithADifferentIssuer_RefusesFailClosed()
+    {
+        // The non-inert proof (#186, acceptance criterion 1): a subject-keyed link minted under one issuer
+        // must NOT resolve when the login presents a different one (the provider was repointed at another
+        // IdP behind the same discovery URL). The check FIRES at runtime and refuses — the prior review
+        // rejected an inert take, so this is the load-bearing test. No takeover: the old account is not
+        // handed to the new-IdP identity, and the stale link/issuer are left untouched for the admin.
+        var (service, cfg, users, log) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["1"] = Existing },
+            CanonicalLinkIssuers = new SerializableDictionary<string, string> { ["1"] = OldIssuer },
+        });
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+
+        await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
+            service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "1", "mallory", allowExistingAccountLink: false, issuer: NewIssuer));
+
+        await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
+        Assert.Equal(Existing, cfg.OidConfigs["kc"].CanonicalLinks["1"]); // stale link untouched
+        Assert.Equal(OldIssuer, cfg.OidConfigs["kc"].CanonicalLinkIssuers["1"]); // stored issuer untouched
+
+        var warnings = log.Entries.FindAll(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning);
+        Assert.Single(warnings);
+        Assert.Contains("issuer", warnings[0].Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_SubjectLinkStampedWithTheSameIssuer_ReusesItWithoutWriting()
+    {
+        // The hot path stays pure (#186): a login whose issuer matches the stored one reuses the link and
+        // writes nothing — the issuer binding adds no per-login persist once a link is stamped.
+        var cfg = new PluginConfiguration();
+        cfg.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+            CanonicalLinkIssuers = new SerializableDictionary<string, string> { ["sub-1"] = OldIssuer },
+        };
+        var users = Substitute.For<IUserManager>();
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        var persists = 0;
+        var store = new ProviderConfigStore(() => cfg, _ => persists++, new CapturingLogger());
+        var service = new CanonicalLinkService(users, new FakeCryptoProvider(), store, new CapturingLogger());
+
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: false, issuer: OldIssuer);
+
+        Assert.Equal(Existing, resolved);
+        Assert.Equal(0, persists); // matched binding = pure read, no write
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_UnstampedSubjectLink_TrustOnFirstUse_StampsAndProceeds()
+    {
+        // Transparent migration (#186, acceptance criterion 3): an existing link with NO stored issuer
+        // (minted before this store) keeps working while the provider is unchanged AND gets stamped with the
+        // current issuer on its first login — no lockout on upgrade, and the binding is in force from then on.
+        var cfg = new PluginConfiguration();
+        cfg.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        };
+        var users = Substitute.For<IUserManager>();
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        var persists = 0;
+        var store = new ProviderConfigStore(() => cfg, _ => persists++, new CapturingLogger());
+        var service = new CanonicalLinkService(users, new FakeCryptoProvider(), store, new CapturingLogger());
+
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: false, issuer: OldIssuer);
+
+        Assert.Equal(Existing, resolved);
+        Assert.Equal(OldIssuer, cfg.OidConfigs["kc"].CanonicalLinkIssuers["sub-1"]); // stamped on first use
+        Assert.Equal(1, persists); // exactly one write for the stamp
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_UnstampedSubjectLink_ThenRepointedIssuer_IsRefused()
+    {
+        // The end-to-end story: after trust-on-first-use stamps a link, a later login from a DIFFERENT issuer
+        // is refused. Proves the stamp is what arms the binding (the same-URL-repoint case the belt cannot see).
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+
+        // First login stamps the current issuer.
+        await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: false, issuer: OldIssuer);
+        Assert.Equal(OldIssuer, cfg.OidConfigs["kc"].CanonicalLinkIssuers["sub-1"]);
+
+        // A later login from a swapped IdP (same URL) is now refused.
+        await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
+            service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: false, issuer: NewIssuer));
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_StampedSubjectLink_LoginWithNoIssuer_IsRefused()
+    {
+        // Bypass closed (#186): a token that omits `iss` (issuer resolves to null) must NOT slip past a
+        // stamped binding — a null current issuer against a stored one is a mismatch, so the login is refused
+        // rather than mapping onto the stamped account.
+        var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+            CanonicalLinkIssuers = new SerializableDictionary<string, string> { ["sub-1"] = OldIssuer },
+        });
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+
+        await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
+            service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: false, issuer: null));
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_CreateNewAccount_StampsTheLoginIssuer()
+    {
+        // A newly created account's link is issuer-bound at creation (#186), so it is protected from the
+        // first login onward, not only after a later trust-on-first-use pass.
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
+        var created = UserNamed("alice", Other);
+        users.GetUserByName("alice").Returns((User?)null);
+        users.CreateUserAsync("alice").Returns(created);
+        users.GetUserById(Other).Returns(created);
+
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: false, issuer: NewIssuer);
+
+        Assert.Equal(Other, resolved);
+        Assert.Equal(NewIssuer, cfg.OidConfigs["kc"].CanonicalLinkIssuers["sub-1"]);
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_AdoptExistingAccount_StampsTheLoginIssuer()
+    {
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
+        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: true, issuer: NewIssuer);
+
+        Assert.Equal(Existing, resolved);
+        Assert.Equal(NewIssuer, cfg.OidConfigs["kc"].CanonicalLinkIssuers["sub-1"]);
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_LegacyMigration_StampsIssuerOnTheSubjectKey()
+    {
+        // The re-keyed link (#155 legacy migration) is a fresh subject-keyed link written under this login,
+        // so it is stamped with the login's issuer (#186) — the migrated link is issuer-bound like any other.
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
+        });
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
+
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: true, issuer: NewIssuer);
+
+        Assert.Equal(Existing, resolved);
+        var issuers = cfg.OidConfigs["kc"].CanonicalLinkIssuers;
+        Assert.Equal(NewIssuer, issuers["sub-1"]);
+        Assert.False(issuers.ContainsKey("alice")); // no issuer under the retired legacy key
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_NullIssuerOnUnstampedLink_LeavesItUnstamped_AndProceeds()
+    {
+        // A login that carries no issuer (SAML, or a non-conformant token) never stamps a blank value — the
+        // link stays un-stamped rather than binding to nothing, and the login proceeds unchanged (#186).
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: false, issuer: null);
+
+        Assert.Equal(Existing, resolved);
+        Assert.Empty(cfg.OidConfigs["kc"].CanonicalLinkIssuers);
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_Saml_IgnoresIssuerBinding()
+    {
+        // SAML is out of scope (#186): a SAML login resolves normally regardless of any issuer argument, and
+        // SamlConfig carries no issuer map at all — the binding is OpenID only.
+        var (service, cfg, users, _) = Build(c => c.SamlConfigs["adfs"] = new SamlConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
+        });
+        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Saml, "adfs", "alice", "alice", allowExistingAccountLink: false, issuer: NewIssuer);
+
+        Assert.Equal(Existing, resolved);
+        Assert.Equal(Existing, cfg.SamlConfigs["adfs"].CanonicalLinks["alice"]);
+    }
+
+    [Fact]
+    public void TryCreateLink_Oid_StampsTheIssuer()
+    {
+        // A manual OpenID link (the admin/self link redeem) is issuer-bound too (#186), so it is not left an
+        // un-stamped TOFU candidate a repoint could exploit before its first login.
+        var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
+
+        var result = service.TryCreateLink(ProviderMode.Oid, "kc", "sub-1", Existing, issuer: NewIssuer);
+
+        Assert.Equal(CanonicalLinkWriteResult.Created, result);
+        Assert.Equal(NewIssuer, cfg.OidConfigs["kc"].CanonicalLinkIssuers["sub-1"]);
+    }
+
+    [Fact]
+    public void TryRemoveLink_Oid_DropsTheIssuerEntry()
+    {
+        // Removing a link drops its issuer entry (#186), so a removed-then-recreated sub does not inherit a
+        // stale binding and the issuer map does not accumulate orphans.
+        var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+            CanonicalLinkIssuers = new SerializableDictionary<string, string> { ["sub-1"] = OldIssuer },
+        });
+
+        var result = service.TryRemoveLink(ProviderMode.Oid, "kc", "sub-1", Existing);
+
+        Assert.Equal(CanonicalLinkRemoveResult.Removed, result.Result);
+        Assert.False(cfg.OidConfigs["kc"].CanonicalLinkIssuers.ContainsKey("sub-1"));
+    }
+
+    [Fact]
+    public void RemoveUserEverywhere_PrunesOrphanedIssuerEntries()
+    {
+        // Revoking a user's links also prunes any now-orphaned issuer entries (#186), so the map stays clean.
+        var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing, ["sub-2"] = Other },
+            CanonicalLinkIssuers = new SerializableDictionary<string, string> { ["sub-1"] = OldIssuer, ["sub-2"] = NewIssuer },
+        });
+
+        service.RemoveUserEverywhere(Existing);
+
+        var issuers = cfg.OidConfigs["kc"].CanonicalLinkIssuers;
+        Assert.False(issuers.ContainsKey("sub-1")); // the revoked user's issuer entry is gone
+        Assert.Equal(NewIssuer, issuers["sub-2"]); // the other user's binding survives
+    }
+
     [Fact]
     public async Task ResolveOrCreateAsync_RequireVerifiedEmailOff_NonAdmin_AdoptsRegardlessOfClaim()
     {

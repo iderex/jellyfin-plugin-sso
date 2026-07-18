@@ -48,6 +48,25 @@ internal enum CanonicalLinkRemoveResult
 }
 
 /// <summary>
+/// The issuer binding of a resolved subject-keyed OpenID link against the current login's issuer (#186).
+/// SAML (any non-OpenID mode) and a login with no resolved subject link are <see cref="NotBound"/>.
+/// </summary>
+internal enum IssuerBinding
+{
+    /// <summary>Issuer binding does not apply (SAML / any non-OpenID mode, or no subject link resolved).</summary>
+    NotBound,
+
+    /// <summary>The link's stored issuer ordinally equals the login's issuer — proceed, no write.</summary>
+    Match,
+
+    /// <summary>The link carries no stored issuer (a legacy/un-stamped link) — eligible for trust-on-first-use stamping.</summary>
+    Absent,
+
+    /// <summary>The link's stored issuer differs from the login's — refuse the login (fail closed).</summary>
+    Mismatch,
+}
+
+/// <summary>
 /// The outcome of a manual unlink, together with whether the target user still holds any other canonical
 /// SSO link after it. The remainder is meaningful only when <see cref="Result"/> is
 /// <see cref="CanonicalLinkRemoveResult.Removed"/> (the other outcomes change no state); the controller
@@ -126,8 +145,14 @@ internal sealed class CanonicalLinkService
     /// when the gate requires a verified email the login must carry <c>email_verified == true</c>. Default
     /// (<see cref="AdoptionGate.None"/>) is the SAML/legacy posture: admin refusal only.
     /// </param>
+    /// <param name="issuer">
+    /// The OpenID login's id_token issuer, used to issuer-bind the canonical link (#186): a resolved link
+    /// whose stored issuer does not match this value is refused (fail closed, after an apparent repoint),
+    /// and a link with no stored issuer is stamped with this value on first use (trust-on-first-use). Null
+    /// for SAML and for a token that carried no <c>iss</c>; both skip the binding.
+    /// </param>
     /// <returns>The resolved Jellyfin user id.</returns>
-    internal async Task<Guid> ResolveOrCreateAsync(ProviderMode mode, string provider, string canonicalKey, string username, bool allowExistingAccountLink, AdoptionGate adoptionGate = default)
+    internal async Task<Guid> ResolveOrCreateAsync(ProviderMode mode, string provider, string canonicalKey, string username, bool allowExistingAccountLink, AdoptionGate adoptionGate = default, string issuer = null)
     {
         // Defense in depth (#95, #155): a login that resolved no stable identity key (OpenID sub /
         // SAML NameID) or no username must never create, adopt, or look up an account. Both callbacks
@@ -152,7 +177,7 @@ internal sealed class CanonicalLinkService
         // key before the re-key and the legacy key after it, resolve neither, and bounce a legitimate
         // user off the adoption gate with a spurious 403. A link whose target user was deleted counts
         // as absent (dangling links are dead, not identities).
-        var (subjectLink, legacyLink) = _configStore.Read(configuration =>
+        var (subjectLink, legacyLink, subjectIssuer) = _configStore.Read(configuration =>
         {
             // The login callbacks resolve the provider before calling, so it is normally present and
             // enabled. If it was deleted OR DISABLED in the race between that lookup and here, fail
@@ -176,8 +201,35 @@ internal sealed class CanonicalLinkService
                 && !string.Equals(canonicalKey, username, StringComparison.Ordinal)
                 && links.TryGetValue(username, out var n) && _userManager.GetUserById(n) != null
                 ? n : (Guid?)null;
-            return (bySubject, byName);
+
+            // Classify the subject link's issuer binding in the SAME locked read (#186), so the verdict
+            // cannot tear against a concurrent stamp or repoint. NotBound unless a subject link resolved
+            // for an OpenID provider.
+            var issuerVerdict = bySubject is null
+                ? IssuerBinding.NotBound
+                : ClassifyIssuer(configuration, mode, provider, canonicalKey, issuer);
+            return (bySubject, byName, issuerVerdict);
         });
+
+        // Non-inert issuer binding (#186): the subject-keyed link this identity resolves to was minted
+        // under a DIFFERENT issuer than the login now presents — an admin repointed the provider entry at
+        // another identity provider behind the same discovery URL, or (with the URL edited) the belt has
+        // not yet run. Refuse rather than map this login onto the old link's account; a colliding `sub`
+        // from a new IdP (realistic for short numeric subjects like "1") no longer inherits the old user.
+        // Fail closed, self-healing: the admin re-establishes the link, or an endpoint edit clears the
+        // stale links (ServerManagedFields belt). This is the check that MUST fire at runtime — the prior
+        // review rejected an inert take; a rejection test pins that it does. A login with no issuer while
+        // the link has one lands here too (ClassifyIssuer treats it as a mismatch), so a token omitting
+        // `iss` cannot slip past a stamped binding.
+        if (subjectLink.HasValue && subjectIssuer == IssuerBinding.Mismatch)
+        {
+            _logger.LogWarning(
+                "OpenID login for {Name} via {Mode}/{Provider} refused: the account link's stored issuer does not match the login's issuer (the provider entry may have been repointed at a different identity provider). Re-establish the link via the admin endpoints.",
+                username?.ReplaceLineEndings(string.Empty),
+                mode.ToToken(),
+                provider?.ReplaceLineEndings(string.Empty));
+            throw new AccountLinkForbiddenException("The account link was minted under a different issuer; refusing to resolve it after an apparent provider repoint.");
+        }
 
         // The account currently bearing the display name, resolved once (outside the config lock — it is
         // a user-manager read, not a config read). It is both the same-name adoption candidate for the
@@ -218,11 +270,21 @@ internal sealed class CanonicalLinkService
             // instead of reasoning about its (previously argued-benign) safety. A concurrent winner's live
             // subject link is used as-is; the deleted-target edge resolves to null so the login falls
             // through to the create/adopt gate rather than binding to a dead account.
-            linkedUserId = MigrateAndResolveCanonicalLink(mode, provider, canonicalKey, username);
+            linkedUserId = MigrateAndResolveCanonicalLink(mode, provider, canonicalKey, username, issuer);
             _logger.LogInformation(
                 "Migrated {Mode}/{Provider} canonical link from the legacy username key to the stable subject key.",
                 mode.ToToken(),
                 provider?.ReplaceLineEndings(string.Empty));
+        }
+        else if (subjectLink.HasValue && subjectIssuer == IssuerBinding.Absent)
+        {
+            // Trust-on-first-use migration (#186): the resolved subject link carries no stored issuer — it
+            // was minted before this store existed, or by a null-issuer path. The provider is unchanged
+            // (we did not hit the mismatch refusal above), so the login's issuer IS the one the link was
+            // minted under; stamp it now so a later same-URL issuer swap is caught. No lockout on upgrade:
+            // an existing user's first post-upgrade login stamps and proceeds. Skipped when the login
+            // carries no issuer — there is nothing safe to bind to, so the link stays un-stamped.
+            StampIssuer(mode, provider, canonicalKey, issuer);
         }
 
         // A legacy link that survives here un-migrated (flag off — or flag on but the name no longer
@@ -269,8 +331,9 @@ internal sealed class CanonicalLinkService
                 }
 
                 // Atomic check-then-link (#133): if a concurrent first-login already linked this
-                // identity, that winner is used and no second write or duplicate audit occurs.
-                var (adoptedUserId, wrote) = LinkCanonicalIfAbsent(mode, provider, canonicalKey, decision.UserId);
+                // identity, that winner is used and no second write or duplicate audit occurs. The link
+                // write also stamps the login's issuer (#186), so the adopted link is issuer-bound.
+                var (adoptedUserId, wrote) = LinkCanonicalIfAbsent(mode, provider, canonicalKey, decision.UserId, issuer);
                 if (wrote)
                 {
                     SsoAudit.AccountAdopted(_logger, mode == ProviderMode.Oid ? "OpenID" : "SAML", provider, username);
@@ -309,8 +372,9 @@ internal sealed class CanonicalLinkService
 
                 // Atomic check-then-link (#133): if a concurrent first-login for the same identity
                 // linked meanwhile, use its account — this freshly created user is left unlinked rather
-                // than overwriting the winner's link (a rare, benign orphan, not a duplicate login).
-                var (effectiveUserId, _) = LinkCanonicalIfAbsent(mode, provider, canonicalKey, user.Id);
+                // than overwriting the winner's link (a rare, benign orphan, not a duplicate login). The
+                // link write stamps the login's issuer (#186), so the new link is issuer-bound.
+                var (effectiveUserId, _) = LinkCanonicalIfAbsent(mode, provider, canonicalKey, user.Id, issuer);
                 return effectiveUserId;
             }
 
@@ -355,8 +419,9 @@ internal sealed class CanonicalLinkService
     /// <param name="provider">The provider the link belongs to.</param>
     /// <param name="providerUserId">The provider-side identity key (OpenID sub / SAML NameID).</param>
     /// <param name="jellyfinUserId">The Jellyfin user to link the identity to.</param>
+    /// <param name="issuer">The OpenID id_token issuer to issuer-bind the new link to (#186); null for SAML or an unauthenticated admin link, which leaves the link un-stamped (trust-on-first-use applies on its first login).</param>
     /// <returns>The write outcome.</returns>
-    internal CanonicalLinkWriteResult TryCreateLink(ProviderMode mode, string provider, string providerUserId, Guid jellyfinUserId)
+    internal CanonicalLinkWriteResult TryCreateLink(ProviderMode mode, string provider, string providerUserId, Guid jellyfinUserId, string issuer = null)
     {
         // Fail closed (#95), linking-side choke point: an SSO identity that did not resolve must not
         // create a link — an empty or whitespace key would persist a dead link no login can ever redeem.
@@ -381,6 +446,7 @@ internal sealed class CanonicalLinkService
             }
 
             links[providerUserId] = jellyfinUserId;
+            StampIssuerInPlace(configuration, mode, provider, providerUserId, issuer);
             return CanonicalLinkWriteResult.Created;
         });
     }
@@ -428,6 +494,10 @@ internal sealed class CanonicalLinkService
             }
 
             links.Remove(canonicalName);
+
+            // Drop the OpenID issuer entry alongside the link (#186), so the issuer map does not accumulate
+            // orphans and a later re-link of the same sub is not judged against a stale binding. No-op for SAML.
+            RemoveIssuer(configuration, mode, provider, canonicalName);
 
             // Whether the user keeps any other canonical link across ALL providers, read in the SAME
             // transaction as the removal (#468): computing it here rather than in a second lock acquisition
@@ -499,6 +569,17 @@ internal sealed class CanonicalLinkService
                 {
                     removed += CanonicalLinkRevoker.RemoveUser(links, userId);
                 }
+
+                // Prune orphaned OpenID issuer entries (#186): after the revoke, any issuer keyed on a sub
+                // no longer present in the links map is dead weight and must not linger to spuriously bind
+                // (or refuse) a future re-link of that sub. SAML has no issuer map.
+                if (config is OidConfig oid && oid.CanonicalLinks is { } liveLinks)
+                {
+                    foreach (var staleKey in oid.CanonicalLinkIssuers.Keys.Where(k => !liveLinks.ContainsKey(k)).ToList())
+                    {
+                        oid.CanonicalLinkIssuers.Remove(staleKey);
+                    }
+                }
             }
 
             return removed;
@@ -568,7 +649,7 @@ internal sealed class CanonicalLinkService
     // reports WroteLink=false (so the caller does not re-emit the adoption audit). The link write goes
     // straight into the config (no discarded ActionResult), so a failure to persist propagates rather
     // than falling through as a successful adoption.
-    private (Guid EffectiveUserId, bool WroteLink) LinkCanonicalIfAbsent(ProviderMode mode, string provider, string canonicalKey, Guid candidateUserId)
+    private (Guid EffectiveUserId, bool WroteLink) LinkCanonicalIfAbsent(ProviderMode mode, string provider, string canonicalKey, Guid candidateUserId, string issuer)
     {
         return _configStore.Mutate(configuration =>
         {
@@ -589,6 +670,10 @@ internal sealed class CanonicalLinkService
             if (wroteLink)
             {
                 links[canonicalKey] = effectiveUserId;
+
+                // A link written under this login carries this login's issuer (#186). The #133 race loser
+                // (wroteLink == false) uses the winner's already-stamped link, so it stamps nothing.
+                StampIssuerInPlace(configuration, mode, provider, canonicalKey, issuer);
             }
 
             return (effectiveUserId, wroteLink);
@@ -605,7 +690,7 @@ internal sealed class CanonicalLinkService
     // only a dangling one (its target user deleted), which would otherwise block the hand-off on every
     // subsequent login. Returns null only when neither key resolves a live account (the dangling edge), so
     // the login fails closed into the create/adopt gate rather than binding to a dead account.
-    private Guid? MigrateAndResolveCanonicalLink(ProviderMode mode, string provider, string canonicalKey, string legacyKey)
+    private Guid? MigrateAndResolveCanonicalLink(ProviderMode mode, string provider, string canonicalKey, string legacyKey, string issuer)
     {
         return _configStore.Mutate<Guid?>(configuration =>
         {
@@ -629,6 +714,11 @@ internal sealed class CanonicalLinkService
             {
                 links.Remove(legacyKey);
                 links[canonicalKey] = legacyUserId;
+
+                // The re-keyed link is a fresh subject-keyed link written under THIS login, so stamp its
+                // issuer (#186). The legacy key carried no issuer (it predates the store); the new key is
+                // bound to the login that migrated it, matching the create/adopt write paths.
+                StampIssuerInPlace(configuration, mode, provider, canonicalKey, issuer);
                 return legacyUserId;
             }
 
@@ -679,5 +769,84 @@ internal sealed class CanonicalLinkService
         var ok = configs.TryGetValue(provider, out var config);
         links = config?.CanonicalLinks;
         return ok && links != null && (!requireEnabled || config.Enabled);
+    }
+
+    // Classifies an OpenID subject link's issuer binding against the login's issuer, read under the caller's
+    // config lock (#186). SAML (and any non-OID mode) is NotBound — issuer binding is OpenID only. For OID:
+    // Absent when the link has no stored issuer yet (legacy/un-stamped, eligible for trust-on-first-use);
+    // Match when the stored issuer ordinally equals the login's; Mismatch otherwise. A blank stored value is
+    // treated as Absent (never written blank; defensive). The Mismatch arm INCLUDES the case where the login
+    // carries no issuer while the link has one, so a token that omits `iss` cannot slip past a stamped
+    // binding — fail closed.
+    private static IssuerBinding ClassifyIssuer(PluginConfiguration configuration, ProviderMode mode, string provider, string canonicalKey, string issuer)
+    {
+        if (mode != ProviderMode.Oid)
+        {
+            return IssuerBinding.NotBound;
+        }
+
+        var stored = configuration.OidConfigs.TryGetValue(provider, out var config) && config?.CanonicalLinkIssuers is { } issuers
+            && issuers.TryGetValue(canonicalKey, out var storedIssuer)
+            ? storedIssuer
+            : null;
+
+        if (string.IsNullOrWhiteSpace(stored))
+        {
+            return IssuerBinding.Absent;
+        }
+
+        return string.Equals(stored, issuer, StringComparison.Ordinal) ? IssuerBinding.Match : IssuerBinding.Mismatch;
+    }
+
+    // Trust-on-first-use stamp of an OpenID link that has no stored issuer yet (#186), in its own config
+    // transaction. OID-only and non-blank-issuer-only. Idempotent: writes only when the link still exists AND
+    // its issuer is still absent, so a concurrent login that already stamped is not overwritten. A no-op for
+    // SAML or a blank issuer (nothing safe to bind to) — the link stays un-stamped rather than binding to an
+    // empty value.
+    private void StampIssuer(ProviderMode mode, string provider, string canonicalKey, string issuer)
+    {
+        if (mode != ProviderMode.Oid || string.IsNullOrWhiteSpace(issuer))
+        {
+            return;
+        }
+
+        _configStore.Mutate(configuration =>
+        {
+            if (configuration.OidConfigs.TryGetValue(provider, out var config) && config?.CanonicalLinks is { } links
+                && links.ContainsKey(canonicalKey)
+                && !config.CanonicalLinkIssuers.ContainsKey(canonicalKey))
+            {
+                config.CanonicalLinkIssuers[canonicalKey] = issuer;
+            }
+        });
+    }
+
+    // Stamps (overwriting) an OpenID link's issuer within the caller's ALREADY-HELD config transaction (#186),
+    // called right after a link WRITE (adopt / create / migrate / manual link) so the fresh link carries the
+    // issuer it was minted under. Overwrites any stale value — a link just (re)written under this login belongs
+    // to this login's issuer. A no-op for SAML or a blank issuer.
+    private static void StampIssuerInPlace(PluginConfiguration configuration, ProviderMode mode, string provider, string canonicalKey, string issuer)
+    {
+        if (mode != ProviderMode.Oid || string.IsNullOrWhiteSpace(issuer))
+        {
+            return;
+        }
+
+        if (configuration.OidConfigs.TryGetValue(provider, out var config) && config is not null)
+        {
+            config.CanonicalLinkIssuers[canonicalKey] = issuer;
+        }
+    }
+
+    // Drops an OpenID link's issuer entry within the caller's already-held config transaction (#186), called
+    // alongside a link removal so the issuer map does not accumulate orphans. A no-op for SAML.
+    private static void RemoveIssuer(PluginConfiguration configuration, ProviderMode mode, string provider, string canonicalKey)
+    {
+        if (mode == ProviderMode.Oid
+            && configuration.OidConfigs.TryGetValue(provider, out var config)
+            && config?.CanonicalLinkIssuers is { } issuers)
+        {
+            issuers.Remove(canonicalKey);
+        }
     }
 }
