@@ -9,6 +9,14 @@
     "owner": "iderex",
     "versions": [
       {
+        "changelog": "Jellyfin 12.0 (.NET 10) beta 5.0.0-JF12-beta (plugin version 5.0.0.3).\nInstall via the beta repository URL (a Jellyfin 12.0 server picks this build automatically by targetAbi):\nhttps://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json\n\n\n## What's Changed\n* publish-beta: shared publish-manifest-beta concurrency group by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/606\n\n\n**Full Changelog**: https://github.com/iderex/jellyfin-plugin-sso/compare/4.1.2-beta.4...5.0.0-JF12-beta.3",
+        "checksum": "db56f4bbed7c112911955dda10f04b82",
+        "sourceUrl": "https://github.com/iderex/jellyfin-plugin-sso/releases/download/5.0.0-JF12-beta.3/sso-authentication_5.0.0.3.zip",
+        "targetAbi": "12.0.0.0",
+        "timestamp": "2026-07-18T21:15:50Z",
+        "version": "5.0.0.3"
+      },
+      {
         "changelog": "Jellyfin 12.0 (.NET 10) beta 5.0.0-JF12-beta (plugin version 5.0.0.2).\nInstall via the beta repository URL (a Jellyfin 12.0 server picks this build automatically by targetAbi):\nhttps://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json\n\n\n## What's Changed\n* publish-beta: shared publish-manifest-beta concurrency group by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/606\n\n\n**Full Changelog**: https://github.com/iderex/jellyfin-plugin-sso/compare/4.1.2-beta.4...5.0.0-JF12-beta.2",
         "checksum": "026d1070e6f898da97fcc5cb4810ea43",
         "sourceUrl": "https://github.com/iderex/jellyfin-plugin-sso/releases/download/5.0.0-JF12-beta.2/sso-authentication_5.0.0.2.zip",
