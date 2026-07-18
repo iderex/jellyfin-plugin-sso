@@ -66,6 +66,65 @@
             to accomplish this.
           </p>
 
+          <!--
+            Config export / import (#161). Export downloads a REDACTED, importable document — the provider
+            secrets and the server-managed canonical-link maps are withheld by the server, so the file carries
+            no secret, encrypted envelope, or key. Import merges the document into THIS instance, keeping the
+            stored secret and account links of each unchanged provider (an OpenID provider whose endpoint or
+            client id the import changes has its links/secret cleared — the #186 repoint safety measure);
+            because secrets are redacted, they are re-entered on the target after an import. Both endpoints
+            require administrator privileges. The download is built from a Blob and the status is rendered with
+            textContent (never innerHTML), so no document value reaches the DOM as markup (#221).
+          -->
+          <form id="sso-config-transfer" class="esqConfigurationForm">
+            <div
+              class="verticalSection"
+              is="emby-collapse"
+              title="Export / Import Configuration"
+            >
+              <div class="collapseContent">
+                <div class="fieldDescription">
+                  Export downloads a redacted copy of this plugin's
+                  configuration (provider secrets and account links are never
+                  included). Import merges an exported file into this instance,
+                  keeping the stored secret and account links of each unchanged
+                  provider — but if the import gives an OpenID provider a
+                  different discovery endpoint or client id, that provider's
+                  links and secret are cleared (a repoint safety measure), so
+                  review a file before importing it over a live provider.
+                  Re-enter each provider's secret here after importing. Requires
+                  administrator privileges.
+                </div>
+
+                <button
+                  id="ExportConfig"
+                  is="emby-button"
+                  type="button"
+                  class="raised button-submit block emby-button"
+                >
+                  <span>Export Configuration</span>
+                </button>
+
+                <input
+                  id="ImportConfigFile"
+                  type="file"
+                  accept="application/json,.json"
+                  style="display: none"
+                />
+                <button
+                  id="ImportConfig"
+                  is="emby-button"
+                  type="button"
+                  class="raised button-alt block emby-button"
+                >
+                  <span>Import Configuration</span>
+                </button>
+
+                <div id="ConfigTransferResult"></div>
+              </div>
+            </div>
+          </form>
+
           <form id="sso-load-config" class="esqConfigurationForm">
             <div
               class="verticalSection"

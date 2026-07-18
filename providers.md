@@ -480,6 +480,67 @@ A failing probe returns `Ok: false` with an actionable, **generic** message (wha
 HTTPS, the `.well-known` path, a parsable certificate) that never echoes a stored secret. Because the test
 reads the **stored** provider config, **save the provider first**, then test.
 
+## Configuration export / import (admin)
+
+The whole plugin configuration can be exported to a file on one instance and imported into another (for
+example when replicating a setup or migrating a server). Both actions live in the plugin's admin config
+page — an **Export Configuration** button and an **Import Configuration** button — and are also reachable
+directly:
+
+```
+GET  <base URL>/sso/Config/Export
+POST <base URL>/sso/Config/Import
+```
+
+Both endpoints **require administrator privileges**, like every other config endpoint. The request body of
+an import is size-capped, so an oversized document is rejected before it is parsed.
+
+### The export is redacted — secrets never leave the server
+
+The export document is the **same redaction the config already applies on the JSON boundary**, reused, not
+a second copy: the provider secrets — the OpenID **client secret** (`OidSecret`) and the SAML **signing
+keys** (`SamlSigningKeyPfx`, `SamlRolloverSigningKeyPfx`) — are withheld exactly as they are on a normal
+config load, and the **server-managed account-link maps** (`CanonicalLinks`, `CanonicalLinkIssuers`) are
+omitted entirely. So an exported file contains **no plaintext secret, no encrypted `ssoenc:` envelope, and
+no account-link data**. The at-rest data-encryption key (`sso-secret.key`) lives in a separate file and is
+never part of the configuration at all. Everything else — every provider's endpoints, client id, RBAC
+roles, folder mappings, and the security toggles — **is** included, so the document is a complete,
+shareable description of the setup minus its secrets. The global rate-limit settings are included in the
+export for reference, but are **not applied on import** (see below).
+
+### The import merges and preserves an unchanged provider's secrets and links
+
+An import is a **fail-closed merge**, not a blind overwrite:
+
+- It is **validated first** through the same rules the config-page save uses (a malformed Base URL
+  override, an unloadable SAML certificate or signing key, or a new provider name containing
+  URI-reserved/control characters is **rejected**), and only a wholly-valid document is applied —
+  **atomically**, so a rejected import changes nothing.
+- For a provider that **already exists** on the target instance and whose identity is **unchanged**, the
+  target's own **secret is kept** (the export carried none, so the blank value means "keep the stored
+  secret"), and its server-managed **account links, issuer bindings, and redirect-path state are
+  preserved**.
+- **Changing an OpenID provider's identity on import drops that provider's links and secret** — by design.
+  If the imported document gives an existing OpenID provider a **different discovery endpoint or client
+  id**, the plugin treats it as a repoint to a potentially different identity provider and, exactly as a
+  config-page edit does (#186), **clears that provider's account links and issuer bindings and does not
+  carry over its stored secret**. Its users must re-link and an admin must re-enter the secret. This is a
+  deliberate safety measure (a different IdP must not inherit the old one's account mappings), but because
+  the endpoint change can ride in from a file, **review an export before importing it over a live provider**.
+  SAML provider links are preserved regardless of endpoint changes.
+- Providers on the target that are **not** in the imported document are **left untouched** (it is a merge,
+  not a replace).
+- A provider that is **new** to the target is added with a **blank secret**, so its login fails closed
+  until an administrator supplies the secret.
+- The **global rate-limit settings are not imported** — they are instance-local operational tuning
+  (reverse-proxy dependent), so the target keeps its own limiter configuration. This is deliberate: a
+  document from an instance that never enabled rate limiting must not silently turn a DoS control off on a
+  target that had it on. Tune the limiter on the config page, not by import.
+
+**Round-trip in practice:** export from instance A, import into instance B, then on B open each provider,
+**re-enter its client secret / signing key, and save**. The export deliberately never carried the secrets,
+so re-entering them on the target is the final step — everything else is already in place.
+
 ## SAML login browser binding
 
 Every SP-initiated SAML login (one started from Jellyfin, i.e. `SAML/start/...`) is bound to the

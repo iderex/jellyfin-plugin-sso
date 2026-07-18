@@ -66,6 +66,16 @@ internal static class SsoAudit
             "[SSO Audit] OpenID provider '{Provider}' does not advertise PKCE (S256) in its discovery document (code_challenge_methods_supported). PKCE is still sent, but a server that ignores it leaves cross-session authorization-code injection undetectable (RFC 9700 §2.1.1). Set RequirePkce to fail closed once the provider supports it.",
             provider?.ReplaceLineEndings(string.Empty));
 
+    /// <summary>Records an administrator importing a configuration document (#161).</summary>
+    /// <param name="logger">The logger.</param>
+    /// <param name="oidProviders">How many OpenID providers the import merged.</param>
+    /// <param name="samlProviders">How many SAML providers the import merged.</param>
+    internal static void ConfigImported(ILogger logger, int oidProviders, int samlProviders)
+        => logger.LogWarning(
+            "[SSO Audit] Configuration imported by an administrator: {OidProviders} OpenID and {SamlProviders} SAML provider(s) merged. Server-managed secrets and links were preserved; redacted secrets must be re-entered on this instance.",
+            oidProviders,
+            samlProviders);
+
     /// <summary>Records a provider being saved with one or more security checks disabled (#140).</summary>
     /// <param name="logger">The logger.</param>
     /// <param name="protocol">The protocol (OpenID or SAML).</param>

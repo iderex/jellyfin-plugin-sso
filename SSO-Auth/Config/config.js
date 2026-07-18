@@ -441,6 +441,92 @@ const ssoConfigurationPage = {
     });
     container.appendChild(list);
   },
+  // Config export (#161). Fetches the redacted export document from the elevation-gated endpoint (the
+  // server withholds every secret and account-link map) and saves it as a JSON file via a Blob download —
+  // never navigation, so the admin's auth header is sent and no secret is placed in a URL. The filename is
+  // fixed text; nothing from the document reaches the DOM as markup.
+  exportConfig: (page) => {
+    const container = page.querySelector("#ConfigTransferResult");
+    ssoConfigurationPage.renderTransferMessage(container, "Exporting…");
+
+    return ApiClient.getJSON(ApiClient.getUrl("sso/Config/Export")).then(
+      (document_json) => {
+        const blob = new Blob([JSON.stringify(document_json, null, 2)], {
+          type: "application/json",
+        });
+        const url = URL.createObjectURL(blob);
+        const anchor = window.document.createElement("a");
+        anchor.href = url;
+        anchor.download = "sso-config-export.json";
+        window.document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(url);
+        ssoConfigurationPage.renderTransferMessage(
+          container,
+          "Exported. Provider secrets and account links are redacted from the file.",
+        );
+      },
+      () =>
+        ssoConfigurationPage.renderTransferMessage(
+          container,
+          "Could not export the configuration. Make sure you are signed in as an administrator, then try again.",
+        ),
+    );
+  },
+  // Config import (#161). Reads the chosen file as text, parses it locally (a parse error is reported, never
+  // applied), and POSTs it to the elevation-gated import endpoint. The server validates and merges it
+  // fail-closed, keeping each unchanged provider's stored secret and links (an OpenID provider whose
+  // endpoint/client id the import changes has its links/secret cleared — the #186 repoint safety measure).
+  // On success the provider list is reloaded so the merged providers appear; the admin re-enters secrets.
+  importConfig: (page, file) => {
+    const container = page.querySelector("#ConfigTransferResult");
+    if (!file) {
+      return Promise.resolve();
+    }
+
+    ssoConfigurationPage.renderTransferMessage(container, "Importing…");
+    return file
+      .text()
+      .then((text) => {
+        let document_json;
+        try {
+          document_json = JSON.parse(text);
+        } catch (e) {
+          throw new Error("not-json");
+        }
+
+        return ApiClient.fetch({
+          type: "POST",
+          url: ApiClient.getUrl("sso/Config/Import"),
+          data: JSON.stringify(document_json),
+          contentType: "application/json",
+        });
+      })
+      .then(() => {
+        ssoConfigurationPage.loadConfiguration(page);
+        ssoConfigurationPage.renderTransferMessage(
+          container,
+          "Imported. Re-enter each provider's secret and save it — secrets are never included in an export.",
+        );
+      })
+      .catch((e) => {
+        // A local parse failure and a server rejection (an invalid or unsupported document, an expired
+        // session) are both fail-closed here: the message is generic and never reflects a server value.
+        const message =
+          e && e.message === "not-json"
+            ? "That file is not valid JSON. Choose a configuration file exported from this plugin."
+            : "Could not import the configuration. The file was rejected by the server, or you are not signed in as an administrator.";
+        ssoConfigurationPage.renderTransferMessage(container, message);
+      });
+  },
+  renderTransferMessage: (container, message) => {
+    container.replaceChildren();
+    const line = window.document.createElement("p");
+    line.classList.add("fieldDescription");
+    line.textContent = message;
+    container.appendChild(line);
+  },
   addTextAreaStyle: (view) => {
     const style = document.createElement("link");
     style.rel = "stylesheet";
@@ -499,6 +585,26 @@ export default function initSsoConfigurationPage(view) {
       ssoConfigurationPage.serializeRoleMappings(container);
     current_mappings.push({ Role: "", Folders: [] });
     ssoConfigurationPage.populateRoleMappings(current_mappings, container);
+  });
+
+  view.querySelector("#ExportConfig").addEventListener("click", (e) => {
+    ssoConfigurationPage.exportConfig(view);
+    e.preventDefault();
+    return false;
+  });
+
+  // The visible Import button drives the hidden file input; selecting a file runs the import.
+  view.querySelector("#ImportConfig").addEventListener("click", (e) => {
+    view.querySelector("#ImportConfigFile").click();
+    e.preventDefault();
+    return false;
+  });
+
+  view.querySelector("#ImportConfigFile").addEventListener("change", (e) => {
+    const file = e.target.files && e.target.files[0];
+    // Clear the input so choosing the same file again re-triggers change.
+    e.target.value = "";
+    ssoConfigurationPage.importConfig(view, file);
   });
 
   view.querySelector("#sso-self-service-link").href =
