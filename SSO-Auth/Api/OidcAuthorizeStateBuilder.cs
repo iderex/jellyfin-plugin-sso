@@ -39,12 +39,6 @@ internal static class OidcAuthorizeStateBuilder
         // Materialize so the claims can be enumerated more than once (avatar format, role claim, sub fallback).
         var claimList = claims as IReadOnlyList<Claim> ?? claims.ToList();
 
-        // Folders start from the statically-enabled set only when folder roles are off; role-granted
-        // folders are appended below.
-        var folders = !config.EnableFolderRoles && config.EnabledFolders != null
-            ? new List<string>(config.EnabledFolders)
-            : new List<string>();
-
         var avatarUrl = ResolveAvatarUrl(claimList, config);
         var (username, valid, roles) = ScanClaims(claimList, config);
 
@@ -64,13 +58,14 @@ internal static class OidcAuthorizeStateBuilder
         // validity and of the username, like the subject above.
         var emailVerified = ResolveEmailVerified(claimList);
 
-        // Map the collected roles to privileges and merge (monotonic: only ever grants).
-        var grants = RolePrivilegeMapper.Evaluate(roles, config);
-        valid |= grants.Valid;
-        var admin = grants.Admin;
-        var enableLiveTv = config.EnableLiveTv || grants.EnableLiveTv;
-        var enableLiveTvManagement = config.EnableLiveTvManagement || grants.EnableLiveTvManagement;
-        folders.AddRange(grants.Folders);
+        // Assemble the role-derived privileges (folders, admin, Live TV) in the single shared home
+        // (#508); OR the assembled validity into the running validity — the SAML builder ignores it.
+        var privileges = RolePrivilegeMapper.AssemblePrivileges(roles, config);
+        valid |= privileges.Valid;
+        var admin = privileges.Admin;
+        var enableLiveTv = privileges.EnableLiveTv;
+        var enableLiveTvManagement = privileges.EnableLiveTvManagement;
+        var folders = privileges.Folders;
 
         // If nothing has validated the login yet, fall back to the stable "sub" as the username. The
         // subject was already resolved above (last "sub" wins), so this reuses it instead of scanning
