@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Duende.IdentityModel.OidcClient;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Api.Flows;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Microsoft.AspNetCore.Mvc;
 using NSubstitute;
@@ -153,7 +154,7 @@ public class SSOControllerOidAuthTests
             new OidcAuthorizeStateBuilder.OidcAuthorizeState(
                 Username: "alice", Subject: "sub-1", EmailVerified: null, Valid: true, Admin: false,
                 EnableLiveTv: false, EnableLiveTvManagement: false, Folders: new List<string>(), AvatarUrl: null));
-        SSOController.SeedOidStateForTests(token, ready);
+        OidcLoginService.SeedOidStateForTests(token, ready);
 
         var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
         harness.UserManager.CreateUserAsync("alice").Returns(user);

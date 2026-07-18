@@ -8,7 +8,6 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
-using Duende.IdentityModel.OidcClient;
 using Jellyfin.Data;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
@@ -56,16 +55,16 @@ public class SSOController : ControllerBase
     private readonly ISessionManager _sessionManager;
     private readonly IAuthorizationContext _authContext;
     private readonly ILogger<SSOController> _logger;
-    private readonly ILoggerFactory _loggerFactory;
     private readonly ICryptoProvider _cryptoProvider;
-    private readonly IHttpClientFactory _httpClientFactory;
 
     // The account-linking workflow (resolve/adopt/create, legacy re-key, revoke); the controller keeps
     // the authz guards, the one-time-use replay/state consume, and the HTTP mapping (#318).
     private readonly CanonicalLinkService _canonicalLinks;
-    // The in-flight OpenID authorize-state store (cap, lifetime, throttled sweep and capacity signal
-    // all live inside; see OidcStateStore). One process-wide instance, like the SAML caches below.
-    private static readonly OidcStateStore StateStore = new();
+    // The OpenID login flow (#160, #318 step 12): challenge, redirect callback, session-minting
+    // authenticate, and manual link. It owns the OpenID-specific process-wide caches (the authorize-state
+    // store and the discovery-facts cache) as its own statics; the controller's OpenID endpoints apply the
+    // shared rate-limit gate below and delegate here. New'd per request like the other collaborators.
+    private readonly Flows.OidcLoginService _oidc;
 
     // One-time-use tracking for consumed SAML assertion IDs (replay protection).
     private static readonly SamlReplayCache SamlReplays = new SamlReplayCache();
@@ -73,15 +72,9 @@ public class SSOController : ControllerBase
     // Outstanding SAML AuthnRequest IDs, for InResponseTo correlation of solicited responses (#156).
     private static readonly SamlRequestCache SamlRequests = new SamlRequestCache();
 
-    // The per-discovery-URL cache of the two facts the challenge reads in one fetch — PKCE-S256 support
-    // (#141) and whether the AS advertises the RFC 9207 response-`iss` parameter (#210) — plus the
-    // fetch/parse that populates it. One process-wide instance, like the SAML caches above; the TTL,
-    // bounding rationale, and tolerant fail-open-only-under-RequirePkce behaviour all live inside
-    // OidcDiscoveryCache (#449).
-    private static readonly OidcDiscoveryCache DiscoveryCache = new();
-
     // How long an issued SAML AuthnRequest ID stays valid for correlation — the interactive leg
-    // (challenge -> IdP login/MFA -> POST back -> mint), matching OidcStateStore.DefaultLifetime.
+    // (challenge -> IdP login/MFA -> POST back -> mint), matching the OpenID authorize-state lifetime the
+    // flow service keeps.
     private static readonly TimeSpan SamlRequestLifetime = TimeSpan.FromMinutes(15);
 
     // Opt-in per-client rate limiter over the anonymous SSO flow endpoints (#128).
@@ -114,13 +107,12 @@ public class SSOController : ControllerBase
         _authContext = authContext;
         _cryptoProvider = cryptoProvider;
         _logger = logger;
-        _loggerFactory = loggerFactory;
-        _httpClientFactory = httpClientFactory;
         _sessionManager = sessionManager;
         _canonicalLinks = new CanonicalLinkService(userManager, cryptoProvider, SSOPlugin.Instance.ConfigStore, logger);
         var avatarService = new AvatarService(userManager, providerManager, serverConfigurationManager, logger, SsoHttp.UserAgent);
         var sessionMinter = new SessionMinter(userManager, avatarService, sessionManager, logger);
         _loginCompletion = new LoginCompletionService(_canonicalLinks, sessionMinter, logger);
+        _oidc = new Flows.OidcLoginService(_loginCompletion, _canonicalLinks, httpClientFactory, loggerFactory, logger);
         _logger.LogInformation("SSO Controller initialized");
     }
 
@@ -142,86 +134,10 @@ public class SSOController : ControllerBase
             return throttled;
         }
 
-        // Unknown and disabled providers share one rejection so neither can be probed apart, matching
-        // the guard-clause form the SAML sibling (SamlPost) already uses.
-        var config = FindOidConfig(provider);
-        if (config is not { Enabled: true })
-        {
-            return BadRequest(NoMatchingProviderMessage);
-        }
-
-        if (string.IsNullOrEmpty(state))
-        {
-            return BadRequest("Missing state");
-        }
-
-        if (StateStore.PeekCurrent(state, provider, DateTime.Now, Request.Cookies[AuthorizeStateBinding.CookieName]) is not { } pending)
-        {
-            // Unknown, expired, minted for a different provider, or from a different browser than the
-            // one that started the flow (#326) — reject (details on PeekCurrent / AuthorizeStateBinding).
-            return BadRequest("Invalid or expired state");
-        }
-
-        var oidcClient = CreateCallbackOidcClient(config, provider, pending.ProviderInformation);
-        var result = await oidcClient.ProcessResponseAsync(Request.QueryString.Value, pending.OidcState).ConfigureAwait(false);
-
-        if (result.IsError)
-        {
-            return ReturnError(StatusCodes.Status400BadRequest, $"Error logging in: {result.Error} - {result.ErrorDescription}");
-        }
-
-        // RFC 9207 (#125, hardened #210): the library parses the authorization-response `iss` but never
-        // checks it. When present it must match the authorization server this callback is bound to — its
-        // discovery issuer (§2.4's canonical anchor, from the reused #247 or freshly-discovered
-        // ProviderInformation) OR the redeemed id_token's issuer. Both are accepted so a provider whose
-        // issuer legitimately differs from its discovery location (DoNotValidateIssuerName / templated /
-        // multi-tenant) is not locked out — there the response iss equals the concrete id_token iss, not
-        // the templated discovery iss. A response iss matching neither is a mix-up, so reject. When the
-        // server advertised the parameter (captured at challenge), a missing iss is a downgrade and is
-        // likewise rejected; otherwise absence is tolerated so IdPs that never emit `iss` keep working.
-        if (!config.DoNotValidateResponseIssuer
-            && OidcResponseIssuer.IsRejected(Request.Query["iss"], oidcClient.Options.ProviderInformation?.IssuerName, result.IdentityToken, pending.ResponseIssuerRequired))
-        {
-            _logger.LogWarning("OpenID login denied for provider {Provider}: the authorization-response issuer was absent-but-required or matched neither the discovery issuer nor the id_token issuer (RFC 9207 mix-up check).", provider?.ReplaceLineEndings(string.Empty));
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SsoResponseInvalid));
-        }
-
-        // Derive the authorize-state values (username, validity, admin, Live TV, folders, avatar)
-        // from the verified login's claims and the provider configuration.
-        var derived = OidcAuthorizeStateBuilder.Build(result.User.Claims, config);
-
-        // Fail closed (#155): a valid OpenID login must resolve a stable subject to key the account
-        // link on. sub is an OIDC Core MUST and (post-#134) the id_token validator has verified the
-        // token, so a missing sub means a non-conformant provider — reject rather than fall back to
-        // keying on the mutable username.
-        if (derived.Valid && string.IsNullOrWhiteSpace(derived.Subject))
-        {
-            _logger.LogWarning("OpenID login denied for provider {Provider}: the id_token carried no 'sub' claim to key the account link on.", provider?.ReplaceLineEndings(string.Empty));
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
-        }
-
-        if (!derived.Valid)
-        {
-            // The role gate did not pass: leave the Pending unpromoted (never redeemable — the redeem
-            // requires a Ready) so it simply expires. Checked before Promote so no Ready is ever created
-            // for a denied login.
-            _logger.LogWarning(
-                "OpenID login denied for {Username}: no role matched the allow-list, or the login resolved no username. Claims: {@Claims}. Roles expected (any one of): {@ExpectedClaims}",
-                derived.Username?.ReplaceLineEndings(string.Empty),
-                result.User.Claims.Select(o => new { Type = o.Type?.ReplaceLineEndings(string.Empty), Value = o.Value?.ReplaceLineEndings(string.Empty) }),
-                config.Roles);
-
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
-        }
-
-        // Atomically swap the peeked Pending for a redeemable Ready (#341). A false return means a
-        // concurrent callback already promoted it, or it expired/was pruned since the peek — either way
-        // the browser's redeem is the real gate, which consumes the single Ready once (or cleanly rejects
-        // a state that is gone), so the auth page is returned regardless.
-        StateStore.Promote(pending, derived);
-
-        _logger.LogInformation("Is request linking: {IsLinking}", pending.IsLinking);
-        return HtmlAuthPage(nonce => WebResponse.Generator(data: state, provider: provider, baseUrl: GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), mode: "OID", nonce: nonce, isLinking: pending.IsLinking));
+        // The OpenID redirect callback lives in the flow service (#160, #318): it validates the
+        // browser-bound state, exchanges the code, validates the id_token and RFC 9207 response issuer,
+        // applies the role gate, and renders the security-headered intermediate auth page (passed in).
+        return await _oidc.CallbackAsync(provider, state, Request, HtmlAuthPage).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -239,116 +155,17 @@ public class SSOController : ControllerBase
             return throttled;
         }
 
-        StateStore.PruneExpired(DateTime.Now);
-        var config = FindOidConfig(provider);
-        if (config is not { Enabled: true })
-        {
-            // Unknown and disabled providers share one rejection so neither can be probed apart (no
-            // enumeration oracle), and the answer no longer depends on host middleware mapping a thrown
-            // ArgumentException — the in-process 400 is fail-closed regardless of the deployment (#318).
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.UnknownProvider));
-        }
-
-        // RFC 9700 §2.1.1: confirm the authorization server advertises PKCE (S256) before relying on
-        // it. OidcClient sends code_challenge unconditionally but never checks this, so a server that
-        // ignores PKCE would silently downgrade authorization-code-injection protection (#141). Fail
-        // closed when the provider is marked RequirePkce; otherwise emit an audit warning and proceed.
-        // One discovery read yields both facts the challenge needs: PKCE-S256 support (gated below) and
-        // whether the AS advertises the RFC 9207 response-`iss` parameter (persisted on the state below,
-        // so the callback can require `iss` without a second fetch) (#210).
-        var discoveryFacts = await DiscoveryCache.ReadFactsAsync(config, provider, _httpClientFactory, _logger).ConfigureAwait(false);
-        var pkceSupported = discoveryFacts.PkceS256;
-        if (pkceSupported == false)
-        {
-            if (config.RequirePkce)
-            {
-                _logger.LogWarning("OpenID login refused for provider {Provider}: RequirePkce is set but the authorization server does not advertise PKCE (S256).", provider?.ReplaceLineEndings(string.Empty));
-                return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.PkceNotSupported));
-            }
-
-            SsoAudit.PkceNotAdvertised(_logger, provider);
-        }
-        else if (pkceSupported is null && config.RequirePkce)
-        {
-            _logger.LogWarning("OpenID login refused for provider {Provider}: RequirePkce is set but the discovery document could not be read to confirm PKCE (S256).", provider?.ReplaceLineEndings(string.Empty));
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.PkceUnverifiable));
-        }
-
-        bool newPath = ResolveChallengeNewPath(config.NewPath, isLinking, value => config.NewPath = value);
-
-        string redirectUri = SsoUrlBuilder.OidRedirectUri(GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), newPath, provider);
-
-        var oidcClient = CreateOidcClient(config, redirectUri, BuildScopeString(config));
-        var state = await oidcClient.PrepareLoginAsync().ConfigureAwait(false);
-
-        if (state.IsError)
-        {
-            return ReturnError(StatusCodes.Status400BadRequest, $"Error preparing login: {state.Error} - {state.ErrorDescription}");
-        }
-
-        // Bind this authorize state to the browser that started it (#326): record a fresh random id on
-        // the state and hand the same value to the browser as a cookie. The callbacks require the cookie
-        // to match before honoring the state, so a state started in one browser cannot be completed in
-        // another (the forced-login / session-fixation defense).
-        var bindingId = AuthorizeStateBinding.NewId();
-
-        // IsLinking tracks whether this is a linking request rather than a login. The state value
-        // is a fresh CSPRNG token, so a collision is effectively impossible; a refusal is almost
-        // always the capacity backstop under a flood, and the store throttles its warning signal.
-        // The client key bounds how much of the store one source can occupy (#327); a proxy/private
-        // source normalizes to null and is exempt.
-        var clientKey = SsoRateLimiter.NormalizeClientKey(HttpContext.Connection.RemoteIpAddress);
-
-        // Build the challenge's authorize state complete — the discovery metadata PrepareLoginAsync just
-        // fetched and validated against this provider's DiscoveryPolicy (reused at the callback so
-        // ProcessResponseAsync skips a second discovery + JWKS, #247), and whether that discovery
-        // advertised the RFC 9207 response-`iss` parameter (so the callback requires `iss`, its absence
-        // being a downgrade, #210). Folded in at construction so registration is one atomic insert and the
-        // stored Pending is never mutated after it enters the store (#341).
-        var pending = new AuthorizeSession.Pending(state, provider, isLinking, DateTime.Now, bindingId, clientKey, oidcClient.Options.ProviderInformation, discoveryFacts.ResponseIssuerAdvertised);
-        if (!StateStore.TryAdd(pending, out var shouldWarnCapacity))
-        {
-            if (shouldWarnCapacity)
-            {
-                _logger.LogWarning("OpenID authorize state refused for provider {Provider}: a CSPRNG-token collision (effectively impossible) or the store is at capacity (warning throttled).", provider?.ReplaceLineEndings(string.Empty));
-            }
-
-            return ReturnError(StatusCodes.Status500InternalServerError, "Could not start login; please retry.");
-        }
-
-        // Set the cookie only after the state is registered, so a refused challenge leaves no cookie.
-        Response.Cookies.Append(AuthorizeStateBinding.CookieName, bindingId, AuthorizeStateBinding.CookieOptions(OidcStateStore.DefaultLifetime));
-
-        return Redirect(state.StartUrl);
-    }
-
-    // Test-only reset of the process-wide OpenID caches this controller keeps as private statics: the
-    // in-flight authorize-state store and the discovery-facts cache. A test that drives the login flow
-    // mutates these, so without a reset the state leaks into a sibling test in the same non-parallel
-    // collection. The other static caches are deliberately not cleared here: the SAML replay/request
-    // caches key on random IDs and the rate limiter is isolated by per-test client IP, so they cannot
-    // bleed between tests. Internal and reachable only through InternalsVisibleTo; it is never wired to
-    // an endpoint or DI, so it adds no runtime or security surface. Callback/challenge coverage relies
-    // on it for isolation (#289).
-    internal static void ResetOidStateForTests()
-    {
-        StateStore.Clear();
-        DiscoveryCache.Clear();
+        // The OpenID challenge lives in the flow service (#160, #318): it reads discovery, applies the
+        // PKCE gate, prepares the authorization request, registers the browser-bound authorize state, and
+        // redirects to the identity provider (setting the binding cookie on the response).
+        return await _oidc.ChallengeAsync(provider, isLinking, Request, Response).ConfigureAwait(false);
     }
 
     // Test-only: clears the outstanding-SAML-request cache so a prior test's seeded or in-flight entry
     // (e.g. one left behind by a signature-failing response that returns before the consume) cannot leak
-    // into the next test. Same test-only surface as ResetOidStateForTests (internal, InternalsVisibleTo).
+    // into the next test. Same test-only surface as OidcLoginService.ResetOidStateForTests (internal,
+    // InternalsVisibleTo).
     internal static void ResetSamlRequestsForTests() => SamlRequests.Clear();
-
-    // Test-only seed of a single authorize-state entry so a test can exercise the OidAuth callback
-    // (which consumes an already-validated state that the browser redirect leg normally populates)
-    // without standing up the full token-exchange flow. Same test-only surface as ResetOidStateForTests
-    // (internal, InternalsVisibleTo, no endpoint/DI) — never reachable in production.
-    internal static void SeedOidStateForTests(string token, AuthorizeSession state)
-    {
-        StateStore.Seed(token, state);
-    }
 
     // Test-only seed of an outstanding SAML AuthnRequest so a test can exercise SamlAuth's browser
     // binding (#415) — normally populated by the SamlChallenge redirect leg — without deriving the
@@ -362,10 +179,8 @@ public class SSOController : ControllerBase
     // undefined behaviour in .NET (throw, misread, or a spin on a corrupted chain during a resize) (#252).
     // Returns null for an unknown provider so call sites branch on a null check instead of catching
     // KeyNotFoundException as control flow (#241). An uncontended lock is nanoseconds; it is only held long
-    // during a first-login/admin persist, which is exactly when a consistent read matters.
-    private static OidConfig FindOidConfig(string provider) =>
-        SSOPlugin.Instance.ReadConfiguration(configuration => configuration.OidConfigs.TryGetValue(provider, out var config) ? config : null);
-
+    // during a first-login/admin persist, which is exactly when a consistent read matters. (The OpenID twin
+    // moved into the flow service with the OID flow, #160.)
     private static SamlConfig FindSamlConfig(string provider) =>
         SSOPlugin.Instance.ReadConfiguration(configuration => configuration.SamlConfigs.TryGetValue(provider, out var config) ? config : null);
 
@@ -386,77 +201,6 @@ public class SSOController : ControllerBase
         var newPath = ChallengePath.IsNewPath(Request.Path.Value);
         record(newPath);
         return newPath;
-    }
-
-    // Builds the space-delimited OpenID scope string, always leading with the base "openid profile".
-    // OidScopes is null when a provider was stored without scopes (#368, e.g. via the OID/Add API) —
-    // normalize to empty so neither the challenge nor the callback throws (an unhandled 500 on the
-    // anonymous challenge endpoint) or pads the scope string with null entries. Blank elements inside a
-    // non-null array are dropped too, so a persisted null/empty/whitespace scope cannot inject a
-    // doubled or trailing separator (#407). Shared by both sites.
-    internal static string BuildScopeString(OidConfig config)
-        => string.Join(" ", (config.OidScopes ?? Array.Empty<string>())
-            .Where(s => !string.IsNullOrWhiteSpace(s))
-            .Prepend("openid profile"));
-
-    // Builds the OidcClient that both the challenge and the callback use. Pure mechanical assembly:
-    // the redirect URI and the scope string are the only two inputs the endpoints derive differently,
-    // so the caller supplies them. Constructed in the same order as before the extraction, so a null
-    // OidEndpoint still fails at the same point (the Uri constructor, after the options object).
-    private OidcClient CreateOidcClient(OidConfig config, string redirectUri, string scope, ProviderInformation providerInformation = null)
-    {
-        var options = new OidcClientOptions
-        {
-            Authority = config.OidEndpoint?.Trim(),
-            ClientId = config.OidClientId?.Trim(),
-            ClientSecret = config.OidSecret?.Trim(),
-            RedirectUri = redirectUri,
-            Scope = scope,
-            DisablePushedAuthorization = config.DisablePushedAuthorization,
-            LoggerFactory = _loggerFactory,
-            LoadProfile = !config.DoNotLoadProfile,
-            HttpClientFactory = o => SsoHttp.CreateClient(_httpClientFactory)
-        };
-        var oidEndpointUri = new Uri(config.OidEndpoint?.Trim());
-        options.Policy.Discovery.AdditionalEndpointBaseAddresses.Add(oidEndpointUri.GetLeftPart(UriPartial.Authority));
-        options.Policy.Discovery.ValidateEndpoints = !config.DoNotValidateEndpoints; // For Google and other providers with different endpoints
-        options.Policy.Discovery.RequireHttps = !config.DisableHttps;
-        options.Policy.Discovery.ValidateIssuerName = !config.DoNotValidateIssuerName;
-
-        // OidcClient 7.x validates nothing about the id_token unless a validator is supplied (its
-        // fallback only base64-decodes the payload). Signature validation is required and has no
-        // config toggle: an unvalidated id_token is a forgeable login (#134).
-        options.Policy.RequireIdentityTokenSignature = true;
-        options.IdentityTokenValidator = new OidcIdTokenValidator();
-
-        // Reuse the challenge's already-fetched, policy-validated discovery metadata when the callback
-        // supplies it (#247), so ProcessResponseAsync does not re-run discovery + JWKS. Pre-assigning
-        // ProviderInformation sets the client's internal _useDiscovery = false, which also disables the
-        // library's invalid_signature JWKS-refresh-and-retry. Two directions of key change, both bounded
-        // by the authorize state's ~15-minute lifetime: a key rotated IN during the window (the id_token
-        // signed by a key the challenge did not capture) fails this callback closed and self-heals on
-        // retry (the next challenge fetches fresh keys); a key rotated OUT / revoked during the window
-        // stays accepted until the state expires, since the callback validates against the captured
-        // set — a far tighter exposure than the platform-default 24-hour JWKS cache, and never wider than
-        // the state lifetime. Populated only from a validated fetch (never hand-filled), so the
-        // DiscoveryPolicy (RequireHttps / ValidateIssuerName / ValidateEndpoints) is not bypassed.
-        if (providerInformation is not null)
-        {
-            options.ProviderInformation = providerInformation;
-        }
-
-        return new OidcClient(options);
-    }
-
-    // Callback-side client: the redirect URI is rebuilt from the callback's own route (the IdP calls
-    // back on exactly the route the authorization request advertised), so the token request's
-    // redirect_uri matches the authorization request's as RFC 6749 requires (#98). The scope string
-    // is normalized the same way as the challenge side (BuildScopeString) — both tolerate a null
-    // OidScopes identically (#368).
-    private OidcClient CreateCallbackOidcClient(OidConfig config, string provider, ProviderInformation providerInformation)
-    {
-        var redirectUri = SsoUrlBuilder.OidCallbackRedirectUri(GetRequestBase(config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), Request.Path.Value, provider);
-        return CreateOidcClient(config, redirectUri, BuildScopeString(config), providerInformation);
     }
 
     // Rejects a malformed canonical base-URL override (#139) at the OID/SAML Add endpoints. These persist
@@ -623,8 +367,8 @@ public class SSOController : ControllerBase
     [HttpGet("OID/States")]
     public ActionResult OidStates()
     {
-        // Non-secret summaries only — the redaction rationale lives on OidcStateStore.Summaries.
-        return Ok(StateStore.Summaries());
+        // Non-secret summaries only — the flow service projects the in-flight states to redacted summaries.
+        return Ok(_oidc.StateSummaries());
     }
 
     /// <summary>
@@ -643,38 +387,14 @@ public class SSOController : ControllerBase
             return throttled;
         }
 
-        if (string.IsNullOrEmpty(response?.Data))
-        {
-            return BadRequest("Missing data");
-        }
-
-        // Unknown and disabled providers share one rejection so neither can be probed apart — this
-        // unifies the previously JSON unknown-provider body and the disabled provider's 500 into the
-        // one uniform 400, and a disabled provider does not consume the state (the guard precedes the
-        // redeem, as before).
-        var config = FindOidConfig(provider);
-        if (config is not { Enabled: true })
-        {
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.UnknownProvider));
-        }
-
-        // One-time atomic claim — details on OidcStateStore.TryRedeem. A miss (unknown, expired,
-        // provider-mismatched, already-redeemed, or from a different browser than started the flow, #326)
-        // is a client-caused rejection, not a server fault: one uniform body, so a replay is
-        // indistinguishable from an expiry and replay stays hidden. A binding mismatch does not consume
-        // the state (the check precedes the atomic remove), so it cannot burn a legitimate user's state.
-        if (StateStore.TryRedeem(response.Data, provider, DateTime.Now, Request.Cookies[AuthorizeStateBinding.CookieName]) is not { } redeemed)
-        {
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.InvalidState));
-        }
-
-        // The redeemed state carries the fully-verified identity (#473); the OpenID adoption gate applies
-        // the provider's verified-email requirement (#218). From here the OpenID and SAML paths are one.
-        return await _loginCompletion.CompleteAsync(
-            redeemed.Identity,
+        // The session-minting authenticate leg lives in the flow service (#160, #318): it redeems the
+        // browser-bound authorize state once and hands the verified identity to the shared completion tail.
+        // The controller passes the presented binding cookie and the HttpContext-derived remote endpoint in,
+        // keeping the flow tier HttpContext-free (#177).
+        return await _oidc.AuthenticateAsync(
+            provider,
             response,
-            config,
-            new AdoptionGate(config.RequireVerifiedEmailForAdoption, redeemed.Identity.EmailVerified),
+            Request.Cookies[AuthorizeStateBinding.CookieName],
             () => HttpContext.GetNormalizedRemoteIP().ToString()).ConfigureAwait(false);
     }
 
@@ -1277,37 +997,11 @@ public class SSOController : ControllerBase
     /// <param name="response">The data passed to the client to ensure it is the right one.</param>
     /// <returns>JSON for the client to populate information with.</returns>
     // No [Consumes]/[Produces]: inert on a private helper (see SamlLink) — AddCanonicalLink owns the
-    // content negotiation (#393).
-    private ActionResult OidLink(string provider, Guid jellyfinUserId, AuthResponse response)
-    {
-        if (string.IsNullOrEmpty(response?.Data))
-        {
-            return BadRequest("Missing data");
-        }
-
-        // A disabled provider must neither create a link nor consume the state (#343), mirroring
-        // OidAuth's short-circuit order: an administrator disabling a provider takes effect for
-        // in-flight linking states immediately, not after their 15-minute lifetime. The unknown and
-        // disabled cases share one response, so neither can be probed apart (no enumeration oracle).
-        if (FindOidConfig(provider) is not { Enabled: true })
-        {
-            return BadRequest(NoMatchingProviderMessage);
-        }
-
-        // One-time atomic claim (see OidcStateStore.TryRedeem): consume the state so one verified
-        // identity cannot be linked repeatedly and cannot then be reused to mint a session. A miss
-        // (unknown, expired, provider-mismatched, already-redeemed, or from a different browser than
-        // started the flow, #326) is a client-caused 400 in the same uniform body as the login path,
-        // not a 500. The linking challenge sets the same binding cookie, carried on this same-origin POST.
-        if (StateStore.TryRedeem(response.Data, provider, DateTime.Now, Request.Cookies[AuthorizeStateBinding.CookieName]) is not { } redeemed)
-        {
-            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.InvalidState));
-        }
-
-        // Manual linking keys on the stable subject (#155), matching the auto-login path, so a
-        // later provider-side rename does not orphan the link the user just created.
-        return MapWrite(_canonicalLinks.TryCreateLink("oid", provider, redeemed.Identity.Subject, jellyfinUserId));
-    }
+    // content negotiation (#393). The OID link redeem (which consumes the flow service's authorize state)
+    // lives on the flow service; the controller keeps the caller-authz guard (AddCanonicalLink) and the
+    // write-result-to-HTTP mapping it shares with SamlLink (#160).
+    private ActionResult OidLink(string provider, Guid jellyfinUserId, AuthResponse response) =>
+        _oidc.Link(provider, jellyfinUserId, response, Request.Cookies[AuthorizeStateBinding.CookieName], MapWrite);
 
     // The HTTP boundary for a manual link creation: maps the service's closed write result to a response.
     // The empty-key and unknown-provider refusals keep distinct bodies (the service checks the empty key

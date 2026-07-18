@@ -472,6 +472,46 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void Controller_DelegatesOidcFlowToTheFlowService()
+    {
+        // Locked in by the OpenID flow extraction (#160, #318 step 12): the OpenID challenge and redirect
+        // callback bodies, together with the OpenID-specific process-wide state (the in-flight authorize
+        // store and the discovery-facts cache), moved into OidcLoginService. The controller's OpenID
+        // endpoints now apply the shared rate-limit gate and hand the request to that service, so a
+        // CONTROLLER neither holds those OIDC caches nor drives the OidcClient challenge/callback protocol
+        // itself. Call-level property, so it is a source scan like the other controller rules above.
+        //
+        // The two cache tokens are nameof-derived, so a rename of either type fails to COMPILE this rule
+        // rather than passing vacuously; the two protocol tokens are the OidcClient methods the challenge
+        // (PrepareLoginAsync) and callback (ProcessResponseAsync) drive. The shared per-client rate limiter
+        // is deliberately NOT a marker — it fronts BOTH protocols, so it legitimately stays a controller
+        // static and its extraction is out of scope for this step.
+        var storeToken = nameof(OidcStateStore);
+        var cacheToken = nameof(OidcDiscoveryCache);
+        var markers = new[] { storeToken, cacheToken, "PrepareLoginAsync", "ProcessResponseAsync" };
+
+        var controllerHits = ControllerSourceFiles()
+            .SelectMany(path => File.ReadAllLines(path)
+                .Select((line, index) => (File: Path.GetFileName(path), Text: line.Trim(), Number: index + 1)))
+            .Where(l => markers.Any(m => l.Text.Contains(m, StringComparison.Ordinal)))
+            .Select(l => $"{l.File} line {l.Number}: {l.Text}")
+            .ToList();
+
+        Assert.True(
+            controllerHits.Count == 0,
+            "A controller must not hold the OpenID authorize/discovery caches or drive the OidcClient challenge/callback protocol; the OpenID flow lives in OidcLoginService (#160). Found: " + string.Join(" | ", controllerHits));
+
+        // Liveness against a vacuous pass: the OpenID flow must actually live in OidcLoginService — a move,
+        // not a silent removal — so the flow service's own source must contain every moved token.
+        var oidcSource = string.Join(
+            "\n",
+            SourceFilesDeclaring(new[] { typeof(OidcLoginService) }).Select(File.ReadAllText));
+        Assert.True(
+            markers.All(m => oidcSource.Contains(m, StringComparison.Ordinal)),
+            "OidcLoginService must own the OpenID challenge/callback flow and its authorize/discovery caches; otherwise the controller scan passes vacuously (#160).");
+    }
+
+    [Fact]
     public void RateLimiting_FlowsThroughLoginOutcome()
     {
         // Locked in by #474: the rate-limit rejection was the last login-path error that bypassed the single

@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Duende.IdentityModel.OidcClient;
 using Jellyfin.Plugin.SSO_Auth;
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Api.Flows;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -419,7 +420,7 @@ public class SSOControllerOidPostTests
         // parameter (#210), so the callback must require iss; false is the tolerant default (the challenge
         // capture path itself is pinned end-to-end by OidChallengeToCallback_* below). Seeded as a Pending:
         // the callback derives the login and promotes it to a Ready (#341).
-        SSOController.SeedOidStateForTests("state-1", new AuthorizeSession.Pending(authState, "kc", isLinking: false, DateTime.Now, Binding, clientKey: null, providerInformation: null, responseIssuerRequired: responseIssuerRequired));
+        OidcLoginService.SeedOidStateForTests("state-1", new AuthorizeSession.Pending(authState, "kc", isLinking: false, DateTime.Now, Binding, clientKey: null, providerInformation: null, responseIssuerRequired: responseIssuerRequired));
 
         return harness;
     }
