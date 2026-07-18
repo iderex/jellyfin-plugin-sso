@@ -12,8 +12,10 @@ public class SamlSignatureAlgorithmsTests
 {
     private const string RsaSha256 = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256";
     private const string RsaSha512 = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512";
+    private const string EcdsaSha256 = "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256";
     private const string EcdsaSha384 = "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha384";
     private const string RsaSha1 = "http://www.w3.org/2000/09/xmldsig#rsa-sha1";
+    private const string EcdsaSha1 = "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha1";
 
     private const string DigestSha256 = "http://www.w3.org/2001/04/xmlenc#sha256";
     private const string DigestSha384 = "http://www.w3.org/2001/04/xmldsig-more#sha384";
@@ -96,6 +98,7 @@ public class SamlSignatureAlgorithmsTests
     [Theory]
     [InlineData(RsaSha256)]
     [InlineData(RsaSha512)]
+    [InlineData(EcdsaSha256)] // the algorithm the outgoing ECDSA signer emits (#493)
     [InlineData(EcdsaSha384)]
     public void IsSignatureMethodAllowed_StrongMethods_ReturnTrue(string method)
     {
@@ -104,6 +107,7 @@ public class SamlSignatureAlgorithmsTests
 
     [Theory]
     [InlineData(RsaSha1)]
+    [InlineData(EcdsaSha1)] // no SHA-1 variant is admitted, ECDSA included (#493)
     [InlineData("urn:made:up")]
     [InlineData(null)]
     public void IsSignatureMethodAllowed_WeakOrUnknownOrNull_ReturnFalse(string? method)

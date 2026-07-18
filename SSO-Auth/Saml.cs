@@ -583,9 +583,9 @@ internal sealed class SamlAuthnRequest
     /// </summary>
     /// <param name="samlEndpoint">The SAML endpoint.</param>
     /// <param name="relayState">The relay state, omitted when null or empty.</param>
-    /// <param name="signingKey">The service-provider RSA private key.</param>
+    /// <param name="signingKey">The service-provider private key — RSA or ECDSA (#493).</param>
     /// <returns>The signed redirect url.</returns>
-    public string GetSignedRedirectUrl(string samlEndpoint, string relayState, RSA signingKey)
+    public string GetSignedRedirectUrl(string samlEndpoint, string relayState, AsymmetricAlgorithm signingKey)
     {
         ArgumentNullException.ThrowIfNull(samlEndpoint);
 

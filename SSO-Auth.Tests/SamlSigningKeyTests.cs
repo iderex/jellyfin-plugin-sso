@@ -25,6 +25,29 @@ public class SamlSigningKeyTests
         }
     }
 
+    [Fact]
+    public void TryLoad_EcdsaPfx_ReturnsCertificateWhoseSigningKeyIsEcdsa()
+    {
+        // An ECDSA SP signing key is a first-class option (#493): it loads, and GetSigningKey surfaces it.
+        Assert.True(SamlSigningKey.TryLoad(SamlSigningKeyFactory.CreateEcdsaPfxBase64(), out var certificate));
+        using (certificate)
+        {
+            using var privateKey = SamlSigningKey.GetSigningKey(certificate);
+            Assert.IsAssignableFrom<ECDsa>(privateKey);
+        }
+    }
+
+    [Fact]
+    public void GetSigningKey_RsaCertificate_ReturnsRsaKey()
+    {
+        Assert.True(SamlSigningKey.TryLoad(SamlSigningKeyFactory.CreatePfxBase64(), out var certificate));
+        using (certificate)
+        {
+            using var privateKey = SamlSigningKey.GetSigningKey(certificate);
+            Assert.IsAssignableFrom<RSA>(privateKey);
+        }
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
@@ -57,6 +80,13 @@ public class SamlSigningKeyTests
     public void IsInvalid_ValidPfx_False()
     {
         Assert.False(SamlSigningKey.IsInvalid(SamlSigningKeyFactory.CreatePfxBase64()));
+    }
+
+    [Fact]
+    public void IsInvalid_EcdsaPfx_False()
+    {
+        // An ECDSA signing key can sign (#493), so the admin-write validity check must accept it.
+        Assert.False(SamlSigningKey.IsInvalid(SamlSigningKeyFactory.CreateEcdsaPfxBase64()));
     }
 
     [Theory]

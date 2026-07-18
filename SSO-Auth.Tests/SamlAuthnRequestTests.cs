@@ -47,6 +47,20 @@ public class SamlAuthnRequestTests
     }
 
     [Fact]
+    public void GetSignedRedirectUrl_EcdsaKey_CarriesAVerifiableEcdsaSignature()
+    {
+        var request = new SamlAuthnRequest("jellyfin-sp", "https://jellyfin.example.com/sso/SAML/p/adfs");
+        using var certificate = SamlSigningKeyFactory.CreateEcdsaCertificate();
+        using var privateKey = certificate.GetECDsaPrivateKey()!;
+
+        var url = request.GetSignedRedirectUrl(Endpoint, relayState: null, privateKey);
+
+        Assert.Contains("SigAlg=" + Uri.EscapeDataString("http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256"), url);
+        using var publicKey = certificate.GetECDsaPublicKey()!;
+        Assert.True(EcdsaSignatureVerifies(url, publicKey));
+    }
+
+    [Fact]
     public void GetSignedRedirectUrl_NullEndpoint_Throws()
     {
         var request = new SamlAuthnRequest("jellyfin-sp", "https://jellyfin.example.com/sso/SAML/p/adfs");
@@ -64,6 +78,16 @@ public class SamlAuthnRequestTests
 
         var signedQuery = "SAMLRequest=" + Uri.EscapeDataString(samlRequest) + "&SigAlg=" + Uri.EscapeDataString(sigAlg);
         return publicKey.VerifyData(Encoding.UTF8.GetBytes(signedQuery), signature, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+    }
+
+    private static bool EcdsaSignatureVerifies(string url, ECDsa publicKey)
+    {
+        var samlRequest = QueryValue(url, "SAMLRequest");
+        var sigAlg = QueryValue(url, "SigAlg");
+        var signature = Convert.FromBase64String(QueryValue(url, "Signature"));
+
+        var signedQuery = "SAMLRequest=" + Uri.EscapeDataString(samlRequest) + "&SigAlg=" + Uri.EscapeDataString(sigAlg);
+        return publicKey.VerifyData(Encoding.UTF8.GetBytes(signedQuery), signature, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
     }
 
     private static string QueryValue(string url, string name)

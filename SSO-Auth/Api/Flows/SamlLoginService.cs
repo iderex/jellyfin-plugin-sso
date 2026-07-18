@@ -462,11 +462,11 @@ internal sealed class SamlLoginService
         }
 
         using (signingCertificate)
-        using (var signingKey = signingCertificate.GetRSAPrivateKey())
+        using (var signingKey = SamlSigningKey.GetSigningKey(signingCertificate))
         {
             if (signingKey is null)
             {
-                throw new InvalidOperationException("Outgoing SAML request signing is enabled but the signing key has no RSA private key.");
+                throw new InvalidOperationException("Outgoing SAML request signing is enabled but the signing key has no RSA or ECDSA private key.");
             }
 
             return request.GetSignedRedirectUrl(endpoint, relayState, signingKey);
