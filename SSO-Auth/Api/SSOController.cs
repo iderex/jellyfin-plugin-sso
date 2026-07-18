@@ -687,16 +687,16 @@ public class SSOController : ControllerBase
             return throttled;
         }
 
-        // The SAML session-minting authenticate leg lives in the flow service (#160, #318): it validates
-        // the signed response, correlates it to an AuthnRequest this server issued (browser binding),
-        // enforces the login allow-list and one-time replay consume, and hands the verified identity to the
-        // shared completion tail. The controller passes the presented binding cookie and the
-        // HttpContext-derived remote endpoint in, keeping the flow tier HttpContext-free (#177).
+        // The SAML session-minting authenticate leg lives in the flow service (#160, #318): it redeems the
+        // one-time login-outcome token the ACS callback minted (#251; since #528 the token is the only
+        // accepted shape), correlates the carried InResponseTo to an AuthnRequest this server issued (browser
+        // binding), and hands the already-verified identity to the shared completion tail. The controller
+        // passes the presented binding cookie and the HttpContext-derived remote endpoint in, keeping the flow
+        // tier HttpContext-free (#177).
         return await _saml.AuthenticateAsync(
             provider,
             response,
             Request.Cookies[AuthorizeStateBinding.SamlCookieName],
-            Request,
             () => HttpContext.GetNormalizedRemoteIP().ToString()).ConfigureAwait(false);
     }
 
