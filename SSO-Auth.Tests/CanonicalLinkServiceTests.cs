@@ -606,6 +606,28 @@ public class CanonicalLinkServiceTests
     }
 
     [Fact]
+    public void DisabledProvider_LinksStayListedAndRemovable()
+    {
+        // The linking page no longer offers a disabled provider for new links (#344), but a link the
+        // user already holds to one must stay visible and removable — disable-then-clean-up is the
+        // intended workflow. This pins the server contract the page now relies on: LinksByUser returns
+        // the disabled provider's links, and TryRemoveLink removes them (requireEnabled:false), so the
+        // enabled-only GetNames filter never strands a stale link.
+        var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = false,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+
+        var listed = service.LinksByUser(ProviderMode.Oid, Existing);
+        Assert.Equal(new[] { "sub-1" }, listed["kc"]);
+
+        var result = service.TryRemoveLink(ProviderMode.Oid, "kc", "sub-1", Existing);
+        Assert.Equal(CanonicalLinkRemoveResult.Removed, result);
+        Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("sub-1"));
+    }
+
+    [Fact]
     public void TryRemoveLink_OwnLink_RemovesItAndReturnsRemoved()
     {
         var (service, cfg, _, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
