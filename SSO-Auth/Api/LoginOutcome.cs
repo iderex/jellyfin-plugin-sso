@@ -31,4 +31,13 @@ internal abstract record LoginOutcome
     /// every denial maps to the one uniform 401 body, so a cause cannot leak even by construction.
     /// </summary>
     internal sealed record Denied : LoginOutcome;
+
+    /// <summary>
+    /// The rate limiter refused an over-budget anonymous request (#128, #474). Unlike the other cases the
+    /// mapper needs the response to carry the Retry-After header, so a Throttled outcome is rendered through
+    /// <see cref="LoginStatusMapper.ToActionResult(LoginOutcome, Microsoft.AspNetCore.Http.HttpResponse)"/>;
+    /// the 429 status, plain-text body and Retry-After value are byte-identical to the pre-#474 direct emission.
+    /// </summary>
+    /// <param name="RetryAfterSeconds">Whole seconds until the client's rate-limit window resets.</param>
+    internal sealed record Throttled(int RetryAfterSeconds) : LoginOutcome;
 }

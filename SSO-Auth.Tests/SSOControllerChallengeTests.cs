@@ -218,9 +218,19 @@ public class SSOControllerChallengeTests
         // then rejects with the uniform 400, but that is after the budget is spent.
         Assert.Equal(400, Assert.IsType<ContentResult>(harness.Controller.SamlChallenge("does-not-exist")).StatusCode);
 
-        // The second is over budget and is throttled with a 429 before the provider is even looked up.
-        var throttled = harness.Controller.SamlChallenge("does-not-exist");
-        Assert.Equal(429, Assert.IsType<ContentResult>(throttled).StatusCode);
+        // The second is over budget and is throttled before the provider is even looked up. The whole
+        // response shape is characterized here (#474): after routing through LoginOutcome.Throttled and the
+        // single mapper it must stay byte-identical — a 429, the fixed plain-text body, and a Retry-After
+        // header whose value falls within the configured window.
+        var throttled = Assert.IsType<ContentResult>(harness.Controller.SamlChallenge("does-not-exist"));
+        Assert.Equal(429, throttled.StatusCode);
+        Assert.Equal("Too many login attempts. Please wait a moment and try again.", throttled.Content);
+        Assert.Equal("text/plain", throttled.ContentType);
+
+        var retryAfter = harness.Controller.Response.Headers.RetryAfter.ToString();
+        Assert.True(
+            int.TryParse(retryAfter, out var seconds) && seconds >= 1 && seconds <= 60,
+            $"Retry-After must be whole seconds within the 60s window; was '{retryAfter}'.");
     }
 
     [Fact]

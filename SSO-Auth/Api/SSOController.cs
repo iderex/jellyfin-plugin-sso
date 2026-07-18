@@ -1321,14 +1321,14 @@ public class SSOController : ControllerBase
     };
 
     // Applies the opt-in per-client rate limit (#128) on an anonymous flow endpoint: null when the
-    // request may proceed, else a 429 carrying Retry-After. Reads the settings under the config
-    // lock; an unattributable or non-public client is never throttled (fail open, availability
-    // over throttling). Keys on RemoteIpAddress only — proxy attribution is the host's job
-    // (Jellyfin's "Known proxies" setting resolves the real client into it); see
+    // request may proceed, else the throttled outcome rendered by the single mapper (#474). Reads the
+    // settings under the config lock; an unattributable or non-public client is never throttled (fail
+    // open, availability over throttling). Keys on RemoteIpAddress only — proxy attribution is the
+    // host's job (Jellyfin's "Known proxies" setting resolves the real client into it); see
     // SsoRateLimiter.NormalizeClientKey. The endpoint class (challenge/callback/auth) is part of
     // the key so one login — which hits all three — gets the full budget at each stage rather
     // than a third of it, keeping the default generous for shared egress addresses (NAT/CGNAT).
-    private ContentResult RateLimitCheck(string endpointClass)
+    private ActionResult RateLimitCheck(string endpointClass)
     {
         var (enabled, maxAttempts, windowSeconds) = SSOPlugin.Instance.ReadConfiguration(
             c => (c.EnableRateLimit, c.RateLimitMaxAttempts, c.RateLimitWindowSeconds));
@@ -1360,11 +1360,10 @@ public class SSOController : ControllerBase
             _logger.LogWarning("SSO rate limit engaged on the anonymous login endpoints: {Count} request(s) throttled since the last notice; further notices are suppressed for at least a minute.", throttledCount);
         }
 
-        // A human-readable body, not a bare status: the challenge/callback endpoints are navigated
-        // directly in the browser, so a blank 429 would look like a broken login (the XHR auth page
-        // reads the status, not this body). Retry-After carries the machine-readable delay.
-        Response.Headers.RetryAfter = retryAfterSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        return ReturnError(StatusCodes.Status429TooManyRequests, "Too many login attempts. Please wait a moment and try again.");
+        // The rejection is expressed as a LoginOutcome and rendered by the single mapper (#474): the
+        // status, plain-text body and the retry-delay header all originate there, so the controller no
+        // longer emits a bare rate-limit ContentResult or sets the delay header itself.
+        return LoginStatusMapper.ToActionResult(new LoginOutcome.Throttled(retryAfterSeconds), Response);
     }
 
     // Consumes the SAML assertion's ID against the provider-scoped replay cache for one-time use.

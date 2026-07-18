@@ -472,6 +472,38 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void RateLimiting_FlowsThroughLoginOutcome()
+    {
+        // Locked in by #474: the rate-limit rejection was the last login-path error that bypassed the single
+        // mapper. It now flows as LoginOutcome.Throttled through LoginStatusMapper, which is the ONE place the
+        // 429 status and its Retry-After header are emitted — so a CONTROLLER neither returns a bare rate-limit
+        // ContentResult nor sets Retry-After itself. Call-level property, so it is a source scan like the other
+        // controller rules above. Markers are the emission tokens, not prose: the 429 status constant, the
+        // typed IHeaderDictionary accessor (".RetryAfter" — the leading dot excludes the "retryAfterSeconds"
+        // local the controller still passes into the outcome), and the raw header-name literal.
+        var markers = new[] { "Status429TooManyRequests", ".RetryAfter", "Retry-After" };
+        var offenders = ControllerSourceFiles()
+            .SelectMany(path => File.ReadAllLines(path)
+                .Select((line, index) => (File: Path.GetFileName(path), Text: line.Trim(), Number: index + 1)))
+            .Where(l => markers.Any(m => l.Text.Contains(m, StringComparison.Ordinal)))
+            .Select(l => $"{l.File} line {l.Number}: {l.Text}")
+            .ToList();
+
+        Assert.True(
+            offenders.Count == 0,
+            "A controller must not emit a rate-limit 429 or set Retry-After directly; route the rejection through LoginOutcome.Throttled and LoginStatusMapper (#474). Found: " + string.Join(" | ", offenders));
+
+        // Liveness against a vacuous pass: the 429 + Retry-After must actually live in the mapper — a move,
+        // not a silent removal — so LoginStatusMapper's own source must emit both.
+        var mapperSource = string.Join(
+            "\n",
+            SourceFilesDeclaring(new[] { typeof(LoginStatusMapper) }).Select(File.ReadAllText));
+        Assert.True(
+            mapperSource.Contains("Status429TooManyRequests", StringComparison.Ordinal) && mapperSource.Contains("RetryAfter", StringComparison.Ordinal),
+            "LoginStatusMapper must own the rate-limit 429 and its Retry-After header; otherwise the controller scan passes vacuously (#474).");
+    }
+
+    [Fact]
     public void LegacyLinkMigration_ReturnsTheAuthoritativeMapping_NotAVoidReKey()
     {
         // Locked in by #363: the #155 legacy-link re-key runs as a SECOND lock acquisition after the
