@@ -45,6 +45,13 @@ internal sealed class SamlLoginService
     // browser binding (#415). One process-wide instance.
     private static readonly SamlRequestCache SamlRequests = new SamlRequestCache();
 
+    // The in-flight login-outcome store (#251): the ACS callback validates the assertion ONCE, stores the
+    // resulting verified outcome keyed by a CSPRNG token, and hands the intermediate page only that token;
+    // the session-mint leg redeems the token instead of re-parsing and re-validating the assertion. One
+    // process-wide instance, like the outstanding-request cache above — the callback and the mint leg run
+    // across separate per-request flow-service instances.
+    private static readonly SamlOutcomeStore Outcomes = new SamlOutcomeStore();
+
     // How long an issued SAML AuthnRequest ID stays valid for correlation — the interactive leg
     // (challenge -> IdP login/MFA -> POST back -> mint), matching the OpenID authorize-state lifetime the
     // sibling flow service keeps.
@@ -83,6 +90,14 @@ internal sealed class SamlLoginService
     // into the next test. Same test-only surface as OidcLoginService.ResetOidStateForTests (internal,
     // InternalsVisibleTo, no endpoint/DI). Moved here with the statics from the controller (#160).
     internal static void ResetSamlRequestsForTests() => SamlRequests.Clear();
+
+    // Test-only: clears the in-flight login-outcome store (#251) between tests, the same process-wide-static
+    // reset reason as ResetSamlRequestsForTests. Internal, InternalsVisibleTo, never wired to an endpoint/DI.
+    internal static void ResetSamlOutcomesForTests() => Outcomes.Clear();
+
+    // Test-only: seeds a single login outcome so a test can drive the token-redeem mint leg without first
+    // running the callback that normally populates the store. Same test-only surface as the resets above.
+    internal static void SeedSamlOutcomeForTests(SamlLoginOutcome outcome) => Outcomes.Seed(outcome);
 
     // Test-only seed of an outstanding SAML AuthnRequest so a test can exercise SamlAuth's browser
     // binding (#415) — normally populated by the challenge redirect leg — without deriving the random
@@ -134,7 +149,22 @@ internal sealed class SamlLoginService
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
 
-        if (SamlLoginPolicy.IsLoginAllowed(SamlAssertionValidator.GetAssertionRoles(samlResponse), config.Roles))
+        if (!SamlLoginPolicy.IsLoginAllowed(SamlAssertionValidator.GetAssertionRoles(samlResponse), config.Roles))
+        {
+            _logger.LogWarning(
+                "SAML user: {UserId} has insufficient roles: {@Roles}. Expected any one of: {@ExpectedRoles}",
+                samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty),
+                SamlAssertionValidator.GetAssertionRoles(samlResponse).Select(r => r?.ReplaceLineEndings(string.Empty)),
+                config.Roles);
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
+        }
+
+        // Linking keeps the assertion-embedded page (#251 is scoped to the login round-trip): the page JS
+        // posts its data to BOTH SAML/Link and SAML/Auth, and the one-time outcome token is single-use, so a
+        // token would satisfy only the first of the two posts. The link redeem (SamlLoginService.Link)
+        // consumes the assertion's one-time-use id on its own leg, and the follow-on SAML/Auth post then
+        // falls to the fully-validating deprecation branch below — byte-for-byte the pre-#251 linking flow.
+        if (isLinking)
         {
             return FlowResponses.AuthPage(response, nonce =>
                 WebResponse.Generator(
@@ -143,15 +173,52 @@ internal sealed class SamlLoginService
                     baseUrl: requestBase,
                     mode: "SAML",
                     nonce: nonce,
-                    isLinking: isLinking));
+                    isLinking: true));
         }
 
-        _logger.LogWarning(
-            "SAML user: {UserId} has insufficient roles: {@Roles}. Expected any one of: {@ExpectedRoles}",
-            samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty),
-            SamlAssertionValidator.GetAssertionRoles(samlResponse).Select(r => r?.ReplaceLineEndings(string.Empty)),
-            config.Roles);
-        return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
+        // Login path (#251): validate the assertion exactly ONCE here — the one-time replay consume, the
+        // non-empty-NameID guard, and the sole SAML VerifiedIdentity construction — then store the verified
+        // outcome server-side keyed by a CSPRNG token and hand the page only that token. The signed XML never
+        // crosses to the browser, so SAML/Auth redeems the outcome instead of parsing and validating a second
+        // copy. The InResponseTo correlation and browser binding are NOT enforced here: the ACS POST is
+        // cross-site and would not carry the SameSite=Lax binding cookie, so that check stays at the
+        // same-origin mint leg (below), where the cookie is present — the assertion's InResponseTo is carried
+        // in the stored outcome so the mint leg can correlate it without the XML.
+        if (!_validator.TryProduceVerifiedIdentity(config, provider, samlResponse, out var identity, out var rejection))
+        {
+            return LoginStatusMapper.ToActionResult(rejection);
+        }
+
+        var clientKey = SsoRateLimiter.NormalizeClientKey(request.HttpContext.Connection.RemoteIpAddress);
+        Outcomes.PruneExpired(DateTime.UtcNow);
+        var outcome = new SamlLoginOutcome(
+            SamlOutcomeStore.NewToken(),
+            provider,
+            identity,
+            samlResponse.GetInResponseTo() ?? string.Empty,
+            clientKey,
+            DateTime.UtcNow);
+        if (!Outcomes.TryAdd(outcome, out var shouldWarnCapacity))
+        {
+            // A CSPRNG-token collision (effectively impossible) or the store is at capacity — fail closed
+            // rather than render a page whose token could never redeem. The store throttles the capacity
+            // warning to one signal per interval so a flood cannot amplify into log volume (CWE-400).
+            if (shouldWarnCapacity)
+            {
+                _logger.LogWarning("SAML login outcome refused for provider {Provider}: a CSPRNG-token collision (effectively impossible) or the outcome store is at capacity (warning throttled).", provider?.ReplaceLineEndings(string.Empty));
+            }
+
+            return FlowResponses.PlainTextError(StatusCodes.Status500InternalServerError, "Could not start login; please retry.");
+        }
+
+        return FlowResponses.AuthPage(response, nonce =>
+            WebResponse.Generator(
+                data: outcome.Token,
+                provider: provider,
+                baseUrl: requestBase,
+                mode: "SAML",
+                nonce: nonce,
+                isLinking: false));
     }
 
     /// <summary>
@@ -277,52 +344,54 @@ internal sealed class SamlLoginService
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.UnknownProvider));
         }
 
+        // The one-time outcome-token path (#251): the plugin now renders a token (not the assertion) for
+        // login flows. Redeem it once — an atomic claim, so a replayed token misses and a token minted for
+        // another provider is refused (details on SamlOutcomeStore.TryRedeem). The assertion was already
+        // fully validated at the ACS callback (signature, time, audience, recipient, role gate, the one-time
+        // replay consume and the verified-identity construction), so NOTHING is re-parsed or re-validated
+        // here: only the browser binding remains, checked at this same-origin leg where the SameSite=Lax
+        // cookie is sent (the cross-site ACS POST could not carry it). A miss falls through to the
+        // deprecation branch below, so an unknown/expired/replayed token is rejected there rather than minting.
+        if (Outcomes.TryRedeem(response?.Data, provider, DateTime.UtcNow) is { } outcome)
+        {
+            if (!CorrelateAndBind(provider, outcome.InResponseTo, bindingCookie, config.ValidateInResponseTo))
+            {
+                return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
+            }
+
+            // From here the SAML and OpenID paths are one: the verified identity flows into the shared
+            // completion tail. SAML keys the link on the NameID and carries no email_verified claim, so
+            // AdoptionGate.None; the resolver's admin-adoption refusal (#218) still applies.
+            return await _loginCompletion.CompleteAsync(
+                outcome.Identity,
+                response,
+                config,
+                AdoptionGate.None,
+                remoteEndPointResolver).ConfigureAwait(false);
+        }
+
+        // DEPRECATION WINDOW (#251, drop scheduled by #528): a page rendered by a PRE-#251
+        // plugin still embeds the full base64 assertion and posts it here. For one release SAML/Auth also
+        // accepts that legacy shape and FULLY validates it — signature/time/audience/recipient, the
+        // InResponseTo correlation + browser binding, the login allow-list, and the one-time replay consume —
+        // exactly as before #251, so an admin upgrading mid-login does not break a user's in-flight login.
+        // The plugin itself renders only tokens going forward; this branch is removed once the window closes.
         var requestBase = GetRequestBase(request, config.SchemeOverride, config.PortOverride, config.BaseUrlOverride);
         if (!_validator.TryValidate(config, provider, requestBase, response?.Data, out var samlResponse))
         {
-            // Malformed input is rejected the same way an invalid response is — clean 4xx, not 500 (#199).
+            // A malformed body, an unknown/expired/replayed token that reached this fallback, or a failed
+            // signature/time/audience/recipient check is rejected the same way — a clean 4xx, never a 500 (#199).
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
 
-        // Correlate the response to an AuthnRequest this server issued (#156, #415), and enforce the
-        // browser binding for a solicited login. A NON-EMPTY InResponseTo means the response claims to
-        // answer a request this server issued, so it must actually correlate to a live outstanding
-        // request AND carry that request's binding cookie — anything less fails closed. Crucially, a
-        // non-empty InResponseTo whose entry is gone (expired past the 15-minute window, evicted at the
-        // cap, lost to a restart or a non-sticky multi-node hop) is a LOST correlation, not an
-        // unsolicited response: treating it as unsolicited would let a signature-valid response mint a
-        // session with no binding check when ValidateInResponseTo is off, which is exactly the
-        // forced-login bypass the binding exists to close (login validity must never default to true).
-        //
-        // The binding is checked AFTER the atomic claim (unlike the OpenID state, #326) and that is safe:
-        // the response already passed signature validation above and the InResponseTo is read from that
-        // validated document, so an attacker cannot mint a signature-valid response carrying a victim's
-        // request id to burn their outstanding entry. The cookie is checked here (the same-origin auth
-        // endpoint), not at the cross-site ACS POST which would not carry a SameSite=Lax cookie.
-        var inResponseTo = samlResponse.GetInResponseTo();
-        if (!string.IsNullOrEmpty(inResponseTo))
+        if (!CorrelateAndBind(provider, samlResponse.GetInResponseTo(), bindingCookie, config.ValidateInResponseTo))
         {
-            var requestKey = ProviderScopedKey.For(provider, inResponseTo);
-            if (!SamlRequests.TryConsume(requestKey, DateTime.UtcNow, out var storedBindingId)
-                || !AuthorizeStateBinding.Matches(storedBindingId, bindingCookie))
-            {
-                _logger.LogWarning("SAML login denied: a solicited response did not correlate to a live outstanding request from the initiating browser (binding mismatch, expiry, or lost correlation).");
-                return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
-            }
-        }
-        else if (config.ValidateInResponseTo)
-        {
-            // No InResponseTo at all: a genuinely unsolicited (IdP-initiated) response. It is refused
-            // only when the opt-in solicited-only mode is on; otherwise it proceeds — unchanged and
-            // non-breaking for IdP-initiated deployments. The rejection is a client-caused 400 in the
-            // uniform SAML body, never a 500, and the diagnosis stays in the warning log.
-            _logger.LogWarning("SAML login denied: the response was not solicited by this server (no InResponseTo).");
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
 
-        // Enforce the login allow-list here too, not only at the assertion-consumer page: a caller
-        // can POST an assertion straight to this session-minting endpoint and skip the page, so
-        // checking it only there would be fail-open.
+        // Enforce the login allow-list here too, not only at the assertion-consumer page: a legacy caller
+        // can POST an assertion straight to this session-minting endpoint and skip the page, so checking it
+        // only there would be fail-open.
         if (!SamlLoginPolicy.IsLoginAllowed(SamlAssertionValidator.GetAssertionRoles(samlResponse), config.Roles))
         {
             _logger.LogWarning(
@@ -333,11 +402,7 @@ internal sealed class SamlLoginService
 
         // Complete the assertion validation in the dedicated validator: the one-time replay consume and the
         // non-empty-NameID guard, then — and only then — the verified identity through FromValidatedSaml
-        // (#496). A replay fails as an invalid response and a missing NameID as a denial, the same outcomes
-        // this endpoint returned when those checks were inline. From here the SAML and OpenID paths are one:
-        // the verified identity flows into the shared completion tail (SAML keys the link on the NameID and
-        // carries no email_verified claim, so AdoptionGate.None; the resolver's admin-adoption refusal, #218,
-        // still applies).
+        // (#496). A replay fails as an invalid response and a missing NameID as a denial.
         if (!_validator.TryProduceVerifiedIdentity(config, provider, samlResponse, out var identity, out var rejection))
         {
             return LoginStatusMapper.ToActionResult(rejection);
@@ -349,6 +414,42 @@ internal sealed class SamlLoginService
             config,
             AdoptionGate.None,
             remoteEndPointResolver).ConfigureAwait(false);
+    }
+
+    // Correlates a response to an AuthnRequest this server issued (#156, #415) and enforces the browser
+    // binding for a solicited login. A NON-EMPTY InResponseTo means the response claims to answer a request
+    // this server issued, so it must actually correlate to a live outstanding request AND carry that
+    // request's binding cookie — anything less fails closed. Crucially, a non-empty InResponseTo whose entry
+    // is gone (expired past the 15-minute window, evicted at the cap, lost to a restart or a non-sticky
+    // multi-node hop) is a LOST correlation, not an unsolicited response: treating it as unsolicited would
+    // let a validated response complete a login with no binding check when ValidateInResponseTo is off, which
+    // is exactly the forced-login bypass the binding exists to close (login validity must never default to
+    // true). The consume is the atomic claim of the outstanding request; the cookie match is checked at this
+    // same-origin auth endpoint, not at the cross-site ACS POST which would not carry a SameSite=Lax cookie.
+    // Shared by the token-redeem mint path (on the stored outcome's InResponseTo) and the deprecation branch
+    // (on the freshly parsed response), so both enforce the identical correlation.
+    private bool CorrelateAndBind(string provider, string inResponseTo, string bindingCookie, bool validateInResponseTo)
+    {
+        if (!string.IsNullOrEmpty(inResponseTo))
+        {
+            var requestKey = ProviderScopedKey.For(provider, inResponseTo);
+            if (!SamlRequests.TryConsume(requestKey, DateTime.UtcNow, out var storedBindingId)
+                || !AuthorizeStateBinding.Matches(storedBindingId, bindingCookie))
+            {
+                _logger.LogWarning("SAML login denied: a solicited response did not correlate to a live outstanding request from the initiating browser (binding mismatch, expiry, or lost correlation).");
+                return false;
+            }
+        }
+        else if (validateInResponseTo)
+        {
+            // No InResponseTo at all: a genuinely unsolicited (IdP-initiated) response. It is refused only
+            // when the opt-in solicited-only mode is on; otherwise it proceeds — unchanged and non-breaking
+            // for IdP-initiated deployments.
+            _logger.LogWarning("SAML login denied: the response was not solicited by this server (no InResponseTo).");
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>

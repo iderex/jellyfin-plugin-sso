@@ -59,6 +59,9 @@ internal sealed class SamlReplayCache
     /// <summary>Gets the live entry count. Test-only, so the cap and sweep paths can be asserted.</summary>
     internal int Count => _consumed.Count;
 
+    /// <summary>Test-only: drops all consumed-assertion entries so process-wide state cannot leak between tests.</summary>
+    internal void Clear() => _consumed.Clear();
+
     /// <summary>
     /// Computes how long a just-consumed assertion must be retained for replay protection: the whole
     /// window it would still be accepted - its NotOnOrAfter plus the validation clock skew - with a
