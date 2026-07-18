@@ -152,6 +152,45 @@ public class SSOControllerSamlTokenTests
         await harness.UserManager.Received(1).CreateUserAsync("alice");
     }
 
+    [Fact]
+    public async Task CallbackRefusedAtOutcomeStoreCap_DoesNotBurnTheAssertion_RetrySucceeds_ReplayStillRejected()
+    {
+        // #539: in the token flow the ACS callback consumes the assertion's one-time replay id and then stores
+        // the outcome. If the store refused AFTER the consume, a cap refusal would burn the assertion for a
+        // login that never completed and permanently lock out the legitimate user. Reserving the store slot
+        // BEFORE the consume fixes that: a cap refusal leaves the assertion untouched and the login retryable,
+        // while a genuine replay is still rejected.
+        var fixture = SamlTestFactory.Create(nameId: "alice");
+        var harness = ProvisioningHarness(fixture, out _);
+        var assertion = fixture.EncodeResponse();
+
+        // Install a cap-1 outcome store (the production 100k ceiling is unreachable in a unit test) and fill
+        // its single global slot with an unrelated in-flight outcome, so the next callback's reservation is
+        // refused. The filler uses a null (exempt) client key so it occupies the GLOBAL slot.
+        var store = new SamlOutcomeStore(1, TimeSpan.FromMinutes(15), TimeSpan.FromMinutes(1));
+        SamlLoginService.SetSamlOutcomeStoreForTests(store);
+        var filler = SamlOutcomeStore.NewToken();
+        var fillerIdentity = VerifiedIdentity.FromValidatedSaml("adfs", "filler", SamlAuthorizeStateBuilder.Build(new System.Collections.Generic.List<string>(), new SamlConfig()));
+        Assert.True(store.TryAdd(new SamlLoginOutcome(filler, "adfs", fillerIdentity, string.Empty, null, DateTime.UtcNow), out _));
+
+        // The callback is refused at the store cap — a fail-closed 500 — and the assertion's one-time replay
+        // id is NOT consumed, because the reservation is checked ahead of the consume.
+        var refused = Assert.IsType<ContentResult>(harness.Controller.SamlCallback("adfs", formSamlResponse: assertion));
+        Assert.Equal(500, refused.StatusCode);
+
+        // Drain the store (redeem the filler), then re-POST the SAME assertion. Because it was never burned,
+        // the retry now validates, consumes the id, and renders a real token — the login was not lost.
+        Assert.NotNull(store.TryRedeem(filler, "adfs", DateTime.UtcNow));
+        var token = ExtractToken(harness.Controller.SamlCallback("adfs", formSamlResponse: assertion));
+        Assert.IsType<OkObjectResult>(await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = token }));
+        await harness.UserManager.Received(1).CreateUserAsync("alice");
+
+        // Replay protection is intact: re-POSTing the same assertion a third time (the store now has room) is
+        // refused by the one-time replay guard, since the retry above consumed the id.
+        var replay = Assert.IsType<ContentResult>(harness.Controller.SamlCallback("adfs", formSamlResponse: assertion));
+        Assert.Equal(400, replay.StatusCode);
+    }
+
     private const string AuthnRequestId = "_authnreq-251";
     private const string Binding = "251251251251251251251251251251251251251251251251251251251251251A";
 

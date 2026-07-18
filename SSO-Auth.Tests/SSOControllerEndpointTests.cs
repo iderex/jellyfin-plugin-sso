@@ -159,6 +159,22 @@ public class SSOControllerEndpointTests
     }
 
     [Fact]
+    public void OidProviderNames_SkipsNullValuedEntry()
+    {
+        // A null-valued entry must not NRE the anonymous GetNames endpoint into a 500 (#538) — it is
+        // skipped, the same fail-closed treatment CanonicalLinkService already applies to these maps.
+        var harness = new SsoControllerHarness(c =>
+        {
+            c.OidConfigs["keycloak"] = new OidConfig { Enabled = true };
+            c.OidConfigs["broken"] = null;
+        });
+
+        var result = Assert.IsType<OkObjectResult>(harness.Controller.OidProviderNames());
+        var names = Assert.IsType<List<string>>(result.Value);
+        Assert.Equal(new[] { "keycloak" }, names);
+    }
+
+    [Fact]
     public void SamlProviderNames_ReturnsEnabledNames()
     {
         var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig { Enabled = true });
@@ -176,6 +192,21 @@ public class SSOControllerEndpointTests
         {
             c.SamlConfigs["adfs"] = new SamlConfig { Enabled = true };
             c.SamlConfigs["disabled-idp"] = new SamlConfig { Enabled = false };
+        });
+
+        var result = Assert.IsType<OkObjectResult>(harness.Controller.SamlProviderNames());
+        var names = Assert.IsType<List<string>>(result.Value);
+        Assert.Equal(new[] { "adfs" }, names);
+    }
+
+    [Fact]
+    public void SamlProviderNames_SkipsNullValuedEntry()
+    {
+        // SAML twin of OidProviderNames_SkipsNullValuedEntry (#538).
+        var harness = new SsoControllerHarness(c =>
+        {
+            c.SamlConfigs["adfs"] = new SamlConfig { Enabled = true };
+            c.SamlConfigs["broken"] = null;
         });
 
         var result = Assert.IsType<OkObjectResult>(harness.Controller.SamlProviderNames());

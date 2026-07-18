@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main ]
   pull_request:
-    branches: [ main ]
+    branches: [ "**" ]
 
 # Read-only: build/test/scan only, no job here writes to the repo or a release.
 permissions:
