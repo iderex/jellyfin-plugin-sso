@@ -13,7 +13,7 @@
 
     <!-- Fail closed on EVERY CI restore, not just the PR build job: GITHUB_ACTIONS is set to
          "true" in all GitHub Actions runs, so this covers the analysis build, the JPRM package
-         job, and the release/nightly publish that produces the shipped artifact. Locked mode fails
+         job, and the release/beta publish that produces the shipped artifact. Locked mode fails
          the restore if a committed lock file would change (drift or tampering). Left off locally so
          a package update does not need the force-evaluate switch. -->
     <RestoreLockedMode Condition="'$(GITHUB_ACTIONS)' == 'true'">true</RestoreLockedMode>
