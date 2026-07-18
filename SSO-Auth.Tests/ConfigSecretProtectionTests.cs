@@ -60,6 +60,7 @@ public class ConfigSecretProtectionTests
             {
                 SamlSigningKeyPfx = "pfx-x",
                 SamlCertificate = "PUBLIC-IDP-CERT-X",
+                SamlSecondaryCertificate = "PUBLIC-IDP-CERT-SECONDARY-X",
             };
             config.SamlConfigs["y"] = new SamlConfig { SamlSigningKeyPfx = "pfx-y" };
 
@@ -75,6 +76,11 @@ public class ConfigSecretProtectionTests
             // it directly (never through Reveal), so encrypting it here would silently break every SAML
             // login. It - and non-secret ids - must be left verbatim.
             Assert.Equal("PUBLIC-IDP-CERT-X", config.SamlConfigs["x"].SamlCertificate);
+
+            // The inbound secondary verification certificate (#491) is likewise the identity provider's
+            // PUBLIC key, read directly by signature verification (never through Reveal); encrypting it would
+            // silently break rotation logins, so it too must be left verbatim.
+            Assert.Equal("PUBLIC-IDP-CERT-SECONDARY-X", config.SamlConfigs["x"].SamlSecondaryCertificate);
             Assert.Equal("client-a", config.OidConfigs["a"].OidClientId);
         });
     }

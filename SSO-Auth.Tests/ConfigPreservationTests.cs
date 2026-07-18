@@ -834,4 +834,36 @@ public class ConfigPreservationTests
     {
         ProviderConfigValidator.Validate(new PluginConfiguration { SamlConfigs = null }, new PluginConfiguration());
     }
+
+    [Fact]
+    public void ValidateSamlSecondaryCertificate_ValidOrBlank_DoesNotThrow()
+    {
+        // The inbound secondary verification certificate (#491) is validated on the whole-config save path
+        // exactly like the primary; a valid or blank value is accepted.
+        var incoming = new PluginConfiguration();
+        incoming.SamlConfigs["ok"] = new SamlConfig
+        {
+            SamlCertificate = SamlTestFactory.Create().CertificateBase64,
+            SamlSecondaryCertificate = SamlTestFactory.Create().CertificateBase64,
+        };
+        incoming.SamlConfigs["blank"] = new SamlConfig { SamlCertificate = null, SamlSecondaryCertificate = null };
+
+        ProviderConfigValidator.Validate(incoming, new PluginConfiguration());
+    }
+
+    [Fact]
+    public void ValidateSamlSecondaryCertificate_Garbage_Throws()
+    {
+        // A set-but-unloadable secondary certificate is rejected fail-closed before persistence, so it can
+        // never make every callback throw a CryptographicException 500.
+        var incoming = new PluginConfiguration();
+        incoming.SamlConfigs["idp"] = new SamlConfig
+        {
+            SamlCertificate = SamlTestFactory.Create().CertificateBase64,
+            SamlSecondaryCertificate = "QUJD", // valid base64, not a cert
+        };
+
+        var ex = Assert.Throws<ArgumentException>(() => ProviderConfigValidator.Validate(incoming, new PluginConfiguration()));
+        Assert.Contains("secondary", ex.Message, StringComparison.Ordinal);
+    }
 }

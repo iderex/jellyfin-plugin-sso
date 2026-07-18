@@ -225,6 +225,25 @@ public class SamlConfig : ProviderConfigBase
     public string SamlCertificate { get; set; }
 
     /// <summary>
+    /// Gets or sets an OPTIONAL second identity-provider signing certificate accepted alongside
+    /// <see cref="SamlCertificate"/> during an INBOUND (IdP-side) signing-key rotation (#491). A response
+    /// is accepted when its signature verifies against EITHER this certificate or the primary, under the
+    /// SAME algorithm allowlist (no SHA-1), signature-scope, and fail-closed checks; when blank, the trial
+    /// narrows to the primary alone. Note the validity-window check added with this field applies to the
+    /// primary too, so an already-EXPIRED primary certificate — which the pre-#491 path still accepted, as
+    /// XML-DSig verification ignores certificate dates — is now rejected on upgrade unless a current
+    /// certificate is configured (here or promoted into <see cref="SamlCertificate"/>). Unlike
+    /// <see cref="SamlSigningKeyPfx"/> and
+    /// <see cref="SamlRolloverSigningKeyPfx"/> — the SP's own PRIVATE signing keys — this is the identity
+    /// provider's PUBLIC signing certificate, exactly like <see cref="SamlCertificate"/>: it is NOT a
+    /// secret, so it carries no write-only/encrypted-at-rest handling and is stored and returned in the
+    /// clear. An expired certificate is rejected, so an administrator adds the identity provider's new
+    /// certificate here before the cutover and promotes it into <see cref="SamlCertificate"/> (clearing
+    /// this field) once the provider has fully rotated — with no login downtime across the overlap window.
+    /// </summary>
+    public string SamlSecondaryCertificate { get; set; }
+
+    /// <summary>
     /// Gets or sets the audience (SP entity id) that a SAML response must be addressed to. When
     /// unset, the SamlClientId is used. Ignored when <see cref="DoNotValidateAudience"/> is set.
     /// </summary>

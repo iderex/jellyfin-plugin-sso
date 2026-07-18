@@ -410,6 +410,56 @@ Because the rollover key is publish-only and withheld from config responses, it 
 changed by posting a non-blank value; a blank save keeps whatever is stored, so an unrelated edit cannot
 end the overlap window by accident.
 
+## SAML identity-provider certificate rotation (inbound)
+
+The counterpart to the SP-side rollover above: when the **identity provider** rotates its **own**
+signing key, a hard cutover would break every login the moment it starts signing with the new key while
+the plugin still trusts only the old `SamlCertificate`. To roll over with no downtime, the plugin accepts
+a response whose signature verifies against **either** the primary `SamlCertificate` **or** an optional
+second certificate:
+
+- **`SamlCertificate`** — the identity provider's **public** signing certificate, as a Base64-encoded
+  (DER) X.509 certificate. This is the primary and only required certificate.
+- **`SamlSecondaryCertificate`** _(optional)_ — a **second** identity-provider public signing
+  certificate, in the same Base64-encoded (DER) X.509 shape. A response is accepted when its signature
+  verifies against **either** certificate, under the **same** checks as the primary (the no-SHA-1
+  algorithm allowlist, single-signature/anti-wrapping binding, XXE/DOCTYPE rejection, time-bound,
+  audience and recipient). Leave it blank when you are not mid-rotation: validation is then **byte-for-byte
+  the primary-only behaviour**. Unlike the SP's own signing keys (`SamlSigningKeyPfx` /
+  `SamlRolloverSigningKeyPfx`, which carry a **private** key and are encrypted at rest), these are the
+  identity provider's **public** certificates — **not secrets** — so they are stored and returned in the
+  clear.
+
+**Expired certificates are rejected.** A certificate is used to verify only while it is within its own
+`[NotBefore, NotAfter]` validity window (with the same five-minute clock-skew tolerance the other SAML
+time-bounds use); an expired (or not-yet-valid) certificate never verifies a response, whether it is the
+primary or the secondary. This is what makes the overlap window **terminate**: once the identity
+provider's old certificate expires, it stops authenticating logins on its own.
+
+> **Upgrade note.** Earlier versions did **not** check the certificate's validity dates at all (XML-DSig
+> verification ignores them), so a deployment whose identity-provider signing certificate has **already
+> expired** — but whose key still signs — kept working. From this version such a certificate is rejected.
+> If logins for a SAML provider start failing right after upgrading, the primary `SamlCertificate` is
+> likely expired: obtain the identity provider's **current** certificate and set it (in `SamlCertificate`,
+> or in `SamlSecondaryCertificate` during a rotation).
+
+Both are set through the SAML provider configuration (the `SAML/Add` API, like the other SAML options —
+there is no admin-UI toggle yet); include them whenever you re-post a provider's config so a save does
+not reset them. A garbage secondary certificate is rejected when the provider is saved, exactly like the
+primary.
+
+To roll the identity provider's signing key over:
+
+1. **Stage the new certificate.** Before the identity provider cuts over, obtain its **new** public
+   signing certificate and set `SamlSecondaryCertificate` to it (leave `SamlCertificate` — the primary —
+   as the current certificate). Logins now verify against **either**, so responses signed with the old
+   **or** the new key are accepted throughout the overlap.
+2. **Let the identity provider cut over.** When the provider starts signing with its new key, logins keep
+   working — they now verify against the secondary. There is no downtime.
+3. **Promote the new certificate.** Move the new certificate into the primary field — set
+   `SamlCertificate` to the new certificate — and **clear `SamlSecondaryCertificate`**. Validation is
+   back to a single certificate (the new one), and the rotation is complete.
+
 ## SAML service-provider metadata
 
 The plugin can publish standard SAML 2.0 **service-provider metadata** for a provider, so you can

@@ -64,15 +64,24 @@ internal static class SamlTestFactory
         string? inResponseTo = null,
         string? destination = null,
         string? subjectConfirmationMethod = "urn:oasis:names:tc:SAML:2.0:cm:bearer",
-        string[][]? audienceRestrictions = null)
+        string[][]? audienceRestrictions = null,
+        DateTimeOffset? certNotBefore = null,
+        DateTimeOffset? certNotAfter = null)
     {
         var audienceList = audiences ?? (audience == null ? null : new[] { audience });
         const string TimeFormat = "yyyy-MM-ddTHH:mm:ssZ";
         var effectiveNotOnOrAfter = notOnOrAfter ?? DateTime.UtcNow.AddMinutes(5);
 
+        // The signing certificate's own validity window (default: valid — yesterday to ten years out).
+        // Overridable so the inbound verification-cert rotation tests (#491) can sign with an EXPIRED (or
+        // not-yet-valid) certificate; signing uses the private key and is unaffected by these dates, so the
+        // fixture stays a real, correctly-signed response whose acceptance turns solely on the validator's
+        // certificate-expiry gate.
         using var rsa = RSA.Create(2048);
         var request = new CertificateRequest("CN=Test SAML IdP", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
-        var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(10));
+        var certificate = request.CreateSelfSigned(
+            certNotBefore ?? DateTimeOffset.UtcNow.AddDays(-1),
+            certNotAfter ?? DateTimeOffset.UtcNow.AddYears(10));
 
         var responseId = "_" + Guid.NewGuid().ToString("N");
         var assertionId = "_" + Guid.NewGuid().ToString("N");
