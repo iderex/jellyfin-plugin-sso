@@ -145,7 +145,7 @@ jobs:
         # The reproducers are the finding. Always upload; ignore if none were
         # written (the expected clean-run case).
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sharpfuzz-crashers-${{ matrix.target }}
           path: findings/${{ matrix.target }}/
@@ -156,7 +156,7 @@ jobs:
         # The corpus libFuzzer grew this run — reseeds the next run and documents
         # the coverage reached.
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sharpfuzz-corpus-${{ matrix.target }}
           path: SSO-Auth.Fuzz/corpus/${{ matrix.target }}/
