@@ -90,7 +90,8 @@ public abstract class ProviderConfigBase
     /// <summary>
     /// Gets or sets a value indicating whether an SSO login may adopt a pre-existing, unlinked
     /// Jellyfin account whose username matches the SSO name. Off by default (fail closed): a first
-    /// login that matches an existing account is rejected rather than taking it over.
+    /// login that matches an existing account is rejected rather than taking it over. Settable in the
+    /// admin provider form as well as the config XML (#484, #488).
     /// </summary>
     public bool AllowExistingAccountLink { get; set; }
 
@@ -314,9 +315,22 @@ public class OidConfig : ProviderConfigBase
     /// always refused regardless of this flag, so the headline takeover is closed without it; this flag
     /// hardens the residual non-admin, name-based adoption. Enabling it needs the <c>email</c> scope so
     /// the provider actually returns <c>email_verified</c>; an absent or false claim then refuses
-    /// adoption. XML-only, like <see cref="ProviderConfigBase.AllowExistingAccountLink"/>.
+    /// adoption. Settable in the admin provider form as well as the config XML (#484, #488).
     /// </summary>
     public bool RequireVerifiedEmailForAdoption { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether every OpenID login for this provider must carry
+    /// <c>email_verified == true</c> (#166). Off by default (fail closed for availability, not the threat):
+    /// a deployment that does not set it — or an identity provider that omits the claim — is unaffected, so
+    /// the whole userbase sees no change on upgrade. When on, a login whose <c>email_verified</c> is not
+    /// exactly <c>true</c> (absent, false, or unparseable) is refused, so an identity provider that permits
+    /// unverified emails cannot be used to sign in. Distinct from <see cref="RequireVerifiedEmailForAdoption"/>,
+    /// which only gates same-name account adoption; this gates the login itself, before any account is
+    /// resolved. Enabling it needs the <c>email</c> scope so the provider returns <c>email_verified</c>.
+    /// XML-only.
+    /// </summary>
+    public bool RequireVerifiedEmailForLogin { get; set; }
 
     /// <summary>
     /// Gets or sets the claim to check roles against. Separated by "."s.

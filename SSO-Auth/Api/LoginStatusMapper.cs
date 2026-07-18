@@ -70,6 +70,7 @@ internal static class LoginStatusMapper
         PublicReason.SamlResponseInvalid => Emit(StatusCodes.Status400BadRequest, "SAML response validation failed"),
         PublicReason.PkceNotSupported => Emit(StatusCodes.Status400BadRequest, "The identity provider does not advertise the required PKCE (S256) support."),
         PublicReason.PkceUnverifiable => Emit(StatusCodes.Status400BadRequest, "The identity provider's PKCE (S256) support could not be verified."),
+        PublicReason.EmailNotVerified => Emit(StatusCodes.Status403Forbidden, "A verified email is required to log in."),
         // A new PublicReason member without a mapper entry fails loudly here, and the totality test
         // enumerating every member catches it before it can ship — never a fall-through.
         _ => throw new InvalidOperationException($"Unmapped public reason: {reason}"),

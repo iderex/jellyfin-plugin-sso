@@ -143,16 +143,94 @@ public class SSOControllerOidAuthTests
         await harness.UserManager.Received(1).CreateUserAsync("alice");
     }
 
+    [Fact]
+    public async Task OidAuth_RequireVerifiedEmailForLoginOff_Succeeds_RegardlessOfEmailVerified()
+    {
+        // The availability-critical property (#166): with the flag off (the default), the login succeeds
+        // even when email_verified is absent (null) — behaviour is byte-identical to before the gate, so no
+        // existing deployment or claim-omitting IdP is affected on upgrade.
+        var harness = new SsoControllerHarness(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            EnableAuthorization = false,
+            AllowExistingAccountLink = false,
+            RequireVerifiedEmailForLogin = false,
+        });
+        SeedValidState(harness, "state-token", emailVerified: null);
+        SetBindingCookie(harness, Binding);
+
+        var result = await harness.Controller.OidAuth("kc", Redeem("state-token"));
+
+        Assert.IsType<OkObjectResult>(result);
+        await harness.UserManager.Received(1).CreateUserAsync("alice");
+    }
+
+    [Fact]
+    public async Task OidAuth_RequireVerifiedEmailForLoginOn_EmailVerifiedTrue_Succeeds()
+    {
+        var harness = new SsoControllerHarness(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            EnableAuthorization = false,
+            AllowExistingAccountLink = false,
+            RequireVerifiedEmailForLogin = true,
+        });
+        SeedValidState(harness, "state-token", emailVerified: true);
+        SetBindingCookie(harness, Binding);
+
+        var result = await harness.Controller.OidAuth("kc", Redeem("state-token"));
+
+        Assert.IsType<OkObjectResult>(result);
+        await harness.UserManager.Received(1).CreateUserAsync("alice");
+    }
+
+    [Theory]
+    [InlineData(false)] // the IdP asserted the email is NOT verified
+    [InlineData(null)]  // the claim was absent or unparseable
+    public async Task OidAuth_RequireVerifiedEmailForLoginOn_EmailNotVerified_RejectsAndMintsNothing(bool? emailVerified)
+    {
+        // Fail closed (#166): with the flag on, anything other than email_verified == true rejects the whole
+        // login with the 403 gate body, and — crucially — no account is provisioned and no session minted.
+        var harness = new SsoControllerHarness(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            EnableAuthorization = false,
+            AllowExistingAccountLink = false,
+            RequireVerifiedEmailForLogin = true,
+        });
+        SeedValidState(harness, "state-token", emailVerified);
+        SetBindingCookie(harness, Binding);
+
+        var result = await harness.Controller.OidAuth("kc", Redeem("state-token"));
+
+        var content = Assert.IsType<ContentResult>(result);
+        Assert.Equal(403, content.StatusCode);
+        Assert.Equal("A verified email is required to log in.", content.Content);
+        await harness.UserManager.DidNotReceive().CreateUserAsync(Arg.Any<string>());
+    }
+
+    // A fully-populated redeem request; the state token is the only field these gate tests vary.
+    private static AuthResponse Redeem(string state) => new AuthResponse
+    {
+        Data = state,
+        DeviceID = "device-1",
+        DeviceName = "Test Device",
+        AppName = "Jellyfin Web",
+        AppVersion = "1.0",
+    };
+
     // Seeds a valid, redeemable login state for provider "kc" bound to a new user "alice", and mocks the
     // user provisioning + session lookup the happy path drives. BindingId records the browser-binding id
     // the challenge would have set; the redeem leg must present the matching cookie (see SetBindingCookie).
-    private static void SeedValidState(SsoControllerHarness harness, string token)
+    // emailVerified is the email_verified claim the login resolved (null = absent), so a test can exercise
+    // the verified-email login gate (#166).
+    private static void SeedValidState(SsoControllerHarness harness, string token, bool? emailVerified = null)
     {
         var pending = new AuthorizeSession.Pending(new AuthorizeState { State = token }, "kc", isLinking: false, DateTime.Now, Binding, clientKey: null, providerInformation: null, responseIssuerRequired: false);
         var ready = new AuthorizeSession.Ready(
             pending,
             new OidcAuthorizeStateBuilder.OidcAuthorizeState(
-                Username: "alice", Subject: "sub-1", EmailVerified: null, Valid: true, Admin: false,
+                Username: "alice", Subject: "sub-1", EmailVerified: emailVerified, Valid: true, Admin: false,
                 EnableLiveTv: false, EnableLiveTvManagement: false, Folders: new List<string>(), AvatarUrl: null));
         OidcLoginService.SeedOidStateForTests(token, ready);
 
