@@ -65,13 +65,18 @@ jobs:
       run: dotnet build --no-restore --warnaserror
     - name: Derive the beta version
       id: version
-      # Beta version = the release line from build.yaml (A.B.C) with the workflow
-      # run number as the fourth octet, e.g. 4.1.1.<run_number>. This is always
-      # ABOVE the last stable in that line (…․0) so a beta tester is offered it, and
-      # BELOW the next line's stable (a bump of A/B/C outranks any ….<run_number>),
-      # so cutting the next stable supersedes the beta cleanly. The build number is
-      # monotonic within this workflow, which is all Jellyfin's version precedence
-      # needs; the beta stays out of the stable manifest because it is a prerelease.
+      # Beta version = build.yaml's `version`, which is the NEXT RELEASE TARGET (the
+      # version main is developing toward), with the workflow run number as the fourth
+      # octet: <target>.<run_number>, released as "<target>-beta". The maintainer sets
+      # the target per change class — a patch (4.1.1 stable -> 4.1.2), a feature
+      # (-> 4.2.0), or a breaking release (-> 5.0.0) — so the beta always tracks the
+      # actual next release: 4.1.2-beta, then 4.2.0-beta, then 5.0.0-beta. The same
+      # target is what a `<target>-stable` tag releases; after a stable ships the
+      # maintainer bumps build.yaml to the next target. Betas therefore always outrank
+      # the current stable; the two channels are separate manifests, so that is fine.
+      # The build number is monotonic within this workflow, which is all Jellyfin's
+      # version precedence needs; the beta stays out of the stable manifest because it
+      # is a prerelease.
       # The grep pins the three-part shape so a malformed build.yaml fails here rather
       # than producing a bogus tag. RUN_NUMBER is passed via env (not inlined into the
       # script) so no ${{ }} expansion is spliced into the shell.
