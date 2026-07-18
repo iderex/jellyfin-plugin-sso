@@ -27,6 +27,25 @@ reporting.
 
 The latest released version is the only supported version.
 
+## Verifying a release download
+
+Every stable release asset ships with an `.md5` and a `.sha256` sidecar per
+plugin `.zip`; the `.md5` is the checksum the Jellyfin manifest uses to validate
+the download, and it is unchanged.
+
+In addition, each stable release zip carries a **signed SLSA build-provenance
+attestation** (SLSA v1.1, Build L3 — the package build runs in a reusable GitHub
+Actions workflow, which is what raises the provenance from L2 to L3). After
+downloading a release zip you can verify it was produced by this repository's
+release pipeline and has not been tampered with:
+
+```sh
+gh attestation verify <plugin>.zip --repo iderex/jellyfin-plugin-sso
+```
+
+The provenance attestation complements the checksum sidecars — it does not
+replace the manifest MD5.
+
 ## Repository security controls
 
 - **Secret scanning** and **push protection** are enabled, so a leaked credential — an identity-provider client secret, a CI token — is blocked before it can be pushed.
