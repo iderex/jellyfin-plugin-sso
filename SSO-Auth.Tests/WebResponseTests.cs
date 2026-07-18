@@ -135,6 +135,17 @@ public class WebResponseTests
         // exact predicate must be gone so a successful link can no longer proceed to a login post.
         Assert.DoesNotContain("linkStatus < 200 || linkStatus >= 300", html);
         Assert.Contains("if (linkStatus !== undefined) {", html);
+
+        // The terminality is enforced by a `return;` inside the definitive-status branch, BEFORE the
+        // fall-through to the .../Auth post. Assert the ordering directly, so deleting that `return;`
+        // (which would silently reintroduce the #614 fall-through) fails this test.
+        var gateIdx = html.IndexOf("if (linkStatus !== undefined) {", System.StringComparison.Ordinal);
+        var returnAfterGate = html.IndexOf("return;", gateIdx, System.StringComparison.Ordinal);
+        var authPostAfterGate = html.IndexOf("/Auth/", gateIdx, System.StringComparison.Ordinal);
+        Assert.True(returnAfterGate >= 0 && authPostAfterGate >= 0);
+        Assert.True(
+            returnAfterGate < authPostAfterGate,
+            "a definitive link status must return before the .../Auth post");
     }
 
     [Fact]
