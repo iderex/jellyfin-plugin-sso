@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main ]
   pull_request:
-    branches: [ main ]
+    branches: [ "**" ]
 
 # Read-only: the lint only inspects tracked files, it never writes.
 permissions:
