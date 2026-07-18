@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Security.Cryptography;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Xunit;
@@ -91,6 +92,72 @@ public class ConfigSecretProtectionTests
             ConfigSecretProtection.ProtectAll(config, store);
 
             Assert.Equal(afterFirst, config.OidConfigs["a"].OidSecret);
+        });
+    }
+
+    [Fact]
+    public void ProtectAll_ExistingEnvelopeButMissingKey_FailsClosedWithoutMinting()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "sso-cfgsec-" + Guid.NewGuid().ToString("N") + ".key");
+        try
+        {
+            // Encrypt one secret so a real envelope exists, then lose the key file (restored config, lost key).
+            var envelope = new SecretStore(path).Protect("old-secret");
+            File.Delete(path);
+
+            var config = new PluginConfiguration();
+            config.OidConfigs["a"] = new OidConfig { OidSecret = envelope };           // encrypted under the lost key
+            config.SamlConfigs["b"] = new SamlConfig { SamlSigningKeyPfx = "new-plaintext" };
+
+            // Persisting must refuse to mint a fresh key over the orphaned envelope rather than mask the loss.
+            Assert.Throws<CryptographicException>(
+                () => ConfigSecretProtection.ProtectAll(config, new SecretStore(path)));
+
+            Assert.False(File.Exists(path)); // no replacement key minted
+        }
+        finally
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    [Fact]
+    public void ProtectAll_LegacyPlaintextOnly_NoKey_MigratesByMintingKey()
+    {
+        WithStore(store =>
+        {
+            // A legacy plaintext config with no envelopes and no key must still be migrated on first save.
+            var config = new PluginConfiguration();
+            config.OidConfigs["a"] = new OidConfig { OidSecret = "legacy-plaintext" };
+
+            ConfigSecretProtection.ProtectAll(config, store);
+
+            Assert.True(SecretEnvelope.IsProtected(config.OidConfigs["a"].OidSecret));
+            Assert.Equal("legacy-plaintext", store.Reveal(config.OidConfigs["a"].OidSecret));
+        });
+    }
+
+    [Fact]
+    public void ProtectAll_NewPlaintextAlongsideEnvelope_KeyPresent_StillEncrypts()
+    {
+        WithStore(store =>
+        {
+            var envelope = store.Protect("existing-secret"); // mints the key and encrypts
+
+            // A config that already holds an envelope, with the key present, must not be bricked when a new
+            // plaintext secret is added (adding a provider to an already-encrypted config).
+            var config = new PluginConfiguration();
+            config.OidConfigs["a"] = new OidConfig { OidSecret = envelope };
+            config.OidConfigs["b"] = new OidConfig { OidSecret = "brand-new-plaintext" };
+
+            ConfigSecretProtection.ProtectAll(config, store);
+
+            Assert.True(SecretEnvelope.IsProtected(config.OidConfigs["b"].OidSecret));
+            Assert.Equal("existing-secret", store.Reveal(config.OidConfigs["a"].OidSecret));
+            Assert.Equal("brand-new-plaintext", store.Reveal(config.OidConfigs["b"].OidSecret));
         });
     }
 
