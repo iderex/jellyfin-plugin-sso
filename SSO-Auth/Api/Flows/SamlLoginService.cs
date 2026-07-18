@@ -331,11 +331,7 @@ internal sealed class SamlLoginService
         bool newPath = ResolveChallengeNewPath(provider, config, isLinking, request, _logger);
 
         string redirectUri = SsoUrlBuilder.SamlAcsUrl(GetRequestBase(request, config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), newPath, provider);
-        string relayState = null;
-        if (isLinking)
-        {
-            relayState = "linking";
-        }
+        string relayState = isLinking ? "linking" : null;
 
         var samlRequest = new SamlAuthnRequest(
             config.SamlClientId.Trim(),
