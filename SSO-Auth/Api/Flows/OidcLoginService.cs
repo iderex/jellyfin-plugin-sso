@@ -30,8 +30,9 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Flows;
 /// <item>the in-flight authorize-state store (<see cref="OidcStateStore"/>), and</item>
 /// <item>the discovery-facts cache (<see cref="OidcDiscoveryCache"/>).</item>
 /// </list>
-/// The shared per-client rate limiter is deliberately NOT here — it also fronts the SAML flow, so it stays a
-/// controller static both flows reach through the controller's rate-limit gate. Because the challenge and
+/// The shared per-client rate limiter is deliberately NOT here — it also fronts the SAML flow, so it lives in
+/// the shared <see cref="SsoRateLimitGate"/> (Api/Shared) that the controller's endpoints front this service
+/// with, rather than as a per-flow static (#160). Because the challenge and
 /// callback are irreducibly HTTP (cookies, query string, redirect, the intermediate page), those two methods
 /// take the request/response and, for the two response shapes the controller still owns (the security-headered
 /// auth page and the manual-link write mapping), a delegate the controller binds — rather than duplicating the

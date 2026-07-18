@@ -79,18 +79,24 @@ that tail into one shared collaborator is target-direction step 11
 
 ### Process-wide stores
 
-A handful of state stores live as `private static readonly` fields on
-`SSOController` (not dependency-injected — there is no
+A handful of state stores live as `private static readonly` fields — the OIDC
+and SAML caches on their owning flow service (`OidcLoginService` /
+`SamlLoginService`, #500/#501) and the shared rate limiter on the
+`SsoRateLimitGate` (Api/Shared, #160) — not dependency-injected (there is no
 `IPluginServiceRegistrator` in source, so a `static readonly` field is today's
 only way to get one process-wide instance):
 
-| Store                | Guards                                                                                      |
-| -------------------- | ------------------------------------------------------------------------------------------- |
-| `OidcStateStore`     | in-flight OIDC authorize state; capacity cap, lifetime, throttled-sweep via `IntervalGate`  |
-| `SamlReplayCache`    | one-time-use SAML assertion IDs (replay protection)                                         |
-| `SamlRequestCache`   | outstanding SAML `AuthnRequest` IDs for `InResponseTo` correlation                          |
-| `OidcDiscoveryCache` | per-discovery-URL PKCE-S256 / RFC 9207 `iss` facts, 15-minute TTL; owns the fetch/parse too |
-| `SsoRateLimiter`     | opt-in per-client rate limiting on the anonymous login endpoints                            |
+| Store                | Owner              | Guards                                                                                      |
+| -------------------- | ------------------ | ------------------------------------------------------------------------------------------- |
+| `OidcStateStore`     | `OidcLoginService` | in-flight OIDC authorize state; capacity cap, lifetime, throttled-sweep via `IntervalGate`  |
+| `SamlReplayCache`    | `SamlLoginService` | one-time-use SAML assertion IDs (replay protection)                                         |
+| `SamlRequestCache`   | `SamlLoginService` | outstanding SAML `AuthnRequest` IDs for `InResponseTo` correlation                          |
+| `OidcDiscoveryCache` | `OidcLoginService` | per-discovery-URL PKCE-S256 / RFC 9207 `iss` facts, 15-minute TTL; owns the fetch/parse too |
+| `SsoRateLimiter`     | `SsoRateLimitGate` | opt-in per-client rate limiting on the anonymous login endpoints                            |
+
+The controller itself now holds **no mutable static state** — every store above
+lives in a flow service or the Shared tier, pinned by
+`Controller_HoldsNoMutableStaticState`.
 
 ### The uniform outcome
 
