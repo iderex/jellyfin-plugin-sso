@@ -45,7 +45,7 @@ public class ProviderScopedKeyTests
         var replayKey = ProviderScopedKey.For("kc", string.Empty);
         var requestKey = ProviderScopedKey.For("kc", null);
 
-        Assert.False(new SamlReplayCache().TryConsume(replayKey, now.AddMinutes(10), now));
+        Assert.False(new SamlReplayCache().TryConsume(replayKey, now.AddMinutes(10), now, out _));
 
         var requests = new SamlRequestCache();
         requests.Register(requestKey!, "binding", now.AddMinutes(15), now, clientKey: null, out _);

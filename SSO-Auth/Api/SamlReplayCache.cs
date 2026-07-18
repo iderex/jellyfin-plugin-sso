@@ -8,7 +8,9 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 /// cannot be replayed within its validity window. Entries are retained until the supplied expiry and
 /// reclaimed by a throttled expired-entry sweep, and the set is hard-capped so it cannot grow without
 /// bound (#452). It mirrors the sibling login-path caches (<see cref="SamlRequestCache"/>,
-/// <see cref="OidcStateStore"/>): an <see cref="IntervalGate"/>-throttled sweep plus a global cap.
+/// <see cref="OidcStateStore"/>): an <see cref="IntervalGate"/>-throttled sweep plus a global cap, and —
+/// at the cap — a throttled cap-refusal capacity-warning signal surfaced to the flow so a full replay
+/// cache is observable rather than silent (#470).
 ///
 /// The cap is applied differently from the siblings, on purpose. Recording a consumed assertion is what
 /// makes a replay detectable, so this cache must never drop a still-valid entry to free a slot — that
@@ -43,6 +45,16 @@ internal sealed class SamlReplayCache
     // backward wall-clock step of at least the interval (#334). See PruneExpired.
     private readonly IntervalGate _pruneGate;
 
+    // Throttles the cap-refusal capacity warning to one signal per interval (#470, CWE-400): its OWN gate,
+    // separate from the prune gate, so the sweep cadence and the warning cadence never interfere. Under a
+    // burst of cap refusals (extreme login volume, or a compromised identity provider replaying signed
+    // assertions) every refusal would otherwise emit a warning, amplifying into unbounded log volume. The
+    // gate self-heals a backward wall-clock step of at least the interval (#334). Mirrors the siblings so
+    // the SAML replay refusal has the same operator visibility the OpenID/SAML-request caches already give
+    // (#246, #327); the warning line itself stays at the flow so the log-forging inline sanitizer never
+    // crosses a helper boundary.
+    private readonly IntervalGate _capWarnGate;
+
     internal SamlReplayCache()
         : this(DefaultMaxEntries, DefaultPruneInterval)
     {
@@ -54,6 +66,7 @@ internal sealed class SamlReplayCache
     {
         _maxEntries = maxEntries;
         _pruneGate = new IntervalGate(pruneInterval);
+        _capWarnGate = new IntervalGate(pruneInterval);
     }
 
     /// <summary>Gets the live entry count. Test-only, so the cap and sweep paths can be asserted.</summary>
@@ -88,14 +101,19 @@ internal sealed class SamlReplayCache
     /// Records the assertion ID as consumed. Returns false when the assertion has no usable ID, has
     /// already been consumed within its validity window (a replay), or the cache is full of still-valid
     /// entries (a fail-closed cap refusal). A false return always rejects the login, so refusing at the
-    /// cap never reopens the replay window.
+    /// cap never reopens the replay window. Adding the capacity signal did not change this reject behavior:
+    /// the boolean outcome and the no-live-entry-eviction rule are byte-identical to #452 (#470).
     /// </summary>
     /// <param name="assertionId">The assertion ID.</param>
     /// <param name="expiryUtc">When the entry may be evicted (the assertion's retention horizon).</param>
     /// <param name="nowUtc">The current time.</param>
+    /// <param name="shouldWarnCapacity">True when the caller should emit the throttled capacity warning — a
+    /// cap refusal only, at most once per interval. A replay or a missing ID leaves it false, so only genuine
+    /// capacity pressure is surfaced.</param>
     /// <returns>True if this is the first use; false on replay, a missing ID, or a fail-closed cap refusal.</returns>
-    internal bool TryConsume(string assertionId, DateTime expiryUtc, DateTime nowUtc)
+    internal bool TryConsume(string assertionId, DateTime expiryUtc, DateTime nowUtc, out bool shouldWarnCapacity)
     {
+        shouldWarnCapacity = false;
         PruneExpired(nowUtc);
 
         // Fail closed: without an ID we cannot enforce one-time use.
@@ -114,6 +132,10 @@ internal sealed class SamlReplayCache
             SweepExpired(nowUtc);
             if (_consumed.Count >= _maxEntries && !_consumed.ContainsKey(assertionId))
             {
+                // Fail-closed cap refusal: the cache is genuinely full of still-valid entries. Signal the
+                // operator (throttled to one per interval by the dedicated cap-warn gate) that the replay
+                // cache is under real pressure — observability only, the refusal itself is unchanged (#470).
+                shouldWarnCapacity = _capWarnGate.TryEnter(nowUtc);
                 return false;
             }
         }

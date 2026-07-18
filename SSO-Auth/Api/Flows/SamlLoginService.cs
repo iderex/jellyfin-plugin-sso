@@ -338,8 +338,19 @@ internal sealed class SamlLoginService
         // the verified identity flows into the shared completion tail (SAML keys the link on the NameID and
         // carries no email_verified claim, so AdoptionGate.None; the resolver's admin-adoption refusal, #218,
         // still applies).
-        if (!_validator.TryProduceVerifiedIdentity(config, provider, samlResponse, out var identity, out var rejection))
+        if (!_validator.TryProduceVerifiedIdentity(config, provider, samlResponse, out var identity, out var rejection, out var shouldWarnCapacity))
         {
+            // A cap refusal — the process-wide replay cache is full of still-valid consumed assertions —
+            // is surfaced once per interval so operators see the replay cache under genuine pressure
+            // (extreme volume or a compromised IdP replaying signed assertions) instead of a silent
+            // fail-closed reject. The validator throttles the signal via its own cap-warn gate; the line
+            // stays here so the log-forging inline sanitizer never crosses a helper boundary (#470). A
+            // plain replay or a missing NameID leaves shouldWarnCapacity false, so only capacity is logged.
+            if (shouldWarnCapacity)
+            {
+                _logger.LogWarning("SAML login refused for provider {Provider}: the assertion replay cache is at capacity (warning throttled).", provider?.ReplaceLineEndings(string.Empty));
+            }
+
             return LoginStatusMapper.ToActionResult(rejection);
         }
 
@@ -384,8 +395,17 @@ internal sealed class SamlLoginService
         // so InResponseTo is not correlated here — the replay cache is the applicable one-time-use
         // control. A replay is a client-caused 400 in the uniform SAML body, never a 500, and no longer
         // discloses the replay cache to the attacker who replayed.
-        if (!_validator.TryConsumeReplay(samlResponse, provider))
+        if (!_validator.TryConsumeReplay(samlResponse, provider, out var shouldWarnCapacity))
         {
+            // Same cap-refusal observability as the session-minting leg: a full replay cache is surfaced
+            // once per interval (throttled by the validator's cap-warn gate) rather than failing closed
+            // silently. The line stays here so the log-forging inline sanitizer never crosses a helper
+            // boundary (#470); a plain replay leaves shouldWarnCapacity false and is not logged.
+            if (shouldWarnCapacity)
+            {
+                _logger.LogWarning("SAML link refused for provider {Provider}: the assertion replay cache is at capacity (warning throttled).", provider?.ReplaceLineEndings(string.Empty));
+            }
+
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
 

@@ -185,6 +185,29 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void LoginPathCaches_SurfaceAThrottledCapacityWarningThroughACapWarnGate()
+    {
+        // Locked in by #470: every login-path cache surfaces its cap-refusal as a throttled capacity
+        // warning through a DEDICATED IntervalGate field named "_capWarnGate", separate from the prune
+        // gate — so a full cache is observable to operators instead of a silent fail-closed reject, and a
+        // refusal burst cannot amplify into log volume. SamlRequestCache and OidcStateStore already had it
+        // (#246, #327); SamlReplayCache adopted it here so the parity holds for all three, and a later
+        // refactor cannot drop one cache's warning signal and re-open the silent-refusal gap. Keyed on the
+        // field NAME (not merely the IntervalGate type) so the prune gate cannot satisfy it vacuously.
+        const string capWarnGateField = "_capWarnGate";
+        var caches = new[] { typeof(SamlReplayCache), typeof(SamlRequestCache), typeof(OidcStateStore) };
+        var missing = caches
+            .Where(t => !t.GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.DeclaredOnly)
+                .Any(f => f.FieldType == typeof(IntervalGate) && f.Name == capWarnGateField))
+            .Select(SimpleName)
+            .ToList();
+
+        Assert.True(
+            missing.Count == 0,
+            "Every login-path cache must surface a throttled cap-refusal capacity warning through a dedicated IntervalGate field (#470): " + string.Join(", ", missing));
+    }
+
+    [Fact]
     public void CanonicalLinkService_ThrottlesTheLegacyLinkWarningThroughAStaticIntervalGate()
     {
         // Locked in by #362 (CWE-400, log-volume): the terminal pending-legacy-link warnings live in a

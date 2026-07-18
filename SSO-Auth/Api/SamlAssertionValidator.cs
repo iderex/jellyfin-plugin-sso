@@ -88,18 +88,21 @@ internal sealed class SamlAssertionValidator
     /// Consumes the SAML assertion's ID against the provider-scoped replay cache for one-time use. Returns
     /// false when the assertion was already used (or carries no ID — a missing ID stays empty, so TryConsume
     /// fails closed). The key is scoped by provider so two IdPs emitting the same assertion ID cannot block
-    /// each other. Shared by the session mint and the account linking (#219).
+    /// each other. Shared by the session mint and the account linking (#219). Surfaces the cache's throttled
+    /// cap-refusal signal so the flow can log a full replay cache once per interval (#470); the warning line
+    /// stays at the flow so the log-forging inline sanitizer never crosses a helper boundary.
     /// </summary>
     /// <param name="samlResponse">The validated response whose assertion ID is consumed.</param>
     /// <param name="provider">The provider the assertion ID is scoped under.</param>
+    /// <param name="shouldWarnCapacity">True when the flow should emit the throttled capacity warning (a cap refusal, at most once per interval).</param>
     /// <returns>True on the first use; false on a replay (or a missing assertion ID).</returns>
-    internal bool TryConsumeReplay(SamlResponse samlResponse, string provider)
+    internal bool TryConsumeReplay(SamlResponse samlResponse, string provider, out bool shouldWarnCapacity)
     {
         var samlNow = DateTime.UtcNow;
         var replayRetention = SamlReplayCache.ComputeRetention(samlNow, samlResponse.GetNotOnOrAfter());
         var assertionId = samlResponse.GetAssertionId();
         var replayKey = ProviderScopedKey.For(provider, assertionId);
-        return SamlReplays.TryConsume(replayKey, replayRetention, samlNow);
+        return SamlReplays.TryConsume(replayKey, replayRetention, samlNow, out shouldWarnCapacity);
     }
 
     /// <summary>
@@ -115,8 +118,9 @@ internal sealed class SamlAssertionValidator
     /// <param name="samlResponse">The validated, allow-listed, correlated response.</param>
     /// <param name="identity">The verified identity on success; otherwise null.</param>
     /// <param name="rejection">The fail-closed outcome on failure; otherwise null.</param>
+    /// <param name="shouldWarnCapacity">True when the flow should emit the throttled capacity warning — set from the replay consume, so it is true only on a cap refusal (never a replay or a missing NameID).</param>
     /// <returns>True with <paramref name="identity"/> set on success; false with <paramref name="rejection"/> set.</returns>
-    internal bool TryProduceVerifiedIdentity(SamlConfig config, string provider, SamlResponse samlResponse, out VerifiedIdentity identity, out LoginOutcome rejection)
+    internal bool TryProduceVerifiedIdentity(SamlConfig config, string provider, SamlResponse samlResponse, out VerifiedIdentity identity, out LoginOutcome rejection, out bool shouldWarnCapacity)
     {
         identity = null;
 
@@ -124,8 +128,10 @@ internal sealed class SamlAssertionValidator
         // Enforced only at the session-minting endpoint (and the link redeem), not at the SAML/post ACS
         // which merely renders the intermediate page, so the two-step post-then-auth flow consumes the id
         // once. A replay is a client-caused 400 in the uniform SAML body — it no longer discloses the replay
-        // cache to the attacker who replayed, and the log-side diagnosis is unchanged.
-        if (!TryConsumeReplay(samlResponse, provider))
+        // cache to the attacker who replayed, and the log-side diagnosis is unchanged. The consume also sets
+        // shouldWarnCapacity (true only on a cap refusal), so a full replay cache is surfaced to the flow;
+        // every later exit path here leaves it at the consume's value (false, since the consume succeeded).
+        if (!TryConsumeReplay(samlResponse, provider, out shouldWarnCapacity))
         {
             rejection = new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid);
             return false;
