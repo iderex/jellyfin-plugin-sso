@@ -43,6 +43,11 @@ public class SSOController : ControllerBase
     private const string OpenIdProtocol = "OpenID";
     private const string SamlProtocol = "SAML";
 
+    // Hard cap on the config-import request body (#161): a whole plugin configuration is small (kilobytes),
+    // so 1 MiB is generous headroom while an oversized document is rejected fail-closed (413) before it is
+    // parsed, rather than being deserialized into memory.
+    private const long ConfigImportMaxBytes = 1024 * 1024;
+
     private readonly IUserManager _userManager;
     // The shared login-completion tail (#160, #318): resolve/adopt the link, build the session parameters,
     // mint under the revocation gate, audit, map to a LoginOutcome. The controller passes the
@@ -570,6 +575,86 @@ public class SSOController : ControllerBase
         }
 
         return Ok(ProviderConnectionTester.TestSaml(config));
+    }
+
+    /// <summary>
+    /// Exports the whole plugin configuration as a redacted, importable document (#161). Requires
+    /// administrator privileges, like the other config endpoints — the document lists every provider's
+    /// settings. The redaction is the config's OWN JSON-boundary withholding, reused: the provider secrets
+    /// (OidSecret, the SAML signing keys) are serialized as null by their WriteOnlySecretConverter (#189) and
+    /// the server-managed canonical-link maps are dropped by [JsonIgnore] (#157/#186), so the document carries
+    /// no plaintext secret, no <c>ssoenc:</c> envelope, and no link map. The at-rest data-encryption key
+    /// (sso-secret.key) lives in a separate file and is never part of the configuration object at all.
+    /// </summary>
+    /// <returns>The redacted export document.</returns>
+    [Authorize(Policy = Policies.RequiresElevation)]
+    [HttpGet("Config/Export")]
+    public ActionResult ExportConfig()
+    {
+        // Snapshot under the config lock; the JSON formatter redacts the secrets and links as it serializes
+        // the returned document (the same withholding OID/Get relies on), after the lock is released.
+        return Ok(SSOPlugin.Instance.ReadConfiguration(ConfigExport.Build));
+    }
+
+    /// <summary>
+    /// Imports a configuration export document into this instance (#161). Requires administrator privileges.
+    /// The import is a fail-closed MERGE: the document is validated through the same ProviderConfigValidator
+    /// the config-page save uses, and only if the whole document is valid is it merged — atomically, through
+    /// MutateConfiguration — reusing ServerManagedFields.Preserve so a redacted (blank) secret keeps this
+    /// instance's stored secret and the server-managed links/issuers are never wiped. A provider new to this
+    /// instance arrives with a blank secret and fails its login closed until an administrator re-enters it.
+    /// The request body is size-capped so an oversized document is rejected before it is parsed.
+    /// </summary>
+    /// <param name="document">The export document to import.</param>
+    /// <returns>No content on success, or 400 when the document is missing, unsupported, or invalid.</returns>
+    [Authorize(Policy = Policies.RequiresElevation)]
+    [HttpPost("Config/Import")]
+    [RequestSizeLimit(ConfigImportMaxBytes)]
+    [Consumes(MediaTypeNames.Application.Json)]
+    public ActionResult ImportConfig([FromBody] ConfigExportDocument document)
+    {
+        if (document is null)
+        {
+            return BadRequest("The configuration import document is missing or is not valid JSON.");
+        }
+
+        try
+        {
+            // Validate-then-merge lives in the Config helper; the mutation persists only if it returns without
+            // throwing (an invalid document throws inside the lambda, so MutateConfiguration persists nothing).
+            SSOPlugin.Instance.MutateConfiguration(configuration => ConfigImport.Apply(configuration, document));
+        }
+        catch (ArgumentException ex)
+        {
+            // The validator and the import throw ArgumentException for a hostile/malformed document (a bad
+            // Base URL override, an unloadable certificate/key, a reserved-character provider name, an
+            // unsupported version). Strip line endings from the echoed message so it cannot split a log line.
+            return BadRequest(ex.Message?.ReplaceLineEndings(string.Empty));
+        }
+
+        // Audit the import and any provider that arrived with a security check disabled (#140), so importing
+        // an escape hatch (DisableHttps, DoNotValidateIssuerName, …) leaves the same trace a form save would.
+        var oidCount = document.Configuration?.OidConfigs?.Count ?? 0;
+        var samlCount = document.Configuration?.SamlConfigs?.Count ?? 0;
+        SsoAudit.ConfigImported(_logger, oidCount, samlCount);
+        if (document.Configuration?.OidConfigs is { } oidConfigs)
+        {
+            foreach (var kvp in oidConfigs)
+            {
+                if (kvp.Value is null)
+                {
+                    continue;
+                }
+
+                var insecure = OidcInsecureToggles.Enabled(kvp.Value);
+                if (insecure.Count > 0)
+                {
+                    SsoAudit.InsecureOptionsEnabled(_logger, OpenIdProtocol, kvp.Key, insecure);
+                }
+            }
+        }
+
+        return NoContent();
     }
 
     /// <summary>
