@@ -4,6 +4,39 @@ All notable changes to this plugin are documented here. Versions follow the
 four-part `X.Y.Z.W` scheme described in the release policy (breaking / feature /
 bug-fix / security).
 
+## 4.1.1.0
+
+A bug-fix release that restores plugin loading on Jellyfin 10.11. No
+configuration changes.
+
+### Fixed
+
+- **The plugin no longer fails to load on Jellyfin 10.11 (#590).** 4.1.0.0
+  shipped with `Duende.IdentityModel.OidcClient` 7.x, whose assemblies are built
+  against the .NET 10 framework and reference
+  `Microsoft.Extensions.Logging.Abstractions` 10.0.0.0 in their manifest — an
+  assembly the host provides (Jellyfin 10.11 runs on .NET 9 and ships 9.0.0.0)
+  and the plugin therefore does not bundle. Because .NET rolls a host assembly
+  reference forward to a newer host but never down a major version, the packaged
+  plugin threw `FileNotFoundException` the moment the host constructed it, and
+  the server disabled it at startup — taking down every OpenID and SAML login.
+  `dotnet build` and `dotnet test` stayed green because they run against the full
+  publish output, which contains the 10.x assembly; the failure only surfaced on
+  a real host, the same blind spot the SAML/OIDC crypto DLLs hit in 4.1.0.0.
+
+  The OIDC client is pinned back to the 6.x line, which references
+  `Logging.Abstractions` 8.0.0.0 and rolls forward onto the host's 9.0.0.0
+  cleanly; the whole dependency graph stays on the .NET 9 ABI. No behaviour
+  changes — the OpenID and SAML flows are identical to 4.1.0.0.
+
+### Added
+
+- **A conformance test locks the ABI floor in.**
+  `ArchitectureConformanceTests.HostProvidedFrameworkAssemblies_StayOnTheHostNet9Abi`
+  fails the build if any host-provided `Microsoft.Extensions.*` assembly is
+  referenced above the .NET 9 host ABI, so a future dependency bump that
+  re-crosses the floor is caught before release instead of in the field.
+
 ## 4.1.0.0
 
 The first feature release of the revived plugin. It folds in a full
