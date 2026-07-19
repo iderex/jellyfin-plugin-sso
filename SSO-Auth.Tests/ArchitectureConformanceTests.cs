@@ -544,6 +544,60 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void OidcAuthorizeState_IsKeyedOnUtc_NotMachineLocalTime()
+    {
+        // Locked in by #676: the in-flight OpenID authorize-state store keys its lifetime/expiry on the
+        // instant the challenge stamps (the Pending's Created) and the callback/redeem legs compare against
+        // (PruneExpired / PeekCurrent / TryRedeem). That instant MUST be UTC (DateTime.UtcNow), never
+        // machine-LOCAL wall-clock (DateTime.Now): on a DST transition or a clock step local time jumps, so
+        // a machine-local basis can expire a valid authorize state early — or shift its window — and
+        // spuriously fail an otherwise-valid login. The SAML flow already keeps a UTC basis; this pins the
+        // OpenID side to the same one. Call-level property, so it is a source scan like the controller /
+        // SessionMinter rules above — the store TAKES `now` as a parameter, so the clock choice lives
+        // entirely at these call sites and is invisible to a store-level unit test (which injects its own
+        // clock and so passes with EITHER basis). The production code passes the clock inline at each site.
+        //
+        // Deliberately NOT in scope: the _newPathPersistGate.TryEnter(DateTime.Now) throttle in the same
+        // file (and its SAML twin) — a best-effort config-persist throttle, not the authorize-state
+        // lifetime; its clock jitter is harmless and it stays symmetric with the SAML side. The markers
+        // below are scoped to the store's clock-bearing calls, so that line is out of scope by construction.
+        var oidcSource = SourceFilesDeclaring(new[] { typeof(OidcLoginService) });
+        Assert.True(
+            oidcSource.Count == 1,
+            "OidcLoginService's source file was not found (renamed/moved); point OidcAuthorizeState_IsKeyedOnUtc_NotMachineLocalTime at its new location so the UTC-basis scan keeps guarding #676.");
+
+        var lines = File.ReadAllLines(oidcSource[0]);
+        var storeClockMarkers = new[]
+        {
+            "StateStore.PruneExpired(", "StateStore.PeekCurrent(", "StateStore.TryRedeem(", "new AuthorizeSession.Pending(",
+        };
+
+        foreach (var marker in storeClockMarkers)
+        {
+            var markerLines = lines
+                .Select((line, index) => (Text: line.Trim(), Number: index + 1))
+                .Where(l => l.Text.Contains(marker, StringComparison.Ordinal))
+                .ToList();
+
+            // Liveness against a vacuous pass: the store's clock-bearing call site must still exist, or the
+            // scan guards nothing — a rename/restructure of the flow fails HERE and forces a conscious
+            // update of this rule (as the other source scans' sentinels do). "DateTime.Now" is not a
+            // substring of "DateTime.UtcNow", so a correct UtcNow site never trips the machine-local check.
+            Assert.True(
+                markerLines.Count > 0,
+                $"The OIDC authorize-state call site \"{marker}\" was not found in OidcLoginService; it was renamed or restructured, so update OidcAuthorizeState_IsKeyedOnUtc_NotMachineLocalTime so the UTC-basis scan keeps guarding #676.");
+
+            var offenders = markerLines
+                .Where(l => l.Text.Contains("DateTime.Now", StringComparison.Ordinal) || !l.Text.Contains("DateTime.UtcNow", StringComparison.Ordinal))
+                .Select(l => $"line {l.Number}: {l.Text}")
+                .ToList();
+            Assert.True(
+                offenders.Count == 0,
+                $"Every OIDC authorize-state \"{marker}\" call must key on DateTime.UtcNow, never machine-local DateTime.Now, so a DST transition or clock step cannot expire a valid login early (#676). Found: " + string.Join(" | ", offenders));
+        }
+    }
+
+    [Fact]
     public void Controller_DelegatesLoginCompletionToTheFlowService()
     {
         // Locked in by the login-completion extraction (#160, #318 step 11): the one shared completion tail —
