@@ -1,5 +1,6 @@
 using System.Net;
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Api.Net;
 using Xunit;
 
 namespace Jellyfin.Plugin.SSO_Auth.Tests;

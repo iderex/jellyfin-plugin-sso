@@ -15,7 +15,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 internal static class SsoUrlBuilder
 {
     /// <summary>Builds the challenge-time OIDC redirect_uri; the spelling follows the route the login started on.</summary>
-    /// <param name="baseUrl">The canonical base URL, trailing-slash free (from <see cref="CanonicalBaseUrl.Resolve"/>).</param>
+    /// <param name="baseUrl">The canonical base URL, trailing-slash free (from <see cref="Net.CanonicalBaseUrl.Resolve"/>).</param>
     /// <param name="newPath">Whether the login started on the new-path route, choosing "redirect" over "r".</param>
     /// <param name="provider">The route-decoded provider name, appended raw.</param>
     /// <returns>The absolute redirect_uri to register the authorization request under.</returns>

@@ -1,6 +1,6 @@
 using System;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Net;
 
 /// <summary>
 /// Normalizes the per-provider canonical external base-URL override (#139). When an admin pins the

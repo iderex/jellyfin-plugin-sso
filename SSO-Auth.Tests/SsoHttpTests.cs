@@ -1,5 +1,6 @@
 using System.Net.Http;
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Api.Net;
 using NSubstitute;
 using Xunit;
 

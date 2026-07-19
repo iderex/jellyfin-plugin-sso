@@ -3,6 +3,7 @@ using System.Linq;
 using System.Security.Cryptography.X509Certificates;
 using System.Xml.Linq;
 using Jellyfin.Plugin.SSO_Auth.Config;
+using Jellyfin.Plugin.SSO_Auth.Api.Net;
 using Microsoft.AspNetCore.Mvc;
 using Xunit;
 
