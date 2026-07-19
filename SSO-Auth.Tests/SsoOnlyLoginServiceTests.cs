@@ -61,6 +61,7 @@ public class SsoOnlyLoginServiceTests
         foreach (var user in allUsers)
         {
             users.GetUserByName(user.Username).Returns(user);
+            users.GetUserById(user.Id).Returns(user);
         }
 
         return (new SsoOnlyLoginService(users, store, new CapturingLogger()), cfg, users);
@@ -217,13 +218,13 @@ public class SsoOnlyLoginServiceTests
     // --- Break_glass_designation_rejects_non_admin_target ---
 
     [Fact]
-    public async Task DesignateBreakGlass_NonAdminTarget_Refused_AndDoesNotDesignate()
+    public void DesignateBreakGlass_NonAdminTarget_Refused_AndDoesNotDesignate()
     {
         var root = PasswordAdmin("root", RootId);
         var alice = PasswordUser("alice", AliceId); // a non-admin
         var (service, config, _) = Build(new[] { root, alice });
 
-        var outcome = await service.TryDesignateBreakGlassAsync("alice");
+        var outcome = service.TryDesignateBreakGlass("alice");
 
         // The exemption can never point at a non-administrator (T-E1) — it cannot grant admin.
         Assert.Equal(SsoOnlyGuardVerdict.BreakGlassNotAdministrator, outcome.Verdict);
@@ -231,15 +232,99 @@ public class SsoOnlyLoginServiceTests
     }
 
     [Fact]
-    public async Task DesignateBreakGlass_EnabledPasswordAdmin_Succeeds()
+    public void DesignateBreakGlass_EnabledPasswordAdmin_Succeeds()
     {
         var root = PasswordAdmin("root", RootId);
         var (service, config, _) = Build(new[] { root });
 
-        var outcome = await service.TryDesignateBreakGlassAsync("root");
+        var outcome = service.TryDesignateBreakGlass("root");
 
         Assert.Equal(SsoOnlyGuardVerdict.Allow, outcome.Verdict);
         Assert.Equal("root", config.BreakGlassAdminUsername);
         Assert.False(config.DisablePasswordLogin); // designation alone does not enable the mode
+    }
+
+    // --- Finding 2: config.xml total-lockout recovery works via boot reconciliation ---
+
+    [Fact]
+    public async Task Reconcile_ModeOffButAccountsStillRepointed_RestoresThem()
+    {
+        // The documented recovery: an operator edits config.xml to set DisablePasswordLogin=false and
+        // restarts. Enforcement lives in the user DB, so without reconciliation every repointed account stays
+        // locked out. Model the on-disk post-edit state: the flag is off but alice is still repointed and
+        // recorded in the tracking set. Reconcile must restore her.
+        var alice = SsoOnlyUser("alice", AliceId);
+        var (service, config, _) = Build(
+            new[] { alice },
+            c =>
+            {
+                c.DisablePasswordLogin = false;
+                c.SsoOnlyRepointedUserIds.Add(AliceId);
+            });
+
+        var restored = await service.ReconcileOnStartupAsync();
+
+        Assert.Equal(1, restored);
+        Assert.Equal(SsoAuthenticationProviders.DefaultPasswordProviderId, alice.AuthenticationProviderId);
+        Assert.Empty(config.SsoOnlyRepointedUserIds); // the set is cleared once reconciled
+    }
+
+    [Fact]
+    public async Task Reconcile_DoesNotTouchNativelySsoAccounts()
+    {
+        // A plugin-created account permanently carries the SSO provider id and is NOT in the tracking set.
+        // Reconciliation must never hand it a password door — only accounts the mode itself recorded.
+        var alice = SsoOnlyUser("alice", AliceId); // repointed by the mode (tracked)
+        var carol = SsoOnlyUser("carol", SsoUserId); // natively SSO-created (never tracked)
+        var (service, _, users) = Build(
+            new[] { alice, carol },
+            c =>
+            {
+                c.DisablePasswordLogin = false;
+                c.SsoOnlyRepointedUserIds.Add(AliceId);
+            });
+
+        await service.ReconcileOnStartupAsync();
+
+        Assert.Equal(SsoAuthenticationProviders.DefaultPasswordProviderId, alice.AuthenticationProviderId);
+        Assert.Equal(SsoAuthenticationProviders.SsoProviderId, carol.AuthenticationProviderId);
+        await users.DidNotReceive().UpdateUserAsync(carol);
+    }
+
+    [Fact]
+    public async Task Reconcile_ModeOn_IsNoOp()
+    {
+        // A normal boot with the mode ON leaves enforcement in place — nothing is restored.
+        var alice = SsoOnlyUser("alice", AliceId);
+        var (service, config, users) = Build(
+            new[] { alice },
+            c =>
+            {
+                c.DisablePasswordLogin = true;
+                c.SsoOnlyRepointedUserIds.Add(AliceId);
+            });
+
+        var restored = await service.ReconcileOnStartupAsync();
+
+        Assert.Equal(0, restored);
+        Assert.Equal(SsoAuthenticationProviders.SsoProviderId, alice.AuthenticationProviderId);
+        await users.DidNotReceive().UpdateUserAsync(Arg.Any<User>());
+    }
+
+    [Fact]
+    public async Task Disable_DoesNotRestoreNativelySsoAccounts_OnlyTrackedOnes()
+    {
+        // The off-switch restores only the accounts the mode repointed (tracked), never a plugin-created
+        // SSO account that was always on the SSO provider.
+        var root = PasswordAdmin("root", RootId);
+        var alice = PasswordUser("alice", AliceId);
+        var carol = SsoOnlyUser("carol", SsoUserId);
+        var (service, _, _) = Build(new[] { root, alice, carol });
+
+        await service.TryEnableAsync("root"); // repoints alice (tracked); carol already SSO, untracked
+        await service.DisableAsync();
+
+        Assert.Equal(SsoAuthenticationProviders.DefaultPasswordProviderId, alice.AuthenticationProviderId);
+        Assert.Equal(SsoAuthenticationProviders.SsoProviderId, carol.AuthenticationProviderId); // untouched
     }
 }

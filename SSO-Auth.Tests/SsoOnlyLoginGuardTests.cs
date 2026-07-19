@@ -1,4 +1,5 @@
 using System;
+using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Xunit;
 
@@ -116,5 +117,55 @@ public class SsoOnlyLoginGuardTests
         var config = new PluginConfiguration { DisablePasswordLogin = false, BreakGlassAdminUsername = "root" };
 
         Assert.False(SsoOnlyLoginGuard.IsEnforcedNonExempt(config, "alice"));
+    }
+
+    // --- ResolveLoginProvider (Finding 1): the break-glass admin's password door is never stripped on login ---
+
+    [Fact]
+    public void ResolveLoginProvider_ModeOn_BreakGlassAdmin_PinsToPasswordProvider_EvenWhenDefaultIsSso()
+    {
+        // The core of Finding 1: operators commonly set a provider's DefaultProvider to the SSO provider id.
+        // A break-glass admin's SSO login must NOT be repointed off the password provider — otherwise a single
+        // login strips their door and the whole org is locked out once the IdP is down.
+        var config = new PluginConfiguration { DisablePasswordLogin = true, BreakGlassAdminUsername = "root" };
+
+        var resolved = SsoOnlyLoginGuard.ResolveLoginProvider(config, "root", SsoAuthenticationProviders.SsoProviderId);
+
+        Assert.Equal(SsoAuthenticationProviders.DefaultPasswordProviderId, resolved);
+    }
+
+    [Fact]
+    public void ResolveLoginProvider_ModeOn_NonExemptAccount_ForcedToSsoProvider()
+    {
+        var config = new PluginConfiguration { DisablePasswordLogin = true, BreakGlassAdminUsername = "root" };
+
+        var resolved = SsoOnlyLoginGuard.ResolveLoginProvider(config, "alice", configuredDefaultProvider: null);
+
+        Assert.Equal(SsoAuthenticationProviders.SsoProviderId, resolved);
+    }
+
+    [Fact]
+    public void ResolveLoginProvider_ModeOff_UsesConfiguredDefaultUnchanged()
+    {
+        var config = new PluginConfiguration { DisablePasswordLogin = false, BreakGlassAdminUsername = "root" };
+
+        Assert.Equal("some-provider", SsoOnlyLoginGuard.ResolveLoginProvider(config, "alice", "some-provider"));
+        Assert.Null(SsoOnlyLoginGuard.ResolveLoginProvider(config, "root", null));
+    }
+
+    // --- Hardening (bypass-lens): pin the core default-provider identifier so a rename can't silently fail-open ---
+
+    [Fact]
+    public void DefaultPasswordProviderId_MatchesJellyfinCoreDefaultAuthenticationProvider()
+    {
+        // The enforcement sweep and the break-glass guard identify Jellyfin's built-in password provider by
+        // this exact full type name. If a core rename ever diverged from it, EnableSsoOnly would repoint zero
+        // accounts and the guard would misjudge break-glass eligibility — a silent fail-open. The type lives
+        // in Jellyfin.Server.Implementations, which is not a referenceable dependency here, so this pins the
+        // contract string: a change to the constant fails CI and forces a deliberate review rather than a
+        // silent no-op.
+        Assert.Equal(
+            "Jellyfin.Server.Implementations.Users.DefaultAuthenticationProvider",
+            SsoAuthenticationProviders.DefaultPasswordProviderId);
     }
 }

@@ -1,4 +1,5 @@
 using System;
+using Jellyfin.Plugin.SSO_Auth.Api;
 
 namespace Jellyfin.Plugin.SSO_Auth.Config;
 
@@ -130,6 +131,31 @@ internal static class SsoOnlyLoginGuard
     internal static bool IsEnforcedNonExempt(PluginConfiguration configuration, string username)
         => configuration is { DisablePasswordLogin: true }
            && !IsBreakGlass(configuration, username);
+
+    /// <summary>
+    /// Decides the authentication provider id an SSO login should write for the given account (#165,
+    /// Finding 1/2 fixes). When SSO-only is OFF, the provider's own configured default is used unchanged.
+    /// When it is ON, a non-exempt account is forced onto the SSO (non-password) provider so no residual
+    /// password door survives, and the break-glass admin is PINNED to the built-in password provider so an
+    /// SSO login can never strip its password door (operators often set a provider's DefaultProvider to the
+    /// SSO provider id; without this pin the break-glass admin could lock the whole org out when the IdP
+    /// later fails). Pure: the caller reads it under the config lock and passes the result to the minter.
+    /// </summary>
+    /// <param name="configuration">The live plugin configuration.</param>
+    /// <param name="username">The account username completing the SSO login.</param>
+    /// <param name="configuredDefaultProvider">The provider config's own <c>DefaultProvider</c> (already trimmed), applied only while the mode is off.</param>
+    /// <returns>The provider id to write, or the configured default when the mode is off.</returns>
+    internal static string ResolveLoginProvider(PluginConfiguration configuration, string username, string configuredDefaultProvider)
+    {
+        if (configuration is not { DisablePasswordLogin: true })
+        {
+            return configuredDefaultProvider;
+        }
+
+        return IsBreakGlass(configuration, username)
+            ? SsoAuthenticationProviders.DefaultPasswordProviderId
+            : SsoAuthenticationProviders.SsoProviderId;
+    }
 
     /// <summary>
     /// Whether the given username is the designated break-glass admin (the exempt account). Ordinal-ignore-case.

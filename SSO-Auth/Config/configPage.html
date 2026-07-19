@@ -102,11 +102,20 @@
                 </li>
                 <li>
                   <strong>The mode is reversible without SSO.</strong> Turning
-                  it off restores native password routing for the affected
-                  accounts and never resets or reveals any password. If you are
-                  ever fully locked out, edit <code>config.xml</code> on disk
-                  (set <code>DisablePasswordLogin</code> back to
-                  <code>false</code>).
+                  it off restores native password routing for the accounts the
+                  mode repointed and never resets or reveals any password.
+                </li>
+                <li>
+                  <strong>Total-lockout recovery works from disk.</strong> If
+                  you are ever fully locked out, stop Jellyfin, edit the
+                  plugin's <code>config.xml</code>, set
+                  <code>DisablePasswordLogin</code> back to <code>false</code>,
+                  and restart. On startup the plugin reconciles the user
+                  database to the flag &mdash; the accounts the mode repointed
+                  are restored to the built-in password provider (password
+                  hashes untouched), so native login works again. Only accounts
+                  the mode itself moved are restored; accounts created by SSO
+                  keep their SSO-only routing.
                 </li>
                 <li>
                   <strong>No separation of duties.</strong> Jellyfin has a
@@ -125,7 +134,7 @@
                 <code>SSO-Only/Status</code> endpoints (they run the fail-closed
                 last-admin guard and the per-user enforcement sweep). Saving
                 this configuration page never changes the SSO-only state. See
-                <code>providers.md</code> for the full runbook.
+                the plugin wiki's Provider Setup page for the full runbook.
               </p>
             </div>
           </details>

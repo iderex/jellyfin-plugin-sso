@@ -841,8 +841,10 @@ public class SSOController : ControllerBase
     /// Sets or changes the designated break-glass administrator (#165) — the account SSO-only mode never
     /// repoints. Requires administrator privileges. Fail-closed: the target must be an existing, enabled
     /// administrator that still has a password (the exemption can never point at a non-admin, so it cannot
-    /// grant admin — T-E1); an unqualified target is refused and nothing changes. When the mode is already
-    /// on, the change re-asserts the enforcement so the former break-glass admin is repointed. Audited.
+    /// grant admin — T-E1); an unqualified target is refused and nothing changes. To change the designation
+    /// while the mode is on, disable it first (every other admin has already been repointed off the password
+    /// provider, so no other account can satisfy the "usable password" guard), then re-designate and re-enable.
+    /// Audited.
     /// </summary>
     /// <param name="username">The administrator account to designate as the break-glass admin.</param>
     /// <returns>Ok on success, or 400 with the refusal reason when the target does not qualify.</returns>
@@ -852,7 +854,7 @@ public class SSOController : ControllerBase
     public async Task<ActionResult> DesignateBreakGlassAdmin([FromBody] string username)
     {
         var actor = await ResolveActorAsync().ConfigureAwait(false);
-        var outcome = await _ssoOnly.TryDesignateBreakGlassAsync(username).ConfigureAwait(false);
+        var outcome = _ssoOnly.TryDesignateBreakGlass(username);
         if (outcome.Verdict != SsoOnlyGuardVerdict.Allow)
         {
             SsoAudit.SsoOnlyLoginActivationRefused(_logger, actor, outcome.Verdict.ToString());

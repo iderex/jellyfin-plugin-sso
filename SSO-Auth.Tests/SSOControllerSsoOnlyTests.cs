@@ -132,6 +132,7 @@ public class SSOControllerSsoOnlyTests
         var user = new User(name, "SSO-Auth", "Default") { Id = id, Password = "hash-" + name };
         user.AuthenticationProviderId = SsoAuthenticationProviders.DefaultPasswordProviderId;
         harness.UserManager.GetUserByName(name).Returns(user);
+        harness.UserManager.GetUserById(id).Returns(user);
         return user;
     }
 }

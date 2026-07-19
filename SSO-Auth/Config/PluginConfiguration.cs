@@ -9,6 +9,8 @@ namespace Jellyfin.Plugin.SSO_Auth.Config;
 /// </summary>
 public class PluginConfiguration : MediaBrowser.Model.Plugins.BasePluginConfiguration
 {
+    private List<Guid> _ssoOnlyRepointedUserIds;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="PluginConfiguration"/> class.
     /// </summary>
@@ -79,6 +81,29 @@ public class PluginConfiguration : MediaBrowser.Model.Plugins.BasePluginConfigur
     /// Blank means no break-glass admin is designated, so the mode cannot be enabled.
     /// </summary>
     public string BreakGlassAdminUsername { get; set; }
+
+    /// <summary>
+    /// Gets or sets the ids of the accounts SSO-only mode has repointed off the built-in password provider
+    /// (#165). This is server-managed bookkeeping, NOT an admin setting: the enable sweep records each
+    /// account it moves, the disable/off-switch and the boot-time reconciliation restore <em>only</em> these
+    /// accounts, and the set is cleared once they are restored. Tracking is essential for correctness — the
+    /// plugin's own created accounts permanently carry the SSO provider id, so an untracked "restore every
+    /// SSO-provider account" sweep would wrongly hand them a password door. It persists in the config XML so
+    /// the documented recovery (set <see cref="DisablePasswordLogin"/> to <c>false</c> and restart) can
+    /// reconcile the user database back to the flag. Withheld from JSON (<c>[JsonIgnore]</c>) and re-injected
+    /// on save like the other server-managed fields, so a config PUT can neither read nor set it.
+    /// </summary>
+    [XmlArray("SsoOnlyRepointedUserIds")]
+    [XmlArrayItem("UserId")]
+    [System.Text.Json.Serialization.JsonIgnore]
+    public List<Guid> SsoOnlyRepointedUserIds
+    {
+        // Self-healing lazy init (mirrors CanonicalLinks): a config PUT deserializes this to null (it is
+        // JSON-ignored), so a later `.Add` under the config lock must land in a stored list, not a discarded
+        // throwaway. Every access is under ReadConfiguration/MutateConfiguration, so it cannot race.
+        get => _ssoOnlyRepointedUserIds ??= new List<Guid>();
+        set => _ssoOnlyRepointedUserIds = value;
+    }
 }
 
 /// <summary>

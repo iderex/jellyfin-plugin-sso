@@ -111,13 +111,14 @@ internal sealed class SsoOnlyLoginService
     /// <summary>
     /// Re-designates the break-glass admin. The new target must itself satisfy the guard (an enabled
     /// administrator with a usable password), so the exemption can never point at a non-admin or a
-    /// login-incapable account (T-E1). When the mode is already on, the change is followed by a fresh
-    /// enforcement sweep so the previous break-glass admin (now non-exempt) is repointed and the new one is
-    /// spared. Fail-closed: an unqualified target changes nothing.
+    /// login-incapable account (T-E1). Fail-closed: an unqualified target changes nothing. Changing the
+    /// designation while the mode is ON is not supported here — every other admin has already been repointed
+    /// off the password provider, so no other account can satisfy the "usable password" guard; disable the
+    /// mode first, re-designate, then re-enable.
     /// </summary>
     /// <param name="breakGlassUsername">The new break-glass admin username.</param>
-    /// <returns>The guard verdict and, when the mode was on, the number of accounts repointed by the re-sweep.</returns>
-    internal async Task<SsoOnlyEnableOutcome> TryDesignateBreakGlassAsync(string breakGlassUsername)
+    /// <returns>The guard verdict and the account's canonical username on success.</returns>
+    internal SsoOnlyEnableOutcome TryDesignateBreakGlass(string breakGlassUsername)
     {
         var resolved = _userManager.GetUserByName(breakGlassUsername);
         var verdict = SsoOnlyLoginGuard.Evaluate(breakGlassUsername, DescribeBreakGlass(breakGlassUsername));
@@ -127,16 +128,8 @@ internal sealed class SsoOnlyLoginService
         }
 
         var canonicalUsername = resolved!.Username;
-        var modeOn = _configStore.Mutate(configuration =>
-        {
-            configuration.BreakGlassAdminUsername = canonicalUsername;
-            return configuration.DisablePasswordLogin;
-        });
-
-        // When the mode is on, the exempt account changed, so re-assert the invariant: repoint the former
-        // break-glass admin (now non-exempt) and spare the new one. A no-op sweep when the mode is off.
-        var repointed = modeOn ? await SweepEnableAsync(canonicalUsername).ConfigureAwait(false) : 0;
-        return new SsoOnlyEnableOutcome(SsoOnlyGuardVerdict.Allow, repointed, canonicalUsername);
+        _configStore.Mutate(configuration => configuration.BreakGlassAdminUsername = canonicalUsername);
+        return new SsoOnlyEnableOutcome(SsoOnlyGuardVerdict.Allow, 0, canonicalUsername);
     }
 
     /// <summary>
@@ -150,16 +143,40 @@ internal sealed class SsoOnlyLoginService
     internal async Task<int> DisableAsync()
     {
         _configStore.Mutate(configuration => configuration.DisablePasswordLogin = false);
-        return await SweepDisableAsync().ConfigureAwait(false);
+        return await RestoreRepointedAccountsAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Boot-time reconciliation of the user database to the flag (#165). If SSO-only is OFF but accounts the
+    /// mode repointed are still routed to the SSO provider, restore them — this makes the documented
+    /// total-lockout recovery ("edit config.xml, set <c>DisablePasswordLogin</c> to <c>false</c>, restart")
+    /// genuinely work, because enforcement lives in the user database, not the flag. Idempotent and
+    /// fail-safe: a normal boot (flag on, or the tracking set already empty) does nothing, and only accounts
+    /// the mode itself recorded are touched, so the plugin's own SSO-created accounts (which permanently carry
+    /// the SSO provider id) are never handed a password door. When the flag is ON this leaves enforcement in
+    /// place.
+    /// </summary>
+    /// <returns>The number of accounts restored.</returns>
+    internal async Task<int> ReconcileOnStartupAsync()
+    {
+        var (modeOn, trackedCount) = _configStore.Read(
+            configuration => (configuration.DisablePasswordLogin, configuration.SsoOnlyRepointedUserIds.Count));
+        if (modeOn || trackedCount == 0)
+        {
+            return 0;
+        }
+
+        return await RestoreRepointedAccountsAsync().ConfigureAwait(false);
     }
 
     // Repoints every non-exempt account currently on the password provider to the SSO (non-password)
-    // provider, leaving the break-glass admin and every account already on another provider untouched. Only
-    // the routing field is written (T-E3). Idempotent: an account already on the SSO provider is skipped, so
-    // re-running (e.g. a re-designation) costs no redundant writes.
+    // provider, leaving the break-glass admin and every account already on another provider untouched, and
+    // RECORDS each moved account's id so the off-switch and the boot reconciliation restore exactly this set
+    // (never the plugin's own SSO-created accounts). Only the routing field is written (T-E3). Idempotent: an
+    // account already on the SSO provider is skipped.
     private async Task<int> SweepEnableAsync(string breakGlassUsername)
     {
-        int repointed = 0;
+        var repointedIds = new List<Guid>();
         foreach (var user in _userManager.GetUsers() ?? Enumerable.Empty<User>())
         {
             if (IsBreakGlass(user.Username, breakGlassUsername))
@@ -171,23 +188,40 @@ internal sealed class SsoOnlyLoginService
             {
                 user.AuthenticationProviderId = SsoAuthenticationProviders.SsoProviderId;
                 await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
-                repointed++;
+                repointedIds.Add(user.Id);
             }
         }
 
-        return repointed;
+        if (repointedIds.Count > 0)
+        {
+            _configStore.Mutate(configuration =>
+            {
+                foreach (var id in repointedIds)
+                {
+                    if (!configuration.SsoOnlyRepointedUserIds.Contains(id))
+                    {
+                        configuration.SsoOnlyRepointedUserIds.Add(id);
+                    }
+                }
+            });
+        }
+
+        return repointedIds.Count;
     }
 
-    // Restores the password provider for every account currently routed to the SSO (non-password) provider.
-    // Lossless: the routing field is the only thing written; the stored password hash is left byte-for-byte
-    // intact (T-E2). Accounts on the break-glass or a third-party provider are not on the SSO provider, so
-    // they are not touched.
-    private async Task<int> SweepDisableAsync()
+    // Restores the built-in password provider for ONLY the accounts the mode recorded as repointed (that are
+    // still on the SSO provider), then clears the tracking set. Lossless: the routing field is the only thing
+    // written; the stored password hash is left byte-for-byte intact (T-E2). Scoping to the tracked set is
+    // what keeps the plugin's own SSO-created accounts (permanently on the SSO provider, never repointed by
+    // the mode) from being wrongly handed a password door.
+    private async Task<int> RestoreRepointedAccountsAsync()
     {
+        var trackedIds = _configStore.Read(configuration => configuration.SsoOnlyRepointedUserIds.ToList());
         int restored = 0;
-        foreach (var user in _userManager.GetUsers() ?? Enumerable.Empty<User>())
+        foreach (var id in trackedIds)
         {
-            if (SsoAuthenticationProviders.IsSsoProvider(user.AuthenticationProviderId))
+            var user = _userManager.GetUserById(id);
+            if (user is not null && SsoAuthenticationProviders.IsSsoProvider(user.AuthenticationProviderId))
             {
                 user.AuthenticationProviderId = SsoAuthenticationProviders.DefaultPasswordProviderId;
                 await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
@@ -195,6 +229,7 @@ internal sealed class SsoOnlyLoginService
             }
         }
 
+        _configStore.Mutate(configuration => configuration.SsoOnlyRepointedUserIds.Clear());
         return restored;
     }
 

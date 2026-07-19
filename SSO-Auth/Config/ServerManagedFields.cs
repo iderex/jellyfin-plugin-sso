@@ -42,6 +42,7 @@ internal static class ServerManagedFields
         {
             incoming.DisablePasswordLogin = live.DisablePasswordLogin;
             incoming.BreakGlassAdminUsername = live.BreakGlassAdminUsername;
+            incoming.SsoOnlyRepointedUserIds = live.SsoOnlyRepointedUserIds;
         }
     }
 

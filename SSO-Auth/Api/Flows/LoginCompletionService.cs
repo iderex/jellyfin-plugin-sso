@@ -76,20 +76,21 @@ internal sealed class LoginCompletionService
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.AccountLinkForbidden));
         }
 
-        // SSO-only re-assertion on the login path (#165, criterion 5 / T-S1): while DisablePasswordLogin is
-        // on, a non-exempt account that authenticates via SSO must not be left routed to Jellyfin's password
-        // provider — that would be a residual password door. Force the plugin's SSO (non-password) provider
-        // id for everyone but the designated break-glass admin, whose password door is deliberately kept.
-        // Only the provider-routing field is affected (SessionMinter writes AuthenticationProviderId from
-        // DefaultProvider), never a permission — the enforcement stays orthogonal to the grant code (T-E3).
-        // Reading the plugin singleton here matches how the sibling flow services read configuration; when
-        // the mode is off (the default) the provider's own DefaultProvider is used unchanged.
-        var defaultProvider = config.DefaultProvider?.Trim();
-        if (SSOPlugin.Instance is { } plugin
-            && plugin.ReadConfiguration(configuration => SsoOnlyLoginGuard.IsEnforcedNonExempt(configuration, identity.Username)))
-        {
-            defaultProvider = SsoAuthenticationProviders.SsoProviderId;
-        }
+        // SSO-only re-assertion on the login path (#165, criterion 5 / T-S1, Finding 1). While
+        // DisablePasswordLogin is on, an SSO login must not leave the account's provider routing in a state
+        // that undermines the mode: a non-exempt account is forced onto the SSO (non-password) provider so no
+        // residual password door survives, and the break-glass admin is PINNED to the built-in password
+        // provider so an SSO login can never strip its own password door (which would risk a total lockout
+        // once the IdP fails). Only the provider-routing field is affected (SessionMinter writes
+        // AuthenticationProviderId from DefaultProvider), never a permission — enforcement stays orthogonal to
+        // the grant code (T-E3). The pure decision lives in SsoOnlyLoginGuard; reading the plugin singleton
+        // here matches how the sibling flow services read configuration. When the mode is off (the default),
+        // the provider's own DefaultProvider is used unchanged.
+        var configuredDefaultProvider = config.DefaultProvider?.Trim();
+        var defaultProvider = SSOPlugin.Instance is { } plugin
+            ? plugin.ReadConfiguration(configuration =>
+                SsoOnlyLoginGuard.ResolveLoginProvider(configuration, identity.Username, configuredDefaultProvider))
+            : configuredDefaultProvider;
 
         var sessionParameters = new SessionParameters
         {
