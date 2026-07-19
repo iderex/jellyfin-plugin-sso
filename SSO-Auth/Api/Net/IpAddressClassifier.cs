@@ -1,7 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Net;
 
 /// <summary>
 /// Classifies a client-supplied or connection IP address as public or blocked (loopback, private,

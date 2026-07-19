@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
+using Jellyfin.Plugin.SSO_Auth.Api.Net;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api;
 

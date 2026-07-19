@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Net.Http;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Net;
 
 /// <summary>
 /// The one home for the plugin's outbound HTTP policy: the User-Agent value and the factory-client

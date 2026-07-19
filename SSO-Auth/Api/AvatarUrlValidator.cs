@@ -1,5 +1,6 @@
 using System;
 using System.Net;
+using Jellyfin.Plugin.SSO_Auth.Api.Net;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api;
 
