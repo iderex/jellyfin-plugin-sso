@@ -9,7 +9,7 @@ using Jellyfin.Plugin.SSO_Auth.Config;
 using MediaBrowser.Controller.Library;
 using Microsoft.Extensions.Logging;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Session;
 
 /// <summary>
 /// The outcome of an SSO-only activation attempt: the guard <see cref="SsoOnlyGuardVerdict"/> and, only

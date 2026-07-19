@@ -4,7 +4,7 @@ using System.Net.Mime;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Session;
 
 /// <summary>
 /// The single translation from a <see cref="LoginOutcome"/> to an HTTP response. Rejection bodies

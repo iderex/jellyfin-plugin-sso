@@ -10,7 +10,7 @@ using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Session;
 using Microsoft.Extensions.Logging;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Session;
 
 /// <summary>
 /// Mints a Jellyfin session for a resolved SSO login: applies the granted permissions and the optional

@@ -1,4 +1,4 @@
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Session;
 
 /// <summary>
 /// The data the client should pass back to the API.

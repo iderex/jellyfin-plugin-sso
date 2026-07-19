@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Api.Session;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api.Flows;

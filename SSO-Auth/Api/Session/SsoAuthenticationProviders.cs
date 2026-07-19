@@ -1,7 +1,7 @@
 using System;
 using Jellyfin.Plugin.SSO_Auth.Api.Linking;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Session;
 
 /// <summary>
 /// The two <c>User.AuthenticationProviderId</c> values the SSO-only login feature (#165) moves accounts

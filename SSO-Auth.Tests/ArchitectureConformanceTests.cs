@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Jellyfin.Plugin.SSO_Auth;
+using Jellyfin.Plugin.SSO_Auth.Api.Session;
 using Jellyfin.Plugin.SSO_Auth.Api.Identity;
 using Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 using Jellyfin.Plugin.SSO_Auth.Api.Saml;
@@ -200,9 +201,10 @@ public class ArchitectureConformanceTests
     [InlineData("Authz")] // leaf — role→permission mapping: PermissionGrant, PermissionRolePolicy, RolePrivilegeMapper
     [InlineData("Provider", "Net", "RateLimit")] // provider config/test/naming — validates URLs (Net) and keys throttles (RateLimit)
     [InlineData("Linking", "Audit", "Provider", "RateLimit")] // account linking — audits writes, validates providers, throttles
-    [InlineData("Saml", "Authz", "Identity", "RateLimit")] // SAML core/validators — mints the keystone (Identity), maps roles (Authz), throttles (RateLimit)
+    [InlineData("Saml", "Authz", "Identity", "RateLimit", "Session")] // SAML core/validators — mints the keystone (Identity), returns login outcomes (Session), maps roles (Authz), throttles (RateLimit)
     [InlineData("Oidc", "Authz", "Avatar", "Identity", "Net", "Provider", "RateLimit")] // OIDC flow — mints the keystone (Identity), orchestrates roles, avatar, net, provider, throttle
     [InlineData("Identity", "Authz", "Provider")] // the identity keystone — grants (Authz) + link mode (Provider); decoupled from the protocols by #790
+    [InlineData("Session", "Authz", "Avatar", "Linking")] // session mint + login outcomes — applies grants (Authz), sets avatars (Avatar), reconciles links (Linking)
     public void ApiModule_ImportsOnlyItsAllowedApiModules(string module, params string[] allowed)
     {
         var moduleDir = Path.Combine(RepoRoot(), "SSO-Auth", "Api", module);
@@ -639,7 +641,7 @@ public class ArchitectureConformanceTests
         // earlier pre-mutation gate must not satisfy the rule) AND that no user-mutating side effect sits
         // between that final gate and AuthenticateDirect — otherwise a revocation during that work would go
         // unre-checked.
-        var minterSource = File.ReadAllLines(Path.Combine(RepoRoot(), "SSO-Auth", "Api", "SessionMinter.cs"));
+        var minterSource = File.ReadAllLines(Path.Combine(RepoRoot(), "SSO-Auth", "Api", "Session", "SessionMinter.cs"));
         var mintLine = Array.FindIndex(minterSource, l => l.Contains("AuthenticateDirect(", StringComparison.Ordinal));
         Assert.True(mintLine >= 0, "SessionMinter.MintAsync must call AuthenticateDirect to mint the session.");
 

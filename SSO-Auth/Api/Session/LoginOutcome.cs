@@ -1,6 +1,6 @@
 using MediaBrowser.Controller.Authentication;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Session;
 
 /// <summary>
 /// The closed set of results a login flow can produce (#318). There is deliberately no Error case:

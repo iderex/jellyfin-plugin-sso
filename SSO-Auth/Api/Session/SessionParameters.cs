@@ -4,7 +4,7 @@ using Jellyfin.Plugin.SSO_Auth.Api.Authz;
 
 #nullable enable
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Session;
 
 /// <summary>
 /// Everything the session-minting step needs to authenticate a resolved SSO login: the target user,
