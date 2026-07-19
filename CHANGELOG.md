@@ -1,10 +1,13 @@
 # Changelog
 
-All notable changes to this plugin are documented here. Versions follow the
-four-part `X.Y.Z.W` scheme described in the release policy (breaking / feature /
-bug-fix / security).
+All notable changes to this plugin are documented here. Versions are three-part
+`X.Y.Z` as described in the release policy — **X** a breaking / Jellyfin-ABI
+change, **Y** a feature, **Z** a bug-fix or security patch (the two share the
+digit and differ by release cadence). The channel and Jellyfin generation are a
+suffix on the git tag and GitHub release name only (`-stable`, `-beta.<run>`,
+`-JF12-*`), never part of the installed numeric version.
 
-## 4.2.1.0
+## 4.2.1
 
 A bug-fix release.
 
@@ -19,7 +22,7 @@ A bug-fix release.
   eliminates the internal-error surface. A masked test that had tolerated the
   old exception was corrected to assert the explicit deny.
 
-## 4.2.0.0
+## 4.2.0
 
 A breaking release.
 
@@ -41,7 +44,7 @@ A breaking release.
   since #251. Callers that scripted the legacy direct-assertion POST must switch
   to the callback-plus-token round-trip.
 
-## 4.1.1.0
+## 4.1.1
 
 A bug-fix release that restores plugin loading on Jellyfin 10.11. No
 configuration changes.
@@ -74,7 +77,7 @@ configuration changes.
   referenced above the .NET 9 host ABI, so a future dependency bump that
   re-crosses the floor is caught before release instead of in the field.
 
-## 4.1.0.0
+## 4.1.0
 
 The first feature release of the revived plugin. It folds in a full
 security-parity pass over the SAML and OpenID login path, encrypts provider

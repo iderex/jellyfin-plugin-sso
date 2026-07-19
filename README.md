@@ -38,7 +38,7 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 >
 > This is a revival of [**9p4/jellyfin-plugin-sso**](https://github.com/9p4/jellyfin-plugin-sso), which its original author has since archived. It continues from the last upstream release (**4.0.0.x**, Jellyfin 10.11 / .NET 9) and is taken forward **security-first**. Its hardened sibling project, **`jellyfin-plugin-sso-V2`** (private), is the reference this repository draws on — ported across deliberately, one reviewed change at a time. Huge thanks to the original author and contributors for the foundation.
 >
-> **Status:** **Alpha** — the second stage of the maturity ladder. See the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap) for what each stage gates, and [Installing](#installing) — a packaged release (**4.1.0.0**) is now installable from the Jellyfin plugin catalog, with build-from-source as the alternative.
+> **Status:** **Alpha** — the second stage of the maturity ladder. See the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap) for what each stage gates, and [Installing](#installing) — a packaged release is now installable from the Jellyfin plugin catalog, with build-from-source as the alternative.
 >
 > ### How this project is developed
 >
