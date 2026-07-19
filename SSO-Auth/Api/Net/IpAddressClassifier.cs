@@ -8,7 +8,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Net;
 /// carrier-grade NAT, link-local, unique/site-local, unspecified, reserved, or multicast), and unwraps the
 /// IPv4 address embedded in an IPv4-in-IPv6 transition form (6to4, NAT64, the deprecated IPv4-compatible
 /// form). Two unrelated callers share this one definition so they can never disagree on what counts as a
-/// public address: the avatar-fetch SSRF guard (<see cref="AvatarUrlValidator"/>) rejects a blocked target
+/// public address: the avatar-fetch SSRF guard (AvatarUrlValidator) rejects a blocked target
 /// before fetching it, and the login rate limiter (<see cref="SsoRateLimiter.NormalizeClientKey"/>) exempts a
 /// blocked/non-public connection address from throttling entirely. Neither caller's own file is the right
 /// home for this shared invariant — tuning the avatar SSRF policy must never silently change which clients

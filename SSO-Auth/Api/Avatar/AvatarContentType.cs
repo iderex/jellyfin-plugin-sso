@@ -1,4 +1,4 @@
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Avatar;
 
 /// <summary>
 /// Resolves the stored file extension for an avatar HTTP content type, restricted to an allow-list of

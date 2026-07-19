@@ -2,7 +2,7 @@ using System;
 using System.Net;
 using Jellyfin.Plugin.SSO_Auth.Api.Net;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Avatar;
 
 /// <summary>
 /// Validation helpers that constrain the server-side avatar fetch to public http(s) targets,

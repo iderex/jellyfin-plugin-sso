@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Jellyfin.Plugin.SSO_Auth;
+using Jellyfin.Plugin.SSO_Auth.Api.Avatar;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Api.Flows;
 using Jellyfin.Plugin.SSO_Auth.Api.Shared;
@@ -147,30 +148,32 @@ public class ArchitectureConformanceTests
         Assert.True(outside.Count == 0, "All plugin types must live under the " + Root + " root namespace: " + string.Join(", ", outside));
     }
 
-    // Module-boundary fitness function of the #777 folder migration: each extracted module is a LEAF — no
-    // source file under SSO-Auth/Api/<module> may import ANOTHER Api module. Enforced at the IMPORT level,
-    // which also catches method-body coupling (reflection over signatures would miss a body-only call): using a
-    // type from another Api module requires importing its namespace. Importing NON-Api namespaces (e.g. the
-    // Config persistence model) stays allowed, and a file never imports its own module namespace. As each
-    // module lands (#777) it registers a case here; together the cases lock in the module DAG.
+    // Module-boundary fitness function of the #777 folder migration: each extracted module may import ONLY the
+    // Api modules explicitly allowed for it (a leaf allows none), pinning the module dependency DAG. Enforced at
+    // the IMPORT level, which also catches method-body coupling (reflection over signatures would miss a
+    // body-only call): using a type from another Api module requires importing its namespace. Importing NON-Api
+    // namespaces (e.g. the Config persistence model or the still-unmigrated flat Api core) stays allowed, and a
+    // file never imports its own module namespace. As each module lands (#777) it registers a case here with its
+    // allowed dependencies; together the cases lock in the DAG and forbid a cycle.
     [Theory]
-    [InlineData("Net")] // networking / URL / SSRF primitives: IpAddressClassifier, CanonicalBaseUrl, SsoHttp
-    [InlineData("Secrets")] // secrets at rest: SecretStore, SecretEnvelope, ConfigSecretProtection
-    [InlineData("Audit")] // append-only audit logging: SsoAudit
-    public void ApiModule_IsALeaf_ImportsNoOtherApiModule(string module)
+    [InlineData("Net")] // leaf — networking / URL / SSRF primitives: IpAddressClassifier, CanonicalBaseUrl, SsoHttp
+    [InlineData("Secrets")] // leaf — secrets at rest: SecretStore, SecretEnvelope, ConfigSecretProtection
+    [InlineData("Audit")] // leaf — append-only audit logging: SsoAudit
+    [InlineData("Avatar", "Net")] // avatar fetch — validates targets through the Net SSRF classifier
+    public void ApiModule_ImportsOnlyItsAllowedApiModules(string module, params string[] allowed)
     {
         var moduleDir = Path.Combine(RepoRoot(), "SSO-Auth", "Api", module);
-        var selfImport = "Jellyfin.Plugin.SSO_Auth.Api." + module + ";";
+        var permitted = new HashSet<string>(allowed) { module };
         var offenders = Directory.EnumerateFiles(moduleDir, "*.cs")
             .SelectMany(file => File.ReadLines(file)
-                .Where(line => Regex.IsMatch(line, @"^\s*using\s+Jellyfin\.Plugin\.SSO_Auth\.Api(\.|;)")
-                    && !line.TrimEnd().EndsWith(selfImport, StringComparison.Ordinal))
-                .Select(line => Path.GetFileName(file) + ": " + line.Trim()))
+                .Select(line => Regex.Match(line, @"^\s*using\s+Jellyfin\.Plugin\.SSO_Auth\.Api\.(?<mod>[A-Za-z0-9_]+)\s*;"))
+                .Where(m => m.Success && !permitted.Contains(m.Groups["mod"].Value))
+                .Select(m => Path.GetFileName(file) + ": " + m.Value.Trim()))
             .ToList();
 
         Assert.True(
             offenders.Count == 0,
-            $"The {module} module is a leaf: no file under Api/{module} may import another Api module. Offending imports: " + string.Join(" | ", offenders));
+            $"The {module} module may import only [{string.Join(", ", allowed)}] among Api modules; these imports break that: " + string.Join(" | ", offenders));
     }
 
     [Fact]
