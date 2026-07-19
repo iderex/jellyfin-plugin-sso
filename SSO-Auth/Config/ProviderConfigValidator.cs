@@ -6,11 +6,19 @@ namespace Jellyfin.Plugin.SSO_Auth.Config;
 
 /// <summary>
 /// Rejects invalid provider configuration fail-closed before anything is persisted. The whole-config
-/// <see cref="Validate"/> gates the admin config-page save inside <see cref="ProviderConfigStore.Save"/>;
-/// the per-provider methods apply the same predicates to a single incoming provider, so every admin
-/// write path can share one validation rule (#318). Delegates to the existing
-/// <see cref="CanonicalBaseUrl.IsInvalidOverride"/>, <see cref="SamlCertificate.IsInvalid"/>, and
-/// <see cref="ProviderNameValidator.IsInvalid"/> predicates.
+/// <see cref="Validate"/> gates the admin config-page save inside <see cref="ProviderConfigStore.Save"/>
+/// by composing the per-provider checks below; those per-provider methods are also exercised directly,
+/// one predicate at a time, by the unit tests (hence internal, not private). The single source of truth
+/// is the underlying <see cref="CanonicalBaseUrl.IsInvalidOverride"/>,
+/// <see cref="SamlCertificate.IsInvalid"/>, <see cref="SamlSigningKey.IsInvalid"/>, and
+/// <see cref="ProviderNameValidator.IsInvalid"/> predicates — the SAME ones the Add endpoints' own
+/// guards (<c>SSOController.RejectInvalid*</c>) delegate to. The two admin write paths keep separate
+/// throwing wrappers on purpose (#671): the config-page messages here embed the provider name and
+/// protocol for the admin UI, whereas the Add-endpoint messages stay generic and input-independent (they
+/// never echo the caller's provider name back), and <c>RejectInvalidNewProviderName</c> resolves
+/// existence under the config lock. So a new provider-config rule is one shared base predicate plus the
+/// two context-appropriate wrappers — the validation logic is not duplicated, only the messaging is
+/// deliberately parallel.
 /// </summary>
 internal static class ProviderConfigValidator
 {

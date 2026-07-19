@@ -138,7 +138,7 @@ public class SSOController : ControllerBase
         [FromRoute] string provider,
         [FromQuery] string state)
     {
-        if (RateLimitCheck("callback") is { } throttled)
+        if (RateLimitCheck(SsoRateLimitClass.Callback) is { } throttled)
         {
             return throttled;
         }
@@ -159,7 +159,7 @@ public class SSOController : ControllerBase
     [HttpGet("OID/start/{provider}")]
     public async Task<ActionResult> OidChallenge(string provider, [FromQuery] bool isLinking = false)
     {
-        if (RateLimitCheck("challenge") is { } throttled)
+        if (RateLimitCheck(SsoRateLimitClass.Challenge) is { } throttled)
         {
             return throttled;
         }
@@ -387,7 +387,7 @@ public class SSOController : ControllerBase
         // [Authorize] filter rejects a non-elevated caller before the body runs, so an unauthorized request
         // never reaches the limiter (no rate-limit oracle). Once past it, the shared "test" budget caps how
         // fast an authorized admin can drive the probe's outbound discovery fetch.
-        if (RateLimitCheck("test") is { } throttled)
+        if (RateLimitCheck(SsoRateLimitClass.Test) is { } throttled)
         {
             return throttled;
         }
@@ -426,7 +426,7 @@ public class SSOController : ControllerBase
     [Produces(MediaTypeNames.Application.Json)]
     public async Task<ActionResult> OidAuth(string provider, [FromBody] AuthResponse response)
     {
-        if (RateLimitCheck("auth") is { } throttled)
+        if (RateLimitCheck(SsoRateLimitClass.Auth) is { } throttled)
         {
             return throttled;
         }
@@ -459,7 +459,7 @@ public class SSOController : ControllerBase
     [HttpPost("SAML/post/{provider}")]
     public ActionResult SamlCallback(string provider, [FromQuery] string relayState = null, [FromForm(Name = "SAMLResponse")] string formSamlResponse = null)
     {
-        if (RateLimitCheck("callback") is { } throttled)
+        if (RateLimitCheck(SsoRateLimitClass.Callback) is { } throttled)
         {
             return throttled;
         }
@@ -480,7 +480,7 @@ public class SSOController : ControllerBase
     [HttpGet("SAML/start/{provider}")]
     public ActionResult SamlChallenge(string provider, [FromQuery] bool isLinking = false)
     {
-        if (RateLimitCheck("challenge") is { } throttled)
+        if (RateLimitCheck(SsoRateLimitClass.Challenge) is { } throttled)
         {
             return throttled;
         }
@@ -504,7 +504,7 @@ public class SSOController : ControllerBase
     [HttpGet("SAML/metadata/{provider}")]
     public ActionResult SamlMetadata(string provider)
     {
-        if (RateLimitCheck("metadata") is { } throttled)
+        if (RateLimitCheck(SsoRateLimitClass.Metadata) is { } throttled)
         {
             return throttled;
         }
@@ -726,7 +726,7 @@ public class SSOController : ControllerBase
     [Produces(MediaTypeNames.Application.Json)]
     public async Task<ActionResult> SamlAuth(string provider, [FromBody] AuthResponse response)
     {
-        if (RateLimitCheck("auth") is { } throttled)
+        if (RateLimitCheck(SsoRateLimitClass.Auth) is { } throttled)
         {
             return throttled;
         }
@@ -761,7 +761,7 @@ public class SSOController : ControllerBase
         // everywhere, persists a provider switch, and revokes the user's active sessions (#440). Its own
         // "unregister" class carries an independent budget, so it neither starves nor is starved by the
         // link/unlink write surface's "link" bucket (#382) or the anonymous login flows.
-        if (RateLimitCheck("unregister") is { } throttled)
+        if (RateLimitCheck(SsoRateLimitClass.Unregister) is { } throttled)
         {
             return throttled;
         }
@@ -934,7 +934,7 @@ public class SSOController : ControllerBase
         // refused before the limiter is consulted (no rate-limit oracle), then the shared gate caps how fast
         // an authorized caller can drive the config-XML disk writes this write surface performs. "link" is a
         // distinct endpoint class, so its budget is independent of the anonymous login flows.
-        if (RateLimitCheck("link") is { } throttled)
+        if (RateLimitCheck(SsoRateLimitClass.Link) is { } throttled)
         {
             return throttled;
         }
@@ -969,7 +969,7 @@ public class SSOController : ControllerBase
         // Throttle after the caller-authz guard (#382): a name-miss DELETE still runs a full persist under the
         // global config lock, so this endpoint is capped too. It shares the "link" budget with AddCanonicalLink
         // — one bucket per client for the whole link/unlink write surface — while the 403 stays first.
-        if (RateLimitCheck("link") is { } throttled)
+        if (RateLimitCheck(SsoRateLimitClass.Link) is { } throttled)
         {
             return throttled;
         }

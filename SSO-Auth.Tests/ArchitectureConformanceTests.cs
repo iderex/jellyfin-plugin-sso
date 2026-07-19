@@ -722,6 +722,42 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void FlowServices_DoNotDuplicateChallengeNewPathResolution()
+    {
+        // Locked in by #670: the near-identical ResolveChallengeNewPath resolver — and its
+        // _newPathPersistGate persist-throttle — that OidcLoginService and SamlLoginService each carried
+        // (~40 lines apiece, differing only in which provider map the Mutate delegate re-resolved against)
+        // are now ONE generic helper in ChallengeNewPathResolver (Api/Shared), with a single shared gate. Pin
+        // by reflection that NEITHER flow service re-declares its own copy of either member, so the
+        // duplication (and a second, divergent throttle) cannot silently reappear.
+        const BindingFlags all = BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+        var flowServices = new[] { typeof(OidcLoginService), typeof(SamlLoginService) };
+
+        var offenders = flowServices
+            .SelectMany(t => t.GetMethods(all)
+                .Where(m => m.Name == "ResolveChallengeNewPath")
+                .Select(m => $"{SimpleName(t)}.{m.Name} (method)")
+                .Concat(t.GetFields(all)
+                    .Where(f => f.Name == "_newPathPersistGate")
+                    .Select(f => $"{SimpleName(t)}.{f.Name} (field)")))
+            .ToList();
+
+        Assert.True(
+            offenders.Count == 0,
+            "Neither flow service may declare its own ResolveChallengeNewPath method or _newPathPersistGate field; the single generic resolver and its one shared throttle live in ChallengeNewPathResolver (Api/Shared) (#670). Found: " + string.Join(", ", offenders));
+
+        // Liveness against a vacuous pass: the shared resolver must actually own both — a move, not a silent
+        // removal — so ChallengeNewPathResolver must declare the resolver method and the single gate field.
+        var resolver = typeof(ChallengeNewPathResolver);
+        Assert.True(
+            resolver.GetMethods(all).Any(m => m.Name == "ResolveChallengeNewPath"),
+            "ChallengeNewPathResolver must own the ResolveChallengeNewPath resolver; otherwise the flow-service scan passes vacuously (#670).");
+        Assert.True(
+            resolver.GetFields(all).Any(f => f.Name == "_newPathPersistGate" && f.FieldType == typeof(IntervalGate)),
+            "ChallengeNewPathResolver must own the single _newPathPersistGate IntervalGate; otherwise the flow-service scan passes vacuously (#670).");
+    }
+
+    [Fact]
     public void SharedFlowResponses_OwnTheAuthPageErrorAndLinkWriteResults()
     {
         // Locked in by the shared-helper consolidation (#160, #500): the three HTTP result shapes both flow
@@ -785,6 +821,48 @@ public class ArchitectureConformanceTests
         Assert.True(
             mapperSource.Contains("Status429TooManyRequests", StringComparison.Ordinal) && mapperSource.Contains("RetryAfter", StringComparison.Ordinal),
             "LoginStatusMapper must own the rate-limit 429 and its Retry-After header; otherwise the controller scan passes vacuously (#474).");
+    }
+
+    [Fact]
+    public void RateLimitEndpointClass_UsesTypedConstants_NotLiterals()
+    {
+        // Locked in by #694: the per-client rate-limit bucket key is built as `class + ":" + clientKey` in
+        // SsoRateLimitGate.Check, so the endpoint-class string IS the limiter grouping. Passed as a bare
+        // literal at each call site, a single typo ("challange") compiles cleanly and silently mints a
+        // separate, empty bucket — weakening the rate limit undetectably, with nothing to fail. Every call
+        // site now references a SsoRateLimitClass member instead, so a typo is a compile error; this rule
+        // forbids a raw literal from creeping back in. Call-level property, so it is a source scan like the
+        // other controller rules above. The scan covers BOTH the controller's RateLimitCheck wrapper and any
+        // direct SsoRateLimitGate.Check invocation (belt-and-braces: a future controller could call the gate
+        // straight, bypassing the wrapper), and flags a string-literal FIRST argument to either — never the
+        // typed SsoRateLimitClass member reference.
+        var literalCall = new Regex("(?:RateLimitCheck|SsoRateLimitGate\\.Check)\\(\\s*\"");
+        var offenders = ControllerSourceFiles()
+            .SelectMany(path => File.ReadAllLines(path)
+                .Select((line, index) => (File: Path.GetFileName(path), Text: line.Trim(), Number: index + 1)))
+            .Where(l => literalCall.IsMatch(l.Text))
+            .Select(l => $"{l.File} line {l.Number}: {l.Text}")
+            .ToList();
+
+        Assert.True(
+            offenders.Count == 0,
+            "A rate-limited endpoint must pass its endpoint class as a SsoRateLimitClass member, never a raw string literal — a literal typo silently mints a separate empty limiter bucket (#694). Found: " + string.Join(" | ", offenders));
+
+        // Sentinel against a vacuous pass: the scan only means something while the typed call sites exist. A
+        // rename of the wrapper or a restructure that dropped every RateLimitCheck call would make the
+        // offender scan match nothing and pass for the wrong reason, so pin the count of typed call sites. All
+        // rate-limited endpoints route through the RateLimitCheck(SsoRateLimitClass.X) wrapper today; extend
+        // this expected count in the same PR that adds or removes a rate-limited endpoint (as the provider-form
+        // roster rules do), so a change to the limiter surface is a conscious update here rather than a silent
+        // drift the offender scan cannot see.
+        const int expectedTypedCallSites = 11;
+        var typedCall = new Regex("RateLimitCheck\\(\\s*SsoRateLimitClass\\.");
+        var typedCallSites = ControllerSourceFiles()
+            .Sum(path => typedCall.Matches(File.ReadAllText(path)).Count);
+
+        Assert.True(
+            typedCallSites == expectedTypedCallSites,
+            $"Expected {expectedTypedCallSites} typed RateLimitCheck(SsoRateLimitClass.X) call sites (#694); found {typedCallSites}. A rate-limited endpoint was added or removed — update this sentinel in the same PR so the literal scan cannot pass vacuously.");
     }
 
     [Fact]
@@ -946,6 +1024,27 @@ public class ArchitectureConformanceTests
             .ToList();
 
         Assert.True(offenders.Count == 0, "SSOPlugin members touching configuration types must stay limited to the delegating facade (config logic lives in Config/): " + string.Join(", ", offenders));
+    }
+
+    [Fact]
+    public void RawServedLinkingPage_ContainsNoDashboardLocalizationPlaceholders()
+    {
+        // The self-service linking page is served raw by SSOViewsController.GetView (route
+        // /SSOViews/linking) — no Jellyfin dashboard, so no localization pass runs. A ${...} token the
+        // dashboard would substitute therefore leaks to the end user verbatim (the ${Help} button label
+        // was the live case, #666). Scan the raw-served page for such placeholders, ignoring inline
+        // <script> blocks where ${...} is a legitimate JS template-literal interpolation, not a
+        // dashboard token.
+        var html = File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "linking.html"));
+        var withoutScripts = Regex.Replace(html, "<script.*?</script>", string.Empty, RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+        var placeholders = Regex.Matches(withoutScripts, "\\$\\{[^}]*\\}", RegexOptions.Singleline)
+            .Select(m => m.Value)
+            .ToList();
+
+        Assert.True(
+            placeholders.Count == 0,
+            "The raw-served linking page must not carry dashboard ${...} localization placeholders (they are not substituted off the dashboard, #666); found: " + string.Join(", ", placeholders));
     }
 
     [Fact]

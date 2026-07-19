@@ -219,7 +219,7 @@ public class ProviderConfigStoreTests
     [Fact]
     public async Task Mutate_ConcurrentChallengeStyleReadThenWrite_NeverThrows_AndSettlesOnADerivedSpelling()
     {
-        // Mirrors OidcLoginService/SamlLoginService.ResolveChallengeNewPath's shape (#412): a fast Read,
+        // Mirrors ChallengeNewPathResolver.ResolveChallengeNewPath's shape (#412, unified in #670): a fast Read,
         // then a Mutate only when the derived spelling differs from what is stored — never a bare field
         // write outside the lock. Concurrent callers alternate between the two derivable spellings for
         // "kc" while OTHER concurrent callers add and remove UNRELATED provider entries — a genuine

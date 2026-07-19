@@ -208,7 +208,7 @@ public class OidcStateStoreTests
     public void PeekWithoutProviderInformation_ExposesNull_SoTheCallbackFallsBackToDiscovery()
     {
         // A state whose challenge captured no discovery (a flow that predates the capture) exposes null,
-        // so the callback's CreateOidcClient runs a fresh discovery — never a broken login.
+        // so the callback's client build runs a fresh discovery — never a broken login.
         var store = Store();
         Assert.True(store.TryAdd(Pending("p", "s", Now), out _));
 

@@ -100,8 +100,11 @@ internal sealed class SsoOnlyLoginService
     /// reconciliation restore exactly the accounts the mode moved (Finding B); the break-glass admin and an
     /// account already on the SSO provider (plugin-created natively-SSO accounts included) are never tracked.
     /// The returned <see cref="SsoOnlyLoginDecision.IsBreakGlassAdmin"/> lets the mint keep the recovery
-    /// account admin/enabled (Finding H1). When the mode is off, the configured default is returned unchanged
-    /// and nothing is tracked (a read only, no config write).
+    /// account admin/enabled (Finding H1). An account already on a THIRD-PARTY provider (neither the built-in
+    /// password provider nor the SSO provider) is left on it and never tracked — matching the sweep, which
+    /// skips it, so the two enforcement paths agree and no account is repointed-but-untracked (#690). When the
+    /// mode is off, the configured default is returned unchanged and nothing is tracked (a read only, no
+    /// config write).
     /// </summary>
     /// <param name="userId">The Jellyfin user id the login resolved to.</param>
     /// <param name="configuredDefaultProvider">The provider config's own <c>DefaultProvider</c> (already trimmed), used unchanged while the mode is off.</param>
@@ -121,7 +124,7 @@ internal sealed class SsoOnlyLoginService
                 return (new SsoOnlyLoginDecision(configuredDefaultProvider, false), false);
             }
 
-            var provider = SsoOnlyLoginGuard.ResolveLoginProvider(configuration, resolved.Username, configuredDefaultProvider);
+            var provider = SsoOnlyLoginGuard.ResolveLoginProvider(configuration, resolved.Username, resolved.AuthenticationProviderId, configuredDefaultProvider);
             var modeOn = configuration is { DisablePasswordLogin: true };
             var isBreakGlass = modeOn && SsoOnlyLoginGuard.IsBreakGlass(configuration, resolved.Username);
 
