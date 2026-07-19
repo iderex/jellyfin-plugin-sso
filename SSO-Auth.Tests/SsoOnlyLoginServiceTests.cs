@@ -82,6 +82,24 @@ public class SsoOnlyLoginServiceTests
         Assert.Equal("root", config.BreakGlassAdminUsername);
     }
 
+    // --- Enable_fails_closed_when_accounts_cannot_be_enumerated ---
+
+    [Fact]
+    public async Task Enable_WhenUsersCannotBeEnumerated_FailsClosed_AndLeavesPasswordLoginEnabled()
+    {
+        var root = PasswordAdmin("root", RootId);
+        var (service, config, users) = Build(new[] { root });
+        // Simulate a Jellyfin build whose IUserManager exposes no bindable all-users accessor: AllUsers()
+        // finds neither a usable GetUsers() result nor a Users property, so the sweep cannot enumerate.
+        users.GetUsers().Returns((IReadOnlyList<User>?)null);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.TryEnableAsync("root"));
+
+        // Fail closed (directive 1): a sweep that cannot enumerate must NOT leave the mode recorded on with
+        // enforcement unapplied — DisablePasswordLogin is rolled back so no admin is silently locked to SSO.
+        Assert.False(config.DisablePasswordLogin);
+    }
+
     // --- Break_glass_admin_provider_id_never_repointed ---
 
     [Fact]

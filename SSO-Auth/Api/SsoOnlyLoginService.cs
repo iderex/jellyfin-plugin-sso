@@ -194,7 +194,21 @@ internal sealed class SsoOnlyLoginService
             configuration.BreakGlassAdminUsername = canonicalUsername;
         });
 
-        var repointed = await SweepEnableAsync(canonicalUsername).ConfigureAwait(false);
+        int repointed;
+        try
+        {
+            repointed = await SweepEnableAsync(canonicalUsername).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Fail closed: if the sweep could not complete (e.g. this Jellyfin build exposes no recognised
+            // all-users accessor), do not leave the mode recorded ON with enforcement unapplied. Turn the
+            // flag back off so password login is not silently "disabled" while every admin still has a door;
+            // any accounts a partial sweep already repointed are tracked and restored by the boot reconcile.
+            _configStore.Mutate(configuration => configuration.DisablePasswordLogin = false);
+            throw;
+        }
+
         return new SsoOnlyEnableOutcome(SsoOnlyGuardVerdict.Allow, repointed, canonicalUsername);
     }
 
@@ -316,17 +330,18 @@ internal sealed class SsoOnlyLoginService
         var manager = (object)_userManager;
         var type = manager.GetType();
 
-        if (type.GetMethod("GetUsers", Type.EmptyTypes)?.Invoke(manager, null) is IEnumerable<User> viaMethod)
-        {
-            return viaMethod;
-        }
+        var accessor = type.GetMethod("GetUsers", Type.EmptyTypes)?.Invoke(manager, null)
+            ?? type.GetProperty("Users")?.GetValue(manager);
 
-        if (type.GetProperty("Users")?.GetValue(manager) is IEnumerable<User> viaProperty)
-        {
-            return viaProperty;
-        }
-
-        return Array.Empty<User>();
+        // Fail closed (directive 1): if this Jellyfin build exposes neither the GetUsers() method nor the
+        // Users property, we cannot enumerate accounts to enforce the mode. Reject rather than treat the
+        // missing accessor as an empty set — a silent empty here would repoint nobody yet report enable as a
+        // success, leaving password login recorded OFF while every admin keeps a password door. An empty
+        // list from a present accessor (a server with zero users) is legitimate and passes through.
+        return accessor as IEnumerable<User>
+            ?? throw new InvalidOperationException(
+                "IUserManager exposes neither GetUsers() nor a Users property on this Jellyfin build; "
+                + "cannot enumerate accounts to enforce SSO-only login.");
     }
 
     // Restores the built-in password provider for ONLY the accounts the mode recorded as repointed (that are
