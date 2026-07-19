@@ -88,7 +88,7 @@ public class LoginStatusMapperTests
         var result = Assert.IsType<ContentResult>(LoginStatusMapper.ToActionResult(new LoginOutcome.Denied()));
 
         Assert.Equal(401, result.StatusCode);
-        Assert.Equal("Error. Check permissions.", result.Content);
+        Assert.Equal("Login denied. Your account is not permitted to sign in through this provider.", result.Content);
         Assert.Equal("text/plain", result.ContentType);
     }
 
@@ -137,7 +137,7 @@ public class LoginStatusMapperTests
 
         var denied = Assert.IsType<ContentResult>(LoginStatusMapper.ToActionResult(new LoginOutcome.Denied(), response));
         Assert.Equal(401, denied.StatusCode);
-        Assert.Equal("Error. Check permissions.", denied.Content);
+        Assert.Equal("Login denied. Your account is not permitted to sign in through this provider.", denied.Content);
 
         var session = new AuthenticationResult();
         var success = Assert.IsType<OkObjectResult>(LoginStatusMapper.ToActionResult(new LoginOutcome.Success(session), response));

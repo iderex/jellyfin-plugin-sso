@@ -15,8 +15,13 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 /// </summary>
 internal static class LoginStatusMapper
 {
-    /// <summary>The uniform denial body for any rejected login — deliberately uninformative.</summary>
-    internal const string PermissionDeniedMessage = "Error. Check permissions.";
+    /// <summary>
+    /// The uniform denial body for any rejected login. Actionable without enumerating (#668): it tells the
+    /// user their account is not permitted through this provider — the most common trigger is the role
+    /// allow-list not matching — without revealing which accounts or roles are allowed. The server log
+    /// disambiguates the exact reason.
+    /// </summary>
+    internal const string PermissionDeniedMessage = "Login denied. Your account is not permitted to sign in through this provider.";
 
     /// <summary>
     /// The body for an unresolved provider — one wording for both the unknown and the disabled case,
