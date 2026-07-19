@@ -39,6 +39,20 @@ const ssoConfigLinking = {
         .catch(() => ssoConfigLinking.showError());
     });
   },
+  // When a protocol section ends up with no rows — no enabled providers to offer and no existing
+  // link the user still holds — show a placeholder instead of a bare heading over blank space
+  // (#669), so a single-protocol or fresh install does not look broken. Called only after both the
+  // enabled-provider list and the existing-links feed have resolved, since a disabled provider the
+  // user still holds a link to is rendered from the links feed and keeps the section non-empty.
+  maybeShowSectionEmptyState: (container, provider_mode) => {
+    if (container.children.length > 0) {
+      return;
+    }
+    const placeholder = document.createElement("p");
+    placeholder.classList.add("sso-provider-empty");
+    placeholder.textContent = `No ${provider_mode.toUpperCase()} providers are available.`;
+    container.appendChild(placeholder);
+  },
   loadProviderList: (container, providers, provider_mode) => {
     // The server only offers enabled providers for new links (#344), so every name here gets an
     // add button. A link the user still holds to a since-disabled provider is rendered separately
@@ -95,10 +109,15 @@ const ssoConfigLinking = {
               provider_map[provider_name],
             );
           });
+          ssoConfigLinking.maybeShowSectionEmptyState(container, provider_mode);
         })
         // ApiClient.fetch rejects on a non-2xx status (auth expiry, a server error, ...), so a failed
         // existing-links load surfaces the banner instead of silently leaving the list empty (#536).
         .catch(() => ssoConfigLinking.showError());
+    } else {
+      // No signed-in user to fetch existing links for: the section is complete once the enabled
+      // providers are rendered, so decide the empty state now.
+      ssoConfigLinking.maybeShowSectionEmptyState(container, provider_mode);
     }
   },
 

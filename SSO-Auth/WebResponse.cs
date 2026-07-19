@@ -12,13 +12,16 @@ internal static class WebResponse
     /// The shared HTML between all of the responses.
     /// </summary>
     internal static readonly string Base = @"<!DOCTYPE html>
-<html><head>
+<html lang='en'><head>
 <meta name='viewport' content='width=device-width, initial-scale=1'>
 <style nonce=""{{NONCE}}"">
   body {
     background: #101010;
     color: #d1cfce;
     font-family: Noto Sans, Noto Sans HK, Noto Sans JP, Noto Sans KR, Noto Sans SC, Noto Sans TC, sans-serif;
+  }
+  a {
+    color: #00a4dc;
   }
   #iframe-main {
     position: absolute;
@@ -28,7 +31,7 @@ internal static class WebResponse
   }
 </style>
 </head><body>
-<p>Logging in...</p>
+<p role='status' aria-live='polite'>Logging in...</p>
 <noscript>Please enable Javascript to complete the login</noscript>
 <script nonce=""{{NONCE}}"">
 
@@ -221,6 +224,19 @@ const sleep = (milliseconds) => {
     return new Promise(resolve => setTimeout(resolve, milliseconds))
 }
 
+// On a terminal failure the page must not dead-end (#667): offer an obvious way back to the login
+// screen. ssoBaseUrl is a JSON-encoded safe constant; the link is built via DOM APIs (never
+// innerHTML) and appended once after the status line, which carries role='status' aria-live='polite'
+// so its message swap is announced to assistive tech.
+function showReturnLink() {
+    if (document.getElementById('sso-return-link')) return;
+    const link = document.createElement('a');
+    link.id = 'sso-return-link';
+    link.textContent = 'Return to login';
+    link.href = ssoBaseUrl + '/web/index.html';
+    document.querySelector('p').insertAdjacentElement('afterend', link);
+}
+
 ";
 
     /// <summary>
@@ -240,6 +256,15 @@ const sleep = (milliseconds) => {
         // Strip out the protocol (http:// or https://) and convert the domain to Punycode
         var idnMapping = new IdnMapping();
         var protocolSeparatorIndex = baseUrl.IndexOf("//", System.StringComparison.Ordinal);
+
+        // baseUrl is server-derived and normally carries a scheme, so "//" is expected. A missing
+        // separator would otherwise silently mis-split (Substring(0, 1) / Substring(1)); fail closed
+        // instead of building a corrupt ssoBaseUrl the whole page then posts back to.
+        if (protocolSeparatorIndex < 0)
+        {
+            throw new System.ArgumentException("baseUrl must contain a protocol separator ('//').", nameof(baseUrl));
+        }
+
         var protocol = baseUrl.Substring(0, protocolSeparatorIndex + 2);
         var domain = baseUrl.Substring(protocolSeparatorIndex + 2);
         var punycodeDomain = idnMapping.GetAscii(domain);
@@ -319,12 +344,16 @@ async function main() {
         //     behavior of proceeding to the auth leg, since that outcome cannot be told apart from success.
         var linkStatus = await link(request);
         if (linkStatus !== undefined) {
+            const linked = linkStatus >= 200 && linkStatus < 300;
             document.querySelector('p').textContent =
-                linkStatus >= 200 && linkStatus < 300
+                linked
                     ? 'Account linked. You can now log in with SSO.'
                     : linkStatus === 429
                         ? 'Too many attempts. Please wait a moment and try again.'
                         : 'Could not link this account. The provider may be disabled, or linking is not permitted.';
+            if (!linked) {
+                showReturnLink();
+            }
             return;
         }
     }
@@ -357,6 +386,7 @@ async function main() {
             response && response.status === 429
                 ? 'Too many login attempts. Please wait a moment and try again.'
                 : 'Login failed. Please try again.';
+        showReturnLink();
         return;
     }
     var userId = 'user-' + responseJson['User']['Id'] + '-' + responseJson['User']['ServerId'];
