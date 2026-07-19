@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.SSO_Auth.Config;
+using Jellyfin.Plugin.SSO_Auth.Api.Linking;
 using Microsoft.AspNetCore.Mvc;
 using NSubstitute;
 using Xunit;

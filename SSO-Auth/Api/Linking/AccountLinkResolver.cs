@@ -1,6 +1,6 @@
 using System;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Linking;
 
 /// <summary>
 /// The action to take when resolving an SSO identity to a Jellyfin account.

@@ -1,4 +1,4 @@
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Linking;
 
 /// <summary>
 /// The outcome of the adoption-eligibility gate: whether a name-matched pre-existing account may be

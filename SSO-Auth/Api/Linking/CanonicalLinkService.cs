@@ -14,7 +14,7 @@ using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Cryptography;
 using Microsoft.Extensions.Logging;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Linking;
 
 /// <summary>
 /// The outcome of a manual link-creation request. Closed by convention (the controller's mapper throws

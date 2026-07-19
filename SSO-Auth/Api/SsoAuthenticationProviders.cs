@@ -1,4 +1,5 @@
 using System;
+using Jellyfin.Plugin.SSO_Auth.Api.Linking;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api;
 

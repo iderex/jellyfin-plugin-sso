@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Jellyfin.Plugin.SSO_Auth;
+using Jellyfin.Plugin.SSO_Auth.Api.Linking;
 using Jellyfin.Plugin.SSO_Auth.Api.Provider;
 using Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
 using Jellyfin.Plugin.SSO_Auth.Api.Avatar;
@@ -165,6 +166,7 @@ public class ArchitectureConformanceTests
     [InlineData("RateLimit", "Net")] // login throttling — keys buckets by the Net client-IP classifier
     [InlineData("Authz")] // leaf — role→permission mapping: PermissionGrant, PermissionRolePolicy, RolePrivilegeMapper
     [InlineData("Provider", "Net", "RateLimit")] // provider config/test/naming — validates URLs (Net) and keys throttles (RateLimit)
+    [InlineData("Linking", "Audit", "Provider", "RateLimit")] // account linking — audits writes, validates providers, throttles
     public void ApiModule_ImportsOnlyItsAllowedApiModules(string module, params string[] allowed)
     {
         var moduleDir = Path.Combine(RepoRoot(), "SSO-Auth", "Api", module);

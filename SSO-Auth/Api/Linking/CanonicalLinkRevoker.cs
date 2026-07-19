@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Linking;
 
 /// <summary>
 /// Removes canonical-link entries that point at a given Jellyfin user. An admin revoking a user's SSO
