@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Jellyfin.Plugin.SSO_Auth;
+using Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
 using Jellyfin.Plugin.SSO_Auth.Api.Avatar;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Api.Flows;
@@ -160,6 +161,7 @@ public class ArchitectureConformanceTests
     [InlineData("Secrets")] // leaf — secrets at rest: SecretStore, SecretEnvelope, ConfigSecretProtection
     [InlineData("Audit")] // leaf — append-only audit logging: SsoAudit
     [InlineData("Avatar", "Net")] // avatar fetch — validates targets through the Net SSRF classifier
+    [InlineData("RateLimit", "Net")] // login throttling — keys buckets by the Net client-IP classifier
     public void ApiModule_ImportsOnlyItsAllowedApiModules(string module, params string[] allowed)
     {
         var moduleDir = Path.Combine(RepoRoot(), "SSO-Auth", "Api", module);

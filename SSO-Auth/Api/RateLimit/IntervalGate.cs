@@ -1,7 +1,7 @@
 using System;
 using System.Threading;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
 
 /// <summary>
 /// A once-per-interval throttle cursor shared by the anonymous-path sweeps and log signals that must

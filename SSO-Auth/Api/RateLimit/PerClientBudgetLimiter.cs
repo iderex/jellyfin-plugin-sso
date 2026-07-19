@@ -2,7 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
 
 /// <summary>
 /// A per-client occupancy sub-cap shared by the in-flight state stores (#327). Each store owns one

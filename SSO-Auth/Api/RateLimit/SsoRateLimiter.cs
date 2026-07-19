@@ -6,7 +6,7 @@ using System.Net.Sockets;
 using System.Threading;
 using Jellyfin.Plugin.SSO_Auth.Api.Net;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
 
 /// <summary>
 /// Opt-in fixed-window rate limiter for the anonymous SSO flow endpoints (#128), keyed on the

@@ -1,4 +1,4 @@
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
 
 /// <summary>
 /// Forms the provider-scoped one-time-use key for the SAML replay and outstanding-AuthnRequest caches,

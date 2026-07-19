@@ -9,7 +9,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Net;
 /// IPv4 address embedded in an IPv4-in-IPv6 transition form (6to4, NAT64, the deprecated IPv4-compatible
 /// form). Two unrelated callers share this one definition so they can never disagree on what counts as a
 /// public address: the avatar-fetch SSRF guard (AvatarUrlValidator) rejects a blocked target
-/// before fetching it, and the login rate limiter (<see cref="SsoRateLimiter.NormalizeClientKey"/>) exempts a
+/// before fetching it, and the login rate limiter (SsoRateLimiter.NormalizeClientKey) exempts a
 /// blocked/non-public connection address from throttling entirely. Neither caller's own file is the right
 /// home for this shared invariant — tuning the avatar SSRF policy must never silently change which clients
 /// the login rate limiter exempts, and vice versa (#370).
@@ -45,7 +45,7 @@ internal static class IpAddressClassifier
     /// NAT64 well-known prefix <c>64:ff9b::/96</c>, or the deprecated IPv4-compatible <c>::/96</c> form). Both
     /// callers of this classifier share this single definition so they cannot disagree on what an embedded
     /// IPv4 is: the SSRF classifier unwraps it so a blocked internal IPv4 cannot be reached by wrapping it in
-    /// one of these formats, and the rate limiter (<see cref="SsoRateLimiter.NormalizeClientKey"/>) keys a
+    /// one of these formats, and the rate limiter (SsoRateLimiter.NormalizeClientKey) keys a
     /// transition source on its embedded IPv4 instead of collapsing every such client into one shared /64
     /// bucket.
     /// </summary>
