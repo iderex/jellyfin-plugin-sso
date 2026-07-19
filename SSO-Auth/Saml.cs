@@ -146,6 +146,15 @@ internal sealed class SamlResponse : IDisposable
         {
             DtdProcessing = DtdProcessing.Prohibit,
             XmlResolver = null,
+
+            // Bound the DOM the reader materializes (#754). The untrusted body is already length-capped
+            // before decoding by SamlResponseLoader.MaxEncodedResponseLength (256 KB of base64), so this
+            // parser-layer cap normally never bites — a legitimate SAML response is single-digit KB, and
+            // the pre-decode cap keeps any accepted body well under this. It is the belt to the loader's
+            // suspenders: if that pre-decode cap were ever raised or bypassed, the reader still refuses to
+            // build a multi-megabyte document on the unauthenticated, pre-signature path (a cheap CPU/
+            // memory amplifier the DTD prohibition above does not stop, since it bounds entities, not bulk).
+            MaxCharactersInDocument = 256 * 1024,
         };
         using (var stringReader = new StringReader(xml))
         using (var reader = XmlReader.Create(stringReader, settings))
