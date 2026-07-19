@@ -12,7 +12,7 @@ using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Providers;
 using Microsoft.Extensions.Logging;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Avatar;
 
 /// <summary>
 /// Fetches an SSO provider's avatar over an SSRF-safe transport and stores it as the user's profile

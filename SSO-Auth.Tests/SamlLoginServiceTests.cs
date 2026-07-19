@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Api.Avatar;
 using Jellyfin.Plugin.SSO_Auth.Api.Net;
 using Jellyfin.Plugin.SSO_Auth.Api.Flows;
 using Jellyfin.Plugin.SSO_Auth.Api.Shared;

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Security.Claims;
 using System.Text.RegularExpressions;
+using Jellyfin.Plugin.SSO_Auth.Api.Avatar;
 using Jellyfin.Plugin.SSO_Auth.Config;
 
 #nullable enable
