@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 
 /// <summary>
 /// The in-flight OpenID authorize-state store: cap-bounded registration at challenge, a non-consuming

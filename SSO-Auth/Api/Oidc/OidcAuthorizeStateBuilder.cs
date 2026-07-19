@@ -9,7 +9,7 @@ using Jellyfin.Plugin.SSO_Auth.Config;
 
 #nullable enable
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 
 /// <summary>
 /// Derives the per-login authorize-state values (username, login validity, admin, Live TV, folder

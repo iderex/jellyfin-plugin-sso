@@ -9,7 +9,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Saml;
 /// cannot be replayed within its validity window. Entries are retained until the supplied expiry and
 /// reclaimed by a throttled expired-entry sweep, and the set is hard-capped so it cannot grow without
 /// bound (#452). It mirrors the sibling login-path caches (<see cref="SamlRequestCache"/>,
-/// <see cref="OidcStateStore"/>): an <see cref="IntervalGate"/>-throttled sweep plus a global cap, and a
+/// <see cref="Jellyfin.Plugin.SSO_Auth.Api.Oidc.OidcStateStore"/>): an <see cref="IntervalGate"/>-throttled sweep plus a global cap, and a
 /// second <see cref="IntervalGate"/>-throttled signal that surfaces a cap refusal to the caller so a full
 /// replay cache is observable rather than silent (#470).
 ///

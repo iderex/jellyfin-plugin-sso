@@ -11,7 +11,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 /// match (RFC 6749 section 4.1.3), so it has to be read off the route exactly — not by a
 /// <c>Contains("/start/")</c> substring test, which a provider literally named <c>start</c> on the
 /// legacy route (<c>.../OID/p/start/</c>) would trip, flipping the spelling and breaking the login at
-/// the IdP's redirect_uri check (#337). Same fix family as <see cref="OidcCallbackPath.RedirectSegment"/>
+/// the IdP's redirect_uri check (#337). Same fix family as <see cref="Jellyfin.Plugin.SSO_Auth.Api.Oidc.OidcCallbackPath.RedirectSegment"/>
 /// (#98); both now read the suffix through the shared <see cref="RouteSuffix"/> reader (#411, #509) and
 /// keep only their own terminal comparison and default.
 /// </summary>

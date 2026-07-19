@@ -6,7 +6,7 @@ using Newtonsoft.Json.Linq;
 
 #nullable enable
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 
 /// <summary>
 /// RFC 9207 authorization-response issuer check (OpenID Connect mix-up defense, #125, hardened in #210).

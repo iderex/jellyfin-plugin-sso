@@ -9,7 +9,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 /// <summary>
 /// Builds a real signed OpenID Connect id_token plus the matching JWKS against a throw-away RSA key, so
 /// a test can drive the token-exchange callback (<c>OidPost</c>) through the actual id_token validation
-/// path (<see cref="Jellyfin.Plugin.SSO_Auth.Api.OidcIdTokenValidator"/>) rather than mocks. The
+/// path (<see cref="Jellyfin.Plugin.SSO_Auth.Api.Oidc.OidcIdTokenValidator"/>) rather than mocks. The
 /// discovery document, this JWKS, and a token endpoint returning <see cref="TokenEndpointJson"/> are
 /// served in-process through the harness's HTTP responder.
 /// </summary>

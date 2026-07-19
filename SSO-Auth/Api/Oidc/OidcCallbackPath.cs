@@ -2,7 +2,7 @@ using System;
 
 #nullable enable
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 
 /// <summary>
 /// Derives the r/redirect path segment for rebuilding the callback's redirect URI. The token

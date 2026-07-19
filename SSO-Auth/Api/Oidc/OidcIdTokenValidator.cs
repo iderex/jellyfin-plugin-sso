@@ -13,7 +13,7 @@ using Microsoft.IdentityModel.Tokens;
 
 #nullable enable
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 
 /// <summary>
 /// Validates the OpenID Connect id_token per OIDC Core 1.0 section 3.1.3.7. OidcClient 7.x ships no

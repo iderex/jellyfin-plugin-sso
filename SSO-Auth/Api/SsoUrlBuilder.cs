@@ -1,5 +1,7 @@
 #nullable enable
 
+using Jellyfin.Plugin.SSO_Auth.Api.Oidc;
+
 namespace Jellyfin.Plugin.SSO_Auth.Api;
 
 /// <summary>

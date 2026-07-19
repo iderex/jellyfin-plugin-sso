@@ -5,7 +5,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Saml;
 
 /// <summary>
 /// Names the per-provider SAML options that switch off a default-on protection (#672, the SAML parity of
-/// the OpenID <see cref="OidcInsecureToggles"/> under #140), so enabling one leaves a visible, auditable
+/// the OpenID <see cref="Jellyfin.Plugin.SSO_Auth.Api.Oidc.OidcInsecureToggles"/> under #140), so enabling one leaves a visible, auditable
 /// trace instead of silently weakening the login path. Kept strictly to default-on-DISABLE toggles: the
 /// opt-in SAML hardening flags (<c>ValidateRecipient</c>, <c>ValidateInResponseTo</c>, request signing)
 /// are additive protections, not downgrades, and are deliberately NOT reported here.
