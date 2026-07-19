@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Provider;
 
 /// <summary>
 /// The admin-facing result of a provider Test-connection probe (#163): whether the probe passed, a short

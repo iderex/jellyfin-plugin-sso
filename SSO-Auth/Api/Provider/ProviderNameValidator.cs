@@ -5,7 +5,7 @@ using System.Buffers;
 using Jellyfin.Plugin.SSO_Auth.Api.Net;
 using Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Provider;
 
 /// <summary>
 /// Rejects provider names that cannot round-trip through the callback URLs built from them (#336, #360).

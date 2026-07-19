@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Api.Provider;
 using Xunit;
 
 namespace Jellyfin.Plugin.SSO_Auth.Tests;

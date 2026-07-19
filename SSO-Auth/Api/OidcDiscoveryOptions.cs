@@ -1,5 +1,6 @@
 using System;
 using Duende.IdentityModel.OidcClient;
+using Jellyfin.Plugin.SSO_Auth.Api.Provider;
 using Jellyfin.Plugin.SSO_Auth.Config;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api;

@@ -2,7 +2,7 @@ using System;
 
 #nullable enable
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Provider;
 
 /// <summary>
 /// The SSO protocol a canonical-link operation applies to. The route's <c>{mode}</c> token is parsed into
