@@ -17,8 +17,7 @@ STRIDE-style threat model for this repository. It has two parts:
 ## The AI delivery pipeline
 
 Development here is **AI-assisted under solo governance**: an AI agent (Claude)
-carries out individual process steps — generating and analysing code, running
-the adversarial security reviews, running the git/GitHub flow — and a human
+carries out individual process steps and a human
 maintainer reviews, edits, and signs off on every one (see the README's
 "AI-assisted, human-owned" note). That makes the agent, the configuration that
 steers it, and the CI/release pipeline a **trust boundary that sits upstream of
