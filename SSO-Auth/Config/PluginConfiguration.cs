@@ -502,6 +502,18 @@ public class OidConfig : ProviderConfigBase
     public string AvatarUrlFormat { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the zero-config fallback to the standard OIDC
+    /// <c>picture</c> claim is disabled (#723). Off by default (the fallback is on), so a
+    /// standards-compliant IdP yields an avatar with no <see cref="AvatarUrlFormat"/> template. Set it
+    /// to opt an admin out of the IdP-driven avatar fetch entirely — with no template and this set, no
+    /// avatar candidate is produced and nothing is fetched. A configured template is unaffected either
+    /// way. The negative name keeps the safe/parity default at <see langword="false"/>, matching the
+    /// other <c>Disable…</c>/<c>DoNot…</c> toggles and surviving deserialization of configs saved before
+    /// this field existed.
+    /// </summary>
+    public bool DisableAvatarFromPictureClaim { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether HTTPS in the discovery endpoint is required.
     /// </summary>
     public bool DisableHttps { get; set; }

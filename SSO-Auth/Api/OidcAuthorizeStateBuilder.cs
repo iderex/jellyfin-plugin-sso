@@ -135,19 +135,42 @@ internal static class OidcAuthorizeStateBuilder
         return emailVerified;
     }
 
-    // Resolves the avatar URL by substituting @{claimType} tokens in the configured format, or null
-    // when no format is configured. For a duplicate claim type the first occurrence wins: after the
-    // first Replace the token is gone, and Replace on an absent token returns the instance unchanged.
+    // Resolves the avatar URL. With a configured format the template wins: @{claimType} tokens are
+    // substituted (for a duplicate claim type the first occurrence wins — after the first Replace the
+    // token is gone, and Replace on an absent token returns the instance unchanged). With no format
+    // (null or empty) the resolver falls back to the standard OIDC `picture` claim verbatim (#723) so a
+    // standards-compliant IdP yields an avatar with zero configuration — UNLESS the admin has opted out
+    // via DisableAvatarFromPictureClaim, in which case no candidate is produced and nothing is fetched.
+    // Either way this only produces a CANDIDATE URL: AvatarService.TrySetAsync still gates the fetch
+    // through AvatarUrlValidator, so a `picture` (or templated) URL to a private/loopback host is refused
+    // exactly the same.
     private static string? ResolveAvatarUrl(IReadOnlyList<Claim> claims, OidConfig config)
     {
-        if (config.AvatarUrlFormat is null)
+        if (string.IsNullOrEmpty(config.AvatarUrlFormat))
         {
-            return null;
+            return config.DisableAvatarFromPictureClaim ? null : ResolvePictureClaim(claims);
         }
 
         return claims.Aggregate(
             config.AvatarUrlFormat,
             (s, claim) => s.Replace($"@{{{claim.Type}}}", claim.Value));
+    }
+
+    // The last non-empty "picture" claim value, or null when none is present (#723). Last wins, matching
+    // the subject/username/email_verified derivations; an empty value is treated as absent so the caller
+    // skips the fetch rather than handing an empty URL to the validator.
+    private static string? ResolvePictureClaim(IReadOnlyList<Claim> claims)
+    {
+        string? picture = null;
+        foreach (var claim in claims)
+        {
+            if (string.Equals(claim.Type, "picture", StringComparison.Ordinal) && !string.IsNullOrEmpty(claim.Value))
+            {
+                picture = claim.Value;
+            }
+        }
+
+        return picture;
     }
 
     // Splits the configured role-claim path on unescaped dots; escaped "\." are normalized to ".".
@@ -206,7 +229,7 @@ internal static class OidcAuthorizeStateBuilder
     /// <param name="EnableLiveTv">Whether the login grants Live TV access.</param>
     /// <param name="EnableLiveTvManagement">Whether the login grants Live TV management.</param>
     /// <param name="Folders">The enabled folders (statically enabled plus role-granted).</param>
-    /// <param name="AvatarUrl">The resolved avatar URL, or null when no avatar format is configured.</param>
+    /// <param name="AvatarUrl">The resolved avatar candidate URL: the configured AvatarUrlFormat template with @{claim} tokens substituted, or — when no template is configured (null/empty) — the standard OIDC "picture" claim (#723); null when neither yields a value. Only a candidate: the fetch is still gated by AvatarUrlValidator.</param>
     /// <param name="PermissionGrants">The generic role→permission grants (#164); null (treated as empty) when the feature is off.</param>
     internal readonly record struct OidcAuthorizeState(
         string? Username,
