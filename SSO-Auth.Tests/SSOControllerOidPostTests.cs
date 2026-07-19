@@ -239,6 +239,28 @@ public class SSOControllerOidPostTests
     }
 
     [Fact]
+    public async Task OidPost_IdpErrorRedirect_DoesNotReflectAttackerText_ReturnsGenericMessage()
+    {
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        // #708: the authorization server returns an error redirect, whose error / error_description are
+        // parsed from the callback query and are therefore attacker-controllable via a crafted callback URL.
+        // The callback must NOT echo that text into the browser-navigated page (a content-spoofing primitive
+        // that, on the on-brand error page, would display attacker-chosen text). The body is the fixed
+        // generic message; neither the error code nor the attacker-planted description marker appears.
+        const string attackerMarker = "PHISHED-CONTENT-MARKER-708";
+        var harness = ArrangeCallback(fixture, query: $"?error=access_denied&error_description={attackerMarker}&state=state-1");
+
+        var result = await harness.Controller.OidCallback("kc", "state-1");
+
+        var content = Assert.IsType<ContentResult>(result);
+        Assert.Equal(400, content.StatusCode);
+        Assert.Equal("text/plain", content.ContentType);
+        Assert.Equal("Error logging in.", content.Content);
+        Assert.DoesNotContain(attackerMarker, content.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("access_denied", content.Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task OidPost_IdTokenWithoutSub_Returns401()
     {
         using var fixture = new OidcTokenFixture(Authority, "jf");

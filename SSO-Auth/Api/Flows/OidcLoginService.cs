@@ -182,7 +182,17 @@ internal sealed class OidcLoginService
 
         if (state.IsError)
         {
-            return FlowResponses.PlainTextError(StatusCodes.Status400BadRequest, $"Error preparing login: {state.Error} - {state.ErrorDescription}");
+            // Keep the library's error detail out of the browser-navigated page (#708): log it server-side
+            // for the operator, return a fixed generic message. This challenge-side detail is plugin-local
+            // (PrepareLoginAsync builds the authorize request), not attacker-reflected, but the callback
+            // sibling below IS reflected — genericize both so no IdP/library error string ever renders on
+            // the user-facing error page. Sanitized against log forging. Fail-closed is unchanged (400).
+            if (_logger.IsEnabled(LogLevel.Warning))
+            {
+                _logger.LogWarning("OpenID login refused for provider {Provider}: preparing the authorization request failed ({Error} - {ErrorDescription}).", provider?.ReplaceLineEndings(string.Empty), state.Error?.ReplaceLineEndings(string.Empty), state.ErrorDescription?.ReplaceLineEndings(string.Empty));
+            }
+
+            return FlowResponses.PlainTextError(StatusCodes.Status400BadRequest, "Error preparing login.");
         }
 
         // Bind this authorize state to the browser that started it (#326): record a fresh random id on
@@ -271,7 +281,18 @@ internal sealed class OidcLoginService
 
         if (result.IsError)
         {
-            return FlowResponses.PlainTextError(StatusCodes.Status400BadRequest, $"Error logging in: {result.Error} - {result.ErrorDescription}");
+            // result.Error / result.ErrorDescription are parsed from the callback query — an authorization
+            // server returns them on an error redirect, so they are attacker-controllable via a crafted
+            // callback URL. Echoing them into this browser-navigated page is a content-spoofing primitive
+            // (the on-brand error page would display attacker-chosen text). Log the detail server-side for
+            // troubleshooting, return a fixed generic message (#708). Sanitized against log forging;
+            // fail-closed is unchanged (400, no session minted).
+            if (_logger.IsEnabled(LogLevel.Warning))
+            {
+                _logger.LogWarning("OpenID login refused for provider {Provider}: the authorization-response processing failed ({Error} - {ErrorDescription}).", provider?.ReplaceLineEndings(string.Empty), result.Error?.ReplaceLineEndings(string.Empty), result.ErrorDescription?.ReplaceLineEndings(string.Empty));
+            }
+
+            return FlowResponses.PlainTextError(StatusCodes.Status400BadRequest, "Error logging in.");
         }
 
         // RFC 9207 (#125, hardened #210): the library parses the authorization-response `iss` but never

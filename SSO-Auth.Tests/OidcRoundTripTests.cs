@@ -86,13 +86,15 @@ public class OidcRoundTripTests
 
         // The callback must fail closed: the signature does not verify against the advertised JWKS, so the
         // real validator rejects and CallbackAsync returns the plain-text 400 login error (never the
-        // text/html auth page). Asserting the invalid_signature reason pins the 400 to the signature check
-        // specifically, not an unrelated token-exchange failure.
+        // text/html auth page). The body is the fixed generic message — the library's error detail
+        // (invalid_signature) is logged server-side, not reflected into the browser page (#708) — so this
+        // asserts the generic body and that the detail is absent rather than pinning on the reflected reason.
         RepointToCallback(harness, state, binding, query: $"?code=test-code&state={state}");
         var callback = Assert.IsType<ContentResult>(await harness.Controller.OidCallback("kc", state));
         Assert.Equal(400, callback.StatusCode);
         Assert.Equal("text/plain", callback.ContentType);
-        Assert.Contains("invalid_signature", callback.Content);
+        Assert.Equal("Error logging in.", callback.Content);
+        Assert.DoesNotContain("invalid_signature", callback.Content);
 
         // End-to-end fail-closed: because the callback never promoted the state to a redeemable Ready, the
         // authenticate leg finds no state to redeem and provisions nothing — no login is minted from a token
