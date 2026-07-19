@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Xml;
 using System.Xml.Serialization;
 using Jellyfin.Plugin.SSO_Auth;
+using Jellyfin.Plugin.SSO_Auth.Api.Secrets;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Xunit;

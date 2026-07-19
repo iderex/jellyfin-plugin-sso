@@ -2,7 +2,7 @@ using System;
 using System.IO;
 using System.Security.Cryptography;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Secrets;
 
 /// <summary>
 /// Owns the plugin's data-encryption key (DEK) and turns config secrets into (and back out of) at-rest

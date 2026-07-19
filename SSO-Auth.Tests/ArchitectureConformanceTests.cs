@@ -147,26 +147,29 @@ public class ArchitectureConformanceTests
         Assert.True(outside.Count == 0, "All plugin types must live under the " + Root + " root namespace: " + string.Join(", ", outside));
     }
 
-    [Fact]
-    public void NetModule_IsALeaf_ImportsNoOtherApiModule()
+    // Module-boundary fitness function of the #777 folder migration: each extracted module is a LEAF — no
+    // source file under SSO-Auth/Api/<module> may import ANOTHER Api module. Enforced at the IMPORT level,
+    // which also catches method-body coupling (reflection over signatures would miss a body-only call): using a
+    // type from another Api module requires importing its namespace. Importing NON-Api namespaces (e.g. the
+    // Config persistence model) stays allowed, and a file never imports its own module namespace. As each
+    // module lands (#777) it registers a case here; together the cases lock in the module DAG.
+    [Theory]
+    [InlineData("Net")] // networking / URL / SSRF primitives: IpAddressClassifier, CanonicalBaseUrl, SsoHttp
+    [InlineData("Secrets")] // secrets at rest: SecretStore, SecretEnvelope, ConfigSecretProtection
+    public void ApiModule_IsALeaf_ImportsNoOtherApiModule(string module)
     {
-        // First module-boundary fitness function of the #777 folder migration. The Net module holds the
-        // low-level networking / URL / SSRF primitives (IpAddressClassifier, CanonicalBaseUrl, SsoHttp); it is
-        // a LEAF — dependencies point INTO it, never out. Enforced at the IMPORT level, which also catches
-        // method-body coupling (reflection over signatures would miss a body-only call): using any type from
-        // another Api module requires importing its namespace, so no source file under SSO-Auth/Api/Net may
-        // import a Jellyfin.Plugin.SSO_Auth.Api or Jellyfin.Plugin.SSO_Auth.Api.* namespace. As further modules
-        // land (#777), each adds its own allowed-direction rule; together they lock in the module DAG.
-        var netDir = Path.Combine(RepoRoot(), "SSO-Auth", "Api", "Net");
-        var offenders = Directory.EnumerateFiles(netDir, "*.cs")
+        var moduleDir = Path.Combine(RepoRoot(), "SSO-Auth", "Api", module);
+        var selfImport = "Jellyfin.Plugin.SSO_Auth.Api." + module + ";";
+        var offenders = Directory.EnumerateFiles(moduleDir, "*.cs")
             .SelectMany(file => File.ReadLines(file)
-                .Where(line => Regex.IsMatch(line, @"^\s*using\s+Jellyfin\.Plugin\.SSO_Auth\.Api(\.|;)"))
+                .Where(line => Regex.IsMatch(line, @"^\s*using\s+Jellyfin\.Plugin\.SSO_Auth\.Api(\.|;)")
+                    && !line.TrimEnd().EndsWith(selfImport, StringComparison.Ordinal))
                 .Select(line => Path.GetFileName(file) + ": " + line.Trim()))
             .ToList();
 
         Assert.True(
             offenders.Count == 0,
-            "The Net module is a leaf: no file under Api/Net may import another Api module. Offending imports: " + string.Join(" | ", offenders));
+            $"The {module} module is a leaf: no file under Api/{module} may import another Api module. Offending imports: " + string.Join(" | ", offenders));
     }
 
     [Fact]

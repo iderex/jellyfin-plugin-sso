@@ -2,7 +2,7 @@ using System;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Secrets;
 
 /// <summary>
 /// Authenticated envelope encryption for the plugin's at-rest secrets (the OpenID client secret and the
