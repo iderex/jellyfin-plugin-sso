@@ -20,6 +20,17 @@ on:
 permissions:
   contents: read
 
+# Serialize with the JF12 stable leg (#655): both this JF10.11 stable publish and
+# publish-jf12-stable.yml regenerate the SHARED manifest-release branch, so they must
+# not run concurrently or their reader-vs-pusher regenerations race (a TOCTOU that
+# could transiently drop the other generation's just-published build from the stable
+# manifest — the same hazard the shared publish-manifest-beta group fixes for the beta
+# legs). cancel-in-progress is false — a publish holding contents:write must never be
+# killed mid-run.
+concurrency:
+  group: publish-manifest-release
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Build package
