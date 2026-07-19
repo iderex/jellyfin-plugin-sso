@@ -468,3 +468,4 @@ AGENTS.md
 # `!` rule cannot re-include a file whose parent directory is excluded.
 docs/*
 !docs/README.md
+!docs/ARCHITECTURE.md
