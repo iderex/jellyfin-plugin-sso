@@ -73,6 +73,19 @@ internal sealed class SessionMinter
             // management off (#215).
             user.SetPermission(PermissionKind.EnableLiveTvAccess, parameters.EnableLiveTv);
             user.SetPermission(PermissionKind.EnableLiveTvManagement, parameters.EnableLiveTvManagement);
+
+            // Generic role→permission grants for the full boolean PermissionKind surface (#164): apply each
+            // permission the admin explicitly mapped, authoritatively and default-deny — granted when a
+            // login role matched, revoked otherwise. Empty unless the feature is on, so this touches nothing
+            // for existing deployments. The permissions with dedicated fields above (admin, all-folders,
+            // Live TV) are excluded from this set at config validation, so there is exactly one authoritative
+            // writer per permission and no grant here can silently override an admin/folder/Live TV decision.
+            // Under the same EnableAuthorization master switch as those grants (#215), so turning SSO
+            // permission management off leaves the whole permission surface untouched.
+            foreach (var grant in parameters.PermissionGrants)
+            {
+                user.SetPermission(grant.Kind, grant.Granted);
+            }
         }
 
         await _avatarService.TrySetAsync(user, parameters.AvatarUrl).ConfigureAwait(false);

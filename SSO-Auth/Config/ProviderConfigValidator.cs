@@ -32,6 +32,7 @@ internal static class ProviderConfigValidator
             {
                 ValidateProviderName("OpenID", kvp.Key, isNew: live?.OidConfigs?.ContainsKey(kvp.Key) != true);
                 ValidateBaseUrlOverride("OpenID", kvp.Key, kvp.Value?.BaseUrlOverride);
+                ValidatePermissionRoleMappings("OpenID", kvp.Key, kvp.Value?.PermissionRoleMappings);
             }
         }
 
@@ -48,6 +49,7 @@ internal static class ProviderConfigValidator
                 ValidateSamlSecondaryCertificate(kvp.Key, kvp.Value?.SamlSecondaryCertificate);
                 ValidateSamlSigningKey(kvp.Key, kvp.Value?.SamlSigningKeyPfx);
                 ValidateSamlSigningKey(kvp.Key, kvp.Value?.SamlRolloverSigningKeyPfx);
+                ValidatePermissionRoleMappings("SAML", kvp.Key, kvp.Value?.PermissionRoleMappings);
             }
         }
     }
@@ -110,6 +112,49 @@ internal static class ProviderConfigValidator
             throw new ArgumentException(
                 $"SAML provider '{provider?.ReplaceLineEndings(string.Empty)}' has an invalid secondary signing certificate; it must be a Base64-encoded (DER) X.509 certificate.",
                 nameof(certificate));
+        }
+    }
+
+    // A malformed generic permission-role mapping (#164) would be persisted and then silently grant
+    // nothing for the offending entry at login (fail-closed at runtime), leaving the admin's intended
+    // permission un-applied with no feedback. Reject it at the door instead: every entry's Permission must
+    // name a known Jellyfin PermissionKind that is not one of the dedicated permissions managed by their
+    // own fields (administrator, all-folders, Live TV access/management) — those have exactly one
+    // authoritative source and may not be double-mapped here. A null entry maps nothing and is tolerated
+    // (it grants nothing at runtime). Both the config-page save and the Add endpoints run this. The
+    // provider name and the echoed permission are control-stripped in case they reach a log through the
+    // thrown exception.
+    internal static void ValidatePermissionRoleMappings(string protocol, string provider, System.Collections.Generic.IEnumerable<PermissionRoleMap> mappings)
+    {
+        if (mappings == null)
+        {
+            return;
+        }
+
+        foreach (var mapping in mappings)
+        {
+            if (mapping == null)
+            {
+                continue;
+            }
+
+            var status = PermissionRolePolicy.Classify(mapping.Permission);
+            if (status == PermissionRolePolicy.PermissionNameStatus.Valid)
+            {
+                continue;
+            }
+
+            var echoName = (provider ?? string.Empty).ReplaceLineEndings(string.Empty);
+            var echoPerm = string.Concat((mapping.Permission ?? string.Empty).Where(c => !char.IsControl(c))).ReplaceLineEndings(string.Empty);
+            var reason = status switch
+            {
+                PermissionRolePolicy.PermissionNameStatus.Empty => "has an empty permission name",
+                PermissionRolePolicy.PermissionNameStatus.Dedicated => $"names '{echoPerm}', which is managed by its own dedicated setting (administrator, all-folders, or Live TV) and may not be mapped here",
+                _ => $"names '{echoPerm}', which is not a known Jellyfin permission",
+            };
+            throw new ArgumentException(
+                $"{protocol} provider '{echoName}' has an invalid permission-role mapping: it {reason}. Each mapping's Permission must be the exact name of a Jellyfin PermissionKind (for example EnableContentDownloading) other than IsAdministrator, EnableAllFolders, EnableLiveTvAccess, or EnableLiveTvManagement.",
+                nameof(mappings));
         }
     }
 

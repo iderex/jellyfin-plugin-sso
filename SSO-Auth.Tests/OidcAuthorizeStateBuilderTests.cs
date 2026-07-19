@@ -183,6 +183,53 @@ public class OidcAuthorizeStateBuilderTests
     }
 
     [Fact]
+    public void PermissionRoles_AreThreadedFromClaimsOntoTheDerivedState()
+    {
+        // #164 wiring: the generic role→permission grants derived from the login's role claims and the
+        // provider configuration are carried on the derived state (and thence to the mint). Here the login
+        // carries the mapped role, so the permission is granted; another configured-but-unmatched permission
+        // is explicitly revoked.
+        var config = Config(c =>
+        {
+            c.RoleClaim = "role";
+            c.EnablePermissionRoles = true;
+            c.PermissionRoleMappings = new System.Collections.Generic.List<PermissionRoleMap>
+            {
+                new PermissionRoleMap { Permission = "EnableContentDownloading", Roles = new[] { "downloaders" } },
+                new PermissionRoleMap { Permission = "EnableContentDeletion", Roles = new[] { "deleters" } },
+            };
+        });
+
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(("preferred_username", "alice"), ("role", "downloaders")),
+            config);
+
+        Assert.NotNull(result.PermissionGrants);
+        Assert.Contains(result.PermissionGrants!, g => g.Kind == Jellyfin.Database.Implementations.Enums.PermissionKind.EnableContentDownloading && g.Granted);
+        Assert.Contains(result.PermissionGrants!, g => g.Kind == Jellyfin.Database.Implementations.Enums.PermissionKind.EnableContentDeletion && !g.Granted);
+    }
+
+    [Fact]
+    public void PermissionRoles_FeatureOff_LeavesTheGrantsEmpty()
+    {
+        var config = Config(c =>
+        {
+            c.RoleClaim = "role";
+            c.EnablePermissionRoles = false;
+            c.PermissionRoleMappings = new System.Collections.Generic.List<PermissionRoleMap>
+            {
+                new PermissionRoleMap { Permission = "EnableContentDownloading", Roles = new[] { "downloaders" } },
+            };
+        });
+
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(("preferred_username", "alice"), ("role", "downloaders")),
+            config);
+
+        Assert.Empty(result.PermissionGrants!);
+    }
+
+    [Fact]
     public void AdminRole_GrantsAdmin_ViaNestedJsonRoleClaim()
     {
         var config = Config(c =>
