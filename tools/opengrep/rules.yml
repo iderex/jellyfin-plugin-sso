@@ -103,7 +103,7 @@ rules:
       include:
         - "SSO-Auth/**/*.cs"
       exclude:
-        - "SSO-Auth/Api/IntervalGate.cs"
+        - "SSO-Auth/Api/RateLimit/IntervalGate.cs"
 
   # Invariant (architecture, #318 config boundary): every configuration access
   # goes through ProviderConfigStore behind SSOPlugin's facade (ReadConfiguration
