@@ -276,5 +276,5 @@ internal sealed class SamlAssertionValidator
     // a valid login on a path-form flip; both are this provider's own ACS URLs. The base URL is resolved by
     // the flow service (with BaseUrlOverride pinning the canonical host when set, #139) and passed in.
     private static string[] ExpectedAcsUrls(string requestBaseUrl, string provider) =>
-        SsoUrlBuilder.SamlExpectedAcsUrls(requestBaseUrl, provider);
+        SamlAcsUrlBuilder.ExpectedAcsUrls(requestBaseUrl, provider);
 }

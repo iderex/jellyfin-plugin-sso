@@ -10,14 +10,14 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Provider;
 /// <summary>
 /// Rejects provider names that cannot round-trip through the callback URLs built from them (#336, #360).
 /// The name is appended raw to the OIDC redirect_uri and the SAML AssertionConsumerServiceURL
-/// (<see cref="SsoUrlBuilder"/>) and matched back by the callback routes, so URI-reserved characters
+/// (<c>OidcRedirectUriBuilder</c>/<c>SamlAcsUrlBuilder</c>) and matched back by the callback routes, so URI-reserved characters
 /// break the trip: '%' fails or changes route decoding, '/' produces a callback path no route can
 /// match, '?' and '#' cut the name off at the query/fragment boundary, and the remaining RFC 3986
 /// delimiters are structure to proxies and identity providers. Control characters break it the same way
 /// and are rejected too (#360). Every registration surface shares this one predicate; the throw sites
 /// (<see cref="SSOController"/>, <see cref="Config.ProviderConfigValidator"/>) gate only NEWLY registered
 /// names, because the bytes built from an existing name are exactly what its identity provider already
-/// has registered (pinned by the raw-provider tests in SsoUrlBuilderTests).
+/// has registered (pinned by the raw-provider tests in OidcRedirectUriBuilderTests/SamlAcsUrlBuilderTests).
 /// </summary>
 internal static class ProviderNameValidator
 {

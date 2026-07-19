@@ -123,7 +123,7 @@ public class SSOControllerSamlMetadataTests
     [Fact]
     public void SamlMetadata_PublishesBothAcsSpellings_NewDefaultThenLegacy_AnchoredToTheCanonicalBaseUrl()
     {
-        // The SP honours either ACS spelling on the way back (SsoUrlBuilder.SamlExpectedAcsUrls), so the
+        // The SP honours either ACS spelling on the way back (SamlAcsUrlBuilder.ExpectedAcsUrls), so the
         // endpoint publishes both (#569): the new-path spelling as the default (index 0), the legacy spelling
         // as a second, non-default endpoint (index 1). Both are anchored to the canonical Base URL, never the
         // spoofable request host.

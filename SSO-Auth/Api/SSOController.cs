@@ -247,7 +247,7 @@ public class SSOController : ControllerBase
 
     // Rejects a provider name containing URI-reserved or control characters when it would register a NEW
     // provider (#336, #360): the name is appended raw to the callback URLs handed to the identity provider
-    // (SsoUrlBuilder), so '%' breaks route decoding, '/' dead-ends the IdP redirect on a path no route
+    // (the OIDC/SAML URL builders), so '%' breaks route decoding, '/' dead-ends the IdP redirect on a path no route
     // matches, control characters do not round-trip at all, and the other RFC 3986 delimiters invite
     // proxy/IdP misinterpretation. Updating an
     // EXISTING name stays allowed: its URL bytes are already registered at the IdP, and blocking the

@@ -193,7 +193,7 @@ public class SamlSpMetadataBuilderTests
     [Fact]
     public void Build_WithLegacyAcs_AdvertisesBothAssertionConsumerServices_NewDefaultThenLegacy()
     {
-        // The SP accepts either ACS spelling on the way back (SsoUrlBuilder.SamlExpectedAcsUrls), so the
+        // The SP accepts either ACS spelling on the way back (SamlAcsUrlBuilder.ExpectedAcsUrls), so the
         // metadata lists both: the new spelling is the default at index 0, the legacy spelling follows as a
         // non-default endpoint at index 1 (#569).
         const string legacyAcs = "https://jellyfin.example.com/sso/SAML/p/adfs";
