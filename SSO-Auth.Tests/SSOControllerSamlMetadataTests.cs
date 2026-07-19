@@ -120,6 +120,40 @@ public class SSOControllerSamlMetadataTests
     }
 
     [Fact]
+    public void SamlMetadata_PublishesBothAcsSpellings_NewDefaultThenLegacy_AnchoredToTheCanonicalBaseUrl()
+    {
+        // The SP honours either ACS spelling on the way back (SsoUrlBuilder.SamlExpectedAcsUrls), so the
+        // endpoint publishes both (#569): the new-path spelling as the default (index 0), the legacy spelling
+        // as a second, non-default endpoint (index 1). Both are anchored to the canonical Base URL, never the
+        // spoofable request host.
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig
+        {
+            Enabled = true,
+            SamlClientId = "https://sp",
+            BaseUrlOverride = CanonicalBaseUrl,
+            SignAuthnRequests = false,
+        });
+
+        var result = Assert.IsType<ContentResult>(harness.Controller.SamlMetadata("adfs"));
+
+        Assert.Equal(200, result.StatusCode);
+        var spDescriptor = XDocument.Parse(result.Content!).Root!.Element(Md + "SPSSODescriptor");
+        var acsElements = spDescriptor!.Elements(Md + "AssertionConsumerService").ToList();
+
+        Assert.Equal(2, acsElements.Count);
+
+        Assert.Equal(CanonicalBaseUrl + "/sso/SAML/post/adfs", (string?)acsElements[0].Attribute("Location"));
+        Assert.Equal("0", (string?)acsElements[0].Attribute("index"));
+        Assert.Equal("true", (string?)acsElements[0].Attribute("isDefault"));
+
+        Assert.Equal(CanonicalBaseUrl + "/sso/SAML/p/adfs", (string?)acsElements[1].Attribute("Location"));
+        Assert.Equal("1", (string?)acsElements[1].Attribute("index"));
+        Assert.Equal("false", (string?)acsElements[1].Attribute("isDefault"));
+
+        Assert.DoesNotContain(RequestHost, result.Content!, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SamlMetadata_SigningOn_AdvertisesThePublicCertificate_WithoutThePrivateKey()
     {
         using var certificate = SamlSigningKeyFactory.CreateCertificate();

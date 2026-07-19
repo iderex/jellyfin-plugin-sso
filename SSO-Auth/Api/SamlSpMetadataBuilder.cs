@@ -10,11 +10,15 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 /// Builds SAML 2.0 service-provider metadata — an <c>EntityDescriptor</c> carrying an
 /// <c>SPSSODescriptor</c> — that an administrator can hand to an identity provider so it registers this
 /// service provider by URL instead of by hand (#162). Pure and request-free: it emits exactly the entity
-/// id, the HTTP-POST assertion-consumer URL, and — only when request signing is enabled — the PUBLIC
-/// signing certificate(s) it is given. During a signing-key rollover (#491) it advertises BOTH the primary
+/// id, the HTTP-POST assertion-consumer URL(s), and — only when request signing is enabled — the PUBLIC
+/// signing certificate(s) it is given. This SP accepts BOTH ACS spellings on the way back — the new-path
+/// and the legacy one (<see cref="SsoUrlBuilder.SamlExpectedAcsUrls"/>) — so when a legacy ACS URL is
+/// supplied the metadata advertises both as two <c>AssertionConsumerService</c> entries: the new spelling
+/// stays the default at <c>index="0"</c>, the legacy spelling follows at <c>index="1"</c>
+/// (<c>isDefault="false"</c>). During a signing-key rollover (#491) it advertises BOTH the primary
 /// and the optional rollover PUBLIC certificate as two <c>KeyDescriptor use="signing"</c> entries, so the
 /// identity provider trusts either while the administrator swaps. It never touches a private key or any
-/// secret, and it never reads the request <c>Host</c>: the caller resolves the entity id and ACS URL from
+/// secret, and it never reads the request <c>Host</c>: the caller resolves the entity id and ACS URL(s) from
 /// the configured canonical Base URL (#139), so a spoofed or proxy-forwarded host cannot poison the ACS the
 /// identity provider is told to POST assertions to.
 /// </summary>
@@ -33,8 +37,8 @@ internal static class SamlSpMetadataBuilder
     /// (the configured client id), so the identity provider correlates the two.
     /// </param>
     /// <param name="assertionConsumerServiceUrl">
-    /// The absolute HTTP-POST assertion-consumer URL, built from the configured canonical Base URL (never
-    /// the request host).
+    /// The absolute HTTP-POST assertion-consumer URL — the new-path spelling — built from the configured
+    /// canonical Base URL (never the request host). This is the default ACS at <c>index="0"</c>.
     /// </param>
     /// <param name="signingCertificateBase64">
     /// The Base64 (DER) PUBLIC signing certificate to advertise under a <c>KeyDescriptor use="signing"</c>
@@ -49,8 +53,17 @@ internal static class SamlSpMetadataBuilder
     /// (no primary means signing is off, so there is nothing to roll over). Again only ever the public
     /// certificate — never a private key.
     /// </param>
+    /// <param name="legacyAssertionConsumerServiceUrl">
+    /// The OPTIONAL absolute HTTP-POST assertion-consumer URL for the LEGACY route spelling. This SP accepts
+    /// either spelling at runtime (<see cref="SsoUrlBuilder.SamlExpectedAcsUrls"/>), so when this is supplied
+    /// the metadata truthfully advertises both: the new spelling stays the default at <c>index="0"</c> and
+    /// this legacy spelling is emitted as a SECOND <c>AssertionConsumerService</c> at <c>index="1"</c>,
+    /// <c>isDefault="false"</c>. <see langword="null"/> (the default), or a value equal to
+    /// <paramref name="assertionConsumerServiceUrl"/>, emits a single ACS — byte-for-byte the pre-#569
+    /// output. Placed last so existing positional callers stay source-compatible.
+    /// </param>
     /// <returns>The metadata document as an XML string.</returns>
-    internal static string Build(string entityId, string assertionConsumerServiceUrl, string? signingCertificateBase64, string? rolloverSigningCertificateBase64 = null)
+    internal static string Build(string entityId, string assertionConsumerServiceUrl, string? signingCertificateBase64, string? rolloverSigningCertificateBase64 = null, string? legacyAssertionConsumerServiceUrl = null)
     {
         // A StringWriter is UTF-16 internally, which would make XmlWriter stamp encoding="utf-16" into the
         // XML declaration even though the bytes are served as UTF-8; report UTF-8 so the declaration matches
@@ -95,6 +108,23 @@ internal static class SamlSpMetadataBuilder
             xml.WriteAttributeString("index", "0");
             xml.WriteAttributeString("isDefault", "true");
             xml.WriteEndElement(); // md:AssertionConsumerService
+
+            // The SP accepts either ACS spelling on the way back (SsoUrlBuilder.SamlExpectedAcsUrls), so when a
+            // distinct legacy spelling is supplied the metadata lists it too — a SECOND, non-default endpoint at
+            // index="1". The new spelling above stays the default (index="0", isDefault="true"), so an identity
+            // provider that honours isDefault keeps posting to it; the legacy entry only widens what the IdP may
+            // pick to a URL this SP already honours. A null (the default) or duplicate legacy URL leaves the
+            // single-ACS output unchanged.
+            if (legacyAssertionConsumerServiceUrl is not null
+                && !string.Equals(legacyAssertionConsumerServiceUrl, assertionConsumerServiceUrl, System.StringComparison.Ordinal))
+            {
+                xml.WriteStartElement("md", "AssertionConsumerService", MetadataNamespace);
+                xml.WriteAttributeString("Binding", HttpPostBinding);
+                xml.WriteAttributeString("Location", legacyAssertionConsumerServiceUrl);
+                xml.WriteAttributeString("index", "1");
+                xml.WriteAttributeString("isDefault", "false");
+                xml.WriteEndElement(); // md:AssertionConsumerService
+            }
 
             xml.WriteEndElement(); // md:SPSSODescriptor
             xml.WriteEndElement(); // md:EntityDescriptor

@@ -190,6 +190,95 @@ public class SamlSpMetadataBuilderTests
     }
 
     [Fact]
+    public void Build_WithLegacyAcs_AdvertisesBothAssertionConsumerServices_NewDefaultThenLegacy()
+    {
+        // The SP accepts either ACS spelling on the way back (SsoUrlBuilder.SamlExpectedAcsUrls), so the
+        // metadata lists both: the new spelling is the default at index 0, the legacy spelling follows as a
+        // non-default endpoint at index 1 (#569).
+        const string legacyAcs = "https://jellyfin.example.com/sso/SAML/p/adfs";
+
+        var document = XDocument.Parse(
+            SamlSpMetadataBuilder.Build(EntityId, AcsUrl, signingCertificateBase64: null, legacyAssertionConsumerServiceUrl: legacyAcs));
+        var spDescriptor = document.Root!.Element(Md + "SPSSODescriptor");
+
+        var acsElements = spDescriptor!.Elements(Md + "AssertionConsumerService").ToList();
+        Assert.Equal(2, acsElements.Count);
+        Assert.All(acsElements, acs => Assert.Equal(HttpPostBinding, (string?)acs.Attribute("Binding")));
+
+        var primary = acsElements[0];
+        Assert.Equal(AcsUrl, (string?)primary.Attribute("Location"));
+        Assert.Equal("0", (string?)primary.Attribute("index"));
+        Assert.Equal("true", (string?)primary.Attribute("isDefault"));
+
+        var legacy = acsElements[1];
+        Assert.Equal(legacyAcs, (string?)legacy.Attribute("Location"));
+        Assert.Equal("1", (string?)legacy.Attribute("index"));
+        Assert.Equal("false", (string?)legacy.Attribute("isDefault"));
+    }
+
+    [Fact]
+    public void Build_WithoutLegacyAcs_EmitsExactlyOneAssertionConsumerService_PreservingSingleAcsBehavior()
+    {
+        // Legacy unset (the default) is byte-for-byte the pre-#569 single-ACS output.
+        var withDefault = SamlSpMetadataBuilder.Build(EntityId, AcsUrl, signingCertificateBase64: null);
+        var withExplicitNullLegacy = SamlSpMetadataBuilder.Build(EntityId, AcsUrl, signingCertificateBase64: null, legacyAssertionConsumerServiceUrl: null);
+
+        Assert.Equal(withDefault, withExplicitNullLegacy);
+        var acsElements = XDocument.Parse(withDefault).Root!
+            .Element(Md + "SPSSODescriptor")!
+            .Elements(Md + "AssertionConsumerService")
+            .ToList();
+        Assert.Single(acsElements);
+        Assert.Equal("0", (string?)acsElements[0].Attribute("index"));
+        Assert.Equal("true", (string?)acsElements[0].Attribute("isDefault"));
+    }
+
+    [Fact]
+    public void Build_LegacyAcsEqualToPrimary_EmitsExactlyOneAssertionConsumerService()
+    {
+        // A legacy URL identical to the primary is redundant — the SP already advertises that exact endpoint —
+        // so the second entry is dropped, leaving the single-ACS output unchanged (#569 dedup).
+        var withDuplicateLegacy = SamlSpMetadataBuilder.Build(EntityId, AcsUrl, signingCertificateBase64: null, legacyAssertionConsumerServiceUrl: AcsUrl);
+        var withoutLegacy = SamlSpMetadataBuilder.Build(EntityId, AcsUrl, signingCertificateBase64: null);
+
+        Assert.Equal(withoutLegacy, withDuplicateLegacy);
+        Assert.Single(
+            XDocument.Parse(withDuplicateLegacy).Root!
+                .Element(Md + "SPSSODescriptor")!
+                .Elements(Md + "AssertionConsumerService"));
+    }
+
+    [Fact]
+    public void Build_WithRolloverAndLegacyAcs_KeepsBothKeyDescriptorsBeforeBothAssertionConsumerServices()
+    {
+        // The combined worst case for XSD element order: signing-key rollover (#491) emits TWO KeyDescriptors
+        // and the legacy ACS (#569) emits TWO AssertionConsumerService entries in the SAME document. The
+        // metadata XSD requires every KeyDescriptor to precede every AssertionConsumerService, so pin that the
+        // last KeyDescriptor still comes before the first ACS when both features are on at once — a future edit
+        // that interleaves them (invalid for strict IdPs like ADFS/Azure AD) fails here, not only in the field.
+        using var primary = SamlSigningKeyFactory.CreateCertificate();
+        using var rollover = SamlSigningKeyFactory.CreateCertificate();
+        const string legacyAcs = "https://jellyfin.example.com/sso/SAML/p/adfs";
+
+        var spDescriptor = XDocument.Parse(
+                SamlSpMetadataBuilder.Build(
+                    EntityId,
+                    AcsUrl,
+                    Convert.ToBase64String(primary.RawData),
+                    Convert.ToBase64String(rollover.RawData),
+                    legacyAcs))
+            .Root!.Element(Md + "SPSSODescriptor")!;
+
+        Assert.Equal(2, spDescriptor.Elements(Md + "KeyDescriptor").Count());
+        Assert.Equal(2, spDescriptor.Elements(Md + "AssertionConsumerService").Count());
+
+        var childNames = spDescriptor.Elements().Select(e => e.Name).ToList();
+        var lastKeyDescriptorIndex = childNames.FindLastIndex(n => n == Md + "KeyDescriptor");
+        var firstAcsIndex = childNames.FindIndex(n => n == Md + "AssertionConsumerService");
+        Assert.True(lastKeyDescriptorIndex < firstAcsIndex, "Every KeyDescriptor must precede AssertionConsumerService (SAML metadata XSD order).");
+    }
+
+    [Fact]
     public void Build_DeclaresUtf8Encoding()
     {
         // A StringWriter is UTF-16 internally; the builder reports UTF-8 so the declaration matches the

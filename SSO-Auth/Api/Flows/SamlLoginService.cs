@@ -454,9 +454,12 @@ internal sealed class SamlLoginService
                 "SAML metadata is unavailable: this provider has no client id (SP entity id) configured.");
         }
 
-        // Advertise the canonical new-path ACS spelling; the SP accepts either spelling on the way back
-        // (SsoUrlBuilder.SamlExpectedAcsUrls), so publishing one is unambiguous for the identity provider.
+        // Advertise BOTH ACS spellings the SP actually honours on the way back
+        // (SsoUrlBuilder.SamlExpectedAcsUrls): the canonical new-path spelling is the default (index 0), and
+        // the legacy spelling is published as a second, non-default endpoint (index 1) so metadata truthfully
+        // reflects that either POST target is accepted rather than silently omitting one the SP still serves.
         var acsUrl = SsoUrlBuilder.SamlAcsUrl(baseUrl, newPath: true, provider);
+        var legacyAcsUrl = SsoUrlBuilder.SamlAcsUrl(baseUrl, newPath: false, provider);
 
         if (!TryResolveSigningCertificates(config, out var signingCertificateBase64, out var rolloverSigningCertificateBase64))
         {
@@ -471,7 +474,7 @@ internal sealed class SamlLoginService
 
         return new ContentResult
         {
-            Content = SamlSpMetadataBuilder.Build(entityId, acsUrl, signingCertificateBase64, rolloverSigningCertificateBase64),
+            Content = SamlSpMetadataBuilder.Build(entityId, acsUrl, signingCertificateBase64, rolloverSigningCertificateBase64, legacyAcsUrl),
             ContentType = "application/samlmetadata+xml",
             StatusCode = StatusCodes.Status200OK,
         };
