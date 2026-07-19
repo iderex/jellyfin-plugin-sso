@@ -465,3 +465,4 @@ AGENTS.md
 # a genuinely public doc is ever added under docs/, un-ignore it explicitly
 # (e.g. `!docs/CONFIGURATION.md`).
 docs/
+!docs/README.md
