@@ -76,20 +76,6 @@ internal sealed class SamlLoginService
 
     private readonly ILogger _logger;
 
-    // Throttles how often an actual NewPath change is persisted (#412 review follow-up). Both route
-    // spellings stay permanently live side by side (ChallengePath/SsoUrlBuilder never retire either one),
-    // so a provider used concurrently by clients on both is EXPECTED to flip this value on alternating
-    // logins — ExpectedAcsUrls (near ResolveChallengeNewPath below) already treats a flip as routine, not
-    // a rare edge case. Without a cap, that ordinary traffic shape would turn every such login into a
-    // synchronous config persist under the process-wide config lock, serializing every OID/SAML login on
-    // the server (not just this provider's) behind disk I/O. NewPath is only ever consulted by a LATER,
-    // separate linking challenge — never this request's own redirect, which always uses its own
-    // freshly-derived value regardless of whether a write lands — so bounding this to one persist attempt
-    // per interval, process-wide, is harmless: it only delays how soon a flapping spelling's latest value
-    // reaches disk. Not readonly, for the same reason as _outcomes above: ResetSamlRequestsForTests
-    // installs a fresh gate between tests, so one test's persisted change cannot throttle a later test's.
-    private static IntervalGate _newPathPersistGate = new(TimeSpan.FromSeconds(5));
-
     internal SamlLoginService(
         LoginCompletionService loginCompletion,
         CanonicalLinkService canonicalLinks,
@@ -105,13 +91,13 @@ internal sealed class SamlLoginService
     // (e.g. one left behind by a signature-failing response that returns before the consume) cannot leak
     // into the next test. Same test-only surface as OidcLoginService.ResetOidStateForTests (internal,
     // InternalsVisibleTo, no endpoint/DI). Moved here with the statics from the controller (#160). Also
-    // installs a fresh NewPath persist-throttle gate (#412 review follow-up): SsoControllerHarness calls
-    // this for every test, so a change persisted in one test can never throttle a genuine change in the
-    // next one.
+    // resets the shared NewPath persist-throttle gate (#412 review follow-up, #670): SsoControllerHarness
+    // calls this for every test, so a change persisted in one test can never throttle a genuine change in
+    // the next one. The gate now lives on the shared ChallengeNewPathResolver, so the reset delegates there.
     internal static void ResetSamlRequestsForTests()
     {
         SamlRequests.Clear();
-        _newPathPersistGate = new IntervalGate(TimeSpan.FromSeconds(5));
+        ChallengeNewPathResolver.ResetForTests();
     }
 
     // Test-only: restores a fresh default in-flight login-outcome store (#251) between tests, the same
@@ -338,7 +324,7 @@ internal sealed class SamlLoginService
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.UnknownProvider));
         }
 
-        bool newPath = ResolveChallengeNewPath(provider, config, isLinking, request, _logger);
+        bool newPath = ChallengeNewPathResolver.ResolveChallengeNewPath(provider, config, isLinking, request, _logger, c => c.SamlConfigs);
 
         string redirectUri = SsoUrlBuilder.SamlAcsUrl(GetRequestBase(request, config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), newPath, provider);
         string relayState = isLinking ? "linking" : null;
@@ -714,66 +700,6 @@ internal sealed class SamlLoginService
     // controller with the SAML flow (#160); the OpenID twin lives on OidcLoginService.
     private static SamlConfig FindSamlConfig(string provider) =>
         SSOPlugin.Instance.ReadConfiguration(configuration => configuration.SamlConfigs.TryGetValue(provider, out var config) ? config : null);
-
-    // Resolves whether this challenge uses the "new", more descriptive redirect path, and records that as
-    // server-managed runtime state on the provider config. A non-linking challenge derives the spelling
-    // from the request path (a `.../start/...` route means the new path) and stores it, so a later linking
-    // flow — which cannot know which redirect path the identity provider has registered — reuses the last
-    // login's spelling. A linking challenge only reads the stored value. (See SamlAssertionValidator's
-    // ExpectedAcsUrls for the same reason this value is remembered across requests.) Mirrors
-    // OidcLoginService.ResolveChallengeNewPath.
-    //
-    // The record itself goes through MutateConfiguration rather than a bare field assignment (#412): the
-    // `config` the caller passes in was read under ReadConfiguration's lock, which is released before this
-    // runs, so writing straight into it raced a concurrent challenge for the same provider and never went
-    // through the write path every other config mutation uses. The Mutate delegate re-resolves the
-    // provider by name instead of trusting the outer `config` reference, so one deleted/disabled in that
-    // race window is not written into. A plain locked comparison with no write serves the case where the
-    // derived spelling already matches what is stored; an actual change is throttled by
-    // _newPathPersistGate (see its comment) rather than persisted on every mismatched challenge, and a
-    // persist failure is swallowed — this write is best-effort bookkeeping for a later login, never a
-    // requirement for THIS one to succeed. Internal (not private) so ProviderConfigStoreTests-style
-    // callers can exercise the race-window fallback branch directly and deterministically, the way
-    // ResetSamlRequestsForTests-style hooks already do for other login-flow internals.
-    internal static bool ResolveChallengeNewPath(string provider, SamlConfig config, bool isLinking, HttpRequest request, ILogger logger)
-    {
-        if (isLinking)
-        {
-            return config.NewPath;
-        }
-
-        var derived = ChallengePath.IsNewPath(request.Path.Value);
-        if (derived == config.NewPath || !_newPathPersistGate.TryEnter(DateTime.Now))
-        {
-            return derived;
-        }
-
-        try
-        {
-            return SSOPlugin.Instance.MutateConfiguration(configuration =>
-            {
-                if (configuration.SamlConfigs.TryGetValue(provider, out var liveConfig) && liveConfig is { Enabled: true })
-                {
-                    liveConfig.NewPath = derived;
-                }
-
-                // The current redirect always uses `derived` regardless of whether the write above landed —
-                // it reflects this request's own path, exactly like a read-only resolution would have.
-                return derived;
-            });
-        }
-        catch (Exception ex)
-        {
-            // Best-effort: a config-persist failure here (full disk, permissions, a corrupt secret
-            // envelope surfacing mid-ProtectAll) must not turn an otherwise-valid login into a 500 over a
-            // value that only helps a LATER linking flow guess the right spelling. Broad on purpose —
-            // every persist failure is handled identically — but logged so a persistently failing config
-            // write stays observable rather than silently accepted forever (mirrors AvatarService's
-            // best-effort avatar fetch).
-            logger?.LogWarning(ex, "Could not record the NewPath redirect spelling for provider {Provider}; this login proceeds with its own derived value.", provider?.ReplaceLineEndings(string.Empty));
-            return derived;
-        }
-    }
 
     // Builds the redirect URL to the identity provider, signing the outgoing AuthnRequest when the provider
     // opts in (#167). Fail-closed: signing enabled but the signing key missing/unloadable throws, so the
