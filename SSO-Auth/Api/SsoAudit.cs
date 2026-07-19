@@ -114,6 +114,80 @@ internal static class SsoAudit
             oidProviders,
             samlProviders);
 
+    /// <summary>Records SSO-only login being turned on (#165), with the guaranteed break-glass survivor.</summary>
+    /// <param name="logger">The logger.</param>
+    /// <param name="actor">The elevated administrator who enabled the mode.</param>
+    /// <param name="breakGlassAdmin">The designated break-glass admin whose password door survives.</param>
+    /// <param name="repointedCount">How many accounts were repointed off the password provider.</param>
+    internal static void SsoOnlyLoginEnabled(ILogger logger, string actor, string breakGlassAdmin, int repointedCount)
+    {
+        if (!logger.IsEnabled(LogLevel.Warning))
+        {
+            return;
+        }
+
+        logger.LogWarning(
+            "[SSO Audit] SSO-only login ENABLED by {Actor}: break-glass admin '{BreakGlassAdmin}' keeps password login; {RepointedCount} account(s) repointed to SSO-only.",
+            actor?.ReplaceLineEndings(string.Empty),
+            breakGlassAdmin?.ReplaceLineEndings(string.Empty),
+            repointedCount);
+    }
+
+    /// <summary>Records SSO-only login being turned off (#165), the reversible no-SSO off-switch.</summary>
+    /// <param name="logger">The logger.</param>
+    /// <param name="actor">The elevated administrator who disabled the mode.</param>
+    /// <param name="restoredCount">How many accounts had native password routing restored.</param>
+    internal static void SsoOnlyLoginDisabled(ILogger logger, string actor, int restoredCount)
+    {
+        if (!logger.IsEnabled(LogLevel.Warning))
+        {
+            return;
+        }
+
+        logger.LogWarning(
+            "[SSO Audit] SSO-only login DISABLED by {Actor}: native password routing restored for {RestoredCount} account(s); no password hash was reset.",
+            actor?.ReplaceLineEndings(string.Empty),
+            restoredCount);
+    }
+
+    /// <summary>
+    /// Records an SSO-only activation (or designation) being REFUSED by the fail-closed guard (#165), so a
+    /// blocked lockout attempt leaves a trail (T-R1). The reason is a fixed verdict CODE, never a username or
+    /// roster (T-I1).
+    /// </summary>
+    /// <param name="logger">The logger.</param>
+    /// <param name="actor">The elevated administrator whose activation was refused.</param>
+    /// <param name="reasonCode">The guard verdict name (a fixed enum member, not user input).</param>
+    internal static void SsoOnlyLoginActivationRefused(ILogger logger, string actor, string reasonCode)
+    {
+        if (!logger.IsEnabled(LogLevel.Warning))
+        {
+            return;
+        }
+
+        logger.LogWarning(
+            "[SSO Audit] SSO-only login activation REFUSED for {Actor}: no surviving admin login path ({ReasonCode}). No change was made.",
+            actor?.ReplaceLineEndings(string.Empty),
+            reasonCode);
+    }
+
+    /// <summary>Records the break-glass admin designation being set or changed (#165), an elevated operation.</summary>
+    /// <param name="logger">The logger.</param>
+    /// <param name="actor">The elevated administrator who changed the designation.</param>
+    /// <param name="breakGlassAdmin">The newly designated break-glass admin.</param>
+    internal static void BreakGlassAdminDesignated(ILogger logger, string actor, string breakGlassAdmin)
+    {
+        if (!logger.IsEnabled(LogLevel.Warning))
+        {
+            return;
+        }
+
+        logger.LogWarning(
+            "[SSO Audit] Break-glass admin designated by {Actor}: '{BreakGlassAdmin}' is now the account SSO-only login never repoints.",
+            actor?.ReplaceLineEndings(string.Empty),
+            breakGlassAdmin?.ReplaceLineEndings(string.Empty));
+    }
+
     /// <summary>Records a provider being saved with one or more security checks disabled (#140).</summary>
     /// <param name="logger">The logger.</param>
     /// <param name="protocol">The protocol (OpenID or SAML).</param>

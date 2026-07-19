@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 #nullable enable
@@ -45,7 +46,8 @@ internal sealed record VerifiedIdentity
         IReadOnlyList<string> folders,
         bool enableLiveTv,
         bool enableLiveTvManagement,
-        string? avatarUrl)
+        string? avatarUrl,
+        IReadOnlyList<PermissionGrant> permissionGrants)
     {
         LinkMode = linkMode;
         AuditProtocol = auditProtocol;
@@ -59,6 +61,7 @@ internal sealed record VerifiedIdentity
         EnableLiveTv = enableLiveTv;
         EnableLiveTvManagement = enableLiveTvManagement;
         AvatarUrl = avatarUrl;
+        PermissionGrants = permissionGrants;
     }
 
     /// <summary>Gets the protocol the canonical-link store keys this identity under (#369).</summary>
@@ -102,6 +105,13 @@ internal sealed record VerifiedIdentity
     internal string? AvatarUrl { get; }
 
     /// <summary>
+    /// Gets the generic role→permission grants the login resolves (#164): one authoritative grant per
+    /// permission the administrator explicitly mapped, applied at the mint (default-deny). Empty when the
+    /// feature is off, so no extra permission is touched.
+    /// </summary>
+    internal IReadOnlyList<PermissionGrant> PermissionGrants { get; }
+
+    /// <summary>
     /// Builds the verified identity of an OpenID login from the role-gate result. Called from inside
     /// <see cref="AuthorizeSession.Ready"/>, which the store produces only for a promoted (role-gate-passed)
     /// state and hands out only through the one-time atomic redeem — so this can never run before that claim.
@@ -125,7 +135,8 @@ internal sealed record VerifiedIdentity
             derived.Folders,
             derived.EnableLiveTv,
             derived.EnableLiveTvManagement,
-            derived.AvatarUrl);
+            derived.AvatarUrl,
+            derived.PermissionGrants ?? Array.Empty<PermissionGrant>());
 
     /// <summary>
     /// Builds the verified identity of a SAML login. Called only at the SAML session-minting endpoint after
@@ -152,5 +163,6 @@ internal sealed record VerifiedIdentity
             privileges.Folders,
             privileges.EnableLiveTv,
             privileges.EnableLiveTvManagement,
-            null);
+            null,
+            privileges.PermissionGrants ?? Array.Empty<PermissionGrant>());
 }

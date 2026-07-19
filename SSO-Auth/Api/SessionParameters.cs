@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 #nullable enable
 
@@ -21,6 +22,15 @@ internal sealed class SessionParameters
     /// Gets a value indicating whether the user is granted administrator rights.
     /// </summary>
     public required bool IsAdmin { get; init; }
+
+    /// <summary>
+    /// Gets a value indicating whether the resolved account is the designated break-glass admin while
+    /// SSO-only mode is on (#165, Finding H1). When true the mint must leave the account's administrator
+    /// state intact — its own SSO login must never be able to demote the one guaranteed recovery account,
+    /// which would lock the whole org out once the identity provider is unreachable. False for every other
+    /// account and whenever the mode is off, so the ordinary role-derived admin grant applies unchanged.
+    /// </summary>
+    public required bool IsBreakGlassAdmin { get; init; }
 
     /// <summary>
     /// Gets a value indicating whether role-based authorization is applied (when false, the
@@ -47,6 +57,13 @@ internal sealed class SessionParameters
     /// Gets a value indicating whether the user may manage Live TV.
     /// </summary>
     public required bool EnableLiveTvManagement { get; init; }
+
+    /// <summary>
+    /// Gets the generic role→permission grants to apply at the mint (#164): one authoritative grant per
+    /// permission the administrator explicitly mapped, applied only when <see cref="EnableAuthorization"/>
+    /// is on. Required (no default) so a mint path cannot silently omit it; an empty list applies nothing.
+    /// </summary>
+    public required IReadOnlyList<PermissionGrant> PermissionGrants { get; init; }
 
     /// <summary>
     /// Gets the client identity (app, version, device) the session is bound to.

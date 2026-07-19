@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Jellyfin.Data;
 using Jellyfin.Database.Implementations.Entities;
@@ -38,20 +39,24 @@ public class SessionMinterTests
     private static SessionParameters Params(
         bool enableAuthorization = false,
         bool isAdmin = false,
+        bool isBreakGlassAdmin = false,
         bool enableAllFolders = false,
         string[]? enabledFolders = null,
         bool enableLiveTv = false,
         bool enableLiveTvManagement = false,
         string? avatarUrl = null,
-        string? defaultProvider = null) => new SessionParameters
+        string? defaultProvider = null,
+        IReadOnlyList<PermissionGrant>? permissionGrants = null) => new SessionParameters
     {
         UserId = UserId,
         IsAdmin = isAdmin,
+        IsBreakGlassAdmin = isBreakGlassAdmin,
         EnableAuthorization = enableAuthorization,
         EnableAllFolders = enableAllFolders,
         EnabledFolders = enabledFolders ?? Array.Empty<string>(),
         EnableLiveTv = enableLiveTv,
         EnableLiveTvManagement = enableLiveTvManagement,
+        PermissionGrants = permissionGrants ?? Array.Empty<PermissionGrant>(),
         AvatarUrl = avatarUrl,
         DefaultProvider = defaultProvider,
         AuthResponse = new AuthResponse { AppName = "app", AppVersion = "1", DeviceID = "d", DeviceName = "dev" },
@@ -158,6 +163,98 @@ public class SessionMinterTests
         await minter.MintAsync(Params(enableAuthorization: false, isAdmin: false), () => "203.0.113.7", () => true);
 
         Assert.Contains(user.Permissions, perm => perm.Kind == PermissionKind.IsAdministrator && perm.Value); // seeded admin left untouched
+    }
+
+    [Fact]
+    public async Task MintAsync_EnableAuthorization_AppliesGenericPermissionGrants_GrantAndRevoke()
+    {
+        // #164: with the master switch on, each generic role→permission grant is applied authoritatively —
+        // a granted permission is set true and a revoked one set false. Seed the OPPOSITE of each so the
+        // assertions prove the mint flipped them, not that a fresh user happened to match.
+        var (minter, users, sessions) = Build();
+        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        user.SetPermission(PermissionKind.EnableContentDownloading, false); // grant must flip to true
+        user.SetPermission(PermissionKind.EnableContentDeletion, true); // revoke must flip to false
+        users.GetUserById(UserId).Returns(user);
+        sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
+
+        await minter.MintAsync(
+            Params(
+                enableAuthorization: true,
+                permissionGrants: new[]
+                {
+                    new PermissionGrant(PermissionKind.EnableContentDownloading, true),
+                    new PermissionGrant(PermissionKind.EnableContentDeletion, false),
+                }),
+            () => "203.0.113.7",
+            () => true);
+
+        Assert.Contains(user.Permissions, perm => perm.Kind == PermissionKind.EnableContentDownloading && perm.Value);
+        Assert.DoesNotContain(user.Permissions, perm => perm.Kind == PermissionKind.EnableContentDeletion && perm.Value);
+    }
+
+    [Fact]
+    public async Task MintAsync_NoAuthorization_LeavesGenericPermissionGrantsUntouched()
+    {
+        // The generic grants respect the same EnableAuthorization master switch as the admin/Live TV grants
+        // (#215): with it off, a mapped permission is NOT applied. Seed the opposite of the grant and pass
+        // the master switch off — a correct skip leaves the seed intact.
+        var (minter, users, sessions) = Build();
+        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        user.SetPermission(PermissionKind.EnableContentDownloading, false);
+        users.GetUserById(UserId).Returns(user);
+        sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
+
+        await minter.MintAsync(
+            Params(
+                enableAuthorization: false,
+                permissionGrants: new[] { new PermissionGrant(PermissionKind.EnableContentDownloading, true) }),
+            () => "203.0.113.7",
+            () => true);
+
+        Assert.DoesNotContain(user.Permissions, perm => perm.Kind == PermissionKind.EnableContentDownloading && perm.Value); // seed left untouched
+    }
+
+    [Fact]
+    public async Task MintAsync_BreakGlassAdmin_UnderNonAdminLogin_KeepsAdministrator()
+    {
+        // #165 Finding H1: while SSO-only mode is on, the designated break-glass admin's OWN SSO login must
+        // not be able to demote it. Even with EnableAuthorization on and a login whose claims do NOT grant
+        // admin (isAdmin: false), the recovery account keeps IsAdministrator — otherwise the guaranteed
+        // recovery admin becomes useless once the IdP is down. Seed admin=true so the assertion proves the
+        // demotion was SUPPRESSED, not that a fresh user happened to be non-admin.
+        var (minter, users, sessions) = Build();
+        var user = new User("root", "SSO-Auth", "Default") { Id = UserId };
+        user.SetPermission(PermissionKind.IsAdministrator, true);
+        users.GetUserById(UserId).Returns(user);
+        sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
+
+        await minter.MintAsync(
+            Params(enableAuthorization: true, isAdmin: false, isBreakGlassAdmin: true),
+            () => "203.0.113.7",
+            () => true);
+
+        Assert.Contains(user.Permissions, perm => perm.Kind == PermissionKind.IsAdministrator && perm.Value); // admin preserved
+    }
+
+    [Fact]
+    public async Task MintAsync_NonBreakGlassAccount_UnderNonAdminLogin_IsDemotedAsUsual()
+    {
+        // The negative of the break-glass exemption: a NON-break-glass account is authoritatively demoted when
+        // its login carries no admin claim (default-deny). The exemption is narrow — it must never leak to
+        // ordinary accounts. Seed admin=true; a correct write flips it to false.
+        var (minter, users, sessions) = Build();
+        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        user.SetPermission(PermissionKind.IsAdministrator, true);
+        users.GetUserById(UserId).Returns(user);
+        sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
+
+        await minter.MintAsync(
+            Params(enableAuthorization: true, isAdmin: false, isBreakGlassAdmin: false),
+            () => "203.0.113.7",
+            () => true);
+
+        Assert.DoesNotContain(user.Permissions, perm => perm.Kind == PermissionKind.IsAdministrator && perm.Value); // demoted as usual
     }
 
     [Fact]

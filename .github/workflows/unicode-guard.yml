@@ -1,10 +1,12 @@
 name: unicode-guard
 
 on:
+  # Every branch and every PR: the guard is a cheap read-only scan and must cover
+  # the shipping release branches (e.g. 4.2, which ships JF12 betas), not just main.
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
-    branches: [main]
+    branches: ["**"]
 
 # Read-only: the guard only greps the tracked tree, it never writes.
 permissions:

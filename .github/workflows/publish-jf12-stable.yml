@@ -28,10 +28,9 @@ permissions: {}
 
 # Serialize manifest-release regenerations so two stable publishes never race the pages branch (the same
 # reader-vs-pusher TOCTOU #135 fixed for manifest-beta). cancel-in-progress is false: a publish holding
-# contents:write must never be killed mid-run. NOTE: publish.yml (JF10.11 stable) predates this pattern
-# and does not yet share this group, so today this only serializes JF12-stable runs against each other;
-# a follow-up should add the same group name to publish.yml so the two stable legs are serialized against
-# each other as well.
+# contents:write must never be killed mid-run. publish.yml (JF10.11 stable) shares this same group name,
+# so the two stable legs are serialized against each other as well — a JF10.11 and a JF12 stable publish
+# can never regenerate manifest-release concurrently.
 concurrency:
   group: publish-manifest-release
   cancel-in-progress: false
