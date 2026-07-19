@@ -3,9 +3,8 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
 
 /// <summary>
 /// A per-key async mutual-exclusion primitive: at most one holder per key at a time, while unrelated
