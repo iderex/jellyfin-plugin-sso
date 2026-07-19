@@ -47,7 +47,7 @@ jobs:
       attestations: write
     uses: ./.github/workflows/build.yml
     with:
-      dotnet-version: "9.0.*"
+      dotnet-version: "9.0.x"
       dotnet-target:  "net9.0"
       attest: true
   upload:
