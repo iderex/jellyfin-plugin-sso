@@ -59,6 +59,11 @@ public class FlowResponsesTests
         Assert.Equal("nosniff", response.Headers["X-Content-Type-Options"]);
         Assert.Equal("no-referrer", response.Headers["Referrer-Policy"]);
         Assert.Equal("no-store", response.Headers.CacheControl.ToString());
+        // A restrictive Permissions-Policy denies powerful features the login-completion page never uses.
+        var permissionsPolicy = response.Headers["Permissions-Policy"].ToString();
+        Assert.Contains("camera=()", permissionsPolicy);
+        Assert.Contains("geolocation=()", permissionsPolicy);
+        Assert.Contains("microphone=()", permissionsPolicy);
         Assert.False(string.IsNullOrEmpty(response.Headers.ContentSecurityPolicy.ToString()));
     }
 

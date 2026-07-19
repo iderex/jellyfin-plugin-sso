@@ -44,6 +44,7 @@ internal static class BrowserErrorPage
         response.Headers["X-Content-Type-Options"] = "nosniff";
         response.Headers["Referrer-Policy"] = "no-referrer";
         response.Headers.CacheControl = "no-store";
+        response.Headers["Permissions-Policy"] = FlowResponses.ServedPagePermissionsPolicy;
 
         return new ContentResult
         {
