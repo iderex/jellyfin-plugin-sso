@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Jellyfin.Data;
@@ -174,9 +173,17 @@ internal sealed class SsoOnlyLoginService
     // RECORDS each moved account's id so the off-switch and the boot reconciliation restore exactly this set
     // (never the plugin's own SSO-created accounts). Only the routing field is written (T-E3). Idempotent: an
     // account already on the SSO provider is skipped.
+    //
+    // Durability: each account is tracked (a persisted Mutate) BEFORE it is repointed, so a crash between the
+    // two steps leaves the account tracked-but-not-moved — harmless, because the off-switch/boot reconcile is
+    // idempotent and gated on IsSsoProvider, so it no-ops a still-password account and clears the id. The
+    // failure the track-after ordering allowed — moved-but-untracked, which the tracked-set restore could
+    // never auto-recover — cannot happen: the persisted tracked set is always a superset of the accounts
+    // actually moved. The break-glass admin and accounts already off the password provider are never tracked,
+    // so restore never hands a natively-SSO/plugin-created account a password door.
     private async Task<int> SweepEnableAsync(string breakGlassUsername)
     {
-        var repointedIds = new List<Guid>();
+        var repointed = 0;
         foreach (var user in _userManager.GetUsers() ?? Enumerable.Empty<User>())
         {
             if (IsBreakGlass(user.Username, breakGlassUsername))
@@ -184,29 +191,26 @@ internal sealed class SsoOnlyLoginService
                 continue;
             }
 
-            if (SsoAuthenticationProviders.IsDefaultPasswordProvider(user.AuthenticationProviderId))
+            if (!SsoAuthenticationProviders.IsDefaultPasswordProvider(user.AuthenticationProviderId))
             {
-                user.AuthenticationProviderId = SsoAuthenticationProviders.SsoProviderId;
-                await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
-                repointedIds.Add(user.Id);
+                continue;
             }
-        }
 
-        if (repointedIds.Count > 0)
-        {
+            var id = user.Id;
             _configStore.Mutate(configuration =>
             {
-                foreach (var id in repointedIds)
+                if (!configuration.SsoOnlyRepointedUserIds.Contains(id))
                 {
-                    if (!configuration.SsoOnlyRepointedUserIds.Contains(id))
-                    {
-                        configuration.SsoOnlyRepointedUserIds.Add(id);
-                    }
+                    configuration.SsoOnlyRepointedUserIds.Add(id);
                 }
             });
+
+            user.AuthenticationProviderId = SsoAuthenticationProviders.SsoProviderId;
+            await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
+            repointed++;
         }
 
-        return repointedIds.Count;
+        return repointed;
     }
 
     // Restores the built-in password provider for ONLY the accounts the mode recorded as repointed (that are
