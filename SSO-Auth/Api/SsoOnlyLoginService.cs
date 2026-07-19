@@ -142,6 +142,19 @@ internal sealed class SsoOnlyLoginService
             // IsSsoProvider-gated restore simply no-ops and clears. The reverse (moved-but-untracked, which the
             // tracked-set restore could never auto-recover) cannot happen. Re-checked under the lock so a
             // concurrent login for the same account cannot double-add.
+            //
+            // Documented residual (login-vs-Disable race): unlike the sweep, the actual repoint runs LATER, in
+            // SessionMinter after the avatar fetch and revocation gates. If DisableAsync interleaves in that
+            // gap it flips the flag, then RestoreRepointedAccountsAsync reads the tracked set, finds this
+            // account still on the PASSWORD provider (the mint has not written yet) so IsSsoProvider is false,
+            // skips it, and clears the whole set — after which the in-flight mint writes SsoProviderId, leaving
+            // this account repointed-to-SSO, untracked, mode off. Accepted as a residual: it is a single
+            // NON-break-glass account (the break-glass admin is never tracked, so recovery is never lost), it
+            // is strictly better than the pre-fix state (which left EVERY login-path repoint untracked), and it
+            // self-heals on the account's next mode-off SSO login whenever the provider's DefaultProvider
+            // routes to the password provider (the mint then rewrites it). The narrow-window alternative —
+            // keeping unrestored ids tracked instead of clearing — was rejected because it strands the
+            // harmless tracked-but-not-moved id (a revoked-in-flight mint) in the set indefinitely.
             _configStore.Mutate(configuration =>
             {
                 if (!configuration.SsoOnlyRepointedUserIds.Contains(userId))

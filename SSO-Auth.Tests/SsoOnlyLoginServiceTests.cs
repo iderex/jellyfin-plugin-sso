@@ -336,6 +336,50 @@ public class SsoOnlyLoginServiceTests
     }
 
     [Fact]
+    public void ResolveLoginEnforcement_ModeOff_AccountMatchingConfiguredBreakGlassName_IsNotFlaggedBreakGlass()
+    {
+        // The `modeOn &&` conjunct guarding the break-glass flag is load-bearing: DisableAsync does NOT clear
+        // BreakGlassAdminUsername, so mode-off with the ex-break-glass name still configured is reachable, and
+        // here the RESOLVED account's username ("root") equals it. With the mode off that account must NOT be
+        // flagged break-glass — otherwise the mint would wrongly SKIP its legitimate role-derived
+        // administrator demotion. (Dropping the conjunct would flag it, so this pins the guard.)
+        var root = PasswordAdmin("root", RootId);
+        var cfg = new PluginConfiguration { DisablePasswordLogin = false, BreakGlassAdminUsername = "root" };
+        var store = new ProviderConfigStore(() => cfg, _ => { }, new CapturingLogger());
+        var users = Substitute.For<IUserManager>();
+        users.GetUserById(RootId).Returns(root);
+        var service = new SsoOnlyLoginService(users, store, new CapturingLogger());
+
+        var decision = service.ResolveLoginEnforcement(RootId, "configured-default");
+
+        Assert.False(decision.IsBreakGlassAdmin);
+        Assert.Equal("configured-default", decision.DefaultProvider);
+        Assert.Empty(cfg.SsoOnlyRepointedUserIds);
+    }
+
+    [Fact]
+    public void ResolveLoginEnforcement_ResolvedUserDeleted_ReturnsConfiguredDefault_NotBreakGlass_TracksNothing_DoesNotPersist()
+    {
+        // Fail-closed branch (repo rule: a negative test per fail-closed branch): the account vanished between
+        // resolution and here, so GetUserById returns null. Enforce nothing (the mint fails closed on the null
+        // user), flag no break-glass, track nothing — and, being a pure read, pay NO config persist. The mode
+        // is ON here, so this exercises the null guard specifically, not the mode-off short-circuit.
+        var cfg = new PluginConfiguration { DisablePasswordLogin = true, BreakGlassAdminUsername = "root" };
+        var persists = 0;
+        var store = new ProviderConfigStore(() => cfg, _ => persists++, new CapturingLogger());
+        var users = Substitute.For<IUserManager>();
+        users.GetUserById(Arg.Any<Guid>()).Returns((User?)null);
+        var service = new SsoOnlyLoginService(users, store, new CapturingLogger());
+
+        var decision = service.ResolveLoginEnforcement(AliceId, "configured-default");
+
+        Assert.Equal("configured-default", decision.DefaultProvider);
+        Assert.False(decision.IsBreakGlassAdmin);
+        Assert.Empty(cfg.SsoOnlyRepointedUserIds);
+        Assert.Equal(0, persists);
+    }
+
+    [Fact]
     public void ResolveLoginEnforcement_ModeOn_BreakGlassByResolvedAccount_PinsToPassword_FlagsBreakGlass_NeverTracked()
     {
         // Finding A: the break-glass identity is judged on the RESOLVED account's own username ("root"), so
