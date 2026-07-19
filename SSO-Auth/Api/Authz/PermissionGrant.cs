@@ -1,6 +1,6 @@
 using Jellyfin.Database.Implementations.Enums;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Authz;
 
 /// <summary>
 /// A single generic permission grant a login resolves: the Jellyfin permission and whether it is granted

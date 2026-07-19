@@ -6,7 +6,7 @@ using Jellyfin.Plugin.SSO_Auth.Config;
 
 #nullable enable
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Authz;
 
 /// <summary>
 /// Maps the roles carried by a verified login to the generic Jellyfin permission grants they produce
