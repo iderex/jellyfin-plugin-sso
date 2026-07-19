@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using Microsoft.Extensions.Logging;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Audit;
 
 /// <summary>
 /// Emits consistent, structured audit-log entries for security-relevant SSO events that exist today:
