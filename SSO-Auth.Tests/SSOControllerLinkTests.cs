@@ -406,6 +406,32 @@ public class SSOControllerLinkTests
     }
 
     [Fact]
+    public async Task AddCanonicalLink_SamlSignedResponse_LinksThenRejectsReplay_WithCertificateDisposalActive()
+    {
+        // Drives the SAML Link leg end-to-end through the flow (controller -> SamlLoginService.Link ->
+        // TryValidate -> `using var ownedResponse` -> replay consume -> GetNameID -> link write) so the #674
+        // disposal placement is exercised on a real leg: the NameID and the replay getters (GetAssertionId /
+        // GetNotOnOrAfter) are read WHILE the response owns the certificate handle, and the leg still
+        // completes — a use-after-dispose reachable only on this leg would fail here. The assertion's
+        // one-time-use consume is proven by the second, identical attempt being rejected rather than
+        // re-linking (never a second NoContent).
+        var fixture = SamlTestFactory.Create(nameId: "alice");
+        var harness = ForCaller(isAdmin: true, callerId: Target, configure: c => c.SamlConfigs["adfs"] = new SamlConfig
+        {
+            Enabled = true,
+            SamlCertificate = fixture.CertificateBase64,
+            DoNotValidateAudience = true,
+        });
+
+        var first = await harness.Controller.AddCanonicalLink("saml", "adfs", Target, new AuthResponse { Data = fixture.EncodeResponse() });
+        Assert.IsType<NoContentResult>(first);
+        Assert.Equal(Target, SSOPlugin.Instance.ReadConfiguration(c => c.SamlConfigs["adfs"].CanonicalLinks)["alice"]);
+
+        var replay = await harness.Controller.AddCanonicalLink("saml", "adfs", Target, new AuthResponse { Data = fixture.EncodeResponse() });
+        Assert.IsNotType<NoContentResult>(replay);
+    }
+
+    [Fact]
     public async Task GetOidLinksByUser_AuthorizedAdmin_ReturnsTheUsersLinks()
     {
         var harness = ForCaller(isAdmin: true, callerId: Target, configure: c =>

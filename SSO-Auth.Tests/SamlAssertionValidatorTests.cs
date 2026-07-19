@@ -49,4 +49,51 @@ public class SamlAssertionValidatorTests
         Assert.NotNull(identity);
         Assert.True(identity.Admin);
     }
+
+    [Fact]
+    public void TryValidate_ParsesButFailsValidation_ReturnsFalseAndNullsOutTheResponse()
+    {
+        SamlAssertionValidator.ResetReplaysForTests();
+        var validator = new SamlAssertionValidator(Substitute.For<ILogger>());
+
+        // A well-formed, parseable response whose signature does NOT verify against the configured (foreign)
+        // certificate: TryParse succeeds, so this exercises the parse-ok / validation-fail branch — the one
+        // that disposes the parsed response and sets the out parameter to null (#674 and the documented
+        // "otherwise null" out contract). Nothing else calls TryValidate directly, so without this test that
+        // dispose-and-null branch is exercised by nothing and deleting it would be undetectable.
+        // DoNotValidateAudience isolates the failure to the signature check.
+        var fixture = SamlTestFactory.Create(nameId: "alice");
+        var config = new SamlConfig
+        {
+            SamlCertificate = SamlFixture.ForeignCertificateBase64(),
+            DoNotValidateAudience = true,
+        };
+
+        var result = validator.TryValidate(config, "adfs", "https://jf.example", fixture.EncodeResponse(), out var samlResponse);
+
+        Assert.False(result);
+        Assert.Null(samlResponse);
+    }
+
+    [Fact]
+    public void TryValidate_ParsesAndValidates_ReturnsTrueWithNonNullResponse()
+    {
+        SamlAssertionValidator.ResetReplaysForTests();
+        var validator = new SamlAssertionValidator(Substitute.For<ILogger>());
+
+        // The mirror of the fail path: a correctly-signed response returns true with a non-null out response,
+        // so a mutant that always nulls the out (or always returns false) is caught.
+        var fixture = SamlTestFactory.Create(nameId: "alice");
+        var config = new SamlConfig
+        {
+            SamlCertificate = fixture.CertificateBase64,
+            DoNotValidateAudience = true,
+        };
+
+        var result = validator.TryValidate(config, "adfs", "https://jf.example", fixture.EncodeResponse(), out var samlResponse);
+
+        Assert.True(result);
+        Assert.NotNull(samlResponse);
+        samlResponse.Dispose();
+    }
 }

@@ -484,4 +484,35 @@ public class SamlResponseTests
         // The legitimate constant name still returns exactly the same node set as before the hardening.
         Assert.Equal(new List<string> { "jellyfin-users" }, response.GetCustomAttributes("Role"));
     }
+
+    [Fact]
+    public void GetCustomAttributes_MultiValueRole_AfterAnotherAttribute_PreservesAllValuesInOrder()
+    {
+        // The #678 rewrite's core guarantee is "same nodes, same document order" as the old string-XPath. The
+        // factory only ever emits a single-value Role, so this pins the realistic multi-role case directly: a
+        // NON-Role attribute precedes the Role attribute (so a mutated outer continue->break would skip Role
+        // entirely), and Role carries TWO values (so a mutated inner value loop that stops at the first, or
+        // one that reorders, would drop or swap a value). Role feeds the role->permission mapping, so this is
+        // authorization-relevant, not cosmetic. No signature is needed — GetCustomAttributes reads the DOM.
+        var xml =
+            "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" ID=\"_r\" Version=\"2.0\">" +
+                "<saml:Assertion ID=\"_a\" Version=\"2.0\">" +
+                    "<saml:Subject><saml:NameID>alice</saml:NameID></saml:Subject>" +
+                    "<saml:AttributeStatement>" +
+                        "<saml:Attribute Name=\"Department\"><saml:AttributeValue>engineering</saml:AttributeValue></saml:Attribute>" +
+                        "<saml:Attribute Name=\"Role\">" +
+                            "<saml:AttributeValue>admin</saml:AttributeValue>" +
+                            "<saml:AttributeValue>user</saml:AttributeValue>" +
+                        "</saml:Attribute>" +
+                    "</saml:AttributeStatement>" +
+                "</saml:Assertion>" +
+            "</samlp:Response>";
+        using var response = new SamlResponse(SamlFixture.ForeignCertificateBase64(), SamlFixture.Encode(xml));
+
+        // Exactly both Role values, in document order — kills the truncate-to-first and reorder mutants.
+        Assert.Equal(new List<string> { "admin", "user" }, response.GetCustomAttributes("Role"));
+        // The Role attribute is still reached past the preceding Department attribute — kills the outer
+        // continue->break mutant — and the non-Role attribute reads independently.
+        Assert.Equal(new List<string> { "engineering" }, response.GetCustomAttributes("Department"));
+    }
 }
