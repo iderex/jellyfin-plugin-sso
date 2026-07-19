@@ -1071,14 +1071,16 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
-    public void SyncDependentFields_ExpandsEnclosingSecuritySection()
+    public void SyncDependentFields_ExpandsEnclosingSecuritySectionOnTheOrOfInsecureOrSensitive()
     {
         // #689 (active downgrade hidden behind a collapsed accordion): the insecure toggles live behind a
         // "Show insecure options" list that is itself inside the "Security & hardening" emby-collapse, which
         // is authored collapsed. Expanding only the inner list left an active DisableHttps /
         // AllowExistingAccountLink invisible. syncDependentFields must expand the ENCLOSING accordion section
-        // (by its stable id) when any insecure OR account-adoption-sensitive toggle is active. Pinned
-        // statically (no JS harness): the section id exists in the markup, and syncDependentFields targets it.
+        // (by its stable id) when any insecure OR sensitive toggle is active. No JS runtime harness exists,
+        // so this pins statically both the target (the section id in the markup and the call) AND the
+        // condition shape: the expand is driven by the OR of the two sets, so a `||`->`&&` mutant — which
+        // would stop a sensitive-only (AllowExistingAccountLink) provider from expanding — fails here.
         var html = File.ReadAllText(
             Path.Combine(RepoRoot(), "SSO-Auth", "Config", "configPage.html"));
         var js = File.ReadAllText(
@@ -1096,21 +1098,91 @@ public class ArchitectureConformanceTests
         Assert.True(nextMethod > sync, "The method after syncDependentFields was not found in config.js.");
         var body = js[sync..nextMethod];
 
-        Assert.Contains("setSectionExpanded(", body, StringComparison.Ordinal);
-        Assert.Contains("\"sso-security-section\"", body, StringComparison.Ordinal);
-        Assert.Contains("insecureFieldIds", body, StringComparison.Ordinal);
-        Assert.Contains("sensitiveFieldIds", body, StringComparison.Ordinal);
+        // anyInsecure is derived from the insecure set.
+        Assert.Matches(
+            new Regex(@"anyInsecure\s*=\s*ssoConfigurationPage\.insecureFieldIds\.some\(", RegexOptions.Singleline),
+            body);
 
-        // The sensitive set must include the account-adoption toggles the reviewer flagged as getting no
-        // auto-surface today; these are the exact ids rendered in the "Account adoption (sensitive)" region.
+        // The combined condition is the OR (never AND) of anyInsecure and the sensitive set — the disjunction
+        // a `||`->`&&` mutant would break. Both sets must feed it, not just appear somewhere in the body.
+        Assert.Matches(
+            new Regex(@"anySensitive\s*=\s*anyInsecure\s*\|\|\s*ssoConfigurationPage\.sensitiveFieldIds\.some\(", RegexOptions.Singleline),
+            body);
+
+        // The inner insecure-options list is gated on anyInsecure; the ENCLOSING section on the combined
+        // anySensitive — so the section expands for a sensitive-only provider too.
+        Assert.Matches(
+            new Regex(@"if\s*\(\s*anyInsecure\s*\)\s*\{\s*ssoConfigurationPage\.setInsecureOptionsExpanded\(\s*page,\s*true", RegexOptions.Singleline),
+            body);
+        Assert.Matches(
+            new Regex("if\\s*\\(\\s*anySensitive\\s*\\)\\s*\\{\\s*ssoConfigurationPage\\.setSectionExpanded\\(\\s*page,\\s*\"sso-security-section\"", RegexOptions.Singleline),
+            body);
+
+        // The flag / auto-expand trigger set must contain only settings whose ENABLED state is a downgrade or
+        // an attack-surface widening: the five insecure toggles and AllowExistingAccountLink. It must NOT
+        // contain the fail-closed hardening toggles (RequireVerifiedEmailForAdoption/ForLogin, RequirePkce),
+        // which are OFF by default and whose ON state is MORE secure — flagging those is backwards (#689
+        // re-review). Scoped to the two array literals so a stray mention elsewhere cannot mask a regression.
+        var insecureSet = ArrayLiteralAfter(js, "insecureFieldIds:");
+        var sensitiveSet = ArrayLiteralAfter(js, "sensitiveFieldIds:");
+        var trigger = insecureSet + " " + sensitiveSet;
         foreach (var id in new[]
         {
-            "AllowExistingAccountLink", "RequireVerifiedEmailForAdoption", "RequireVerifiedEmailForLogin",
+            "DisableHttps", "DisablePushedAuthorization", "DoNotValidateEndpoints",
+            "DoNotValidateIssuerName", "DoNotValidateResponseIssuer", "AllowExistingAccountLink",
         })
         {
-            Assert.Contains("\"" + id + "\"", js, StringComparison.Ordinal);
-            Assert.Contains("id=\"" + id + "\"", html, StringComparison.Ordinal);
+            Assert.Contains("\"" + id + "\"", trigger, StringComparison.Ordinal);
         }
+
+        foreach (var hardening in new[]
+        {
+            "RequireVerifiedEmailForAdoption", "RequireVerifiedEmailForLogin", "RequirePkce",
+        })
+        {
+            Assert.DoesNotContain(hardening, trigger, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void ResetEditor_ClearsEveryConditionallyLoadedFieldCategory()
+    {
+        // #689 (provider-switch state bleed): loadProvider fills the text, line-list, folder-list and
+        // role-map categories ONLY under `if (provider[id])`, so the clean slate that prevents a previous
+        // provider's value bleeding through has to come from resetEditor unconditionally clearing every one
+        // of those categories (plus the checkboxes). No JS runtime harness exists to assert the live DOM is
+        // zeroed, so this statically pins that the resetEditor body contains the clear for each category — a
+        // mutant deleting any one category's reset (which would let that category bleed) fails here. Scoped
+        // to the resetEditor body so a clear living in some other method cannot satisfy the check.
+        var js = File.ReadAllText(
+            Path.Combine(RepoRoot(), "SSO-Auth", "Config", "config.js"));
+
+        var start = js.IndexOf("resetEditor:", StringComparison.Ordinal);
+        Assert.True(start >= 0, "resetEditor was not found in config.js.");
+        var nextMethod = js.IndexOf("resetEditorSections:", start, StringComparison.Ordinal);
+        Assert.True(nextMethod > start, "resetEditorSections (the method after resetEditor) was not found in config.js.");
+        var body = js[start..nextMethod];
+
+        // text and line-list categories clear their input value to the empty string ("").
+        Assert.Matches(
+            new Regex("text_fields\\.forEach\\(.*?\\.value = \"\"", RegexOptions.Singleline),
+            body);
+        Assert.Matches(
+            new Regex("text_list_fields\\.forEach\\(.*?\\.value = \"\"", RegexOptions.Singleline),
+            body);
+
+        // checkboxes reset to unchecked.
+        Assert.Matches(
+            new Regex(@"check_fields\.forEach\(.*?\.checked = false;", RegexOptions.Singleline),
+            body);
+
+        // folder-list and role-map categories reset to an empty collection via their populate helpers.
+        Assert.Matches(
+            new Regex(@"folder_list_fields\.forEach\(.*?populateEnabledFolders\(\s*\[\]", RegexOptions.Singleline),
+            body);
+        Assert.Matches(
+            new Regex(@"role_map_fields\.forEach\(.*?populateRoleMappings\(\s*\[\]", RegexOptions.Singleline),
+            body);
     }
 
     [Fact]
@@ -1350,6 +1422,20 @@ public class ArchitectureConformanceTests
     // The markup of the #sso-new-oidc-provider settings form (from the opening tag's id attribute to its
     // closing </form>). Forms are not nested here, so the first </form> after the id marker closes it; the
     // preceding #sso-load-config form is left out because its </form> sits before the marker.
+    // Return the first flat "[ ... ]" array literal that follows a marker (e.g. "sensitiveFieldIds:") in
+    // config.js. Used to scope a membership assertion to a specific field-id set rather than the whole file,
+    // so a stray mention of an id elsewhere cannot mask a regression in the set's contents.
+    private static string ArrayLiteralAfter(string source, string marker)
+    {
+        var m = source.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(m >= 0, $"'{marker}' was not found in config.js.");
+        var open = source.IndexOf('[', m);
+        Assert.True(open > m, $"No array literal follows '{marker}' in config.js.");
+        var close = source.IndexOf(']', open);
+        Assert.True(close > open, $"The array literal after '{marker}' is not closed in config.js.");
+        return source[open..(close + 1)];
+    }
+
     private static string OidcProviderFormMarkup(string html)
     {
         const string marker = "id=\"sso-new-oidc-provider\"";

@@ -10,13 +10,15 @@ const ssoConfigurationPage = {
     "DoNotValidateIssuerName",
     "DoNotValidateResponseIssuer",
   ],
-  // Account-adoption toggles that widen who can sign in / take over an account. Not "insecure defaults" but
-  // sensitive enough that an active one is surfaced the same way (auto-expand the enclosing accordion).
-  sensitiveFieldIds: [
-    "AllowExistingAccountLink",
-    "RequireVerifiedEmailForAdoption",
-    "RequireVerifiedEmailForLogin",
-  ],
+  // The non-insecure settings whose ENABLED state is still a downgrade / attack-surface widening, so they
+  // are surfaced the same way as the insecure toggles (card "Review" flag + auto-expand the enclosing
+  // accordion). Only AllowExistingAccountLink qualifies: turning it ON lets a first SSO login adopt (take
+  // over) a same-named local account. Deliberately EXCLUDES the fail-closed hardening toggles
+  // (RequireVerifiedEmailForAdoption, RequireVerifiedEmailForLogin, RequirePkce): those are OFF by default
+  // and enabling them makes the provider MORE secure, so flagging or force-surfacing them would be
+  // backwards and would cause alert fatigue on well-configured providers. Do not add an OFF-direction
+  // surfacing for them either — it would be noisy on the default.
+  sensitiveFieldIds: ["AllowExistingAccountLink"],
   loadConfiguration: (page) => {
     ApiClient.getPluginConfiguration(ssoConfigurationPage.pluginUniqueId).then(
       (config) => {
