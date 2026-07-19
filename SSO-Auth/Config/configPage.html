@@ -66,6 +66,70 @@
             to accomplish this.
           </p>
 
+          <details class="sso-onlylogin-note" style="margin: 1em 0">
+            <summary>
+              <strong>SSO-only login (disable password login)</strong>
+            </summary>
+            <div class="fieldDescription">
+              <p>
+                An opt-in mode (<code>DisablePasswordLogin</code>) can disable
+                native username/password login so users must sign in through
+                SSO. Read these honest limits before enabling it:
+              </p>
+              <ul>
+                <li>
+                  <strong>There is no global Jellyfin kill-switch.</strong>
+                  Jellyfin core has no server-wide "disable password login"
+                  setting, and this plugin cannot intercept its password
+                  endpoint. The mode is enforced <em>per account</em> by
+                  repointing each user's authentication provider away from the
+                  built-in password provider. It is therefore
+                  <em
+                    >"SSO-only for every account except a designated break-glass
+                    admin"</em
+                  >, not an absolute password kill-switch.
+                </li>
+                <li>
+                  <strong
+                    >A break-glass admin always keeps password login.</strong
+                  >
+                  You must designate one existing, enabled administrator account
+                  that still has a password. That account is never repointed, so
+                  it can always log in with a password even if the identity
+                  provider is unreachable. Keep its password strong and stored
+                  offline &mdash; it is the org's root of recovery. Enabling the
+                  mode is <em>refused</em> unless such an admin is provable.
+                </li>
+                <li>
+                  <strong>The mode is reversible without SSO.</strong> Turning
+                  it off restores native password routing for the affected
+                  accounts and never resets or reveals any password. If you are
+                  ever fully locked out, edit <code>config.xml</code> on disk
+                  (set <code>DisablePasswordLogin</code> back to
+                  <code>false</code>).
+                </li>
+                <li>
+                  <strong>No separation of duties.</strong> Jellyfin has a
+                  single admin role, so one administrator can both design and
+                  activate this mode; the plugin cannot manufacture dual
+                  control. The toggle and the break-glass designation are
+                  elevation-gated and written to the ordinary Jellyfin log
+                  (which is not a tamper-evident audit trail).
+                </li>
+              </ul>
+              <p>
+                The mode, its break-glass designation, and the reversible
+                off-switch are driven by the elevation-gated
+                <code>SSO-Only/Enable</code>, <code>SSO-Only/Disable</code>,
+                <code>SSO-Only/BreakGlassAdmin</code>, and
+                <code>SSO-Only/Status</code> endpoints (they run the fail-closed
+                last-admin guard and the per-user enforcement sweep). Saving
+                this configuration page never changes the SSO-only state. See
+                <code>providers.md</code> for the full runbook.
+              </p>
+            </div>
+          </details>
+
           <!--
             Config export / import (#161). Export downloads a REDACTED, importable document — the provider
             secrets and the server-managed canonical-link maps are withheld by the server, so the file carries

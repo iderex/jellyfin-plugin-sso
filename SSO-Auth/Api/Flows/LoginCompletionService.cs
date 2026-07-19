@@ -76,6 +76,21 @@ internal sealed class LoginCompletionService
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.AccountLinkForbidden));
         }
 
+        // SSO-only re-assertion on the login path (#165, criterion 5 / T-S1): while DisablePasswordLogin is
+        // on, a non-exempt account that authenticates via SSO must not be left routed to Jellyfin's password
+        // provider — that would be a residual password door. Force the plugin's SSO (non-password) provider
+        // id for everyone but the designated break-glass admin, whose password door is deliberately kept.
+        // Only the provider-routing field is affected (SessionMinter writes AuthenticationProviderId from
+        // DefaultProvider), never a permission — the enforcement stays orthogonal to the grant code (T-E3).
+        // Reading the plugin singleton here matches how the sibling flow services read configuration; when
+        // the mode is off (the default) the provider's own DefaultProvider is used unchanged.
+        var defaultProvider = config.DefaultProvider?.Trim();
+        if (SSOPlugin.Instance is { } plugin
+            && plugin.ReadConfiguration(configuration => SsoOnlyLoginGuard.IsEnforcedNonExempt(configuration, identity.Username)))
+        {
+            defaultProvider = SsoAuthenticationProviders.SsoProviderId;
+        }
+
         var sessionParameters = new SessionParameters
         {
             UserId = userId,
@@ -86,7 +101,7 @@ internal sealed class LoginCompletionService
             EnableLiveTv = identity.EnableLiveTv,
             EnableLiveTvManagement = identity.EnableLiveTvManagement,
             AuthResponse = response,
-            DefaultProvider = config.DefaultProvider?.Trim(),
+            DefaultProvider = defaultProvider,
             AvatarUrl = identity.AvatarUrl,
         };
 

@@ -33,8 +33,14 @@ internal static class ConfigImport
     /// </summary>
     /// <param name="live">The live configuration to merge into (mutated in place).</param>
     /// <param name="document">The import document.</param>
-    /// <exception cref="ArgumentException">The document is unsupported, empty, or carries an invalid provider.</exception>
-    internal static void Apply(PluginConfiguration live, ConfigExportDocument document)
+    /// <param name="resolveBreakGlass">
+    /// Resolves a username to its <see cref="BreakGlassAdminState"/> for the SSO-only activation guard (#165);
+    /// the controller supplies one backed by <c>IUserManager</c>. Null (or an unresolved account) makes the
+    /// guard fail closed, so a document asserting SSO-only can never be imported without a provable safe
+    /// admin.
+    /// </param>
+    /// <exception cref="ArgumentException">The document is unsupported, empty, carries an invalid provider, or asserts SSO-only with no surviving admin login path.</exception>
+    internal static void Apply(PluginConfiguration live, ConfigExportDocument document, Func<string, BreakGlassAdminState> resolveBreakGlass = null)
     {
         ArgumentNullException.ThrowIfNull(live);
         ArgumentNullException.ThrowIfNull(document);
@@ -47,6 +53,21 @@ internal static class ConfigImport
 
         var imported = document.Configuration
             ?? throw new ArgumentException("The configuration import document has no configuration payload.");
+
+        // #165: the fail-closed SSO-only guard fires on the import persistence path too (T-T2). A document
+        // asserting DisablePasswordLogin must prove a surviving admin password login path or the whole import
+        // is rejected before anything is merged (the caller runs this inside MutateConfiguration, which
+        // persists nothing when the lambda throws). The SSO-only globals themselves are NOT applied by an
+        // import — like the rate-limit settings they are instance-local operational state with no
+        // blank-means-keep signal, and enabling them also requires the per-user enforcement sweep that only
+        // the SSO-Only endpoints (with IUserManager) can run — so import VALIDATES the assertion fail-closed
+        // but leaves the target's own DisablePasswordLogin/BreakGlassAdminUsername untouched. An operator
+        // enables the mode through the elevated, audited SSO-Only endpoints, not by import.
+        if (imported.DisablePasswordLogin)
+        {
+            var breakGlass = imported.BreakGlassAdminUsername;
+            SsoOnlyLoginGuard.AssertCanActivate(breakGlass, resolveBreakGlass?.Invoke(breakGlass) ?? default);
+        }
 
         // 1. Validate the incoming providers fail-closed BEFORE touching the live configuration, exactly as
         //    the config-page save does (ProviderConfigStore.Save): a malformed Base URL override (#139), an

@@ -224,6 +224,61 @@ expiry). A few provider settings must therefore match, or login is refused (fail
   attacker probing names while the flag is on. This runbook is mirrored on the
   [Security Model](https://github.com/iderex/jellyfin-plugin-sso/wiki/Security-Model) wiki page.
 
+## SSO-only login (`DisablePasswordLogin`) and the break-glass admin
+
+An opt-in mode disables native username/password login so users must sign in through SSO. It is
+threat-modelled in full in [`SSO-ONLY-LOGIN-DESIGN.md`](SSO-ONLY-LOGIN-DESIGN.md); this is the operator
+runbook. **Read the honest limits before enabling it — done naively this is a whole-org lockout footgun.**
+
+**What the plugin can and cannot enforce.** Jellyfin core has **no server-wide "disable password login"
+switch**, and the plugin does not sit on core's password endpoint. The mode is therefore enforced
+**per account** by repointing each user's `AuthenticationProviderId` away from the built-in password
+provider (`Jellyfin.Server.Implementations.Users.DefaultAuthenticationProvider`) to the plugin's own
+provider name, which core routes to its `InvalidAuthenticationProvider` — every password is then rejected
+for that account. The honest framing is **"SSO-only for every account except a designated break-glass
+admin,"** not an absolute password kill-switch. Accounts routed to a **third-party** password provider
+(e.g. LDAP) are outside this lever and are not repointed.
+
+- **The break-glass admin is mandatory and never repointed.** You designate one **existing, enabled
+  administrator** account that still has a **password**. The mode never touches its provider routing, so
+  it can always log in with a password even if the identity provider is down. This account is the org's
+  **root of recovery** — keep its password strong and stored offline. Its usability does not depend on any
+  IdP being reachable, which is the entire point: the guard **never** counts "an admin has an SSO link" as
+  the surviving login path.
+- **Enabling is refused fail-closed** unless that break-glass admin is provable — the activation guard runs
+  on the toggle endpoint and on config import. A refusal changes nothing and is logged
+  (`[SSO Audit] … activation REFUSED …`), with a reason code but no account roster.
+- **Enforcement is per-user.** On activation every non-exempt account on the built-in password provider is
+  repointed to SSO-only; accounts the plugin creates are already SSO-only; a subsequent SSO login
+  re-asserts it. A **native account created via the Jellyfin dashboard _after_ activation** is a Jellyfin
+  event the plugin does not observe, so it may briefly retain a password door — re-run
+  `SSO-Only/Enable` (idempotent) after adding such accounts, or add them through SSO.
+
+**Operating it (all elevation-gated, all audited):**
+
+1. **Designate / change the break-glass admin:** `POST SSO-Only/BreakGlassAdmin` with the admin's username
+   as the JSON body. The target must already be an enabled administrator with a password (the exemption
+   can never _grant_ admin).
+2. **Enable:** `POST SSO-Only/Enable` with the break-glass admin's username as the body. The guard runs; on
+   success every non-exempt account is repointed and the transition is audited.
+3. **Disable (reversible, no SSO needed):** `POST SSO-Only/Disable`. It restores the built-in password
+   provider for the repointed accounts **without resetting or revealing any password hash**.
+4. **Status:** `GET SSO-Only/Status` reports the mode, the break-glass admin, and whether the guard still
+   holds (so you can spot a break-glass admin that was later deleted, demoted, disabled, or password-cleared).
+
+Saving the **plugin configuration page does not change the SSO-only state** — `DisablePasswordLogin` and the
+break-glass designation are server-managed and re-injected on save, so the only ways to change them are the
+endpoints above (guarded) or a raw `config.xml` edit.
+
+**Fully locked out?** (e.g. the break-glass admin was deleted while the mode was on, and SSO is also down.)
+Stop Jellyfin, open the plugin's `config.xml`, set `<DisablePasswordLogin>false</DisablePasswordLogin>`, and
+restart — native password login is restored for the affected accounts (stored hashes are intact). This is
+the documented recovery path the plugin cannot perform for you, exactly like the upgrade runbook above.
+
+**No separation of duties.** Jellyfin has a single admin role, so one administrator can both design and
+activate this mode — the plugin cannot manufacture dual control. The mitigations are the fail-closed guard
+and the audit log; note the audit is Jellyfin's ordinary application log, **not** a tamper-evident chain.
+
 ## Secrets encrypted at rest and downgrade
 
 The plugin's at-rest secrets — the OpenID client secret (`OidSecret`) and the SAML request-signing keys

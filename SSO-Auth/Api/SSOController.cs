@@ -66,6 +66,11 @@ public class SSOController : ControllerBase
     // The account-linking workflow (resolve/adopt/create, legacy re-key, revoke); the controller keeps
     // the authz guards, the one-time-use replay/state consume, and the HTTP mapping (#318).
     private readonly CanonicalLinkService _canonicalLinks;
+
+    // The SSO-only login enforcement (#165): the fail-closed last-admin guard, the per-user provider-id
+    // sweep, and the reversible off-switch. The controller keeps the RequiresElevation guards, the actor
+    // resolution, and the audit; the service keeps the account enumeration and the mode-flag writes.
+    private readonly SsoOnlyLoginService _ssoOnly;
     // The OpenID login flow (#160, #318 step 12): challenge, redirect callback, session-minting
     // authenticate, and manual link. It owns the OpenID-specific process-wide caches (the authorize-state
     // store and the discovery-facts cache) as its own statics; the controller's OpenID endpoints apply the
@@ -111,6 +116,7 @@ public class SSOController : ControllerBase
         _sessionManager = sessionManager;
         _httpClientFactory = httpClientFactory;
         _canonicalLinks = new CanonicalLinkService(userManager, cryptoProvider, SSOPlugin.Instance.ConfigStore, logger);
+        _ssoOnly = new SsoOnlyLoginService(userManager, SSOPlugin.Instance.ConfigStore, logger);
         var avatarService = new AvatarService(userManager, providerManager, serverConfigurationManager, logger, SsoHttp.UserAgent);
         var sessionMinter = new SessionMinter(userManager, avatarService, sessionManager, logger);
         _loginCompletion = new LoginCompletionService(_canonicalLinks, sessionMinter, logger);
@@ -636,7 +642,9 @@ public class SSOController : ControllerBase
         {
             // Validate-then-merge lives in the Config helper; the mutation persists only if it returns without
             // throwing (an invalid document throws inside the lambda, so MutateConfiguration persists nothing).
-            SSOPlugin.Instance.MutateConfiguration(configuration => ConfigImport.Apply(configuration, document));
+            // The break-glass resolver lets Apply run the SSO-only activation guard fail-closed on the import
+            // path (#165, T-T2): a document asserting SSO-only with no surviving admin login path is rejected.
+            SSOPlugin.Instance.MutateConfiguration(configuration => ConfigImport.Apply(configuration, document, _ssoOnly.DescribeBreakGlass));
         }
         catch (ArgumentException ex)
         {
@@ -756,6 +764,113 @@ public class SSOController : ControllerBase
         }
 
         return Ok();
+    }
+
+    /// <summary>
+    /// Reports the current SSO-only login state (#165): whether the mode is on, which account is the
+    /// designated break-glass admin, and whether that designation still satisfies the fail-closed survivor
+    /// guard. Requires administrator privileges. Read-only — it changes nothing.
+    /// </summary>
+    /// <returns>The SSO-only login status.</returns>
+    [Authorize(Policy = Policies.RequiresElevation)]
+    [HttpGet("SSO-Only/Status")]
+    [Produces(MediaTypeNames.Application.Json)]
+    public ActionResult SsoOnlyStatus()
+    {
+        var (disablePasswordLogin, breakGlassAdmin) = SSOPlugin.Instance.ReadConfiguration(
+            configuration => (configuration.DisablePasswordLogin, configuration.BreakGlassAdminUsername));
+
+        // The guard is evaluated live against the current account state so the page can warn if the
+        // break-glass admin was deleted, demoted, disabled, or lost its password after activation (T-D2).
+        var guardSatisfied = SsoOnlyLoginGuard.Evaluate(breakGlassAdmin, _ssoOnly.DescribeBreakGlass(breakGlassAdmin))
+            == SsoOnlyGuardVerdict.Allow;
+
+        return Ok(new
+        {
+            DisablePasswordLogin = disablePasswordLogin,
+            BreakGlassAdminUsername = breakGlassAdmin,
+            GuardSatisfied = guardSatisfied,
+        });
+    }
+
+    /// <summary>
+    /// Turns SSO-only login on (#165), designating <paramref name="breakGlassAdminUsername"/> as the account
+    /// whose native password login is never disabled. Requires administrator privileges. Fail-closed: the
+    /// last-admin guard runs first, and unless the designated account is an existing, enabled administrator
+    /// that still has a password, the activation is refused with a clear, non-enumerating message and nothing
+    /// is changed. On success every non-exempt account is repointed off the password provider and the
+    /// transition is audited.
+    /// </summary>
+    /// <param name="breakGlassAdminUsername">The administrator account to keep password-capable as the break-glass door.</param>
+    /// <returns>Ok on activation, or 400 with the refusal reason when the guard rejects it.</returns>
+    [Authorize(Policy = Policies.RequiresElevation)]
+    [HttpPost("SSO-Only/Enable")]
+    [Consumes(MediaTypeNames.Application.Json)]
+    public async Task<ActionResult> EnableSsoOnly([FromBody] string breakGlassAdminUsername)
+    {
+        var actor = await ResolveActorAsync().ConfigureAwait(false);
+        var outcome = await _ssoOnly.TryEnableAsync(breakGlassAdminUsername).ConfigureAwait(false);
+        if (outcome.Verdict != SsoOnlyGuardVerdict.Allow)
+        {
+            // Fail closed: a blocked lockout attempt is audited (reason CODE only, no roster) and refused.
+            SsoAudit.SsoOnlyLoginActivationRefused(_logger, actor, outcome.Verdict.ToString());
+            return BadRequest(SsoOnlyLoginGuard.PublicRefusalMessage);
+        }
+
+        SsoAudit.SsoOnlyLoginEnabled(_logger, actor, outcome.BreakGlassAdmin, outcome.RepointedCount);
+        return Ok();
+    }
+
+    /// <summary>
+    /// Turns SSO-only login off (#165), the reversible no-SSO off-switch: it restores native password
+    /// routing for every account the mode repointed, WITHOUT resetting or exposing any password. Requires
+    /// administrator privileges. Audited on the transition.
+    /// </summary>
+    /// <returns>Ok once password routing is restored.</returns>
+    [Authorize(Policy = Policies.RequiresElevation)]
+    [HttpPost("SSO-Only/Disable")]
+    public async Task<ActionResult> DisableSsoOnly()
+    {
+        var actor = await ResolveActorAsync().ConfigureAwait(false);
+        var restored = await _ssoOnly.DisableAsync().ConfigureAwait(false);
+        SsoAudit.SsoOnlyLoginDisabled(_logger, actor, restored);
+        return Ok();
+    }
+
+    /// <summary>
+    /// Sets or changes the designated break-glass administrator (#165) — the account SSO-only mode never
+    /// repoints. Requires administrator privileges. Fail-closed: the target must be an existing, enabled
+    /// administrator that still has a password (the exemption can never point at a non-admin, so it cannot
+    /// grant admin — T-E1); an unqualified target is refused and nothing changes. When the mode is already
+    /// on, the change re-asserts the enforcement so the former break-glass admin is repointed. Audited.
+    /// </summary>
+    /// <param name="username">The administrator account to designate as the break-glass admin.</param>
+    /// <returns>Ok on success, or 400 with the refusal reason when the target does not qualify.</returns>
+    [Authorize(Policy = Policies.RequiresElevation)]
+    [HttpPost("SSO-Only/BreakGlassAdmin")]
+    [Consumes(MediaTypeNames.Application.Json)]
+    public async Task<ActionResult> DesignateBreakGlassAdmin([FromBody] string username)
+    {
+        var actor = await ResolveActorAsync().ConfigureAwait(false);
+        var outcome = await _ssoOnly.TryDesignateBreakGlassAsync(username).ConfigureAwait(false);
+        if (outcome.Verdict != SsoOnlyGuardVerdict.Allow)
+        {
+            SsoAudit.SsoOnlyLoginActivationRefused(_logger, actor, outcome.Verdict.ToString());
+            return BadRequest(SsoOnlyLoginGuard.PublicRefusalMessage);
+        }
+
+        SsoAudit.BreakGlassAdminDesignated(_logger, actor, outcome.BreakGlassAdmin);
+        return Ok();
+    }
+
+    // Resolves the elevated caller's own username for the audit "actor" field, fail-soft: every SSO-Only
+    // endpoint sits behind [Authorize(RequiresElevation)], so the caller is an administrator, but an
+    // unresolved authorization info still yields a non-null placeholder rather than throwing — the audit
+    // line must never be the thing that fails a security-relevant transition.
+    private async Task<string> ResolveActorAsync()
+    {
+        var auth = await _authContext.GetAuthorizationInfo(HttpContext.Request).ConfigureAwait(false);
+        return auth?.User?.Username ?? "unknown";
     }
 
     /// <summary>
