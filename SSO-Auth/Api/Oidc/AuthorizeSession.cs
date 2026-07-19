@@ -1,7 +1,7 @@
 using System;
 using Duende.IdentityModel.OidcClient;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 
 /// <summary>
 /// The in-flight OpenID authorize state as a closed, immutable sum of two variants: a

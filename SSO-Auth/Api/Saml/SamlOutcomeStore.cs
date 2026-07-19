@@ -13,7 +13,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Saml;
 /// token and hands the intermediate auth page only that token — never the assertion. The same-origin
 /// session-mint leg redeems the token once and completes the login from the stored outcome, so the signed
 /// XML no longer round-trips through the browser and is not parsed or validated a second time. This is the
-/// SAML analogue of <see cref="OidcStateStore"/>'s one-time authorize-state redeem: cap-bounded
+/// SAML analogue of <see cref="Jellyfin.Plugin.SSO_Auth.Api.Oidc.OidcStateStore"/>'s one-time authorize-state redeem: cap-bounded
 /// registration, an atomic one-time claim, and an <see cref="IntervalGate"/>-throttled expired-entry sweep.
 /// </summary>
 /// <remarks>

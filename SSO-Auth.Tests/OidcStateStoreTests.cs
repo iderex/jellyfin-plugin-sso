@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Duende.IdentityModel.OidcClient;
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 using Xunit;
 
 namespace Jellyfin.Plugin.SSO_Auth.Tests;

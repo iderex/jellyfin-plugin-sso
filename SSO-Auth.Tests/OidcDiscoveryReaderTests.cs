@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Duende.IdentityModel.OidcClient;
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using Xunit;

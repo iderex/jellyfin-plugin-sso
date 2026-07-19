@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using Jellyfin.Plugin.SSO_Auth.Config;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 
 /// <summary>
 /// Names the per-provider OpenID options that switch off an RFC 9700-mandated protection (#140), so

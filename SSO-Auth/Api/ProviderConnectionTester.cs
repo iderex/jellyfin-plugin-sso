@@ -5,10 +5,13 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading.Tasks;
 using Duende.IdentityModel.OidcClient;
+using Jellyfin.Plugin.SSO_Auth.Api.Oidc;
+using Jellyfin.Plugin.SSO_Auth.Api.Provider;
+using Jellyfin.Plugin.SSO_Auth.Api.Saml;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Microsoft.Extensions.Logging;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api.Provider;
+namespace Jellyfin.Plugin.SSO_Auth.Api;
 
 /// <summary>
 /// Runs an admin-triggered Test-connection probe against a STORED provider configuration (#163) so an

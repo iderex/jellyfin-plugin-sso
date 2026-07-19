@@ -1,6 +1,6 @@
 using Duende.IdentityModel.OidcClient;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 
 /// <summary>
 /// The outcome of the OpenID challenge's single discovery read (<see cref="OidcDiscoveryReader"/>, #450):

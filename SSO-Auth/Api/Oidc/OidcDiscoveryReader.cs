@@ -6,7 +6,7 @@ using Duende.IdentityModel.OidcClient;
 using Jellyfin.Plugin.SSO_Auth.Api.Net;
 using Microsoft.Extensions.Logging;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 
 /// <summary>
 /// Reads a provider's OpenID discovery document ONCE at the challenge and returns both the two

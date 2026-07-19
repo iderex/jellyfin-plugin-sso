@@ -4,7 +4,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 
 /// <summary>
 /// The trailing <c>{protocol}/{path-kind}/{provider}</c> suffix that both <see cref="ChallengePath"/>
-/// and <see cref="OidcCallbackPath"/> anchor their new-vs-legacy route classification to (#411). Anchoring
+/// and <see cref="Jellyfin.Plugin.SSO_Auth.Api.Oidc.OidcCallbackPath"/> anchor their new-vs-legacy route classification to (#411). Anchoring
 /// to the suffix — rather than the first protocol-like token found anywhere in the path — keeps a
 /// protocol-like reverse-proxy prefix (e.g. <c>/OID/start/proxy/...</c>) from deciding the spelling (#337).
 /// Each caller keeps its own terminal comparison (which protocol/path-kind values it accepts) and its own
