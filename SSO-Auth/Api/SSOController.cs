@@ -138,15 +138,16 @@ public class SSOController : ControllerBase
         [FromRoute] string provider,
         [FromQuery] string state)
     {
-        if (RateLimitCheck("callback") is { } throttled)
+        if (RateLimitCheck(SsoRateLimitClass.Callback) is { } throttled)
         {
-            return throttled;
+            return BrowserErrorPage.Wrap(throttled, Request, Response);
         }
 
         // The OpenID redirect callback lives in the flow service (#160, #318): it validates the
         // browser-bound state, exchanges the code, validates the id_token and RFC 9207 response issuer,
         // applies the role gate, and renders the security-headered intermediate auth page on the response.
-        return await _oidc.CallbackAsync(provider, state, Request, Response).ConfigureAwait(false);
+        // This endpoint is browser-navigated, so a plain-text rejection is restyled as an HTML page (#668).
+        return BrowserErrorPage.Wrap(await _oidc.CallbackAsync(provider, state, Request, Response).ConfigureAwait(false), Request, Response);
     }
 
     /// <summary>
@@ -159,15 +160,16 @@ public class SSOController : ControllerBase
     [HttpGet("OID/start/{provider}")]
     public async Task<ActionResult> OidChallenge(string provider, [FromQuery] bool isLinking = false)
     {
-        if (RateLimitCheck("challenge") is { } throttled)
+        if (RateLimitCheck(SsoRateLimitClass.Challenge) is { } throttled)
         {
-            return throttled;
+            return BrowserErrorPage.Wrap(throttled, Request, Response);
         }
 
         // The OpenID challenge lives in the flow service (#160, #318): it reads discovery, applies the
         // PKCE gate, prepares the authorization request, registers the browser-bound authorize state, and
         // redirects to the identity provider (setting the binding cookie on the response).
-        return await _oidc.ChallengeAsync(provider, isLinking, Request, Response).ConfigureAwait(false);
+        // This endpoint is browser-navigated, so a plain-text rejection is restyled as an HTML page (#668).
+        return BrowserErrorPage.Wrap(await _oidc.ChallengeAsync(provider, isLinking, Request, Response).ConfigureAwait(false), Request, Response);
     }
 
     // Rejects a malformed canonical base-URL override (#139) at the OID/SAML Add endpoints. These persist
@@ -387,7 +389,7 @@ public class SSOController : ControllerBase
         // [Authorize] filter rejects a non-elevated caller before the body runs, so an unauthorized request
         // never reaches the limiter (no rate-limit oracle). Once past it, the shared "test" budget caps how
         // fast an authorized admin can drive the probe's outbound discovery fetch.
-        if (RateLimitCheck("test") is { } throttled)
+        if (RateLimitCheck(SsoRateLimitClass.Test) is { } throttled)
         {
             return throttled;
         }
@@ -426,7 +428,7 @@ public class SSOController : ControllerBase
     [Produces(MediaTypeNames.Application.Json)]
     public async Task<ActionResult> OidAuth(string provider, [FromBody] AuthResponse response)
     {
-        if (RateLimitCheck("auth") is { } throttled)
+        if (RateLimitCheck(SsoRateLimitClass.Auth) is { } throttled)
         {
             return throttled;
         }
@@ -459,15 +461,16 @@ public class SSOController : ControllerBase
     [HttpPost("SAML/post/{provider}")]
     public ActionResult SamlCallback(string provider, [FromQuery] string relayState = null, [FromForm(Name = "SAMLResponse")] string formSamlResponse = null)
     {
-        if (RateLimitCheck("callback") is { } throttled)
+        if (RateLimitCheck(SsoRateLimitClass.Callback) is { } throttled)
         {
-            return throttled;
+            return BrowserErrorPage.Wrap(throttled, Request, Response);
         }
 
         // The SAML assertion-consumer callback lives in the flow service (#160, #318): it validates the
         // signed response and, on a passing role gate, renders the security-headered intermediate auth
         // page on the response.
-        return _saml.Callback(provider, relayState, formSamlResponse, Request, Response);
+        // This endpoint is browser-navigated, so a plain-text rejection is restyled as an HTML page (#668).
+        return BrowserErrorPage.Wrap(_saml.Callback(provider, relayState, formSamlResponse, Request, Response), Request, Response);
     }
 
     /// <summary>
@@ -480,15 +483,16 @@ public class SSOController : ControllerBase
     [HttpGet("SAML/start/{provider}")]
     public ActionResult SamlChallenge(string provider, [FromQuery] bool isLinking = false)
     {
-        if (RateLimitCheck("challenge") is { } throttled)
+        if (RateLimitCheck(SsoRateLimitClass.Challenge) is { } throttled)
         {
-            return throttled;
+            return BrowserErrorPage.Wrap(throttled, Request, Response);
         }
 
         // The SAML challenge lives in the flow service (#160, #318): it builds the AuthnRequest, binds it
         // to the initiating browser (setting the binding cookie on the response), signs it when the
         // provider opts in (#167), and redirects to the identity provider.
-        return _saml.Challenge(provider, isLinking, Request, Response);
+        // This endpoint is browser-navigated, so a plain-text rejection is restyled as an HTML page (#668).
+        return BrowserErrorPage.Wrap(_saml.Challenge(provider, isLinking, Request, Response), Request, Response);
     }
 
     /// <summary>
@@ -504,7 +508,7 @@ public class SSOController : ControllerBase
     [HttpGet("SAML/metadata/{provider}")]
     public ActionResult SamlMetadata(string provider)
     {
-        if (RateLimitCheck("metadata") is { } throttled)
+        if (RateLimitCheck(SsoRateLimitClass.Metadata) is { } throttled)
         {
             return throttled;
         }
@@ -551,6 +555,15 @@ public class SSOController : ControllerBase
             configuration.SamlConfigs[provider] = newConfig;
         });
         SsoAudit.ProviderConfigured(_logger, SamlProtocol, provider);
+
+        // Mirror OidAdd (#140/#672): a SAML provider added with a default-on protection disabled
+        // (DoNotValidateAudience) leaves the same auditable [SSO Audit] trace an OpenID escape hatch does.
+        var insecure = SamlInsecureToggles.Enabled(newConfig);
+        if (insecure.Count > 0)
+        {
+            SsoAudit.InsecureOptionsEnabled(_logger, SamlProtocol, provider, insecure);
+        }
+
         return Ok();
     }
 
@@ -683,6 +696,26 @@ public class SSOController : ControllerBase
             }
         }
 
+        // A mistaken or hostile import that disables a default-on SAML protection (DoNotValidateAudience)
+        // must leave the same [SSO Audit] trace the OpenID escape hatches above do (#672) — the import path
+        // is exactly one of the failure scenarios that issue calls out.
+        if (document.Configuration?.SamlConfigs is { } samlConfigs)
+        {
+            foreach (var kvp in samlConfigs)
+            {
+                if (kvp.Value is null)
+                {
+                    continue;
+                }
+
+                var insecure = SamlInsecureToggles.Enabled(kvp.Value);
+                if (insecure.Count > 0)
+                {
+                    SsoAudit.InsecureOptionsEnabled(_logger, SamlProtocol, kvp.Key, insecure);
+                }
+            }
+        }
+
         return NoContent();
     }
 
@@ -697,7 +730,7 @@ public class SSOController : ControllerBase
     [Produces(MediaTypeNames.Application.Json)]
     public async Task<ActionResult> SamlAuth(string provider, [FromBody] AuthResponse response)
     {
-        if (RateLimitCheck("auth") is { } throttled)
+        if (RateLimitCheck(SsoRateLimitClass.Auth) is { } throttled)
         {
             return throttled;
         }
@@ -732,7 +765,7 @@ public class SSOController : ControllerBase
         // everywhere, persists a provider switch, and revokes the user's active sessions (#440). Its own
         // "unregister" class carries an independent budget, so it neither starves nor is starved by the
         // link/unlink write surface's "link" bucket (#382) or the anonymous login flows.
-        if (RateLimitCheck("unregister") is { } throttled)
+        if (RateLimitCheck(SsoRateLimitClass.Unregister) is { } throttled)
         {
             return throttled;
         }
@@ -905,7 +938,7 @@ public class SSOController : ControllerBase
         // refused before the limiter is consulted (no rate-limit oracle), then the shared gate caps how fast
         // an authorized caller can drive the config-XML disk writes this write surface performs. "link" is a
         // distinct endpoint class, so its budget is independent of the anonymous login flows.
-        if (RateLimitCheck("link") is { } throttled)
+        if (RateLimitCheck(SsoRateLimitClass.Link) is { } throttled)
         {
             return throttled;
         }
@@ -940,7 +973,7 @@ public class SSOController : ControllerBase
         // Throttle after the caller-authz guard (#382): a name-miss DELETE still runs a full persist under the
         // global config lock, so this endpoint is capped too. It shares the "link" budget with AddCanonicalLink
         // — one bucket per client for the whole link/unlink write surface — while the 403 stays first.
-        if (RateLimitCheck("link") is { } throttled)
+        if (RateLimitCheck(SsoRateLimitClass.Link) is { } throttled)
         {
             return throttled;
         }

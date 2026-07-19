@@ -40,6 +40,19 @@ public class SsoOnlyLoginServiceTests
         return user;
     }
 
+    // A third-party IAuthenticationProvider id (e.g. an LDAP plugin) — neither Jellyfin's built-in password
+    // provider nor this plugin's SSO provider. Named once so the #690 skip tests read intent.
+    private const string ThirdPartyProviderId = "Some.ThirdParty.LdapAuthenticationProvider";
+
+    private static User ThirdPartyUser(string name, Guid id)
+    {
+        // An account already routed to a third-party auth provider: it has no built-in-password door, so the
+        // enable sweep skips it and (post-#690) the login path must skip it too — keep its current provider.
+        var user = new User(name, "SSO-Auth", "Default") { Id = id, Password = "hash-" + name };
+        user.AuthenticationProviderId = ThirdPartyProviderId;
+        return user;
+    }
+
     private static User SsoOnlyUser(string name, Guid id)
     {
         // The shape CanonicalLinkService gives every account it creates: routed to the plugin's SSO provider
@@ -456,6 +469,31 @@ public class SsoOnlyLoginServiceTests
 
         Assert.Equal(SsoAuthenticationProviders.SsoProviderId, decision.DefaultProvider);
         Assert.DoesNotContain(SsoUserId, config.SsoOnlyRepointedUserIds);
+    }
+
+    [Fact]
+    public void ResolveLoginEnforcement_ModeOn_ThirdPartyProviderAccount_NotRepointed_AndNeverTracked()
+    {
+        // #690: an account currently on a THIRD-PARTY provider (neither the built-in password provider nor the
+        // SSO provider) already has no password door, and the enable sweep skips it. The login path must skip
+        // it too — keep it on its current provider and never track it. Before the fix the login path repointed
+        // it to SSO while the tracking write (gated on IsDefaultPasswordProvider) left it UNTRACKED, so
+        // DisableAsync/ReconcileOnStartupAsync could never reverse the move. This pins the two paths in
+        // agreement, mirroring the natively-SSO sweep-skip assertion above.
+        var root = PasswordAdmin("root", RootId);
+        var ldap = ThirdPartyUser("alice", AliceId);
+        var (service, config, _) = Build(new[] { root, ldap }, c =>
+        {
+            c.DisablePasswordLogin = true;
+            c.BreakGlassAdminUsername = "root";
+        });
+
+        var decision = service.ResolveLoginEnforcement(AliceId, configuredDefaultProvider: null);
+
+        // Kept on its third-party provider (NOT repointed to SSO), not the break-glass admin, and not tracked.
+        Assert.Equal(ThirdPartyProviderId, decision.DefaultProvider);
+        Assert.False(decision.IsBreakGlassAdmin);
+        Assert.DoesNotContain(AliceId, config.SsoOnlyRepointedUserIds);
     }
 
     [Fact]

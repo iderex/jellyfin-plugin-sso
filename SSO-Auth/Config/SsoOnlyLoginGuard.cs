@@ -134,27 +134,44 @@ internal static class SsoOnlyLoginGuard
 
     /// <summary>
     /// Decides the authentication provider id an SSO login should write for the given account (#165,
-    /// Finding 1/2 fixes). When SSO-only is OFF, the provider's own configured default is used unchanged.
-    /// When it is ON, a non-exempt account is forced onto the SSO (non-password) provider so no residual
-    /// password door survives, and the break-glass admin is PINNED to the built-in password provider so an
-    /// SSO login can never strip its password door (operators often set a provider's DefaultProvider to the
-    /// SSO provider id; without this pin the break-glass admin could lock the whole org out when the IdP
-    /// later fails). Pure: the caller reads it under the config lock and passes the result to the minter.
+    /// Finding 1/2 fixes, #690). When SSO-only is OFF, the provider's own configured default is used
+    /// unchanged. When it is ON, the break-glass admin is PINNED to the built-in password provider so an SSO
+    /// login can never strip its password door (operators often set a provider's DefaultProvider to the SSO
+    /// provider id; without this pin the break-glass admin could lock the whole org out when the IdP later
+    /// fails). A non-exempt account is forced onto the SSO (non-password) provider ONLY when it currently
+    /// routes to the built-in password provider — the exact <see cref="SsoAuthenticationProviders.IsDefaultPasswordProvider"/>
+    /// test the enable sweep uses. An account already on a THIRD-PARTY provider (neither the built-in password
+    /// provider nor the SSO provider) keeps its current provider, matching the sweep, which skips it: SSO-only
+    /// closes the PASSWORD door, and such an account already has none (#690). Repointing it here would be
+    /// repointed-but-UNTRACKED — the caller's tracking write is gated on the same password-provider test — so
+    /// the off-switch and boot reconcile could never reverse it. An account already on the SSO provider keeps
+    /// the SSO provider (a no-op write). Pure: the caller reads it under the config lock and passes the result
+    /// to the minter.
     /// </summary>
     /// <param name="configuration">The live plugin configuration.</param>
     /// <param name="username">The account username completing the SSO login.</param>
+    /// <param name="currentProviderId">The account's CURRENT <c>AuthenticationProviderId</c>, used to leave a third-party-provider account untouched exactly as the sweep does.</param>
     /// <param name="configuredDefaultProvider">The provider config's own <c>DefaultProvider</c> (already trimmed), applied only while the mode is off.</param>
     /// <returns>The provider id to write, or the configured default when the mode is off.</returns>
-    internal static string ResolveLoginProvider(PluginConfiguration configuration, string username, string configuredDefaultProvider)
+    internal static string ResolveLoginProvider(PluginConfiguration configuration, string username, string currentProviderId, string configuredDefaultProvider)
     {
         if (configuration is not { DisablePasswordLogin: true })
         {
             return configuredDefaultProvider;
         }
 
-        return IsBreakGlass(configuration, username)
-            ? SsoAuthenticationProviders.DefaultPasswordProviderId
-            : SsoAuthenticationProviders.SsoProviderId;
+        if (IsBreakGlass(configuration, username))
+        {
+            return SsoAuthenticationProviders.DefaultPasswordProviderId;
+        }
+
+        // Match the enable sweep's skip exactly (SweepEnableAsync gates its repoint on this same test): only an
+        // account still on the built-in password provider is moved to the SSO provider. An account on any other
+        // provider — the SSO provider (no-op) or a third-party provider (kept) — is left on it, so the login
+        // path and the sweep can never disagree and no account is repointed-but-untracked (#690).
+        return SsoAuthenticationProviders.IsDefaultPasswordProvider(currentProviderId)
+            ? SsoAuthenticationProviders.SsoProviderId
+            : currentProviderId;
     }
 
     /// <summary>

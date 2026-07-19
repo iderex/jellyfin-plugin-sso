@@ -7,6 +7,61 @@ digit and differ by release cadence). The channel and Jellyfin generation are a
 suffix on the git tag and GitHub release name only (`-stable`, `-beta.<run>`,
 `-JF12-*`), never part of the installed numeric version.
 
+## 4.3.0
+
+A feature release. This line advances the plugin's maturity to **Beta** on the
+back of a large login-hardening and code-quality pass: SSO-only login
+enforcement, full role-based access control, a redesigned configuration UI, and
+a broad security + perfection audit.
+
+### Added
+
+- **SSO-only login enforcement (#165).** An optional mode that closes the
+  built-in username/password door so accounts authenticate only through the
+  configured SSO provider. It is fail-closed by construction: activation is
+  refused unless a designated, enabled break-glass administrator keeps a working
+  password login, so no reachable configuration can strand the last admin. The
+  per-login enforcement and the enable sweep agree on which accounts are moved,
+  and the mode is fully reversible on disable.
+- **Full role-based access control (#164).** Providers can map identity-provider
+  roles to Jellyfin permissions through a generic permission-role mapping,
+  validated fail-closed at save so a malformed mapping is rejected at the door
+  rather than silently granting nothing at login.
+- **Redesigned configuration UI (#697).** The admin settings page was reworked
+  into clearer, native accordion sections.
+
+### Changed
+
+- **The self-service linking and auth-completion pages were polished
+  (#666, #667, #669).** The linking page renders a proper help label and an
+  empty-state placeholder instead of bare headings; the auth-completion status
+  line is an `aria-live` region that announces failures to assistive tech and
+  now offers a "Return to login" link instead of dead-ending.
+- **Browser-navigated login errors are now styled (#668).** A rejection reached
+  by direct navigation (the OpenID/SAML challenge and callback routes) is
+  rendered as a themed HTML page with a return link and a strict
+  Content-Security-Policy, instead of raw plain text on what looked like a broken
+  page. The uniform denial message was reworded to be actionable without
+  enumerating.
+- **Internal consolidation (#670, #671, #695).** The duplicated challenge
+  redirect-path resolver and a single-caller OpenID wrapper were unified, and the
+  provider-config validation doc was corrected to describe the single source of
+  truth — no behavioural change, locked in by conformance tests.
+
+### Security
+
+- **SAML parsing hardened (#698).**
+- **SAML `DoNotValidateAudience` is now audited (#672).** Enabling this default-on
+  protection's escape hatch leaves an `[SSO Audit]` trail on save and import, at
+  parity with the OpenID insecure toggles.
+- **Rate-limit endpoint-class bucket keys are typed (#694).** The per-client
+  limiter keys are named constants rather than bare string literals, so a typo
+  can no longer silently split a security budget; a conformance test forbids
+  regressions.
+- **SSO-only no longer strips a third-party provider account's login path (#690).**
+- **The OpenID authorize-state store is keyed on UTC (#696), and role-privilege
+  mapping guards null folder sets (#693).**
+
 ## 4.2.1
 
 A bug-fix release.

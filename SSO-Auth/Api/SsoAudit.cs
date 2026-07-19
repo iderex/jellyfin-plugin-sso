@@ -188,7 +188,7 @@ internal static class SsoAudit
             breakGlassAdmin?.ReplaceLineEndings(string.Empty));
     }
 
-    /// <summary>Records a provider being saved with one or more security checks disabled (#140).</summary>
+    /// <summary>Records a provider being saved with one or more default-on security checks disabled (#140, #672).</summary>
     /// <param name="logger">The logger.</param>
     /// <param name="protocol">The protocol (OpenID or SAML).</param>
     /// <param name="provider">The provider name.</param>
@@ -200,8 +200,12 @@ internal static class SsoAudit
             return;
         }
 
+        // Shared by OpenID (#140) and SAML (#672), so the wording stays protocol-neutral: each named option
+        // switches off a protection that is on by default (OpenID transport/issuer/endpoint binding, SAML
+        // audience binding). Naming the exact options is what the audit trail needs; the per-option detail
+        // lives in each toggle's config doc.
         logger.LogWarning(
-            "[SSO Audit] {Protocol} provider '{Provider}' saved with security checks disabled: {Options}. These weaken RFC 9700 transport/issuer/endpoint validation; keep them only if the provider genuinely requires it. DisableHttps in particular exposes the id_token signing keys (JWKS) to a man-in-the-middle.",
+            "[SSO Audit] {Protocol} provider '{Provider}' saved with security checks disabled: {Options}. Each switches off a default-on protection on the login path (such as transport, issuer/audience, or endpoint binding); keep them only if the provider genuinely requires it.",
             protocol,
             provider?.ReplaceLineEndings(string.Empty),
             string.Join(", ", options));

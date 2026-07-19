@@ -158,4 +158,46 @@ public class WebResponseTests
         Assert.Contains("Too many attempts. Please wait a moment and try again.", html);
         Assert.Contains("Could not link this account. The provider may be disabled, or linking is not permitted.", html);
     }
+
+    [Fact]
+    public void Generator_AnnouncesStatusToAssistiveTech_AndDeclaresLanguage()
+    {
+        // #667: the served page is reached directly by end users. The status line must be an
+        // aria-live region so its message swap after the async login attempt is announced, and the
+        // document must declare its language.
+        var html = WebResponse.Generator("ZGF0YQ==", "keycloak", "https://jf.example.com", "OID", "n0nce");
+
+        Assert.Contains("<html lang='en'>", html);
+        Assert.Contains("role='status'", html);
+        Assert.Contains("aria-live='polite'", html);
+    }
+
+    [Fact]
+    public void Generator_TerminalFailure_OffersReturnToLoginLink()
+    {
+        // #667: a failed or throttled attempt must not dead-end. Both terminal-failure branches call
+        // showReturnLink(), which builds a "Return to login" anchor to the known-safe base URL.
+        var html = WebResponse.Generator("ZGF0YQ==", "keycloak", "https://jf.example.com", "OID", "n0nce", isLinking: true);
+
+        Assert.Contains("function showReturnLink()", html);
+        Assert.Contains("'Return to login'", html);
+        Assert.Contains("ssoBaseUrl + '/web/index.html'", html);
+        // The login-failure branch and the rejected-link branch both invoke it; success paths do not.
+        Assert.Contains("showReturnLink();", html);
+        // Pin that the linking branch guards the call behind the failure condition, so a successful
+        // (2xx) link does not offer a "return to login" as if it had failed. Deleting the `if (!linked)`
+        // guard (which would make the link appear on a successful link too) must fail this test.
+        Assert.Contains("if (!linked) {", html);
+    }
+
+    [Theory]
+    [InlineData("jf.example.com")]
+    [InlineData("")]
+    public void Generator_BaseUrlWithoutProtocolSeparator_ThrowsInsteadOfMisSplitting(string baseUrl)
+    {
+        // #679: a baseUrl lacking the "//" separator would otherwise silently mis-split via
+        // Substring(0, 1) / Substring(1) and build a corrupt ssoBaseUrl; it must fail closed.
+        Assert.Throws<System.ArgumentException>(
+            () => WebResponse.Generator("ZGF0YQ==", "keycloak", baseUrl, "OID", "n0nce"));
+    }
 }
