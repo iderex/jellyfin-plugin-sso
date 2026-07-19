@@ -249,6 +249,36 @@ public class SamlSpMetadataBuilderTests
     }
 
     [Fact]
+    public void Build_WithRolloverAndLegacyAcs_KeepsBothKeyDescriptorsBeforeBothAssertionConsumerServices()
+    {
+        // The combined worst case for XSD element order: signing-key rollover (#491) emits TWO KeyDescriptors
+        // and the legacy ACS (#569) emits TWO AssertionConsumerService entries in the SAME document. The
+        // metadata XSD requires every KeyDescriptor to precede every AssertionConsumerService, so pin that the
+        // last KeyDescriptor still comes before the first ACS when both features are on at once — a future edit
+        // that interleaves them (invalid for strict IdPs like ADFS/Azure AD) fails here, not only in the field.
+        using var primary = SamlSigningKeyFactory.CreateCertificate();
+        using var rollover = SamlSigningKeyFactory.CreateCertificate();
+        const string legacyAcs = "https://jellyfin.example.com/sso/SAML/p/adfs";
+
+        var spDescriptor = XDocument.Parse(
+                SamlSpMetadataBuilder.Build(
+                    EntityId,
+                    AcsUrl,
+                    Convert.ToBase64String(primary.RawData),
+                    Convert.ToBase64String(rollover.RawData),
+                    legacyAcs))
+            .Root!.Element(Md + "SPSSODescriptor")!;
+
+        Assert.Equal(2, spDescriptor.Elements(Md + "KeyDescriptor").Count());
+        Assert.Equal(2, spDescriptor.Elements(Md + "AssertionConsumerService").Count());
+
+        var childNames = spDescriptor.Elements().Select(e => e.Name).ToList();
+        var lastKeyDescriptorIndex = childNames.FindLastIndex(n => n == Md + "KeyDescriptor");
+        var firstAcsIndex = childNames.FindIndex(n => n == Md + "AssertionConsumerService");
+        Assert.True(lastKeyDescriptorIndex < firstAcsIndex, "Every KeyDescriptor must precede AssertionConsumerService (SAML metadata XSD order).");
+    }
+
+    [Fact]
     public void Build_DeclaresUtf8Encoding()
     {
         // A StringWriter is UTF-16 internally; the builder reports UTF-8 so the declaration matches the
