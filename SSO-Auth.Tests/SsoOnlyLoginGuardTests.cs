@@ -129,17 +129,50 @@ public class SsoOnlyLoginGuardTests
         // login strips their door and the whole org is locked out once the IdP is down.
         var config = new PluginConfiguration { DisablePasswordLogin = true, BreakGlassAdminUsername = "root" };
 
-        var resolved = SsoOnlyLoginGuard.ResolveLoginProvider(config, "root", SsoAuthenticationProviders.SsoProviderId);
+        var resolved = SsoOnlyLoginGuard.ResolveLoginProvider(
+            config, "root", SsoAuthenticationProviders.DefaultPasswordProviderId, SsoAuthenticationProviders.SsoProviderId);
 
         Assert.Equal(SsoAuthenticationProviders.DefaultPasswordProviderId, resolved);
     }
 
     [Fact]
-    public void ResolveLoginProvider_ModeOn_NonExemptAccount_ForcedToSsoProvider()
+    public void ResolveLoginProvider_ModeOn_NonExemptPasswordAccount_ForcedToSsoProvider()
     {
         var config = new PluginConfiguration { DisablePasswordLogin = true, BreakGlassAdminUsername = "root" };
 
-        var resolved = SsoOnlyLoginGuard.ResolveLoginProvider(config, "alice", configuredDefaultProvider: null);
+        var resolved = SsoOnlyLoginGuard.ResolveLoginProvider(
+            config, "alice", SsoAuthenticationProviders.DefaultPasswordProviderId, configuredDefaultProvider: null);
+
+        Assert.Equal(SsoAuthenticationProviders.SsoProviderId, resolved);
+    }
+
+    [Fact]
+    public void ResolveLoginProvider_ModeOn_ThirdPartyProviderAccount_KeepsItsProvider()
+    {
+        // #690: an account whose CURRENT provider is neither the built-in password provider nor the SSO
+        // provider (a third-party IAuthenticationProvider — e.g. LDAP) already has NO password door, and the
+        // enable sweep skips it via the same IsDefaultPasswordProvider test. The login path must skip it too:
+        // keep it on its current provider rather than repoint it to SSO. Repointing here would be
+        // repointed-but-UNTRACKED (the tracking write is gated on IsDefaultPasswordProvider), which the
+        // off-switch/reconcile could never reverse — the exact path-disagreement #690 fixes.
+        const string thirdPartyProvider = "Some.ThirdParty.LdapAuthenticationProvider";
+        var config = new PluginConfiguration { DisablePasswordLogin = true, BreakGlassAdminUsername = "root" };
+
+        var resolved = SsoOnlyLoginGuard.ResolveLoginProvider(
+            config, "alice", thirdPartyProvider, configuredDefaultProvider: null);
+
+        Assert.Equal(thirdPartyProvider, resolved);
+    }
+
+    [Fact]
+    public void ResolveLoginProvider_ModeOn_AlreadySsoAccount_KeepsSsoProvider()
+    {
+        // An account already on the SSO provider (a plugin-created natively-SSO account) is left on it — the
+        // return is a no-op write to the same provider, unchanged from before #690.
+        var config = new PluginConfiguration { DisablePasswordLogin = true, BreakGlassAdminUsername = "root" };
+
+        var resolved = SsoOnlyLoginGuard.ResolveLoginProvider(
+            config, "carol", SsoAuthenticationProviders.SsoProviderId, configuredDefaultProvider: null);
 
         Assert.Equal(SsoAuthenticationProviders.SsoProviderId, resolved);
     }
@@ -149,8 +182,10 @@ public class SsoOnlyLoginGuardTests
     {
         var config = new PluginConfiguration { DisablePasswordLogin = false, BreakGlassAdminUsername = "root" };
 
-        Assert.Equal("some-provider", SsoOnlyLoginGuard.ResolveLoginProvider(config, "alice", "some-provider"));
-        Assert.Null(SsoOnlyLoginGuard.ResolveLoginProvider(config, "root", null));
+        Assert.Equal(
+            "some-provider",
+            SsoOnlyLoginGuard.ResolveLoginProvider(config, "alice", SsoAuthenticationProviders.DefaultPasswordProviderId, "some-provider"));
+        Assert.Null(SsoOnlyLoginGuard.ResolveLoginProvider(config, "root", SsoAuthenticationProviders.DefaultPasswordProviderId, null));
     }
 
     // --- Hardening (bypass-lens): pin the core default-provider identifier so a rename can't silently fail-open ---
