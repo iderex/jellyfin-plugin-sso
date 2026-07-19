@@ -432,7 +432,8 @@ internal sealed class CanonicalLinkService
             // provision a FRESH account under this subject, leaving the original — the one the
             // legacy key points at — orphaned from this identity. This warning is the single
             // observable signal of that outcome; recover by linking the original account to this
-            // subject via the admin endpoints. See the upgrade runbook in providers.md. Throttled
+            // subject via the admin endpoints. See the upgrade runbook in the Provider-Setup wiki
+            // page (https://github.com/iderex/jellyfin-plugin-sso/wiki/Provider-Setup). Throttled
             // through the shared once-per-interval gate (#362) so a login loop cannot flood it; the
             // account is still provisioned on every login regardless of whether the line is emitted.
             if (_logger.IsEnabled(LogLevel.Warning))
