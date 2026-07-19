@@ -19,11 +19,22 @@ on:
         description: "Emit a signed SLSA build-provenance attestation for the built artifact. Release-only; leave false for CI/PR builds."
         type: boolean
 
-# Deny-all at the workflow level; the build job opts into exactly the scopes it
-# needs. The plain build only reads; provenance attestation (opt-in via `attest`)
-# additionally needs an OIDC token and attestation write, which the caller must
-# grant — for a non-attesting caller those scopes are capped away, so the extra
-# grants are inert.
+# Deny-all at the workflow level; the build job opts into the scopes it needs. The
+# plain build only reads; the provenance attestation step (opt-in via `attest`)
+# needs an OIDC token and attestation write.
+#
+# ⚠️ REUSABLE-WORKFLOW CALLER CONTRACT — read before changing the build job's
+# permissions or adding a caller. Because the build job DECLARES id-token +
+# attestations: write below, EVERY caller of this reusable workflow MUST grant
+# those same scopes on its calling job — INCLUDING a caller that leaves `attest`
+# false. A caller that does not grant them fails the reusable-workflow call at
+# STARTUP ("workflow file issue", a 0–1s run), not at the attest step. (This bit
+# the .NET workflow once: dotnet.yml's package job called build.yml with only
+# contents:read and startup_failed the whole run.) The scopes are NOT "capped away"
+# for non-attesting callers — they are a hard prerequisite to start. Callers that
+# must keep granting contents:read + id-token:write + attestations:write:
+#   - .github/workflows/publish.yml  (release path; attest: true)
+#   - .github/workflows/dotnet.yml   (CI Package job; leaves attest false)
 permissions: {}
 
 jobs:
