@@ -122,7 +122,7 @@ internal sealed class OidcLoginService
     /// <returns>A redirect to the authorization server, or a fail-closed rejection/error.</returns>
     internal async Task<ActionResult> ChallengeAsync(string provider, bool isLinking, HttpRequest request, HttpResponse response)
     {
-        StateStore.PruneExpired(DateTime.Now);
+        StateStore.PruneExpired(DateTime.UtcNow);
         var config = FindOidConfig(provider);
         if (config is not { Enabled: true })
         {
@@ -218,8 +218,11 @@ internal sealed class OidcLoginService
         // advertised the RFC 9207 response-`iss` parameter (so the callback requires `iss`, its absence
         // being a downgrade, #210). Both come from the one response (#450). Folded in at construction so
         // registration is one atomic insert and the stored Pending is never mutated after it enters the
-        // store (#341).
-        var pending = new AuthorizeSession.Pending(state, provider, isLinking, DateTime.Now, bindingId, clientKey, discovery.ProviderInformation, discovery.Facts.ResponseIssuerAdvertised);
+        // store (#341). The Created instant — and every expiry comparison the store makes against it
+        // (PruneExpired / PeekCurrent / TryRedeem) — is UTC, not machine-local wall-clock, so a DST
+        // transition or a clock step cannot expire an in-flight authorize state early or shift its window
+        // and spuriously fail a login; this matches the UTC basis the SAML flow already keeps (#676).
+        var pending = new AuthorizeSession.Pending(state, provider, isLinking, DateTime.UtcNow, bindingId, clientKey, discovery.ProviderInformation, discovery.Facts.ResponseIssuerAdvertised);
         if (!StateStore.TryAdd(pending, out var shouldWarnCapacity))
         {
             if (shouldWarnCapacity)
@@ -266,7 +269,7 @@ internal sealed class OidcLoginService
             return new BadRequestObjectResult("Missing state");
         }
 
-        if (StateStore.PeekCurrent(state, provider, DateTime.Now, request.Cookies[AuthorizeStateBinding.CookieName]) is not { } pending)
+        if (StateStore.PeekCurrent(state, provider, DateTime.UtcNow, request.Cookies[AuthorizeStateBinding.CookieName]) is not { } pending)
         {
             // Unknown, expired, minted for a different provider, or from a different browser than the
             // one that started the flow (#326) — reject (details on PeekCurrent / AuthorizeStateBinding).
@@ -389,7 +392,7 @@ internal sealed class OidcLoginService
         // is a client-caused rejection, not a server fault: one uniform body, so a replay is
         // indistinguishable from an expiry and replay stays hidden. A binding mismatch does not consume
         // the state (the check precedes the atomic remove), so it cannot burn a legitimate user's state.
-        if (StateStore.TryRedeem(response.Data, provider, DateTime.Now, bindingCookie) is not { } redeemed)
+        if (StateStore.TryRedeem(response.Data, provider, DateTime.UtcNow, bindingCookie) is not { } redeemed)
         {
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.InvalidState));
         }
@@ -451,7 +454,7 @@ internal sealed class OidcLoginService
         // (unknown, expired, provider-mismatched, already-redeemed, or from a different browser than
         // started the flow, #326) is a client-caused 400 in the same uniform body as the login path,
         // not a 500. The linking challenge sets the same binding cookie, carried on this same-origin POST.
-        if (StateStore.TryRedeem(response.Data, provider, DateTime.Now, bindingCookie) is not { } redeemed)
+        if (StateStore.TryRedeem(response.Data, provider, DateTime.UtcNow, bindingCookie) is not { } redeemed)
         {
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.InvalidState));
         }
