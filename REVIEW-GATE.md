@@ -24,6 +24,17 @@ test`, Prettier, CodeQL (security-extended), Opengrep repo-invariant rules,
   the transitive vulnerable-dependency scan. `build`, `prettier`, and
   `dependency-review` are required status checks on the protected branch (see
   the comment in each workflow); CodeQL is intentionally a non-required check.
+- **Every pull request** (advisory, non-gating): the deterministic PR-hygiene
+  checks (`pr-hygiene.yml`) — a self-hosted "Danger-style" gate (plain workflow +
+  one first-party `github-script` step, no external Danger runtime or bot). It
+  checks the pull request _as an object_ rather than the code: that the body
+  carries an issue reference (Closes/Refs #N; bots exempt), that a `build.yaml`
+  version bump also touches `CHANGELOG.md`, that the diff is not enormous
+  (warn ≥400, fail >800 changed non-generated lines unless `override:size`), and
+  that an `SSO-Auth/*.cs` change moves a test (warn only). It is deliberately
+  **not** a required status check, so it never blocks a merge — it surfaces a
+  deterministic hygiene signal the maintainer acts on. See the header of
+  `pr-hygiene.yml` and the "Deterministic PR-hygiene" note below.
 - **On a weekly schedule** (not per-PR, non-gating by construction): Stryker.NET
   mutation testing (scoped to the SAML/OIDC core), SharpFuzz fuzzing (SAML/OIDC
   parse surface), OpenSSF Scorecard, and the CodeQL baseline re-scan.
@@ -185,11 +196,62 @@ The direction — an author-independent review perspective on every diff — is 
 standing goal; this document records how far the internal gate currently closes
 it.
 
+## Deterministic PR-hygiene (#171): what is checked, and what was declined
+
+`pr-hygiene.yml` implements the deterministic, mechanically-decidable subset of
+the PR-process checks scoped in #171 — the ones that add real value beyond the
+existing CI and do not red-flag a reasonable pull request. Two of the four
+acceptance-criteria items were deliberately **not** implemented; that is a
+reasoned decline, recorded here so the decision is auditable.
+
+**Implemented (high-confidence, in `pr-hygiene.yml`):**
+
+- **Issue reference** — a non-bot PR whose body carries no `#N` / issue-URL
+  reference fails. Closes the issue-driven-linkage gap; nothing else checked it.
+- **CHANGELOG on version bump** — a `build.yaml` `version:` change that does not
+  also touch `CHANGELOG.md` fails. Deterministic release hygiene; near-zero
+  false-positive because only a release PR edits the version line.
+- **PR size** — warn ≥400, fail >800 changed lines (generated/lock files
+  excluded), with an `override:size` label as the escape hatch for a genuinely
+  atomic large change. Reviewer effectiveness degrades on large diffs.
+- **Test co-change** — an `SSO-Auth/*.cs` change with no `SSO-Auth.Tests/*`
+  change **warns only**, never fails: a docs/comment/refactor edit legitimately
+  moves no test, and hard-failing those is exactly the false-positive friction
+  the issue warns against.
+
+**Declined, with rationale:**
+
+- **Sensitive-path diffs without a sign-off gate note (AC3).** A regex over the
+  PR body for a "security-review sign-off note" would be a fuzzy proxy for a
+  control that already exists and is stronger. The login / SAML-OIDC-crypto /
+  config-persistence / release-pipeline surface already gets the **mandatory
+  adversarial multi-lens review** (this document, above) plus the PR template's
+  security checklist; a body-grep cannot tell a genuinely-reviewed PR from one
+  that merely pattern-matches the expected wording, so it would produce
+  false confidence on the miss and false-positive friction on legitimately
+  reviewed PRs whose note is phrased differently. The human gate is the control;
+  a deterministic grep would add noise, not assurance.
+- **Issue-open triage-lint: type + area + priority + milestone (AC4).** These
+  facets are assigned by the maintainer **during triage**, not by the author at
+  open time — and community bug/feature issues are filed through the public
+  templates, which cannot set them. Enforcing them on `issues.opened` would
+  red-flag essentially every externally-filed issue the moment it is created,
+  penalising exactly the outside contributors the project wants to welcome, for
+  a step that is a maintainer responsibility rather than an author obligation.
+  Triage stays a manual maintainer action; automating it as an open-time gate
+  trades a small consistency gain for constant, unfair false-positive friction.
+
+If the declined items are ever revisited, the honest form of AC4 is a
+maintainer-scoped nudge (run only on issues opened by a maintainer, or as a
+periodic untriaged-issue report), not an open-time hard gate — and AC3's value
+is already delivered by the adversarial review, not a body-grep.
+
 ## Pointers
 
 - `SECURITY.md` — the repository security controls, condensed, and the private
   vulnerability-reporting path.
 - `CONTRIBUTING.md` — the build/test commands and the branch → PR flow.
 - `.github/workflows/` — the CI workflows named above.
+- `.github/workflows/pr-hygiene.yml` — the deterministic PR-hygiene checks (#171).
 - `tools/opengrep/rules.yml` — the greppable security invariants.
 - `SSO-Auth.Tests/ArchitectureConformanceTests.cs` — the fitness functions.
