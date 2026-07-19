@@ -2,7 +2,7 @@
 
 > [!NOTE]
 >
-> **Status: Beta** — the third rung of the maturity ladder (**In-Development → Alpha → Beta → Release Candidate → Full Release**; see the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap)). Installable from the Jellyfin plugin catalog.
+> **Status: Beta** — the third rung of the maturity ladder (**In-Development → Alpha → Beta → Release Candidate → Full Release**; see the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap)). Installable by adding this plugin's own repository to Jellyfin (see [Installing](#installing)).
 
 <h1 align="center">Jellyfin SSO Plugin</h1>
 
@@ -38,7 +38,7 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 >
 > This is a revival of [**9p4/jellyfin-plugin-sso**](https://github.com/9p4/jellyfin-plugin-sso), which its original author has since archived. It continues from the last upstream release (**4.0.0.x**, Jellyfin 10.11 / .NET 9) and is taken forward **security-first**. Its hardened sibling project, **`jellyfin-plugin-sso-V2`** (private), is the reference this repository draws on — ported across deliberately, one reviewed change at a time. Huge thanks to the original author and contributors for the foundation.
 >
-> **Status:** **Beta** — the third stage of the maturity ladder. See the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap) for what each stage gates, and [Installing](#installing) — a packaged release is now installable from the Jellyfin plugin catalog, with build-from-source as the alternative.
+> **Status:** **Beta** — the third stage of the maturity ladder. See the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap) for what each stage gates, and [Installing](#installing) — a packaged release is now installable by adding this plugin's own repository to Jellyfin, with build-from-source as the alternative.
 >
 > ### How this project is developed
 >
@@ -63,7 +63,9 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 
 ## Installing
 
-**Install from the Jellyfin plugin catalog (recommended for testing):**
+> **This is an independent plugin repository.** Jellyfin's built-in catalog only lists plugins that live in the [`jellyfin`](https://github.com/jellyfin) GitHub org, and there is currently no official SSO plugin there (the LDAP plugin is the only official auth plugin). You install this plugin by adding **its** repository (below) under **Plugins → Repositories**; it then appears in your in-app catalog. The project is independent for now.
+
+**Add this plugin's repository, then install from the in-app catalog (recommended for testing):**
 
 1. In Jellyfin, go to **Dashboard → Plugins → Repositories** and add the repository URL for the channel you want. **One URL serves both Jellyfin generations** — your server installs the matching build automatically. Add **one** of these:
 
