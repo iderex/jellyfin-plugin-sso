@@ -117,4 +117,45 @@ public class WebResponseTests
 
         Assert.Contains(expected, html);
     }
+
+    [Fact]
+    public void Generator_SuccessfulLink_IsTerminal_ShowsSuccessAndDoesNotPostToAuthUnconditionally()
+    {
+        // #614: a successful link (a 2xx from .../Link) is a terminal SUCCESS on the page — it renders a
+        // clear success message and must NOT fall through to post the same one-time-consumed assertion /
+        // state on to .../Auth (which could never redeem it, so the page showed a misleading login failure).
+        var html = WebResponse.Generator("ZGF0YQ==", "keycloak", "https://jf.example.com", "SAML", "n0nce", isLinking: true);
+
+        // The success branch renders the account-linked message keyed on the 2xx range.
+        Assert.Contains("linkStatus >= 200 && linkStatus < 300", html);
+        Assert.Contains("Account linked. You can now log in with SSO.", html);
+
+        // A definitive link outcome (any non-undefined status) stops the flow before the auth leg. The
+        // former `linkStatus < 200 || linkStatus >= 300` condition let a 2xx fall through to .../Auth; that
+        // exact predicate must be gone so a successful link can no longer proceed to a login post.
+        Assert.DoesNotContain("linkStatus < 200 || linkStatus >= 300", html);
+        Assert.Contains("if (linkStatus !== undefined) {", html);
+
+        // The terminality is enforced by a `return;` inside the definitive-status branch, BEFORE the
+        // fall-through to the .../Auth post. Assert the ordering directly, so deleting that `return;`
+        // (which would silently reintroduce the #614 fall-through) fails this test.
+        var gateIdx = html.IndexOf("if (linkStatus !== undefined) {", System.StringComparison.Ordinal);
+        var returnAfterGate = html.IndexOf("return;", gateIdx, System.StringComparison.Ordinal);
+        var authPostAfterGate = html.IndexOf("/Auth/", gateIdx, System.StringComparison.Ordinal);
+        Assert.True(returnAfterGate >= 0 && authPostAfterGate >= 0);
+        Assert.True(
+            returnAfterGate < authPostAfterGate,
+            "a definitive link status must return before the .../Auth post");
+    }
+
+    [Fact]
+    public void Generator_LinkingPage_KeepsRejectedLinkMessages()
+    {
+        // The failure path is preserved (#344): a genuinely rejected link still surfaces its own message
+        // rather than the login-failure text — a throttled attempt (429) and any other non-2xx are distinct.
+        var html = WebResponse.Generator("ZGF0YQ==", "keycloak", "https://jf.example.com", "SAML", "n0nce", isLinking: true);
+
+        Assert.Contains("Too many attempts. Please wait a moment and try again.", html);
+        Assert.Contains("Could not link this account. The provider may be disabled, or linking is not permitted.", html);
+    }
 }

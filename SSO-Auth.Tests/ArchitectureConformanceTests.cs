@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Jellyfin.Plugin.SSO_Auth;
 using Jellyfin.Plugin.SSO_Auth.Api;
@@ -1040,6 +1041,178 @@ public class ArchitectureConformanceTests
         Assert.True(
             references.Any(a => a.Name == "Microsoft.Extensions.Logging.Abstractions"),
             "SSO-Auth no longer references Microsoft.Extensions.Logging.Abstractions; the #590 ABI-floor scan would pass vacuously — re-anchor it on the host-provided framework assembly the plugin actually uses.");
+    }
+
+    [Fact]
+    public void BuildYamlArtifacts_EqualTheTfmPublishClosure()
+    {
+        // Locked in by #608, the drop-list-completeness partner of HostProvidedFrameworkAssemblies_StayOnTheHostAbi
+        // above (which guards the OVER-reference direction — a host assembly pulled above the host ABI). JPRM
+        // packages the shipped plugin zip from exactly the files named in the build yaml's `artifacts:` list, so
+        // that hand-maintained list MUST equal the plugin's NON-HOST `dotnet publish` closure for the target
+        // framework. Two failure modes it closes, previously guarded only by a comment (the #605 review finding):
+        // a shipped runtime dependency MISSING from the list is dropped from the zip and throws
+        // FileNotFoundException the moment the host loads the plugin (the #590 class of field regression); a
+        // listed-but-unpublished file makes the JPRM package step fail on a missing artifact and is dead weight.
+        //
+        // The publish closure is read from SSO-Auth's own SSO-Auth.deps.json — the runtime-assembly manifest the
+        // ORDINARY build emits, so the test needs no separate `dotnet publish` invocation. Its per-target
+        // `runtime` set is exactly the set `dotnet publish -f <tfm>` copies: the whole package/reference closure
+        // MINUS the .NET + ASP.NET Core shared framework the host supplies through the FrameworkReference (proven
+        // byte-for-byte equal to the publish output when #608 was written). Subtracting the remaining
+        // HOST-PROVIDED families Jellyfin itself ships — Jellyfin/Emby/MediaBrowser and the EF Core, Polly and
+        // Unicode/text stacks they drag in, plus Microsoft.Extensions.* and Newtonsoft.Json — leaves precisely the
+        // set that must travel in the plugin zip. Per target, mirroring the ABI-floor test's #if: net9.0 ->
+        // build.yaml (Jellyfin 10.11, 11 DLLs), net10.0 -> build-jf12.yaml (Jellyfin 12.0, 8 DLLs — where the SAML
+        // crypto assemblies are framework-provided on .NET 10 and correctly absent from both closure and list).
+#if NET10_0_OR_GREATER
+        const string targetFramework = "net10.0";
+        const string buildYaml = "build-jf12.yaml";
+#else
+        const string targetFramework = "net9.0";
+        const string buildYaml = "build.yaml";
+#endif
+#if DEBUG
+        const string configuration = "Debug";
+#else
+        const string configuration = "Release";
+#endif
+
+        // SSO-Auth is a ProjectReference of this test project, so building the test for this configuration/target
+        // builds the plugin into SSO-Auth/bin/<config>/<tfm>/ with its deps.json alongside. RepoRoot() is the
+        // same compile-time-anchored source root the source-scan rules use; the plugin build output lives under
+        // it in CI (which builds and tests the one checkout).
+        var depsPath = Path.Combine(RepoRoot(), "SSO-Auth", "bin", configuration, targetFramework, "SSO-Auth.deps.json");
+        Assert.True(
+            File.Exists(depsPath),
+            $"SSO-Auth.deps.json for {configuration}/{targetFramework} was not found at {depsPath}; the plugin build output carrying the publish closure is missing, so the ship-list cannot be computed — build SSO-Auth for this target before the test runs (#608).");
+
+        var publishClosure = PublishClosureAssemblies(depsPath);
+
+        // Liveness against a vacuous closure: the plugin's own assembly must be in it, proving the deps.json parse
+        // found the real runtime set rather than an empty one that would make the set-equality below trivially true.
+        Assert.True(
+            publishClosure.Contains("SSO-Auth.dll"),
+            "The computed publish closure does not contain the plugin's own SSO-Auth.dll; the deps.json parse found nothing real, so the comparison would pass vacuously (#608).");
+
+        // Liveness against a vacuous FILTER: a keystone host-provided assembly Jellyfin ships (MediaBrowser.Common)
+        // must be present in the raw closure AND be removed by the host filter. If the closure ever stopped
+        // carrying it, or the filter stopped matching it, the host subtraction would be doing nothing and the
+        // equality could pass for the wrong reason — re-anchor the filter on what publish actually drags in.
+        Assert.True(
+            publishClosure.Contains("MediaBrowser.Common.dll") && IsHostProvidedAssembly("MediaBrowser.Common.dll"),
+            "The publish closure no longer carries the host-provided keystone MediaBrowser.Common.dll, or the host-provided filter stopped matching it; re-anchor HostProvidedAssemblyPrefixes on the plugin's real publish output (#608).");
+
+        var shipped = publishClosure.Where(dll => !IsHostProvidedAssembly(dll)).ToHashSet(StringComparer.Ordinal);
+
+        var declared = ParseBuildYamlArtifacts(Path.Combine(RepoRoot(), buildYaml));
+        Assert.True(
+            declared.Count > 0,
+            $"No artifacts were parsed from {buildYaml}; the `artifacts:` list is empty or the parse missed it, so the comparison would pass vacuously (#608).");
+
+        var missingFromYaml = shipped.Except(declared).OrderBy(x => x, StringComparer.Ordinal).ToList();
+        var extraInYaml = declared.Except(shipped).OrderBy(x => x, StringComparer.Ordinal).ToList();
+
+        Assert.True(
+            missingFromYaml.Count == 0 && extraInYaml.Count == 0,
+            $"{buildYaml}'s `artifacts:` list must equal the non-host {targetFramework} publish closure (#608). "
+            + $"Shipped but NOT listed (FileNotFoundException on plugin load): [{string.Join(", ", missingFromYaml)}]. "
+            + $"Listed but NOT in the publish output (JPRM fails / dead artifact): [{string.Join(", ", extraInYaml)}]. "
+            + "Reconcile the build yaml with `dotnet publish -f " + targetFramework + "`, or extend HostProvidedAssemblyPrefixes if a genuinely new host-provided family appeared.");
+    }
+
+    // The assembly-name families the Jellyfin host provides at runtime and therefore must NOT ship in the plugin
+    // zip, even though `dotnet publish` copies them into the plugin's own publish output (they are not part of the
+    // .NET/ASP.NET Core shared framework, so publish does not strip them the way it strips the framework). Matched
+    // on the assembly SIMPLE name so one entry covers a whole family: "Polly" -> Polly + Polly.Core, "ICU4N" ->
+    // ICU4N + ICU4N.Transliterator, "Microsoft.EntityFrameworkCore" -> its .Abstractions/.Relational, etc. This is
+    // the counterpart denylist to the build yaml's allow-list of shipped deps: a genuinely new host-provided family
+    // must be added here (with justification) and a new shipped dependency must be added to the build yaml —
+    // either way BuildYamlArtifacts_EqualTheTfmPublishClosure fails until the two agree (fail-closed). "Microsoft."
+    // is deliberately NOT a blanket prefix: Microsoft.IdentityModel.* and Microsoft.Bcl.Cryptography DO ship, so
+    // only the specific host-provided Microsoft families (Extensions, EntityFrameworkCore) are listed.
+    private static readonly string[] HostProvidedAssemblyPrefixes =
+    {
+        "Jellyfin", "Emby", "MediaBrowser", "Microsoft.Extensions", "Microsoft.EntityFrameworkCore",
+        "Newtonsoft", "Polly", "BitFaster", "Diacritics", "ICU4N", "J2N", "NEbml",
+    };
+
+    private static bool IsHostProvidedAssembly(string dllFileName)
+    {
+        var simpleName = dllFileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
+            ? dllFileName[..^4]
+            : dllFileName;
+        return HostProvidedAssemblyPrefixes.Any(p =>
+            simpleName.Equals(p, StringComparison.Ordinal)
+            || simpleName.StartsWith(p + ".", StringComparison.Ordinal));
+    }
+
+    // The runtime-assembly filenames from SSO-Auth.deps.json's single build target — the exact set
+    // `dotnet publish` copies for that framework (#608). A framework-dependent build has one target (the runtime
+    // target); read every library's `runtime` map and take each entry's leaf filename, because deps.json keys
+    // runtime items by their in-package path (e.g. "lib/net8.0/Duende.IdentityModel.dll"), not the bare name.
+    private static HashSet<string> PublishClosureAssemblies(string depsJsonPath)
+    {
+        using var doc = JsonDocument.Parse(File.ReadAllText(depsJsonPath));
+        var targets = doc.RootElement.GetProperty("targets");
+
+        var result = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var target in targets.EnumerateObject())
+        {
+            foreach (var library in target.Value.EnumerateObject())
+            {
+                if (!library.Value.TryGetProperty("runtime", out var runtime))
+                {
+                    continue;
+                }
+
+                foreach (var asset in runtime.EnumerateObject())
+                {
+                    var leaf = asset.Name.Split('/', '\\').Last();
+                    if (leaf.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                    {
+                        result.Add(leaf);
+                    }
+                }
+            }
+        }
+
+        return result;
+    }
+
+    // The `.dll` names under the build yaml's `artifacts:` list. Minimal hand-parse (the test project takes no YAML
+    // dependency): once at the `artifacts:` key, collect the `- "X.dll"` list items, skip the interleaved comments,
+    // and stop at the next top-level key. build.yaml / build-jf12.yaml keep exactly one quoted dll per list item.
+    private static HashSet<string> ParseBuildYamlArtifacts(string yamlPath)
+    {
+        var artifacts = new HashSet<string>(StringComparer.Ordinal);
+        var inArtifacts = false;
+        foreach (var line in File.ReadAllLines(yamlPath))
+        {
+            if (!inArtifacts)
+            {
+                if (Regex.IsMatch(line, @"^artifacts:\s*$"))
+                {
+                    inArtifacts = true;
+                }
+
+                continue;
+            }
+
+            // A new top-level key (unindented and not a list item) ends the artifacts block.
+            if (line.Length > 0 && !char.IsWhiteSpace(line[0]) && !line.TrimStart().StartsWith('-'))
+            {
+                break;
+            }
+
+            var item = Regex.Match(line, "^\\s*-\\s*\"([^\"]+)\"\\s*$");
+            if (item.Success)
+            {
+                artifacts.Add(item.Groups[1].Value);
+            }
+        }
+
+        return artifacts;
     }
 
     // The markup of the #sso-new-oidc-provider settings form (from the opening tag's id attribute to its
