@@ -166,6 +166,15 @@
   color: rgba(255, 255, 255, 0.87);
 }
 
+.sso-badge-warn {
+  background: #b71c1c; /* Material Red 900 + near-white text clears AA. Paired with the "Review" label. */
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.sso-provider-card-flagged {
+  border-left: 4px solid #b71c1c;
+}
+
 /* Empty state */
 .sso-empty-state {
   padding: 1.5em;

@@ -1040,6 +1040,80 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void OpenProvider_ResetsEditorBeforeLoadingTheProvider()
+    {
+        // #689 (provider-switch state bleed): the editor is a single reused form, so opening a provider must
+        // start from a clean slate or a text/array field the target provider does not set keeps the
+        // PREVIOUS provider's value and a later save silently persists it (e.g. repointing the #186-sensitive
+        // OidEndpoint with no admin edit). No JS runtime harness exists (the config.js checks are static text
+        // parsers), so this pins the ordering invariant statically: within openProvider, resetEditor(page)
+        // must run BEFORE loadProvider(page, provider_name) — the same clean-slate-first order addProvider
+        // already uses. loadProvider then fills the target's real values on top of the reset baseline.
+        var js = File.ReadAllText(
+            Path.Combine(RepoRoot(), "SSO-Auth", "Config", "config.js"));
+
+        var open = js.IndexOf("openProvider:", StringComparison.Ordinal);
+        Assert.True(open >= 0, "openProvider was not found in config.js.");
+
+        // Scope to the openProvider method body (up to the next method, addProvider) so resetEditor/
+        // loadProvider references elsewhere in the file cannot satisfy the check.
+        var nextMethod = js.IndexOf("addProvider:", open, StringComparison.Ordinal);
+        Assert.True(nextMethod > open, "addProvider (the method after openProvider) was not found in config.js.");
+        var body = js[open..nextMethod];
+
+        var reset = body.IndexOf("resetEditor(page)", StringComparison.Ordinal);
+        var load = body.IndexOf("loadProvider(page, provider_name)", StringComparison.Ordinal);
+        Assert.True(reset >= 0, "openProvider must call resetEditor(page) to clear the previous provider's state before loading.");
+        Assert.True(load >= 0, "openProvider must call loadProvider(page, provider_name).");
+        Assert.True(
+            reset < load,
+            "openProvider must call resetEditor(page) BEFORE loadProvider(page, provider_name); otherwise the previous provider's unset fields bleed into the loaded provider and can be silently saved (#689).");
+    }
+
+    [Fact]
+    public void SyncDependentFields_ExpandsEnclosingSecuritySection()
+    {
+        // #689 (active downgrade hidden behind a collapsed accordion): the insecure toggles live behind a
+        // "Show insecure options" list that is itself inside the "Security & hardening" emby-collapse, which
+        // is authored collapsed. Expanding only the inner list left an active DisableHttps /
+        // AllowExistingAccountLink invisible. syncDependentFields must expand the ENCLOSING accordion section
+        // (by its stable id) when any insecure OR account-adoption-sensitive toggle is active. Pinned
+        // statically (no JS harness): the section id exists in the markup, and syncDependentFields targets it.
+        var html = File.ReadAllText(
+            Path.Combine(RepoRoot(), "SSO-Auth", "Config", "configPage.html"));
+        var js = File.ReadAllText(
+            Path.Combine(RepoRoot(), "SSO-Auth", "Config", "config.js"));
+
+        // The enclosing accordion is the emby-collapse carrying the stable id, and it is the security section.
+        Assert.Matches(
+            new Regex("<div\\b[^>]*is=\"emby-collapse\"[^>]*id=\"sso-security-section\"[^>]*title=\"Security & hardening\"", RegexOptions.Singleline),
+            html);
+
+        // Scope to the syncDependentFields method body (up to the next method) so the reference is inside it.
+        var sync = js.IndexOf("syncDependentFields:", StringComparison.Ordinal);
+        Assert.True(sync >= 0, "syncDependentFields was not found in config.js.");
+        var nextMethod = js.IndexOf("setInsecureOptionsExpanded:", sync, StringComparison.Ordinal);
+        Assert.True(nextMethod > sync, "The method after syncDependentFields was not found in config.js.");
+        var body = js[sync..nextMethod];
+
+        Assert.Contains("setSectionExpanded(", body, StringComparison.Ordinal);
+        Assert.Contains("\"sso-security-section\"", body, StringComparison.Ordinal);
+        Assert.Contains("insecureFieldIds", body, StringComparison.Ordinal);
+        Assert.Contains("sensitiveFieldIds", body, StringComparison.Ordinal);
+
+        // The sensitive set must include the account-adoption toggles the reviewer flagged as getting no
+        // auto-surface today; these are the exact ids rendered in the "Account adoption (sensitive)" region.
+        foreach (var id in new[]
+        {
+            "AllowExistingAccountLink", "RequireVerifiedEmailForAdoption", "RequireVerifiedEmailForLogin",
+        })
+        {
+            Assert.Contains("\"" + id + "\"", js, StringComparison.Ordinal);
+            Assert.Contains("id=\"" + id + "\"", html, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void SourceFilesDeclaring_MatchesRecordStructAndStructAlongsideClass()
     {
         // #542: the helper's regex used to be "\bclass\s+{Name}\b" only, so it silently returned an empty

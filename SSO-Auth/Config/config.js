@@ -1,5 +1,22 @@
 const ssoConfigurationPage = {
   pluginUniqueId: "505ce9d1-d916-42fa-86ca-673ef241d7df",
+  // Toggles that disable an OpenID Connect security defense. An active one is a downgrade the admin must
+  // not miss, so loading a provider with any of these expands the "Insecure options" list and its
+  // enclosing "Security & hardening" accordion.
+  insecureFieldIds: [
+    "DisableHttps",
+    "DisablePushedAuthorization",
+    "DoNotValidateEndpoints",
+    "DoNotValidateIssuerName",
+    "DoNotValidateResponseIssuer",
+  ],
+  // Account-adoption toggles that widen who can sign in / take over an account. Not "insecure defaults" but
+  // sensitive enough that an active one is surfaced the same way (auto-expand the enclosing accordion).
+  sensitiveFieldIds: [
+    "AllowExistingAccountLink",
+    "RequireVerifiedEmailForAdoption",
+    "RequireVerifiedEmailForLogin",
+  ],
   loadConfiguration: (page) => {
     ApiClient.getPluginConfiguration(ssoConfigurationPage.pluginUniqueId).then(
       (config) => {
@@ -62,6 +79,24 @@ const ssoConfigurationPage = {
       pill.textContent = enabled ? "Enabled" : "Disabled";
 
       card.append(name, badge, pill);
+
+      // Flag a provider that carries an active insecure / sensitive setting, so an admin sees the downgrade
+      // in the list without opening the editor (the setting itself lives behind the collapsed
+      // "Security & hardening" accordion). Presentation only — the flag reads from the saved config and
+      // changes nothing.
+      const flagged = ssoConfigurationPage.insecureFieldIds
+        .concat(ssoConfigurationPage.sensitiveFieldIds)
+        .some((id) => Boolean(provider[id]));
+      if (flagged) {
+        card.classList.add("sso-provider-card-flagged");
+        const warn = document.createElement("span");
+        warn.classList.add("sso-badge", "sso-badge-warn");
+        warn.textContent = "Review";
+        warn.title =
+          "This provider has an active insecure or sensitive setting.";
+        card.append(warn);
+      }
+
       list.appendChild(card);
     });
   },
@@ -74,10 +109,14 @@ const ssoConfigurationPage = {
   setEditorTitle: (page, title) => {
     page.querySelector("#sso-editor-title").textContent = title;
   },
-  // Load a card into the editor and reveal it. loadProvider fills the fields asynchronously and re-syncs the
-  // reveal-on-toggle visibility at its tail, so the dependent groups reflect the loaded toggles.
+  // Load a card into the editor and reveal it. resetEditor gives a CLEAN SLATE first (the same way
+  // addProvider does) so no field, toggle, or collapse state from the previously loaded provider can bleed
+  // into this one — a text/array field the target provider does not set must not keep the previous
+  // provider's value, or a later save would silently persist it (e.g. repoint OidEndpoint with no edit).
+  // loadProvider then fills the target provider's actual values on top and re-syncs visibility at its tail.
   openProvider: (page, provider_name) => {
     page.querySelector("#selectProvider").value = provider_name;
+    ssoConfigurationPage.resetEditor(page);
     ssoConfigurationPage.clearValidationErrors(page);
     ssoConfigurationPage.renderSaveStatus(page, "");
     ssoConfigurationPage.setEditorTitle(page, provider_name);
@@ -125,6 +164,53 @@ const ssoConfigurationPage = {
         page.querySelector("#" + id),
       );
     });
+
+    // Clean slate for progressive disclosure and collapse state, so a previous provider's expanded danger
+    // zone / accordion state cannot bleed into the next provider. Collapse the "Insecure options" list,
+    // return every editor accordion to its authored default (data-expanded), then re-sync the
+    // reveal-on-toggle groups now that every controlling toggle is off. loadProvider (openProvider) and the
+    // explicit syncDependentFields (addProvider) re-expand only what the loaded/new provider actually needs.
+    ssoConfigurationPage.setInsecureOptionsExpanded(page, false);
+    ssoConfigurationPage.resetEditorSections(page);
+    ssoConfigurationPage.syncDependentFields(page);
+  },
+  // Return every accordion section INSIDE the editor to its authored default collapse state (the sections
+  // with data-expanded="true" open, the rest — including "Security & hardening" — collapsed). Scoped to
+  // #sso-editor so the page-level About / Export collapses are untouched.
+  resetEditorSections: (page) => {
+    const editor = page.querySelector("#sso-editor");
+    if (!editor) {
+      return;
+    }
+    editor.querySelectorAll('[is="emby-collapse"]').forEach((section) => {
+      ssoConfigurationPage.setCollapseExpanded(
+        section,
+        section.getAttribute("data-expanded") === "true",
+      );
+    });
+  },
+  // Drive an emby-collapse to a definite expanded/collapsed state. The host component tracks its open state
+  // as the boolean `expanded` PROPERTY on its `.collapseContent` element and flips it by a click of the
+  // generated `.emby-collapsible-button` (its own click handler runs the slide + hide-class toggle). We read
+  // that property and click only when it differs from the target, so this is idempotent — clicking an
+  // already-open section would wrongly collapse it. Null-guarded so it degrades to a no-op (rather than
+  // throwing) if the section has not been upgraded yet or the host markup changes.
+  setCollapseExpanded: (section, expanded) => {
+    const button = section.querySelector(".emby-collapsible-button");
+    const content = section.querySelector(".collapseContent");
+    if (!button || !content) {
+      return;
+    }
+    if (Boolean(content.expanded) !== expanded) {
+      button.click();
+    }
+  },
+  setSectionExpanded: (page, sectionId, expanded) => {
+    const section = page.querySelector("#" + sectionId);
+    if (!section) {
+      return;
+    }
+    ssoConfigurationPage.setCollapseExpanded(section, expanded);
   },
   // Keep reveal-on-toggle groups in sync with their controlling checkbox. Presentation ONLY: it toggles the
   // `hidden` attribute on wrapper elements and never mutates a field's value or `.checked`, so every marked
@@ -161,21 +247,29 @@ const ssoConfigurationPage = {
       true,
     );
 
-    // Surface active insecure options: if the loaded provider has any set, expand the danger zone so the
-    // admin cannot miss that a security defense is disabled. This never AUTO-HIDES a set option.
-    const insecure = [
-      "DisableHttps",
-      "DisablePushedAuthorization",
-      "DoNotValidateEndpoints",
-      "DoNotValidateIssuerName",
-      "DoNotValidateResponseIssuer",
-    ];
-    const anyInsecure = insecure.some((id) => {
+    // Surface active insecure / sensitive settings so an admin cannot miss that a security defense is
+    // disabled or an account-adoption path is widened. The "Security & hardening" accordion is collapsed by
+    // default, and the insecure toggles are additionally behind a "Show insecure options" list, so a
+    // downgrade on a loaded provider would otherwise be invisible behind two collapsed layers. Expand BOTH
+    // the enclosing accordion section AND, for the insecure subset, the inner list. Expand-only — it never
+    // AUTO-HIDES a set option; resetEditor returns the section to its default when switching to a provider
+    // that has none.
+    const isChecked = (id) => {
       const el = page.querySelector("#" + id);
-      return el && el.checked;
-    });
+      return Boolean(el && el.checked);
+    };
+    const anyInsecure = ssoConfigurationPage.insecureFieldIds.some(isChecked);
+    const anySensitive =
+      anyInsecure || ssoConfigurationPage.sensitiveFieldIds.some(isChecked);
     if (anyInsecure) {
       ssoConfigurationPage.setInsecureOptionsExpanded(page, true);
+    }
+    if (anySensitive) {
+      ssoConfigurationPage.setSectionExpanded(
+        page,
+        "sso-security-section",
+        true,
+      );
     }
   },
   setInsecureOptionsExpanded: (page, expanded) => {
