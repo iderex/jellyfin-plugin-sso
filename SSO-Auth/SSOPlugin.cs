@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using Duende.IdentityModel.OidcClient.Infrastructure;
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Api.Secrets;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;

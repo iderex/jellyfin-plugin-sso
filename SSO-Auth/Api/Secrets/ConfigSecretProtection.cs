@@ -1,6 +1,6 @@
 using Jellyfin.Plugin.SSO_Auth.Config;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Secrets;
 
 /// <summary>
 /// Encrypts the at-rest secrets carried in a <see cref="PluginConfiguration"/> - the OpenID client secrets
