@@ -33,6 +33,20 @@ public class SamlResponseParsingTests
     }
 
     [Fact]
+    public void TryLoad_OversizedResponse_IsRejectedFailClosed_BeforeDecoding()
+    {
+        // A body longer than the pre-decode cap is an unauthenticated pre-signature DoS attempt (#249/#754):
+        // it must be refused fail-closed BEFORE any base64 decode / DOM build, spending no crypto or bulk
+        // allocation on the untrusted input. The exact bytes are irrelevant — the length gate fires first —
+        // so a plainly over-length string is enough; the result is a clean rejection, never an unmapped throw.
+        var fixture = SamlTestFactory.Create();
+        var oversized = new string('A', SamlResponseLoader.MaxEncodedResponseLength + 1);
+
+        Assert.False(SamlResponseLoader.TryParse(fixture.CertificateBase64, oversized, out var response));
+        Assert.Null(response);
+    }
+
+    [Fact]
     public void TryLoad_MalformedXmlBody_ReturnsFalse()
     {
         var fixture = SamlTestFactory.Create();
