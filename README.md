@@ -13,18 +13,20 @@
 <a href="https://github.com/iderex/jellyfin-plugin-sso/blob/main/LICENSE.txt">
 <img alt="GPL 3.0 License" src="https://img.shields.io/github/license/iderex/jellyfin-plugin-sso.svg"/>
 </a>
+<a href="https://github.com/iderex/jellyfin-plugin-sso/releases">
+<img alt="Latest release" src="https://img.shields.io/github/v/release/iderex/jellyfin-plugin-sso?display_name=tag&label=release"/>
+</a>
 <a href="https://github.com/iderex/jellyfin-plugin-sso/actions/workflows/dotnet.yml">
 <img alt="Build Status" src="https://github.com/iderex/jellyfin-plugin-sso/actions/workflows/dotnet.yml/badge.svg"/>
 </a>
 <a href="https://github.com/iderex/jellyfin-plugin-sso/wiki">
 <img alt="Documentation" src="https://img.shields.io/badge/docs-wiki-blue"/>
 </a>
-<!-- OpenSSF Best Practices badge. The project meets the passing-level criteria
-     (see the OpenSSF-Best-Practices wiki page); the badge goes live once the maintainer
-     registers at bestpractices.dev and swaps PROJECT_ID below for the real id.
-     Until then this links to the readiness mapping. -->
-<a href="https://github.com/iderex/jellyfin-plugin-sso/wiki/OpenSSF-Best-Practices">
-<img alt="OpenSSF Best Practices" src="https://img.shields.io/badge/OpenSSF_Best_Practices-passing_criteria_met-informational"/>
+<a href="https://www.bestpractices.dev/projects/13660">
+<img alt="OpenSSF Best Practices" src="https://www.bestpractices.dev/projects/13660/badge"/>
+</a>
+<a href="https://securityscorecards.dev/viewer/?uri=github.com/iderex/jellyfin-plugin-sso">
+<img alt="OpenSSF Scorecard" src="https://api.securityscorecards.dev/projects/github.com/iderex/jellyfin-plugin-sso/badge"/>
 </a>
 </p>
 
