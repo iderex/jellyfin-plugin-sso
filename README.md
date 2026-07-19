@@ -21,6 +21,13 @@
 <a href="https://github.com/iderex/jellyfin-plugin-sso/wiki">
 <img alt="Documentation" src="https://img.shields.io/badge/docs-wiki-blue"/>
 </a>
+<!-- OpenSSF Best Practices badge. The project meets the passing-level criteria
+     (see OPENSSF-BEST-PRACTICES.md); the badge goes live once the maintainer
+     registers at bestpractices.dev and swaps PROJECT_ID below for the real id.
+     Until then this links to the readiness mapping. -->
+<a href="OPENSSF-BEST-PRACTICES.md">
+<img alt="OpenSSF Best Practices" src="https://img.shields.io/badge/OpenSSF_Best_Practices-passing_criteria_met-informational"/>
+</a>
 </p>
 
 <p align="center">
