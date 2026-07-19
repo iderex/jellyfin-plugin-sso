@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Jellyfin.Data;
@@ -274,7 +275,7 @@ internal sealed class SsoOnlyLoginService
     private async Task<int> SweepEnableAsync(string breakGlassUsername)
     {
         var repointed = 0;
-        foreach (var user in _userManager.GetUsers() ?? Enumerable.Empty<User>())
+        foreach (var user in AllUsers())
         {
             if (IsBreakGlass(user.Username, breakGlassUsername))
             {
@@ -301,6 +302,31 @@ internal sealed class SsoOnlyLoginService
         }
 
         return repointed;
+    }
+
+    // Enumerate every account across the whole supported Jellyfin range. IUserManager's all-users accessor
+    // diverged inside that range: the 10.11.0 ABI floor exposes the `Users` property, while 10.11.11+ and 12.0
+    // replaced it with a `GetUsers()` method — no member is common to all three at compile time. A source
+    // reference to either one therefore breaks EITHER the floor build (proving the shipped artifact would
+    // MissingMethod on an early-10.11 server, #142) or the shipping build. Binding whichever member the loaded
+    // server actually exposes, at runtime, is the only way to keep the plugin loadable on every 10.11.x and on
+    // 12.0. This is a cold path (mode enable only), so the per-call lookup cost is irrelevant.
+    private IEnumerable<User> AllUsers()
+    {
+        var manager = (object)_userManager;
+        var type = manager.GetType();
+
+        if (type.GetMethod("GetUsers", Type.EmptyTypes)?.Invoke(manager, null) is IEnumerable<User> viaMethod)
+        {
+            return viaMethod;
+        }
+
+        if (type.GetProperty("Users")?.GetValue(manager) is IEnumerable<User> viaProperty)
+        {
+            return viaProperty;
+        }
+
+        return Array.Empty<User>();
     }
 
     // Restores the built-in password provider for ONLY the accounts the mode recorded as repointed (that are
