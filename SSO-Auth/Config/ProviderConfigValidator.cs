@@ -68,7 +68,7 @@ internal static class ProviderConfigValidator
 
     // A NEW provider name containing URI-reserved or control characters would be persisted and then break
     // the callback round-trip at login (#336, #360): the name is appended raw to the redirect_uri/ACS URL
-    // (SsoUrlBuilder) and matched back by route. Only a name absent from the live configuration is
+    // (the OIDC/SAML URL builders) and matched back by route. Only a name absent from the live configuration is
     // rejected — an existing name, whose URL bytes the identity provider already has registered, must
     // keep saving unchanged or the deployment would be stranded behind a rename. The echoed name gets a
     // full control strip (stronger than the line-ending strip below — see the inline comment).

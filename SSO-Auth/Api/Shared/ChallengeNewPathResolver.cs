@@ -22,7 +22,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Shared;
 internal static class ChallengeNewPathResolver
 {
     // Throttles how often an actual NewPath change is persisted (#412 review follow-up). Both route
-    // spellings stay permanently live side by side (ChallengePath/SsoUrlBuilder never retire either one),
+    // spellings stay permanently live side by side (ChallengePath and the URL builders never retire either one),
     // so a provider used concurrently by clients on both is EXPECTED to flip this value on alternating
     // logins — SamlAssertionValidator's ExpectedAcsUrls already treats a flip as routine, not a rare edge
     // case. Without a cap, that ordinary traffic shape would turn every such login into a synchronous

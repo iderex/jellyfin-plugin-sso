@@ -127,7 +127,7 @@ internal sealed class OidcLoginService : ILoginService
 
         var newPath = ChallengeNewPathResolver.ResolveChallengeNewPath(provider, config, isLinking, request, _logger, c => c.OidConfigs);
 
-        string redirectUri = SsoUrlBuilder.OidRedirectUri(RequestBaseUrl(request, config), newPath, provider);
+        string redirectUri = OidcRedirectUriBuilder.ChallengeRedirectUri(RequestBaseUrl(request, config), newPath, provider);
 
         // Read the discovery document ONCE, up front, and source both the security facts AND the login's
         // provider metadata from that single response (#450). Before this, the facts came from a separate
@@ -575,7 +575,7 @@ internal sealed class OidcLoginService : ILoginService
     // site left; the former CreateOidcClient wrapper folded in here (#695).
     private OidcClient CreateCallbackOidcClient(OidConfig config, string provider, HttpRequest request, ProviderInformation providerInformation)
     {
-        var redirectUri = SsoUrlBuilder.OidCallbackRedirectUri(RequestBaseUrl(request, config), request.Path.Value, provider);
+        var redirectUri = OidcRedirectUriBuilder.CallbackRedirectUri(RequestBaseUrl(request, config), request.Path.Value, provider);
         var options = BuildOidcOptions(config, redirectUri, BuildScopeString(config));
 
         // Reuse an already-fetched, policy-validated discovery metadata when the caller supplies it — the

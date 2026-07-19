@@ -12,7 +12,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Saml;
 /// service provider by URL instead of by hand (#162). Pure and request-free: it emits exactly the entity
 /// id, the HTTP-POST assertion-consumer URL(s), and — only when request signing is enabled — the PUBLIC
 /// signing certificate(s) it is given. This SP accepts BOTH ACS spellings on the way back — the new-path
-/// and the legacy one (<see cref="SsoUrlBuilder.SamlExpectedAcsUrls"/>) — so when a legacy ACS URL is
+/// and the legacy one (<see cref="SamlAcsUrlBuilder.ExpectedAcsUrls"/>) — so when a legacy ACS URL is
 /// supplied the metadata advertises both as two <c>AssertionConsumerService</c> entries: the new spelling
 /// stays the default at <c>index="0"</c>, the legacy spelling follows at <c>index="1"</c>
 /// (<c>isDefault="false"</c>). During a signing-key rollover (#491) it advertises BOTH the primary
@@ -55,7 +55,7 @@ internal static class SamlSpMetadataBuilder
     /// </param>
     /// <param name="legacyAssertionConsumerServiceUrl">
     /// The OPTIONAL absolute HTTP-POST assertion-consumer URL for the LEGACY route spelling. This SP accepts
-    /// either spelling at runtime (<see cref="SsoUrlBuilder.SamlExpectedAcsUrls"/>), so when this is supplied
+    /// either spelling at runtime (<see cref="SamlAcsUrlBuilder.ExpectedAcsUrls"/>), so when this is supplied
     /// the metadata truthfully advertises both: the new spelling stays the default at <c>index="0"</c> and
     /// this legacy spelling is emitted as a SECOND <c>AssertionConsumerService</c> at <c>index="1"</c>,
     /// <c>isDefault="false"</c>. <see langword="null"/> (the default), or a value equal to
@@ -109,7 +109,7 @@ internal static class SamlSpMetadataBuilder
             xml.WriteAttributeString("isDefault", "true");
             xml.WriteEndElement(); // md:AssertionConsumerService
 
-            // The SP accepts either ACS spelling on the way back (SsoUrlBuilder.SamlExpectedAcsUrls), so when a
+            // The SP accepts either ACS spelling on the way back (SamlAcsUrlBuilder.ExpectedAcsUrls), so when a
             // distinct legacy spelling is supplied the metadata lists it too — a SECOND, non-default endpoint at
             // index="1". The new spelling above stays the default (index="0", isDefault="true"), so an identity
             // provider that honours isDefault keeps posting to it; the legacy entry only widens what the IdP may

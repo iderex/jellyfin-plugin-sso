@@ -334,7 +334,7 @@ internal sealed class SamlLoginService : ILoginService
 
         bool newPath = ChallengeNewPathResolver.ResolveChallengeNewPath(provider, config, isLinking, request, _logger, c => c.SamlConfigs);
 
-        string redirectUri = SsoUrlBuilder.SamlAcsUrl(GetRequestBase(request, config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), newPath, provider);
+        string redirectUri = SamlAcsUrlBuilder.AcsUrl(GetRequestBase(request, config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), newPath, provider);
         string relayState = isLinking ? "linking" : null;
 
         var samlRequest = new SamlAuthnRequest(
@@ -463,11 +463,11 @@ internal sealed class SamlLoginService : ILoginService
         }
 
         // Advertise BOTH ACS spellings the SP actually honours on the way back
-        // (SsoUrlBuilder.SamlExpectedAcsUrls): the canonical new-path spelling is the default (index 0), and
+        // (SamlAcsUrlBuilder.ExpectedAcsUrls): the canonical new-path spelling is the default (index 0), and
         // the legacy spelling is published as a second, non-default endpoint (index 1) so metadata truthfully
         // reflects that either POST target is accepted rather than silently omitting one the SP still serves.
-        var acsUrl = SsoUrlBuilder.SamlAcsUrl(baseUrl, newPath: true, provider);
-        var legacyAcsUrl = SsoUrlBuilder.SamlAcsUrl(baseUrl, newPath: false, provider);
+        var acsUrl = SamlAcsUrlBuilder.AcsUrl(baseUrl, newPath: true, provider);
+        var legacyAcsUrl = SamlAcsUrlBuilder.AcsUrl(baseUrl, newPath: false, provider);
 
         if (!TryResolveSigningCertificates(config, out var signingCertificateBase64, out var rolloverSigningCertificateBase64))
         {
