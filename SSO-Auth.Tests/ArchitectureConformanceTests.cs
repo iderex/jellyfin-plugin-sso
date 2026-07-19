@@ -1036,6 +1036,210 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void ProviderForm_RendersEveryPersistingFieldId()
+    {
+        // The full save-contract roster, pinned after the #365 provider-workspace redesign reordered and
+        // regrouped the form into native accordion sections. ProviderFormFieldIds_MatchOidConfigProperties
+        // guards the FORWARD direction (no stray marked id) and a reverse pin for the security-critical
+        // SUBSET; this test is the exhaustive reverse pin: every one of the 34 persisting fields must still
+        // render as a marked input with its exact id, so a field silently dropped or unmarked during a
+        // future re-layout — which would stop it persisting — fails here rather than shipping as silent data
+        // loss. The provider-name KEY input (OidProviderName) is deliberately unmarked (it supplies the
+        // OidConfigs dictionary key, not an OidConfig property) and is asserted present separately.
+        var markerClasses = new[] { "sso-text", "sso-line-list", "sso-toggle", "sso-folder-list", "sso-role-map" };
+        var form = OidcProviderFormMarkup(
+            File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "configPage.html")));
+
+        var markedIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (Match tag in Regex.Matches(form, "<[a-zA-Z][^>]*>", RegexOptions.Singleline))
+        {
+            var classAttr = Regex.Match(tag.Value, "class=\"([^\"]*)\"", RegexOptions.Singleline);
+            if (!classAttr.Success)
+            {
+                continue;
+            }
+
+            var classes = classAttr.Groups[1].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (!classes.Any(c => markerClasses.Contains(c, StringComparer.Ordinal)))
+            {
+                continue;
+            }
+
+            var idMatch = Regex.Match(tag.Value, "(?<![-\\w])id=\"([^\"]*)\"", RegexOptions.Singleline);
+            if (idMatch.Success)
+            {
+                markedIds.Add(idMatch.Groups[1].Value);
+            }
+        }
+
+        var expected = new[]
+        {
+            "OidEndpoint", "OidClientId", "OidSecret", "OidScopes", "Enabled",
+            "EnableAuthorization", "DefaultUsernameClaim", "DefaultProvider", "AvatarUrlFormat", "RoleClaim",
+            "Roles", "AdminRoles", "EnableAllFolders", "EnabledFolders", "EnableFolderRoles", "FolderRoleMapping",
+            "EnableLiveTvRoles", "LiveTvRoles", "LiveTvManagementRoles", "EnableLiveTv", "EnableLiveTvManagement",
+            "DoNotLoadProfile", "SchemeOverride", "PortOverride", "BaseUrlOverride",
+            "RequirePkce", "AllowExistingAccountLink", "RequireVerifiedEmailForAdoption", "RequireVerifiedEmailForLogin",
+            "DisableHttps", "DisablePushedAuthorization", "DoNotValidateEndpoints", "DoNotValidateIssuerName", "DoNotValidateResponseIssuer",
+        };
+
+        Assert.Equal(34, expected.Length);
+        var missing = expected.Where(id => !markedIds.Contains(id)).ToList();
+        Assert.True(
+            missing.Count == 0,
+            "These persisting provider-form fields are missing their marked input in configPage.html (a re-layout dropped or unmarked them, so they would stop persisting): " + string.Join(", ", missing));
+
+        // The provider-name KEY input must still be present (unmarked by design).
+        Assert.Contains("id=\"OidProviderName\"", form, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OpenProvider_ResetsEditorBeforeLoadingTheProvider()
+    {
+        // #689 (provider-switch state bleed): the editor is a single reused form, so opening a provider must
+        // start from a clean slate or a text/array field the target provider does not set keeps the
+        // PREVIOUS provider's value and a later save silently persists it (e.g. repointing the #186-sensitive
+        // OidEndpoint with no admin edit). No JS runtime harness exists (the config.js checks are static text
+        // parsers), so this pins the ordering invariant statically: within openProvider, resetEditor(page)
+        // must run BEFORE loadProvider(page, provider_name) — the same clean-slate-first order addProvider
+        // already uses. loadProvider then fills the target's real values on top of the reset baseline.
+        var js = File.ReadAllText(
+            Path.Combine(RepoRoot(), "SSO-Auth", "Config", "config.js"));
+
+        var open = js.IndexOf("openProvider:", StringComparison.Ordinal);
+        Assert.True(open >= 0, "openProvider was not found in config.js.");
+
+        // Scope to the openProvider method body (up to the next method, addProvider) so resetEditor/
+        // loadProvider references elsewhere in the file cannot satisfy the check.
+        var nextMethod = js.IndexOf("addProvider:", open, StringComparison.Ordinal);
+        Assert.True(nextMethod > open, "addProvider (the method after openProvider) was not found in config.js.");
+        var body = js[open..nextMethod];
+
+        var reset = body.IndexOf("resetEditor(page)", StringComparison.Ordinal);
+        var load = body.IndexOf("loadProvider(page, provider_name)", StringComparison.Ordinal);
+        Assert.True(reset >= 0, "openProvider must call resetEditor(page) to clear the previous provider's state before loading.");
+        Assert.True(load >= 0, "openProvider must call loadProvider(page, provider_name).");
+        Assert.True(
+            reset < load,
+            "openProvider must call resetEditor(page) BEFORE loadProvider(page, provider_name); otherwise the previous provider's unset fields bleed into the loaded provider and can be silently saved (#689).");
+    }
+
+    [Fact]
+    public void SyncDependentFields_ExpandsEnclosingSecuritySectionOnTheOrOfInsecureOrSensitive()
+    {
+        // #689 (active downgrade hidden behind a collapsed accordion): the insecure toggles live behind a
+        // "Show insecure options" list that is itself inside the "Security & hardening" emby-collapse, which
+        // is authored collapsed. Expanding only the inner list left an active DisableHttps /
+        // AllowExistingAccountLink invisible. syncDependentFields must expand the ENCLOSING accordion section
+        // (by its stable id) when any insecure OR sensitive toggle is active. No JS runtime harness exists,
+        // so this pins statically both the target (the section id in the markup and the call) AND the
+        // condition shape: the expand is driven by the OR of the two sets, so a `||`->`&&` mutant — which
+        // would stop a sensitive-only (AllowExistingAccountLink) provider from expanding — fails here.
+        var html = File.ReadAllText(
+            Path.Combine(RepoRoot(), "SSO-Auth", "Config", "configPage.html"));
+        var js = File.ReadAllText(
+            Path.Combine(RepoRoot(), "SSO-Auth", "Config", "config.js"));
+
+        // The enclosing accordion is the emby-collapse carrying the stable id, and it is the security section.
+        Assert.Matches(
+            new Regex("<div\\b[^>]*is=\"emby-collapse\"[^>]*id=\"sso-security-section\"[^>]*title=\"Security & hardening\"", RegexOptions.Singleline),
+            html);
+
+        // Scope to the syncDependentFields method body (up to the next method) so the reference is inside it.
+        var sync = js.IndexOf("syncDependentFields:", StringComparison.Ordinal);
+        Assert.True(sync >= 0, "syncDependentFields was not found in config.js.");
+        var nextMethod = js.IndexOf("setInsecureOptionsExpanded:", sync, StringComparison.Ordinal);
+        Assert.True(nextMethod > sync, "The method after syncDependentFields was not found in config.js.");
+        var body = js[sync..nextMethod];
+
+        // anyInsecure is derived from the insecure set.
+        Assert.Matches(
+            new Regex(@"anyInsecure\s*=\s*ssoConfigurationPage\.insecureFieldIds\.some\(", RegexOptions.Singleline),
+            body);
+
+        // The combined condition is the OR (never AND) of anyInsecure and the sensitive set — the disjunction
+        // a `||`->`&&` mutant would break. Both sets must feed it, not just appear somewhere in the body.
+        Assert.Matches(
+            new Regex(@"anySensitive\s*=\s*anyInsecure\s*\|\|\s*ssoConfigurationPage\.sensitiveFieldIds\.some\(", RegexOptions.Singleline),
+            body);
+
+        // The inner insecure-options list is gated on anyInsecure; the ENCLOSING section on the combined
+        // anySensitive — so the section expands for a sensitive-only provider too.
+        Assert.Matches(
+            new Regex(@"if\s*\(\s*anyInsecure\s*\)\s*\{\s*ssoConfigurationPage\.setInsecureOptionsExpanded\(\s*page,\s*true", RegexOptions.Singleline),
+            body);
+        Assert.Matches(
+            new Regex("if\\s*\\(\\s*anySensitive\\s*\\)\\s*\\{\\s*ssoConfigurationPage\\.setSectionExpanded\\(\\s*page,\\s*\"sso-security-section\"", RegexOptions.Singleline),
+            body);
+
+        // The flag / auto-expand trigger set must contain only settings whose ENABLED state is a downgrade or
+        // an attack-surface widening: the five insecure toggles and AllowExistingAccountLink. It must NOT
+        // contain the fail-closed hardening toggles (RequireVerifiedEmailForAdoption/ForLogin, RequirePkce),
+        // which are OFF by default and whose ON state is MORE secure — flagging those is backwards (#689
+        // re-review). Scoped to the two array literals so a stray mention elsewhere cannot mask a regression.
+        var insecureSet = ArrayLiteralAfter(js, "insecureFieldIds:");
+        var sensitiveSet = ArrayLiteralAfter(js, "sensitiveFieldIds:");
+        var trigger = insecureSet + " " + sensitiveSet;
+        foreach (var id in new[]
+        {
+            "DisableHttps", "DisablePushedAuthorization", "DoNotValidateEndpoints",
+            "DoNotValidateIssuerName", "DoNotValidateResponseIssuer", "AllowExistingAccountLink",
+        })
+        {
+            Assert.Contains("\"" + id + "\"", trigger, StringComparison.Ordinal);
+        }
+
+        foreach (var hardening in new[]
+        {
+            "RequireVerifiedEmailForAdoption", "RequireVerifiedEmailForLogin", "RequirePkce",
+        })
+        {
+            Assert.DoesNotContain(hardening, trigger, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void ResetEditor_ClearsEveryConditionallyLoadedFieldCategory()
+    {
+        // #689 (provider-switch state bleed): loadProvider fills the text, line-list, folder-list and
+        // role-map categories ONLY under `if (provider[id])`, so the clean slate that prevents a previous
+        // provider's value bleeding through has to come from resetEditor unconditionally clearing every one
+        // of those categories (plus the checkboxes). No JS runtime harness exists to assert the live DOM is
+        // zeroed, so this statically pins that the resetEditor body contains the clear for each category — a
+        // mutant deleting any one category's reset (which would let that category bleed) fails here. Scoped
+        // to the resetEditor body so a clear living in some other method cannot satisfy the check.
+        var js = File.ReadAllText(
+            Path.Combine(RepoRoot(), "SSO-Auth", "Config", "config.js"));
+
+        var start = js.IndexOf("resetEditor:", StringComparison.Ordinal);
+        Assert.True(start >= 0, "resetEditor was not found in config.js.");
+        var nextMethod = js.IndexOf("resetEditorSections:", start, StringComparison.Ordinal);
+        Assert.True(nextMethod > start, "resetEditorSections (the method after resetEditor) was not found in config.js.");
+        var body = js[start..nextMethod];
+
+        // text and line-list categories clear their input value to the empty string ("").
+        Assert.Matches(
+            new Regex("text_fields\\.forEach\\(.*?\\.value = \"\"", RegexOptions.Singleline),
+            body);
+        Assert.Matches(
+            new Regex("text_list_fields\\.forEach\\(.*?\\.value = \"\"", RegexOptions.Singleline),
+            body);
+
+        // checkboxes reset to unchecked.
+        Assert.Matches(
+            new Regex(@"check_fields\.forEach\(.*?\.checked = false;", RegexOptions.Singleline),
+            body);
+
+        // folder-list and role-map categories reset to an empty collection via their populate helpers.
+        Assert.Matches(
+            new Regex(@"folder_list_fields\.forEach\(.*?populateEnabledFolders\(\s*\[\]", RegexOptions.Singleline),
+            body);
+        Assert.Matches(
+            new Regex(@"role_map_fields\.forEach\(.*?populateRoleMappings\(\s*\[\]", RegexOptions.Singleline),
+            body);
+    }
+
+    [Fact]
     public void SourceFilesDeclaring_MatchesRecordStructAndStructAlongsideClass()
     {
         // #542: the helper's regex used to be "\bclass\s+{Name}\b" only, so it silently returned an empty
@@ -1272,6 +1476,20 @@ public class ArchitectureConformanceTests
     // The markup of the #sso-new-oidc-provider settings form (from the opening tag's id attribute to its
     // closing </form>). Forms are not nested here, so the first </form> after the id marker closes it; the
     // preceding #sso-load-config form is left out because its </form> sits before the marker.
+    // Return the first flat "[ ... ]" array literal that follows a marker (e.g. "sensitiveFieldIds:") in
+    // config.js. Used to scope a membership assertion to a specific field-id set rather than the whole file,
+    // so a stray mention of an id elsewhere cannot mask a regression in the set's contents.
+    private static string ArrayLiteralAfter(string source, string marker)
+    {
+        var m = source.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(m >= 0, $"'{marker}' was not found in config.js.");
+        var open = source.IndexOf('[', m);
+        Assert.True(open > m, $"No array literal follows '{marker}' in config.js.");
+        var close = source.IndexOf(']', open);
+        Assert.True(close > open, $"The array literal after '{marker}' is not closed in config.js.");
+        return source[open..(close + 1)];
+    }
+
     private static string OidcProviderFormMarkup(string html)
     {
         const string marker = "id=\"sso-new-oidc-provider\"";

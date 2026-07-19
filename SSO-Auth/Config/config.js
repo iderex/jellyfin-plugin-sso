@@ -1,5 +1,24 @@
 const ssoConfigurationPage = {
   pluginUniqueId: "505ce9d1-d916-42fa-86ca-673ef241d7df",
+  // Toggles that disable an OpenID Connect security defense. An active one is a downgrade the admin must
+  // not miss, so loading a provider with any of these expands the "Insecure options" list and its
+  // enclosing "Security & hardening" accordion.
+  insecureFieldIds: [
+    "DisableHttps",
+    "DisablePushedAuthorization",
+    "DoNotValidateEndpoints",
+    "DoNotValidateIssuerName",
+    "DoNotValidateResponseIssuer",
+  ],
+  // The non-insecure settings whose ENABLED state is still a downgrade / attack-surface widening, so they
+  // are surfaced the same way as the insecure toggles (card "Review" flag + auto-expand the enclosing
+  // accordion). Only AllowExistingAccountLink qualifies: turning it ON lets a first SSO login adopt (take
+  // over) a same-named local account. Deliberately EXCLUDES the fail-closed hardening toggles
+  // (RequireVerifiedEmailForAdoption, RequireVerifiedEmailForLogin, RequirePkce): those are OFF by default
+  // and enabling them makes the provider MORE secure, so flagging or force-surfacing them would be
+  // backwards and would cause alert fatigue on well-configured providers. Do not add an OFF-direction
+  // surfacing for them either — it would be noisy on the default.
+  sensitiveFieldIds: ["AllowExistingAccountLink"],
   loadConfiguration: (page) => {
     ApiClient.getPluginConfiguration(ssoConfigurationPage.pluginUniqueId).then(
       (config) => {
@@ -11,21 +30,421 @@ const ssoConfigurationPage = {
     ssoConfigurationPage.populateFolders(folder_container);
   },
   populateProviders: (page, providers) => {
+    const select = page.querySelector("#selectProvider");
+
     // Clear providers in case there are out of date ones
-    page
-      .querySelector("#selectProvider")
-      .querySelectorAll("option")
-      .forEach((option) => {
-        option.remove();
-      });
+    select.querySelectorAll("option").forEach((option) => option.remove());
 
-    // Add providers as options for the selector
-
+    // Add providers as options for the (hidden) selector. The selector is retained as the state holder the
+    // save path already reads (saveProvider sets its value after a save); the visible affordance is the card
+    // list rendered below.
     Object.keys(providers).forEach((provider_name) => {
-      const choice = new Option(provider_name, provider_name);
-
-      page.querySelector("#selectProvider").appendChild(choice);
+      select.appendChild(new Option(provider_name, provider_name));
     });
+
+    ssoConfigurationPage.renderProviderCards(page, providers);
+  },
+  // Render the provider LIST as cards (#365). Built with createElement/textContent (never innerHTML) so a
+  // provider name is inert on the page — a name like `<img onerror=...>` cannot inject markup — mirroring
+  // _populateFolders and the linking view (#221). Clicking a card loads that provider into the editor.
+  renderProviderCards: (page, providers) => {
+    const list = page.querySelector("#sso-provider-list");
+    const empty = page.querySelector("#sso-provider-empty");
+    list.replaceChildren();
+
+    const names = Object.keys(providers);
+    empty.hidden = names.length !== 0;
+
+    names.forEach((provider_name) => {
+      const provider = providers[provider_name] || {};
+
+      const card = document.createElement("button");
+      card.type = "button";
+      card.classList.add("sso-provider-card");
+      card.dataset.provider = provider_name;
+      card.setAttribute("role", "listitem");
+
+      const name = document.createElement("span");
+      name.classList.add("sso-provider-card-name");
+      name.textContent = provider_name;
+
+      const badge = document.createElement("span");
+      badge.classList.add("sso-badge", "sso-badge-type");
+      badge.textContent = "OIDC";
+
+      const enabled = Boolean(provider.Enabled);
+      const pill = document.createElement("span");
+      pill.classList.add(
+        "sso-pill",
+        enabled ? "sso-pill-enabled" : "sso-pill-disabled",
+      );
+      pill.textContent = enabled ? "Enabled" : "Disabled";
+
+      card.append(name, badge, pill);
+
+      // Flag a provider that carries an active insecure / sensitive setting, so an admin sees the downgrade
+      // in the list without opening the editor (the setting itself lives behind the collapsed
+      // "Security & hardening" accordion). Presentation only — the flag reads from the saved config and
+      // changes nothing.
+      const flagged = ssoConfigurationPage.insecureFieldIds
+        .concat(ssoConfigurationPage.sensitiveFieldIds)
+        .some((id) => Boolean(provider[id]));
+      if (flagged) {
+        card.classList.add("sso-provider-card-flagged");
+        const warn = document.createElement("span");
+        warn.classList.add("sso-badge", "sso-badge-warn");
+        warn.textContent = "Review";
+        warn.title =
+          "This provider has an active insecure or sensitive setting.";
+        card.append(warn);
+      }
+
+      list.appendChild(card);
+    });
+  },
+  showEditor: (page) => {
+    page.querySelector("#sso-editor").hidden = false;
+  },
+  hideEditor: (page) => {
+    page.querySelector("#sso-editor").hidden = true;
+  },
+  setEditorTitle: (page, title) => {
+    page.querySelector("#sso-editor-title").textContent = title;
+  },
+  // Load a card into the editor and reveal it. resetEditor gives a CLEAN SLATE first (the same way
+  // addProvider does) so no field, toggle, or collapse state from the previously loaded provider can bleed
+  // into this one — a text/array field the target provider does not set must not keep the previous
+  // provider's value, or a later save would silently persist it (e.g. repoint OidEndpoint with no edit).
+  // loadProvider then fills the target provider's actual values on top and re-syncs visibility at its tail.
+  openProvider: (page, provider_name) => {
+    page.querySelector("#selectProvider").value = provider_name;
+    ssoConfigurationPage.resetEditor(page);
+    ssoConfigurationPage.clearValidationErrors(page);
+    ssoConfigurationPage.renderSaveStatus(page, "");
+    ssoConfigurationPage.setEditorTitle(page, provider_name);
+    ssoConfigurationPage.showEditor(page);
+    ssoConfigurationPage.loadProvider(page, provider_name);
+    page.querySelector("#sso-editor").scrollIntoView({ block: "start" });
+  },
+  // Open a blank editor for a NEW provider. Every toggle is reset OFF (fail closed) — the same security
+  // posture loadProvider enforces when switching providers, so a stale insecure toggle from a previous
+  // edit can never be carried into a new provider and silently saved.
+  addProvider: (page) => {
+    page.querySelector("#selectProvider").value = "";
+    ssoConfigurationPage.resetEditor(page);
+    ssoConfigurationPage.clearValidationErrors(page);
+    ssoConfigurationPage.renderSaveStatus(page, "");
+    ssoConfigurationPage.setEditorTitle(page, "New provider");
+    ssoConfigurationPage.syncDependentFields(page);
+    ssoConfigurationPage.showEditor(page);
+    page.querySelector("#sso-editor").scrollIntoView({ block: "start" });
+    page.querySelector("#OidProviderName").focus();
+  },
+  resetEditor: (page) => {
+    const form_elements = ssoConfigurationPage.listArgumentsByType(page);
+
+    page.querySelector("#OidProviderName").value = "";
+
+    form_elements.text_fields.forEach((id) => {
+      page.querySelector("#" + id).value = "";
+    });
+    form_elements.text_list_fields.forEach((id) => {
+      page.querySelector("#" + id).value = "";
+    });
+    form_elements.check_fields.forEach((id) => {
+      page.querySelector("#" + id).checked = false;
+    });
+    form_elements.folder_list_fields.forEach((id) => {
+      ssoConfigurationPage.populateEnabledFolders(
+        [],
+        page.querySelector("#" + id),
+      );
+    });
+    form_elements.role_map_fields.forEach((id) => {
+      ssoConfigurationPage.populateRoleMappings(
+        [],
+        page.querySelector("#" + id),
+      );
+    });
+
+    // Clean slate for progressive disclosure and collapse state, so a previous provider's expanded danger
+    // zone / accordion state cannot bleed into the next provider. Collapse the "Insecure options" list,
+    // return every editor accordion to its authored default (data-expanded), then re-sync the
+    // reveal-on-toggle groups now that every controlling toggle is off. loadProvider (openProvider) and the
+    // explicit syncDependentFields (addProvider) re-expand only what the loaded/new provider actually needs.
+    ssoConfigurationPage.setInsecureOptionsExpanded(page, false);
+    ssoConfigurationPage.resetEditorSections(page);
+    ssoConfigurationPage.syncDependentFields(page);
+  },
+  // Return every accordion section INSIDE the editor to its authored default collapse state (the sections
+  // with data-expanded="true" open, the rest — including "Security & hardening" — collapsed). Scoped to
+  // #sso-editor so the page-level About / Export collapses are untouched.
+  resetEditorSections: (page) => {
+    const editor = page.querySelector("#sso-editor");
+    if (!editor) {
+      return;
+    }
+    editor.querySelectorAll('[is="emby-collapse"]').forEach((section) => {
+      ssoConfigurationPage.setCollapseExpanded(
+        section,
+        section.getAttribute("data-expanded") === "true",
+      );
+    });
+  },
+  // Drive an emby-collapse to a definite expanded/collapsed state. The host component tracks its open state
+  // as the boolean `expanded` PROPERTY on its `.collapseContent` element and flips it by a click of the
+  // generated `.emby-collapsible-button` (its own click handler runs the slide + hide-class toggle). We read
+  // that property and click only when it differs from the target, so this is idempotent — clicking an
+  // already-open section would wrongly collapse it. Null-guarded so it degrades to a no-op (rather than
+  // throwing) if the section has not been upgraded yet or the host markup changes.
+  setCollapseExpanded: (section, expanded) => {
+    const button = section.querySelector(".emby-collapsible-button");
+    const content = section.querySelector(".collapseContent");
+    if (!button || !content) {
+      return;
+    }
+    if (Boolean(content.expanded) !== expanded) {
+      button.click();
+    }
+  },
+  setSectionExpanded: (page, sectionId, expanded) => {
+    const section = page.querySelector("#" + sectionId);
+    if (!section) {
+      return;
+    }
+    ssoConfigurationPage.setCollapseExpanded(section, expanded);
+  },
+  // Keep reveal-on-toggle groups in sync with their controlling checkbox. Presentation ONLY: it toggles the
+  // `hidden` attribute on wrapper elements and never mutates a field's value or `.checked`, so every marked
+  // field stays in the DOM and serializable (the hide-not-remove invariant, #365). The save path enumerates
+  // the fields with querySelectorAll regardless of whether their group is hidden.
+  setDependent: (page, checkboxId, groupId, revealWhenChecked) => {
+    const checkbox = page.querySelector("#" + checkboxId);
+    const group = page.querySelector("#" + groupId);
+    if (!checkbox || !group) {
+      return;
+    }
+    const reveal = revealWhenChecked ? checkbox.checked : !checkbox.checked;
+    group.hidden = !reveal;
+    checkbox.setAttribute("aria-expanded", String(reveal));
+  },
+  syncDependentFields: (page) => {
+    // EnabledFolders is only meaningful when NOT all folders are enabled.
+    ssoConfigurationPage.setDependent(
+      page,
+      "EnableAllFolders",
+      "EnabledFolders-group",
+      false,
+    );
+    ssoConfigurationPage.setDependent(
+      page,
+      "EnableFolderRoles",
+      "FolderRoleMapping-group",
+      true,
+    );
+    ssoConfigurationPage.setDependent(
+      page,
+      "EnableLiveTvRoles",
+      "LiveTvRoles-group",
+      true,
+    );
+
+    // Surface active insecure / sensitive settings so an admin cannot miss that a security defense is
+    // disabled or an account-adoption path is widened. The "Security & hardening" accordion is collapsed by
+    // default, and the insecure toggles are additionally behind a "Show insecure options" list, so a
+    // downgrade on a loaded provider would otherwise be invisible behind two collapsed layers. Expand BOTH
+    // the enclosing accordion section AND, for the insecure subset, the inner list. Expand-only — it never
+    // AUTO-HIDES a set option; resetEditor returns the section to its default when switching to a provider
+    // that has none.
+    const isChecked = (id) => {
+      const el = page.querySelector("#" + id);
+      return Boolean(el && el.checked);
+    };
+    const anyInsecure = ssoConfigurationPage.insecureFieldIds.some(isChecked);
+    const anySensitive =
+      anyInsecure || ssoConfigurationPage.sensitiveFieldIds.some(isChecked);
+    if (anyInsecure) {
+      ssoConfigurationPage.setInsecureOptionsExpanded(page, true);
+    }
+    if (anySensitive) {
+      ssoConfigurationPage.setSectionExpanded(
+        page,
+        "sso-security-section",
+        true,
+      );
+    }
+  },
+  setInsecureOptionsExpanded: (page, expanded) => {
+    const button = page.querySelector("#ShowInsecureOptions");
+    const options = page.querySelector("#sso-insecure-options");
+    if (!button || !options) {
+      return;
+    }
+    options.hidden = !expanded;
+    button.setAttribute("aria-expanded", String(expanded));
+    button.querySelector("span").textContent = expanded
+      ? "Hide insecure options"
+      : "Show insecure options";
+  },
+  // On-blur inline validation (#365). These are pre-emptive WARNINGS that mirror the server's fail-closed
+  // checks, surfaced beside the field before the round-trip; they never block the save (the server remains
+  // the authority), so a false positive cannot lock an admin out of saving.
+  clearValidationErrors: (page) => {
+    [
+      "OidProviderName",
+      "OidEndpoint",
+      "OidClientId",
+      "RoleClaim",
+      "OidScopes",
+      "BaseUrlOverride",
+    ].forEach((id) => ssoConfigurationPage.setFieldError(page, id, ""));
+  },
+  setFieldError: (page, id, message) => {
+    const field = page.querySelector("#" + id);
+    const box = page.querySelector("#" + id + "-error");
+    if (!box || !field) {
+      return;
+    }
+    if (message) {
+      box.textContent = message;
+      box.hidden = false;
+      field.setAttribute("aria-invalid", "true");
+    } else {
+      box.textContent = "";
+      box.hidden = true;
+      field.removeAttribute("aria-invalid");
+    }
+  },
+  validateRequired: (page, id, label) => {
+    const value = page.querySelector("#" + id).value.trim();
+    ssoConfigurationPage.setFieldError(
+      page,
+      id,
+      value ? "" : label + " is required.",
+    );
+  },
+  validateEndpoint: (page) => {
+    const value = page.querySelector("#OidEndpoint").value.trim();
+    if (!value) {
+      ssoConfigurationPage.setFieldError(
+        page,
+        "OidEndpoint",
+        "OpenID Endpoint is required.",
+      );
+      return;
+    }
+    let url;
+    try {
+      url = new URL(value);
+    } catch (e) {
+      ssoConfigurationPage.setFieldError(
+        page,
+        "OidEndpoint",
+        "Enter an absolute URL, e.g. https://id.example.com",
+      );
+      return;
+    }
+    if (url.protocol === "http:") {
+      ssoConfigurationPage.setFieldError(
+        page,
+        "OidEndpoint",
+        "Uses http:// — discovery would be unencrypted. Prefer an https:// endpoint.",
+      );
+      return;
+    }
+    if (url.protocol !== "https:") {
+      ssoConfigurationPage.setFieldError(
+        page,
+        "OidEndpoint",
+        "Use an https:// URL for the OpenID endpoint.",
+      );
+      return;
+    }
+    ssoConfigurationPage.setFieldError(page, "OidEndpoint", "");
+  },
+  validateBaseUrl: (page) => {
+    const value = page.querySelector("#BaseUrlOverride").value.trim();
+    if (!value) {
+      // Optional field: blank is valid (the redirect URI then derives from the request host).
+      ssoConfigurationPage.setFieldError(page, "BaseUrlOverride", "");
+      return;
+    }
+    let url;
+    try {
+      url = new URL(value);
+    } catch (e) {
+      ssoConfigurationPage.setFieldError(
+        page,
+        "BaseUrlOverride",
+        "Enter a full origin such as https://jellyfin.example.com (scheme + host only).",
+      );
+      return;
+    }
+    if (url.protocol !== "https:" && url.protocol !== "http:") {
+      ssoConfigurationPage.setFieldError(
+        page,
+        "BaseUrlOverride",
+        "Enter a full origin such as https://jellyfin.example.com",
+      );
+      return;
+    }
+    // Full origin only — no path, query or fragment (this is the base URL, not the redirect URI).
+    if ((url.pathname && url.pathname !== "/") || url.search || url.hash) {
+      ssoConfigurationPage.setFieldError(
+        page,
+        "BaseUrlOverride",
+        "Enter the base URL only (no path) — e.g. https://jellyfin.example.com, not the /sso/... redirect URI.",
+      );
+      return;
+    }
+    ssoConfigurationPage.setFieldError(page, "BaseUrlOverride", "");
+  },
+  validateProviderName: (page) => {
+    const value = page.querySelector("#OidProviderName").value;
+    if (!value.trim()) {
+      ssoConfigurationPage.setFieldError(
+        page,
+        "OidProviderName",
+        "A provider name is required.",
+      );
+      return;
+    }
+    // Mirror the server's fail-closed name checks (#336/#360) so they surface before the round-trip.
+    // Control characters are detected by code point (not a regex escape) to keep this source ASCII-only.
+    const hasControlChar = [...value].some((ch) => {
+      const code = ch.charCodeAt(0);
+      return code < 0x20 || code === 0x7f;
+    });
+    if (hasControlChar) {
+      ssoConfigurationPage.setFieldError(
+        page,
+        "OidProviderName",
+        "Remove control characters (such as a tab or newline, often introduced by copy-paste) from the name.",
+      );
+      return;
+    }
+    // The backslash and the URI-reserved characters the server rejects.
+    const reserved = ["\\", "/", "?", "#", "%"];
+    if (reserved.some((c) => value.includes(c))) {
+      ssoConfigurationPage.setFieldError(
+        page,
+        "OidProviderName",
+        "Remove backslash and URI-reserved characters (\\ / ? # %) from the name.",
+      );
+      return;
+    }
+    ssoConfigurationPage.setFieldError(page, "OidProviderName", "");
+  },
+  renderSaveStatus: (page, message, ok) => {
+    const box = page.querySelector("#sso-save-status");
+    if (!box) {
+      return;
+    }
+    box.textContent = message || "";
+    box.classList.remove("sso-status-ok", "sso-status-fail");
+    if (message) {
+      box.classList.add(ok ? "sso-status-ok" : "sso-status-fail");
+    }
   },
   populateEnabledFolders: (folder_list, container) => {
     container.querySelectorAll(".folder-checkbox").forEach((e) => {
@@ -99,7 +518,7 @@ const ssoConfigurationPage = {
       elem.classList.add("sso-role-mapping-container");
       elem.innerHTML = `
       <label
-        class="inputLabel inputLabelUnfocused sso-role-mapping-input-label" 
+        class="inputLabel inputLabelUnfocused sso-role-mapping-input-label"
       >Role:</label>
       <div class="listItem">
         <input
@@ -114,8 +533,8 @@ const ssoConfigurationPage = {
           class="listItemButton sso-remove-role-mapping"
         >
           <span class="material-icons remove_circle" aria-hidden="true"></span>
-        </button> 
-      </div> 
+        </button>
+      </div>
       <div
         class="checkboxList paperList sso-folder-list"
       ></div>
@@ -263,6 +682,11 @@ const ssoConfigurationPage = {
           if (provider[id])
             ssoConfigurationPage.populateRoleMappings(provider[id], elem);
         });
+
+        // Reflect the loaded toggles in the reveal-on-toggle groups (hide-not-remove) and surface any
+        // active insecure option. Runs after the check_fields above are set from the loaded provider, so a
+        // hidden-but-checked box is never left behind for the next save.
+        ssoConfigurationPage.syncDependentFields(page);
       },
     );
   },
@@ -288,6 +712,8 @@ const ssoConfigurationPage = {
           function (result) {
             Dashboard.processPluginConfigurationUpdateResult(result);
             ssoConfigurationPage.loadConfiguration(page);
+            // The deleted provider is gone from the list; close its now-stale editor.
+            ssoConfigurationPage.hideEditor(page);
 
             Dashboard.alert("Provider removed");
           },
@@ -543,16 +969,28 @@ export default function initSsoConfigurationPage(view) {
   view.querySelector("#SaveProvider").addEventListener("click", (e) => {
     const target_provider = view.querySelector("#OidProviderName").value;
 
-    // The save already alerts the admin on failure; swallow the rejection here so a failed save is not
-    // an unhandled promise rejection (the rejection exists so callers can distinguish failure from success).
-    ssoConfigurationPage.saveProvider(view, target_provider).catch(() => {});
+    // The save alerts the admin on failure via Dashboard.alert; also surface the outcome inline in the
+    // editor header. Handling the rejection here keeps a failed save from becoming an unhandled promise
+    // rejection (the rejection still exists so callers can distinguish failure from success).
+    ssoConfigurationPage.saveProvider(view, target_provider).then(
+      () => {
+        ssoConfigurationPage.renderSaveStatus(view, "Settings saved.", true);
+        ssoConfigurationPage.setEditorTitle(view, target_provider);
+      },
+      () =>
+        ssoConfigurationPage.renderSaveStatus(
+          view,
+          "Save failed — see the details in the alert.",
+          false,
+        ),
+    );
 
     e.preventDefault();
     return false;
   });
 
   view.querySelector("#TestProvider").addEventListener("click", (e) => {
-    // Test the provider named in the add/update form (the one just saved), not the load selector.
+    // Test the provider named in the editor (the one just saved), not a load selector.
     const target_provider = view.querySelector("#OidProviderName").value;
 
     ssoConfigurationPage.testProvider(view, target_provider);
@@ -561,19 +999,38 @@ export default function initSsoConfigurationPage(view) {
     return false;
   });
 
-  view.querySelector("#LoadProvider").addEventListener("click", (e) => {
-    const target_provider = view.querySelector("#selectProvider").value;
+  // The provider LIST replaces the old select -> Load button: a click on a card loads that provider into
+  // the editor. Event delegation, because the cards are re-rendered on every configuration reload.
+  view.querySelector("#sso-provider-list").addEventListener("click", (e) => {
+    const card = e.target.closest(".sso-provider-card");
+    if (!card) {
+      return;
+    }
+    ssoConfigurationPage.openProvider(view, card.dataset.provider);
+  });
 
-    ssoConfigurationPage.loadProvider(view, target_provider);
+  view.querySelector("#AddProvider").addEventListener("click", (e) => {
+    ssoConfigurationPage.addProvider(view);
+    e.preventDefault();
+    return false;
+  });
 
+  view.querySelector("#AddProviderEmpty").addEventListener("click", (e) => {
+    ssoConfigurationPage.addProvider(view);
     e.preventDefault();
     return false;
   });
 
   view.querySelector("#DeleteProvider").addEventListener("click", (e) => {
-    const target_provider = view.querySelector("#selectProvider").value;
+    // Delete the provider currently loaded in the editor (its name is the editor's name field).
+    const target_provider = view.querySelector("#OidProviderName").value;
 
-    ssoConfigurationPage.deleteProvider(view, target_provider);
+    if (target_provider) {
+      ssoConfigurationPage.deleteProvider(view, target_provider);
+    } else {
+      // A never-saved new provider: nothing to delete server-side, just discard the editor.
+      ssoConfigurationPage.hideEditor(view);
+    }
 
     e.preventDefault();
     return false;
@@ -586,6 +1043,65 @@ export default function initSsoConfigurationPage(view) {
     current_mappings.push({ Role: "", Folders: [] });
     ssoConfigurationPage.populateRoleMappings(current_mappings, container);
   });
+
+  // The insecure-options expander keeps the dangerous toggles in the DOM (hidden), never detached, so they
+  // still serialize; it only flips the `hidden` attribute and the aria-expanded state.
+  view.querySelector("#ShowInsecureOptions").addEventListener("click", (e) => {
+    const collapsed = view.querySelector("#sso-insecure-options").hidden;
+    ssoConfigurationPage.setInsecureOptionsExpanded(view, collapsed);
+    e.preventDefault();
+    return false;
+  });
+
+  // Reveal-on-toggle dependent groups react to their controlling checkbox. syncDependentFields only toggles
+  // visibility (hide-not-remove) and never mutates a value, so nothing can be dropped from a later save.
+  ["EnableAllFolders", "EnableFolderRoles", "EnableLiveTvRoles"].forEach(
+    (id) => {
+      view
+        .querySelector("#" + id)
+        .addEventListener("change", () =>
+          ssoConfigurationPage.syncDependentFields(view),
+        );
+    },
+  );
+
+  // On-blur inline validation (not per-keystroke) pre-empts the generic round-trip save error.
+  view
+    .querySelector("#OidProviderName")
+    .addEventListener("blur", () =>
+      ssoConfigurationPage.validateProviderName(view),
+    );
+  view
+    .querySelector("#OidEndpoint")
+    .addEventListener("blur", () =>
+      ssoConfigurationPage.validateEndpoint(view),
+    );
+  view
+    .querySelector("#OidClientId")
+    .addEventListener("blur", () =>
+      ssoConfigurationPage.validateRequired(
+        view,
+        "OidClientId",
+        "OpenID Client ID",
+      ),
+    );
+  view
+    .querySelector("#RoleClaim")
+    .addEventListener("blur", () =>
+      ssoConfigurationPage.validateRequired(view, "RoleClaim", "Role Claim"),
+    );
+  view
+    .querySelector("#OidScopes")
+    .addEventListener("blur", () =>
+      ssoConfigurationPage.validateRequired(
+        view,
+        "OidScopes",
+        "Additional Scopes",
+      ),
+    );
+  view
+    .querySelector("#BaseUrlOverride")
+    .addEventListener("blur", () => ssoConfigurationPage.validateBaseUrl(view));
 
   view.querySelector("#ExportConfig").addEventListener("click", (e) => {
     ssoConfigurationPage.exportConfig(view);
