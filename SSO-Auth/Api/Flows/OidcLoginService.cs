@@ -45,7 +45,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Flows;
 /// <see cref="LoginCompletionService"/>: the authenticate leg takes only the redeemed model, the presented
 /// binding cookie value, and the remote-endpoint resolver (#177).
 /// </remarks>
-internal sealed class OidcLoginService
+internal sealed class OidcLoginService : ILoginService
 {
     // The in-flight OpenID authorize-state store (cap, lifetime, throttled sweep and capacity signal all
     // live inside; see OidcStateStore). One process-wide instance, like the SAML caches the controller keeps.
@@ -383,7 +383,7 @@ internal sealed class OidcLoginService
     /// <param name="bindingCookie">The browser-binding cookie value the redeem presented (#326).</param>
     /// <param name="remoteEndPointResolver">Resolves the normalized client IP for the activity log (#177).</param>
     /// <returns>The minted session, or a fail-closed rejection.</returns>
-    internal async Task<ActionResult> AuthenticateAsync(string provider, AuthResponse response, string bindingCookie, Func<string> remoteEndPointResolver)
+    public async Task<ActionResult> AuthenticateAsync(string provider, AuthResponse response, string bindingCookie, Func<string> remoteEndPointResolver)
     {
         if (string.IsNullOrEmpty(response?.Data))
         {
