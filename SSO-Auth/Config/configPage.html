@@ -615,6 +615,26 @@
                     </div>
                   </div>
 
+                  <div
+                    class="checkboxContainer checkboxContainer-withDescription"
+                  >
+                    <label>
+                      <input
+                        is="emby-checkbox"
+                        id="DisableAvatarFromPictureClaim"
+                        name="DisableAvatarFromPictureClaim"
+                        type="checkbox"
+                        class="sso-toggle"
+                      />
+                      <span>Disable avatar from the OIDC picture claim</span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">
+                      With no avatar url format above, the standard OIDC
+                      <code>picture</code> claim is used automatically. Check
+                      this to opt out of that fetch entirely.
+                    </div>
+                  </div>
+
                   <div class="inputContainer">
                     <label
                       class="inputLabel inputLabelUnfocused"

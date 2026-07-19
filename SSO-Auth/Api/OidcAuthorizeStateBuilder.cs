@@ -138,15 +138,17 @@ internal static class OidcAuthorizeStateBuilder
     // Resolves the avatar URL. With a configured format the template wins: @{claimType} tokens are
     // substituted (for a duplicate claim type the first occurrence wins — after the first Replace the
     // token is gone, and Replace on an absent token returns the instance unchanged). With no format
-    // (null or empty) the resolver falls back to the standard OIDC `picture` claim verbatim (#723), so
-    // a standards-compliant IdP yields an avatar with zero configuration. Either way this only produces
-    // a CANDIDATE URL: AvatarService.TrySetAsync still gates the fetch through AvatarUrlValidator, so a
-    // `picture` (or templated) URL to a private/loopback host is refused exactly the same.
+    // (null or empty) the resolver falls back to the standard OIDC `picture` claim verbatim (#723) so a
+    // standards-compliant IdP yields an avatar with zero configuration — UNLESS the admin has opted out
+    // via DisableAvatarFromPictureClaim, in which case no candidate is produced and nothing is fetched.
+    // Either way this only produces a CANDIDATE URL: AvatarService.TrySetAsync still gates the fetch
+    // through AvatarUrlValidator, so a `picture` (or templated) URL to a private/loopback host is refused
+    // exactly the same.
     private static string? ResolveAvatarUrl(IReadOnlyList<Claim> claims, OidConfig config)
     {
         if (string.IsNullOrEmpty(config.AvatarUrlFormat))
         {
-            return ResolvePictureClaim(claims);
+            return config.DisableAvatarFromPictureClaim ? null : ResolvePictureClaim(claims);
         }
 
         return claims.Aggregate(
@@ -227,7 +229,7 @@ internal static class OidcAuthorizeStateBuilder
     /// <param name="EnableLiveTv">Whether the login grants Live TV access.</param>
     /// <param name="EnableLiveTvManagement">Whether the login grants Live TV management.</param>
     /// <param name="Folders">The enabled folders (statically enabled plus role-granted).</param>
-    /// <param name="AvatarUrl">The resolved avatar URL, or null when no avatar format is configured.</param>
+    /// <param name="AvatarUrl">The resolved avatar candidate URL: the configured AvatarUrlFormat template with @{claim} tokens substituted, or — when no template is configured (null/empty) — the standard OIDC "picture" claim (#723); null when neither yields a value. Only a candidate: the fetch is still gated by AvatarUrlValidator.</param>
     /// <param name="PermissionGrants">The generic role→permission grants (#164); null (treated as empty) when the feature is off.</param>
     internal readonly record struct OidcAuthorizeState(
         string? Username,

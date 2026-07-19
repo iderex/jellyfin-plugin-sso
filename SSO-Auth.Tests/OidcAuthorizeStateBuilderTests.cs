@@ -545,6 +545,34 @@ public class OidcAuthorizeStateBuilderTests
     }
 
     [Fact]
+    public void NoAvatarUrlFormat_PictureFallbackDisabled_YieldsNull()
+    {
+        // The admin opt-out (#723): with the picture fallback disabled and no template, no candidate is
+        // produced even when the IdP sends a picture claim — nothing is fetched.
+        var config = Config(c => c.DisableAvatarFromPictureClaim = true);
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(("preferred_username", "alice"), ("picture", "https://idp.example.com/alice.jpg")),
+            config);
+
+        Assert.Null(result.AvatarUrl);
+    }
+
+    [Fact]
+    public void AvatarUrlFormat_TemplateUnaffectedByPictureFallbackToggle()
+    {
+        // The opt-out only gates the no-template picture fallback; a configured template still resolves,
+        // so disabling the fallback never silently drops an explicitly-configured avatar.
+        var config = Config(c =>
+        {
+            c.AvatarUrlFormat = "https://avatars.example.com/@{sub}.png";
+            c.DisableAvatarFromPictureClaim = true;
+        });
+        var result = OidcAuthorizeStateBuilder.Build(Claims(("preferred_username", "alice"), ("sub", "123")), config);
+
+        Assert.Equal("https://avatars.example.com/123.png", result.AvatarUrl);
+    }
+
+    [Fact]
     public void NoAvatarUrlFormat_EmptyPictureClaim_YieldsNull()
     {
         // An empty picture value is treated as absent, so the caller skips the fetch rather than handing
