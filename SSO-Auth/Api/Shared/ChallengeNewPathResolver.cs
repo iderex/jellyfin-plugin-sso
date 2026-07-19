@@ -1,6 +1,7 @@
 using System;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Api.Avatar;
+using Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;

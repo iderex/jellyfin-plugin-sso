@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api;
 
