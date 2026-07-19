@@ -15,9 +15,9 @@
 #   - FAIL  (high confidence, near-zero false-positive):
 #       * PR body carries an issue reference (Closes/Refs #N) — skipped for bots.
 #       * a build.yaml version bump also touches CHANGELOG.md.
-#       * the diff is not enormous (>800 changed lines) unless `override:size` says so.
 #   - WARN  (soft convention, annotation only — never fails):
-#       * the diff is large (>=400 changed lines).
+#       * the diff is large (>=400 changed lines) — advisory; a feature, doc
+#         migration, or bulk rename legitimately exceeds any cap, so size never reds.
 #       * SSO-Auth code changed without a matching SSO-Auth.Tests change.
 #
 # Two acceptance-criteria items from #171 are intentionally NOT implemented here
@@ -29,9 +29,8 @@ name: PR Hygiene
 
 on:
   pull_request:
-    # labeled/unlabeled: so adding `override:size` re-runs and clears the check.
-    # edited: so editing the body to add the issue reference re-runs it.
-    types: [opened, edited, synchronize, reopened, labeled, unlabeled]
+    # edited: so editing the body to add the issue reference re-runs the check.
+    types: [opened, edited, synchronize, reopened]
 
 # Explicit deny-all at workflow level; the job below grants only what it reads.
 permissions: {}
@@ -107,11 +106,13 @@ jobs:
               );
             }
 
-            // --- Check 3: PR size (warn >=400, fail >800 unless overridden) -----
+            // --- Check 3: PR size (WARN only — never fails) --------------------
             // Rationale (#171): reviewer effectiveness — human and AI — degrades on
-            // very large diffs. Generated/lock files are excluded so the count
-            // reflects human-authored change, and `override:size` is the escape
-            // hatch for a legitimately large change (a bulk rename, a vendored drop).
+            // very large diffs, so a big PR is worth a closer look. But "large" is
+            // not "wrong": a feature, a doc migration, or a bulk rename legitimately
+            // exceeds any line cap, so size is ADVISORY ONLY and never reds a
+            // legitimate PR (no hard cap, no override label needed). Generated/lock
+            // files are excluded so the count reflects human-authored change.
             const isGenerated = (name) =>
               name.endsWith("packages.lock.json") ||
               name === "flake.lock" ||
@@ -121,18 +122,10 @@ jobs:
               .filter((f) => !isGenerated(f.filename))
               .reduce((sum, f) => sum + f.additions + f.deletions, 0);
             const WARN_AT = 400;
-            const FAIL_AT = 800;
-            const sizeOverridden = labels.includes("override:size");
-            if (churn > FAIL_AT && !sizeOverridden) {
-              failures.push(
-                `PR changes ${churn} lines (excluding generated/lock files), over ` +
-                  `the ${FAIL_AT}-line cap. Split it into smaller PRs, or add the ` +
-                  "`override:size` label with a reason if it is genuinely atomic.",
-              );
-            } else if (churn >= WARN_AT) {
+            if (churn >= WARN_AT) {
               warnings.push(
                 `PR changes ${churn} lines (excluding generated/lock files). ` +
-                  `Consider splitting it — reviews degrade past ~${WARN_AT} lines.`,
+                  `Large PRs get a closer look — reviews degrade past ~${WARN_AT} lines.`,
               );
             }
 
