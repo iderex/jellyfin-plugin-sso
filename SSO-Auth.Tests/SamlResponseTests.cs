@@ -431,4 +431,57 @@ public class SamlResponseTests
         var fixture = SamlTestFactory.Create(notOnOrAfter: expiry);
         Assert.Equal(expiry, Load(fixture).GetNotOnOrAfter());
     }
+
+    // --- Certificate lifetime: SamlResponse owns and disposes the IdP signing cert handle (#674) ---
+
+    [Fact]
+    public void SamlResponse_IsDisposable_AndDisposesWithoutBreakingTheParseValidateExtractFlow()
+    {
+        var fixture = SamlTestFactory.Create(role: "jellyfin-admins");
+        var response = Load(fixture);
+
+        // It loads an X509Certificate2 (an unmanaged key handle) per request, so it MUST be IDisposable.
+        Assert.IsAssignableFrom<System.IDisposable>(response);
+
+        // The full parse -> signature validate -> claim extract flow round-trips (the certificate stays alive
+        // through validation and every read), and only then is disposal safe.
+        Assert.True(response.IsValid());
+        Assert.Equal("alice", response.GetNameID());
+        Assert.Equal(new List<string> { "jellyfin-admins" }, response.GetCustomAttributes("Role"));
+
+        // Disposal releases the certificate handle and is idempotent — a using plus an explicit Dispose, or a
+        // double dispose, must not throw.
+        response.Dispose();
+        response.Dispose();
+    }
+
+    [Fact]
+    public void SamlResponse_UsingBlock_CompletesNormally()
+    {
+        var fixture = SamlTestFactory.Create();
+        using (var response = Load(fixture))
+        {
+            Assert.True(response.IsValid());
+        }
+    }
+
+    // --- XPath-injection safety in GetCustomAttributes (#678) ---
+
+    [Fact]
+    public void GetCustomAttributes_MaliciousAttributeName_DoesNotInjectOrThrow()
+    {
+        // An attr breaking out of the '...' XPath literal (an apostrophe plus a union/predicate payload) must
+        // be treated as a literal attribute name that matches nothing — it may never widen the node selection
+        // and must not throw. Latent today (every production caller passes the constant "Role"), but the
+        // method is public, so it is made injection-safe for any input.
+        var fixture = SamlTestFactory.Create(role: "jellyfin-users");
+        var response = Load(fixture);
+
+        Assert.Empty(response.GetCustomAttributes("Role'] | //*[1='"));
+        Assert.Empty(response.GetCustomAttributes("' or '1'='1"));
+        Assert.Empty(response.GetCustomAttributes("Role' or '1'='1"));
+
+        // The legitimate constant name still returns exactly the same node set as before the hardening.
+        Assert.Equal(new List<string> { "jellyfin-users" }, response.GetCustomAttributes("Role"));
+    }
 }

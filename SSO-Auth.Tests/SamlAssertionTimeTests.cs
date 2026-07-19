@@ -83,4 +83,59 @@ public class SamlAssertionTimeTests
     {
         Assert.True(Valid(At(5), At(-5), At(5)));
     }
+
+    // --- xsd:dateTime-faithful parsing (#677): XmlConvert replaces DateTime.TryParse ---
+
+    [Fact]
+    public void TryParseUtc_BasicXsdDateTime_ParsesToCorrectUtcInstant()
+    {
+        Assert.True(SamlAssertionTime.TryParseUtc("2026-07-11T12:00:00Z", out var parsed));
+        Assert.Equal(new DateTime(2026, 7, 11, 12, 0, 0, DateTimeKind.Utc), parsed);
+        Assert.Equal(DateTimeKind.Utc, parsed.Kind);
+    }
+
+    [Fact]
+    public void TryParseUtc_OffsetForm_IsNormalizedToUtc()
+    {
+        // An explicit +02:00 offset must be converted to UTC (14:30+02:00 == 12:30Z), not read as local.
+        Assert.True(SamlAssertionTime.TryParseUtc("2026-07-11T14:30:00+02:00", out var parsed));
+        Assert.Equal(new DateTime(2026, 7, 11, 12, 30, 0, DateTimeKind.Utc), parsed);
+        Assert.Equal(DateTimeKind.Utc, parsed.Kind);
+    }
+
+    [Fact]
+    public void TryParseUtc_MoreThanSevenFractionalDigits_IsAccepted()
+    {
+        // xsd:dateTime permits unbounded fractional-second digits; some IdPs emit high precision. The old
+        // DateTime.TryParse path caps at 7 digits and rejected these, wrongly failing a valid assertion —
+        // XmlConvert tolerates them (truncating to tick precision). This is the #677 regression, now fixed.
+        Assert.True(SamlAssertionTime.TryParseUtc("2026-07-11T12:00:00.123456789012345Z", out var parsed));
+        Assert.Equal(DateTimeKind.Utc, parsed.Kind);
+        // Truncated to the same second; the sub-second tail is below the assertion window's resolution.
+        Assert.Equal(new DateTime(2026, 7, 11, 12, 0, 0, DateTimeKind.Utc), new DateTime(parsed.Year, parsed.Month, parsed.Day, parsed.Hour, parsed.Minute, parsed.Second, DateTimeKind.Utc));
+    }
+
+    [Fact]
+    public void TryParseUtc_HighPrecisionUpperBound_IsAcceptedEndToEnd()
+    {
+        // The same high-precision value flows through the window check as a valid future upper bound.
+        var highPrecision = Now.AddMinutes(5).ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture) + ".123456789012345Z";
+        Assert.True(Valid(highPrecision, null, null));
+    }
+
+    [Theory]
+    [InlineData("not-a-date")]
+    [InlineData("")]
+    [InlineData("2026-13-99T99:99:99Z")]
+    [InlineData("2026-07-11 12:00:00")]
+    public void TryParseUtc_MalformedValue_ReturnsFalseFailClosed(string raw)
+    {
+        Assert.False(SamlAssertionTime.TryParseUtc(raw, out _));
+    }
+
+    [Fact]
+    public void TryParseUtc_Null_ReturnsFalse()
+    {
+        Assert.False(SamlAssertionTime.TryParseUtc(null, out _));
+    }
 }

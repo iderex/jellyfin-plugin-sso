@@ -85,9 +85,19 @@ internal sealed class SamlAssertionValidator
         // accepted across an identity-provider signing-key overlap window (#491); when it is blank the
         // trial narrows to the primary alone (both the primary and any secondary are additionally required
         // to be within their validity window — see IsWithinValidityPeriod).
-        if (!SamlResponseLoader.TryParse(config.SamlCertificate, config.SamlSecondaryCertificate, rawResponse, out samlResponse)
-            || !IsResponseValid(config, provider, requestBaseUrl, samlResponse))
+        if (!SamlResponseLoader.TryParse(config.SamlCertificate, config.SamlSecondaryCertificate, rawResponse, out samlResponse))
         {
+            return false;
+        }
+
+        if (!IsResponseValid(config, provider, requestBaseUrl, samlResponse))
+        {
+            // The response parsed but failed response-level validation. It owns an unmanaged certificate
+            // handle (#674), and the caller only ever consumes samlResponse on the true path, so dispose it
+            // here and null the out parameter — honoring the "otherwise null" out contract so a caller can
+            // never read (or be handed) a rejected, half-consumed response.
+            samlResponse.Dispose();
+            samlResponse = null;
             return false;
         }
 
