@@ -2,6 +2,7 @@ using System;
 using System.Net;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
+using Jellyfin.Plugin.SSO_Auth.Api.Session;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;

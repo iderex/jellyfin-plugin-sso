@@ -5,7 +5,7 @@ using MediaBrowser.Controller.Library;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Session;
 
 /// <summary>
 /// Boot-time reconciliation of the user database to the SSO-only flag (#165). SSO-only enforcement is
