@@ -488,9 +488,71 @@ public class OidcAuthorizeStateBuilderTests
     }
 
     [Fact]
-    public void NoAvatarUrlFormat_YieldsNull()
+    public void AvatarUrlFormat_ConfiguredTemplateWinsOverPictureClaim()
     {
+        // The template always wins when configured; the picture-claim fallback is only for the no-template
+        // case (#723), so a configured format is never silently overridden by a picture claim.
+        var config = Config(c => c.AvatarUrlFormat = "https://avatars.example.com/@{sub}.png");
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(("preferred_username", "alice"), ("sub", "123"), ("picture", "https://idp.example.com/pic.jpg")),
+            config);
+
+        Assert.Equal("https://avatars.example.com/123.png", result.AvatarUrl);
+    }
+
+    [Fact]
+    public void NoAvatarUrlFormat_FallsBackToStandardPictureClaim()
+    {
+        // Zero-config parity (#723): with no template the resolver uses the standard OIDC `picture` claim,
+        // so a standards-compliant IdP yields an avatar candidate without any configuration.
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(("preferred_username", "alice"), ("picture", "https://idp.example.com/alice.jpg")),
+            Config(_ => { }));
+
+        Assert.Equal("https://idp.example.com/alice.jpg", result.AvatarUrl);
+    }
+
+    [Fact]
+    public void EmptyAvatarUrlFormat_FallsBackToStandardPictureClaim()
+    {
+        // An empty template is treated the same as no template (null/empty → picture fallback, #723),
+        // rather than resolving to an empty URL the way the pre-#723 aggregate did.
+        var config = Config(c => c.AvatarUrlFormat = string.Empty);
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(("preferred_username", "alice"), ("picture", "https://idp.example.com/alice.jpg")),
+            config);
+
+        Assert.Equal("https://idp.example.com/alice.jpg", result.AvatarUrl);
+    }
+
+    [Fact]
+    public void NoAvatarUrlFormat_LastPictureClaimWins()
+    {
+        // Last wins, matching the subject/username/email_verified derivations.
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(("picture", "https://idp.example.com/old.jpg"), ("picture", "https://idp.example.com/new.jpg")),
+            Config(_ => { }));
+
+        Assert.Equal("https://idp.example.com/new.jpg", result.AvatarUrl);
+    }
+
+    [Fact]
+    public void NoAvatarUrlFormat_NoPictureClaim_YieldsNull()
+    {
+        // No template and no picture claim: nothing to fetch, so the candidate is null (no fetch attempted).
         var result = OidcAuthorizeStateBuilder.Build(Claims(("preferred_username", "alice")), Config(_ => { }));
+        Assert.Null(result.AvatarUrl);
+    }
+
+    [Fact]
+    public void NoAvatarUrlFormat_EmptyPictureClaim_YieldsNull()
+    {
+        // An empty picture value is treated as absent, so the caller skips the fetch rather than handing
+        // an empty URL to AvatarUrlValidator.
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(("preferred_username", "alice"), ("picture", string.Empty)),
+            Config(_ => { }));
+
         Assert.Null(result.AvatarUrl);
     }
 
