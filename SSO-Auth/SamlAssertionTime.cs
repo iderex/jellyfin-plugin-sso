@@ -1,6 +1,6 @@
 #nullable enable
 using System;
-using System.Globalization;
+using System.Xml;
 
 namespace Jellyfin.Plugin.SSO_Auth;
 
@@ -84,12 +84,29 @@ internal static class SamlAssertionTime
 
     internal static bool TryParseUtc(string? raw, out DateTime utc)
     {
-        // SAML timestamps are xsd:dateTime in UTC ('...Z'). Parse culture-invariantly and normalize
-        // to UTC, assuming UTC when no offset is present rather than the machine's local zone.
-        return DateTime.TryParse(
-            raw,
-            CultureInfo.InvariantCulture,
-            DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal,
-            out utc);
+        utc = default;
+        if (raw == null)
+        {
+            return false;
+        }
+
+        // SAML NotBefore/NotOnOrAfter are xsd:dateTime. Parse them with XmlConvert.ToDateTime, which
+        // implements the xsd:dateTime grammar faithfully — unlike DateTime.TryParse, which accepts non-xsd
+        // shapes and REJECTS some valid ones, notably fractional seconds beyond the 7 digits it caps at that
+        // xsd permits and some IdPs emit (#677). XmlDateTimeSerializationMode.Utc normalizes any offset (or an
+        // offset-less value) to UTC. XmlConvert.ToDateTime THROWS on malformed input, so wrap it and fail
+        // CLOSED (return false) on any parse failure — this method's non-throwing bool contract is unchanged.
+        try
+        {
+            utc = XmlConvert.ToDateTime(raw, XmlDateTimeSerializationMode.Utc);
+        }
+        catch (Exception ex) when (ex is FormatException or ArgumentException)
+        {
+            return false;
+        }
+
+        // Utc mode yields a Kind=Utc DateTime; assert it so a bound is never compared against nowUtc in a
+        // mismatched kind, and so a future refactor of the mode cannot silently reintroduce local-time drift.
+        return utc.Kind == DateTimeKind.Utc;
     }
 }

@@ -23,7 +23,7 @@ namespace Jellyfin.Plugin.SSO_Auth;
 /// <summary>
 /// Represents a SAML response.
 /// </summary>
-internal sealed class SamlResponse
+internal sealed class SamlResponse : IDisposable
 {
     // The only positions an enveloped SAML signature may occupy: a direct child of the Response or
     // of the Assertion. Encodes the security-critical "no relocated signature" invariant, so it is a
@@ -81,6 +81,25 @@ internal sealed class SamlResponse
     /// Gets the SAML response's XML data.
     /// </summary>
     public string Xml => _xmlDoc.OuterXml;
+
+    /// <summary>
+    /// Disposes the loaded identity-provider signing certificate(s) (#674). Each
+    /// <see cref="X509Certificate2"/> wraps an unmanaged key handle, and one <see cref="SamlResponse"/> is
+    /// constructed per inbound assertion-consumer callback, so without this every request leaked a handle.
+    /// The certificates are the only unmanaged resource this type owns: <see cref="XmlDocument"/> holds only
+    /// managed state (it is not itself IDisposable) and the parse-time <see cref="System.Xml.XmlReader"/> /
+    /// <see cref="StringReader"/> are already disposed inside <see cref="ParseResponseXml"/>. Disposal must
+    /// therefore happen only AFTER the response is fully consumed (signature validation and every claim
+    /// read), because <see cref="VerifiesAgainstCandidateCertificate"/> uses these certificates — the owning
+    /// callers scope it to the point where the assertion has been read in full.
+    /// </summary>
+    public void Dispose()
+    {
+        foreach (var certificate in _certificates)
+        {
+            certificate.Dispose();
+        }
+    }
 
     // Loads the candidate identity-provider signing certificates: the primary always, and the optional
     // secondary only when configured (#491). The primary is loaded FIRST so the constructor's exception
@@ -532,11 +551,36 @@ internal sealed class SamlResponse
     /// <returns>The custom attributes.</returns>
     public List<string> GetCustomAttributes(string attr)
     {
-        var node = _xmlDoc.SelectNodes("/samlp:Response/saml:Assertion[1]/saml:AttributeStatement/saml:Attribute[@Name='" + attr + "']/saml:AttributeValue", _xmlNameSpaceManager);
-        List<string> output = new List<string>();
-        foreach (XmlNode item in node)
+        // Select the Attribute nodes with a CONSTANT XPath and compare @Name in C# (exact ordinal), rather
+        // than interpolating attr into a quoted XPath literal (#678). An attr carrying an apostrophe or a
+        // "'] | //*['"-style payload would otherwise break out of the '...' predicate and select arbitrary
+        // nodes — classic XPath injection. Every production caller passes the constant "Role", so the result
+        // set for that case is byte-for-byte the previous behavior (same nodes, same document order); the
+        // rewrite only removes the injection surface the public signature exposes for any other input.
+        var output = new List<string>();
+        var attributes = _xmlDoc.SelectNodes("/samlp:Response/saml:Assertion[1]/saml:AttributeStatement/saml:Attribute", _xmlNameSpaceManager);
+        if (attributes == null)
         {
-            output.Add(item?.InnerText);
+            return output;
+        }
+
+        foreach (XmlNode attribute in attributes)
+        {
+            if (!string.Equals((attribute as XmlElement)?.GetAttribute("Name"), attr, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var values = attribute.SelectNodes("saml:AttributeValue", _xmlNameSpaceManager);
+            if (values == null)
+            {
+                continue;
+            }
+
+            foreach (XmlNode value in values)
+            {
+                output.Add(value?.InnerText);
+            }
         }
 
         return output;

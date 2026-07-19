@@ -431,4 +431,88 @@ public class SamlResponseTests
         var fixture = SamlTestFactory.Create(notOnOrAfter: expiry);
         Assert.Equal(expiry, Load(fixture).GetNotOnOrAfter());
     }
+
+    // --- Certificate lifetime: SamlResponse owns and disposes the IdP signing cert handle (#674) ---
+
+    [Fact]
+    public void SamlResponse_IsDisposable_AndDisposesWithoutBreakingTheParseValidateExtractFlow()
+    {
+        var fixture = SamlTestFactory.Create(role: "jellyfin-admins");
+        var response = Load(fixture);
+
+        // It loads an X509Certificate2 (an unmanaged key handle) per request, so it MUST be IDisposable.
+        Assert.IsAssignableFrom<System.IDisposable>(response);
+
+        // The full parse -> signature validate -> claim extract flow round-trips (the certificate stays alive
+        // through validation and every read), and only then is disposal safe.
+        Assert.True(response.IsValid());
+        Assert.Equal("alice", response.GetNameID());
+        Assert.Equal(new List<string> { "jellyfin-admins" }, response.GetCustomAttributes("Role"));
+
+        // Disposal releases the certificate handle and is idempotent — a using plus an explicit Dispose, or a
+        // double dispose, must not throw.
+        response.Dispose();
+        response.Dispose();
+    }
+
+    [Fact]
+    public void SamlResponse_UsingBlock_CompletesNormally()
+    {
+        var fixture = SamlTestFactory.Create();
+        using (var response = Load(fixture))
+        {
+            Assert.True(response.IsValid());
+        }
+    }
+
+    // --- XPath-injection safety in GetCustomAttributes (#678) ---
+
+    [Fact]
+    public void GetCustomAttributes_MaliciousAttributeName_DoesNotInjectOrThrow()
+    {
+        // An attr breaking out of the '...' XPath literal (an apostrophe plus a union/predicate payload) must
+        // be treated as a literal attribute name that matches nothing — it may never widen the node selection
+        // and must not throw. Latent today (every production caller passes the constant "Role"), but the
+        // method is public, so it is made injection-safe for any input.
+        var fixture = SamlTestFactory.Create(role: "jellyfin-users");
+        var response = Load(fixture);
+
+        Assert.Empty(response.GetCustomAttributes("Role'] | //*[1='"));
+        Assert.Empty(response.GetCustomAttributes("' or '1'='1"));
+        Assert.Empty(response.GetCustomAttributes("Role' or '1'='1"));
+
+        // The legitimate constant name still returns exactly the same node set as before the hardening.
+        Assert.Equal(new List<string> { "jellyfin-users" }, response.GetCustomAttributes("Role"));
+    }
+
+    [Fact]
+    public void GetCustomAttributes_MultiValueRole_AfterAnotherAttribute_PreservesAllValuesInOrder()
+    {
+        // The #678 rewrite's core guarantee is "same nodes, same document order" as the old string-XPath. The
+        // factory only ever emits a single-value Role, so this pins the realistic multi-role case directly: a
+        // NON-Role attribute precedes the Role attribute (so a mutated outer continue->break would skip Role
+        // entirely), and Role carries TWO values (so a mutated inner value loop that stops at the first, or
+        // one that reorders, would drop or swap a value). Role feeds the role->permission mapping, so this is
+        // authorization-relevant, not cosmetic. No signature is needed — GetCustomAttributes reads the DOM.
+        var xml =
+            "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" ID=\"_r\" Version=\"2.0\">" +
+                "<saml:Assertion ID=\"_a\" Version=\"2.0\">" +
+                    "<saml:Subject><saml:NameID>alice</saml:NameID></saml:Subject>" +
+                    "<saml:AttributeStatement>" +
+                        "<saml:Attribute Name=\"Department\"><saml:AttributeValue>engineering</saml:AttributeValue></saml:Attribute>" +
+                        "<saml:Attribute Name=\"Role\">" +
+                            "<saml:AttributeValue>admin</saml:AttributeValue>" +
+                            "<saml:AttributeValue>user</saml:AttributeValue>" +
+                        "</saml:Attribute>" +
+                    "</saml:AttributeStatement>" +
+                "</saml:Assertion>" +
+            "</samlp:Response>";
+        using var response = new SamlResponse(SamlFixture.ForeignCertificateBase64(), SamlFixture.Encode(xml));
+
+        // Exactly both Role values, in document order — kills the truncate-to-first and reorder mutants.
+        Assert.Equal(new List<string> { "admin", "user" }, response.GetCustomAttributes("Role"));
+        // The Role attribute is still reached past the preceding Department attribute — kills the outer
+        // continue->break mutant — and the non-Role attribute reads independently.
+        Assert.Equal(new List<string> { "engineering" }, response.GetCustomAttributes("Department"));
+    }
 }

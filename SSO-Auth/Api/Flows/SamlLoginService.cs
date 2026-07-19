@@ -182,6 +182,13 @@ internal sealed class SamlLoginService
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
 
+        // Own the parsed response for the rest of this synchronous method: it wraps the identity provider's
+        // signing-certificate unmanaged handle and must be disposed once fully read (#674). Every claim read
+        // below completes before any return (the intermediate auth page's XML is rendered eagerly), and the
+        // stored login outcome copies out only strings and the verified identity — never this object — so
+        // method scope is the correct disposal boundary; the using declaration disposes on every exit path.
+        using var ownedResponse = samlResponse;
+
         // Evaluate the assertion's role attribute ONCE per response (#479): the same list feeds the allow-list
         // gate here, the denied-path warning below, and the privilege derivation in TryProduceVerifiedIdentity
         // on the mint path — the assertion is immutable here, so the role XPath runs once instead of at each use.
@@ -678,6 +685,10 @@ internal sealed class SamlLoginService
             // Malformed input is rejected the same way an invalid response is — clean 4xx, not 500 (#199).
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
+
+        // Dispose the parsed response (it owns the IdP certificate's unmanaged handle) when this synchronous
+        // method returns (#674); the one-time-use consume and NameID read below both complete first.
+        using var ownedResponse = samlResponse;
 
         // Enforce one-time use here too (#219): without it, a captured, still-valid assertion could be
         // replayed to bind its NameID to the caller's account. The linking flow issues no AuthnRequest,
