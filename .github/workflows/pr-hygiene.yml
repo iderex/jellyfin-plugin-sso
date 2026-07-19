@@ -115,7 +115,6 @@ jobs:
             // files are excluded so the count reflects human-authored change.
             const isGenerated = (name) =>
               name.endsWith("packages.lock.json") ||
-              name === "flake.lock" ||
               name.endsWith(".min.js") ||
               name.endsWith(".min.css");
             const churn = files
