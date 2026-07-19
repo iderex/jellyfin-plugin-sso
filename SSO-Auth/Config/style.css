@@ -63,3 +63,322 @@
 .sso-role-mapping-input-label {
   padding-left: 0.5em;
 }
+
+/*
+  Provider workspace redesign (#365). Purely additive presentation classes. Colours reuse the AA-safe
+  #b71c1c red from emby-restyle.css (destructive/danger) as a solid background or accent border paired with
+  light text — never as body text on the dark dashboard, where a dark red fails the 4.5:1 contrast floor.
+  Error and status TEXT stays in the theme's own high-contrast foreground so it clears WCAG AA in both the
+  dark and light dashboards; the red is carried by the accent border, the tinted panel and the ⚠ glyph, so
+  meaning is never signalled by colour alone.
+*/
+
+.sso-visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Provider list */
+.sso-workspace-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1em;
+  flex-wrap: wrap;
+  margin-bottom: 0.5em;
+}
+
+.sso-workspace-title {
+  margin: 0;
+}
+
+.sso-add-provider .material-icons.add {
+  margin-right: 0.35em;
+}
+
+.sso-provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
+  margin: 0.5em 0 1em;
+}
+
+.sso-provider-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75em;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.75em 1em;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.135);
+  border-radius: 0.3em;
+}
+
+.sso-provider-card:hover,
+.sso-provider-card:focus-visible {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.35);
+  outline: none;
+}
+
+.sso-provider-card-name {
+  flex: 1 1 auto;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.sso-badge,
+.sso-pill {
+  flex: 0 0 auto;
+  display: inline-block;
+  padding: 0.15em 0.6em;
+  border-radius: 1em;
+  font-size: 0.8em;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.sso-badge-type {
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.87);
+}
+
+.sso-pill-enabled {
+  background: #2e7d32; /* Material Green 800 + white text clears AA (~4.8:1). */
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.sso-pill-disabled {
+  background: rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.87);
+}
+
+/* Empty state */
+.sso-empty-state {
+  padding: 1.5em;
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  border-radius: 0.3em;
+  margin: 0.5em 0 1em;
+  text-align: center;
+}
+
+.sso-empty-state-title {
+  font-size: 1.1em;
+  font-weight: 600;
+  margin: 0 0 0.5em;
+}
+
+/* Editor */
+.sso-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1em;
+  flex-wrap: wrap;
+  margin-bottom: 0.5em;
+}
+
+.sso-editor-title {
+  margin: 0;
+  word-break: break-word;
+}
+
+.sso-editor-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75em;
+}
+
+.sso-btn-deemphasized {
+  opacity: 0.85;
+}
+
+.sso-save-status {
+  font-weight: 600;
+  padding: 0.15em 0.6em;
+  border-radius: 0.25em;
+}
+
+.sso-save-status.sso-status-ok {
+  background: #2e7d32;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.sso-save-status.sso-status-fail {
+  background: #b71c1c;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+/* Required / optional field markers */
+.sso-required-legend {
+  margin-top: 0;
+}
+
+.sso-required {
+  color: #ff8a80; /* Light red: an accent glyph, not body text — decorative emphasis only. */
+  font-weight: 700;
+}
+
+.sso-optional {
+  opacity: 0.7;
+  font-weight: 400;
+  font-style: italic;
+}
+
+/* Inline field validation. Theme-foreground text (AA), red accent border + a tinted panel carry the
+   error meaning so it is never colour-only. */
+.sso-inline-error {
+  margin-top: 0.35em;
+  padding: 0.4em 0.6em;
+  border-left: 3px solid #b71c1c;
+  background: rgba(183, 28, 28, 0.16);
+  border-radius: 0 0.2em 0.2em 0;
+  color: inherit;
+}
+
+.sso-inline-error::before {
+  content: "⚠ ";
+  font-weight: 700;
+}
+
+/* Sub-groups inside a section */
+.sso-subgroup {
+  margin-top: 0.75em;
+  padding-left: 0.75em;
+  border-left: 2px solid rgba(255, 255, 255, 0.135);
+}
+
+.sso-subgroup-title {
+  font-weight: 600;
+  margin: 0.25em 0 0.5em;
+}
+
+/* Callout (promotes the former inline-red BaseUrlOverride warning) */
+.sso-callout {
+  margin-top: 0.5em;
+  padding: 0.6em 0.85em;
+  border-radius: 0.25em;
+  color: inherit;
+}
+
+.sso-callout-warning {
+  border-left: 4px solid #b71c1c;
+  background: rgba(183, 28, 28, 0.14);
+}
+
+/* Security & hardening section */
+.sso-security-block {
+  margin-bottom: 1em;
+}
+
+.sso-sensitive-region {
+  padding: 0.75em 1em;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 0.3em;
+}
+
+.sso-danger-zone {
+  padding: 0.75em 1em;
+  border-left: 4px solid #b71c1c;
+  background: rgba(183, 28, 28, 0.08);
+  border-radius: 0 0.3em 0.3em 0;
+}
+
+.sso-danger-title {
+  color: #ff8a80; /* Accent heading, paired with the descriptive text below it — not colour-only. */
+}
+
+.sso-insecure-toggle {
+  margin: 0.5em 0;
+}
+
+/* Sticky save footer (Fitts): the primary action stays at the bottom edge. */
+.sso-save-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.75em;
+  margin-top: 1em;
+  padding: 0.75em 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.135);
+  background: rgba(20, 20, 20, 0.94);
+}
+
+.sso-restart-reminder {
+  flex: 1 1 auto;
+  margin: 0;
+}
+
+.sso-save-button {
+  flex: 0 0 auto;
+  min-width: 10em;
+}
+
+.sso-test-block {
+  margin-top: 1em;
+}
+
+@media (prefers-color-scheme: light) {
+  .sso-provider-card {
+    background: rgba(0, 0, 0, 0.03);
+    border-color: rgba(0, 0, 0, 0.18);
+  }
+
+  .sso-provider-card:hover,
+  .sso-provider-card:focus-visible {
+    background: rgba(0, 0, 0, 0.07);
+    border-color: rgba(0, 0, 0, 0.4);
+  }
+
+  .sso-badge-type,
+  .sso-pill-disabled {
+    background: rgba(0, 0, 0, 0.1);
+    color: rgba(0, 0, 0, 0.87);
+  }
+
+  .sso-subgroup,
+  .sso-save-footer {
+    border-color: rgba(0, 0, 0, 0.18);
+  }
+
+  .sso-sensitive-region {
+    border-color: rgba(0, 0, 0, 0.25);
+  }
+
+  .sso-empty-state {
+    border-color: rgba(0, 0, 0, 0.25);
+  }
+
+  /* On a light dashboard #b71c1c clears AA as text, so the accent glyph/heading use it directly. */
+  .sso-required,
+  .sso-danger-title {
+    color: #b71c1c;
+  }
+
+  .sso-save-footer {
+    background: rgba(250, 250, 250, 0.95);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sso-provider-card {
+    transition: none;
+  }
+}

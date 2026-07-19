@@ -982,6 +982,64 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void ProviderForm_RendersEveryPersistingFieldId()
+    {
+        // The full save-contract roster, pinned after the #365 provider-workspace redesign reordered and
+        // regrouped the form into native accordion sections. ProviderFormFieldIds_MatchOidConfigProperties
+        // guards the FORWARD direction (no stray marked id) and a reverse pin for the security-critical
+        // SUBSET; this test is the exhaustive reverse pin: every one of the 34 persisting fields must still
+        // render as a marked input with its exact id, so a field silently dropped or unmarked during a
+        // future re-layout — which would stop it persisting — fails here rather than shipping as silent data
+        // loss. The provider-name KEY input (OidProviderName) is deliberately unmarked (it supplies the
+        // OidConfigs dictionary key, not an OidConfig property) and is asserted present separately.
+        var markerClasses = new[] { "sso-text", "sso-line-list", "sso-toggle", "sso-folder-list", "sso-role-map" };
+        var form = OidcProviderFormMarkup(
+            File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "configPage.html")));
+
+        var markedIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (Match tag in Regex.Matches(form, "<[a-zA-Z][^>]*>", RegexOptions.Singleline))
+        {
+            var classAttr = Regex.Match(tag.Value, "class=\"([^\"]*)\"", RegexOptions.Singleline);
+            if (!classAttr.Success)
+            {
+                continue;
+            }
+
+            var classes = classAttr.Groups[1].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (!classes.Any(c => markerClasses.Contains(c, StringComparer.Ordinal)))
+            {
+                continue;
+            }
+
+            var idMatch = Regex.Match(tag.Value, "(?<![-\\w])id=\"([^\"]*)\"", RegexOptions.Singleline);
+            if (idMatch.Success)
+            {
+                markedIds.Add(idMatch.Groups[1].Value);
+            }
+        }
+
+        var expected = new[]
+        {
+            "OidEndpoint", "OidClientId", "OidSecret", "OidScopes", "Enabled",
+            "EnableAuthorization", "DefaultUsernameClaim", "DefaultProvider", "AvatarUrlFormat", "RoleClaim",
+            "Roles", "AdminRoles", "EnableAllFolders", "EnabledFolders", "EnableFolderRoles", "FolderRoleMapping",
+            "EnableLiveTvRoles", "LiveTvRoles", "LiveTvManagementRoles", "EnableLiveTv", "EnableLiveTvManagement",
+            "DoNotLoadProfile", "SchemeOverride", "PortOverride", "BaseUrlOverride",
+            "RequirePkce", "AllowExistingAccountLink", "RequireVerifiedEmailForAdoption", "RequireVerifiedEmailForLogin",
+            "DisableHttps", "DisablePushedAuthorization", "DoNotValidateEndpoints", "DoNotValidateIssuerName", "DoNotValidateResponseIssuer",
+        };
+
+        Assert.Equal(34, expected.Length);
+        var missing = expected.Where(id => !markedIds.Contains(id)).ToList();
+        Assert.True(
+            missing.Count == 0,
+            "These persisting provider-form fields are missing their marked input in configPage.html (a re-layout dropped or unmarked them, so they would stop persisting): " + string.Join(", ", missing));
+
+        // The provider-name KEY input must still be present (unmarked by design).
+        Assert.Contains("id=\"OidProviderName\"", form, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SourceFilesDeclaring_MatchesRecordStructAndStructAlongsideClass()
     {
         // #542: the helper's regex used to be "\bclass\s+{Name}\b" only, so it silently returned an empty
