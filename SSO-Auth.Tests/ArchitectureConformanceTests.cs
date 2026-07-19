@@ -722,6 +722,42 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void FlowServices_DoNotDuplicateChallengeNewPathResolution()
+    {
+        // Locked in by #670: the near-identical ResolveChallengeNewPath resolver — and its
+        // _newPathPersistGate persist-throttle — that OidcLoginService and SamlLoginService each carried
+        // (~40 lines apiece, differing only in which provider map the Mutate delegate re-resolved against)
+        // are now ONE generic helper in ChallengeNewPathResolver (Api/Shared), with a single shared gate. Pin
+        // by reflection that NEITHER flow service re-declares its own copy of either member, so the
+        // duplication (and a second, divergent throttle) cannot silently reappear.
+        const BindingFlags all = BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+        var flowServices = new[] { typeof(OidcLoginService), typeof(SamlLoginService) };
+
+        var offenders = flowServices
+            .SelectMany(t => t.GetMethods(all)
+                .Where(m => m.Name == "ResolveChallengeNewPath")
+                .Select(m => $"{SimpleName(t)}.{m.Name} (method)")
+                .Concat(t.GetFields(all)
+                    .Where(f => f.Name == "_newPathPersistGate")
+                    .Select(f => $"{SimpleName(t)}.{f.Name} (field)")))
+            .ToList();
+
+        Assert.True(
+            offenders.Count == 0,
+            "Neither flow service may declare its own ResolveChallengeNewPath method or _newPathPersistGate field; the single generic resolver and its one shared throttle live in ChallengeNewPathResolver (Api/Shared) (#670). Found: " + string.Join(", ", offenders));
+
+        // Liveness against a vacuous pass: the shared resolver must actually own both — a move, not a silent
+        // removal — so ChallengeNewPathResolver must declare the resolver method and the single gate field.
+        var resolver = typeof(ChallengeNewPathResolver);
+        Assert.True(
+            resolver.GetMethods(all).Any(m => m.Name == "ResolveChallengeNewPath"),
+            "ChallengeNewPathResolver must own the ResolveChallengeNewPath resolver; otherwise the flow-service scan passes vacuously (#670).");
+        Assert.True(
+            resolver.GetFields(all).Any(f => f.Name == "_newPathPersistGate" && f.FieldType == typeof(IntervalGate)),
+            "ChallengeNewPathResolver must own the single _newPathPersistGate IntervalGate; otherwise the flow-service scan passes vacuously (#670).");
+    }
+
+    [Fact]
     public void SharedFlowResponses_OwnTheAuthPageErrorAndLinkWriteResults()
     {
         // Locked in by the shared-helper consolidation (#160, #500): the three HTTP result shapes both flow

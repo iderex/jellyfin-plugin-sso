@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Api.Flows;
+using Jellyfin.Plugin.SSO_Auth.Api.Shared;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Library;
@@ -116,7 +117,8 @@ public class SamlLoginServiceTests
     [Fact]
     public void ResolveChallengeNewPath_ProviderDisabledInTheRaceWindow_SkipsThePersist_ButStillReturnsThisRequestsDerivedSpelling()
     {
-        // #412 review follow-up: exercises the Mutate delegate's own re-check inside ResolveChallengeNewPath.
+        // #412 review follow-up: exercises the Mutate delegate's own re-check inside the shared
+        // ChallengeNewPathResolver (unified across both flows in #670), driven with the SAML map selector.
         // `config` mirrors the reference the real caller already captured under ReadConfiguration's lock
         // (FindSamlConfig) before its own Enabled check passed; something then disables the provider in the
         // LIVE store before this write attempt runs — a race the outer check cannot see. The current
@@ -127,7 +129,7 @@ public class SamlLoginServiceTests
         SSOPlugin.Instance.MutateConfiguration(c => c.SamlConfigs["adfs"].Enabled = false);
         context.Request.Path = "/sso/SAML/start/adfs";
 
-        var result = SamlLoginService.ResolveChallengeNewPath("adfs", config, isLinking: false, context.Request, Substitute.For<ILogger>());
+        var result = ChallengeNewPathResolver.ResolveChallengeNewPath("adfs", config, isLinking: false, context.Request, Substitute.For<ILogger>(), c => c.SamlConfigs);
 
         Assert.True(result); // this request's own redirect still uses the freshly-derived spelling
         Assert.False(SSOPlugin.Instance.ReadConfiguration(c => c.SamlConfigs["adfs"].NewPath)); // stored value untouched
