@@ -72,6 +72,7 @@ public class BrowserErrorPageTests
         Assert.Equal("DENY", ctx.Response.Headers["X-Frame-Options"].ToString());
         Assert.Equal("nosniff", ctx.Response.Headers["X-Content-Type-Options"].ToString());
         Assert.Equal("no-store", ctx.Response.Headers.CacheControl.ToString());
+        Assert.Contains("camera=()", ctx.Response.Headers["Permissions-Policy"].ToString());
 
         // The nonce authorizing the inline <style> must be the exact nonce bound in the CSP.
         var nonce = Regex.Match(csp, "style-src 'nonce-([^']+)'").Groups[1].Value;

@@ -19,6 +19,15 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Shared;
 /// </summary>
 internal static class FlowResponses
 {
+    // The restrictive Permissions-Policy applied to both served HTML pages — the auth-completion page and
+    // the browser-navigated error page in BrowserErrorPage — shared as one constant so the two cannot drift.
+    // These pages run only a tiny inline script and need no powerful browser feature, so every listed feature
+    // is denied with an empty allowlist. HSTS is deliberately NOT set per page: transport security for the
+    // whole origin is the operator's reverse proxy / Jellyfin global responsibility (#756), not a per-response
+    // plugin header.
+    internal const string ServedPagePermissionsPolicy =
+        "camera=(), microphone=(), geolocation=(), payment=(), usb=(), accelerometer=(), gyroscope=(), magnetometer=(), autoplay=(), display-capture=()";
+
     /// <summary>
     /// A plain-text error result (<c>text/plain</c> with the given status), reproducing the controller's
     /// former <c>ReturnError</c> shape exactly so the non-outcome flow errors — a SAML signing-key failure,
@@ -52,6 +61,7 @@ internal static class FlowResponses
         response.Headers["X-Content-Type-Options"] = "nosniff";
         response.Headers["Referrer-Policy"] = "no-referrer";
         response.Headers.CacheControl = "no-store";
+        response.Headers["Permissions-Policy"] = ServedPagePermissionsPolicy;
         return new ContentResult
         {
             Content = render(nonce),
