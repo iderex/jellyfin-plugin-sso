@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Jellyfin.Data;
 using Jellyfin.Database.Implementations.Entities;
@@ -43,7 +44,8 @@ public class SessionMinterTests
         bool enableLiveTv = false,
         bool enableLiveTvManagement = false,
         string? avatarUrl = null,
-        string? defaultProvider = null) => new SessionParameters
+        string? defaultProvider = null,
+        IReadOnlyList<PermissionGrant>? permissionGrants = null) => new SessionParameters
     {
         UserId = UserId,
         IsAdmin = isAdmin,
@@ -52,6 +54,7 @@ public class SessionMinterTests
         EnabledFolders = enabledFolders ?? Array.Empty<string>(),
         EnableLiveTv = enableLiveTv,
         EnableLiveTvManagement = enableLiveTvManagement,
+        PermissionGrants = permissionGrants ?? Array.Empty<PermissionGrant>(),
         AvatarUrl = avatarUrl,
         DefaultProvider = defaultProvider,
         AuthResponse = new AuthResponse { AppName = "app", AppVersion = "1", DeviceID = "d", DeviceName = "dev" },
@@ -158,6 +161,56 @@ public class SessionMinterTests
         await minter.MintAsync(Params(enableAuthorization: false, isAdmin: false), () => "203.0.113.7", () => true);
 
         Assert.Contains(user.Permissions, perm => perm.Kind == PermissionKind.IsAdministrator && perm.Value); // seeded admin left untouched
+    }
+
+    [Fact]
+    public async Task MintAsync_EnableAuthorization_AppliesGenericPermissionGrants_GrantAndRevoke()
+    {
+        // #164: with the master switch on, each generic role→permission grant is applied authoritatively —
+        // a granted permission is set true and a revoked one set false. Seed the OPPOSITE of each so the
+        // assertions prove the mint flipped them, not that a fresh user happened to match.
+        var (minter, users, sessions) = Build();
+        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        user.SetPermission(PermissionKind.EnableContentDownloading, false); // grant must flip to true
+        user.SetPermission(PermissionKind.EnableContentDeletion, true); // revoke must flip to false
+        users.GetUserById(UserId).Returns(user);
+        sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
+
+        await minter.MintAsync(
+            Params(
+                enableAuthorization: true,
+                permissionGrants: new[]
+                {
+                    new PermissionGrant(PermissionKind.EnableContentDownloading, true),
+                    new PermissionGrant(PermissionKind.EnableContentDeletion, false),
+                }),
+            () => "203.0.113.7",
+            () => true);
+
+        Assert.Contains(user.Permissions, perm => perm.Kind == PermissionKind.EnableContentDownloading && perm.Value);
+        Assert.DoesNotContain(user.Permissions, perm => perm.Kind == PermissionKind.EnableContentDeletion && perm.Value);
+    }
+
+    [Fact]
+    public async Task MintAsync_NoAuthorization_LeavesGenericPermissionGrantsUntouched()
+    {
+        // The generic grants respect the same EnableAuthorization master switch as the admin/Live TV grants
+        // (#215): with it off, a mapped permission is NOT applied. Seed the opposite of the grant and pass
+        // the master switch off — a correct skip leaves the seed intact.
+        var (minter, users, sessions) = Build();
+        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        user.SetPermission(PermissionKind.EnableContentDownloading, false);
+        users.GetUserById(UserId).Returns(user);
+        sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
+
+        await minter.MintAsync(
+            Params(
+                enableAuthorization: false,
+                permissionGrants: new[] { new PermissionGrant(PermissionKind.EnableContentDownloading, true) }),
+            () => "203.0.113.7",
+            () => true);
+
+        Assert.DoesNotContain(user.Permissions, perm => perm.Kind == PermissionKind.EnableContentDownloading && perm.Value); // seed left untouched
     }
 
     [Fact]

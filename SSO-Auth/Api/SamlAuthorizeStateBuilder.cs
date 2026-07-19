@@ -29,7 +29,11 @@ internal static class SamlAuthorizeStateBuilder
         // ignored here.
         var privileges = RolePrivilegeMapper.AssemblePrivileges(roles, config);
 
-        return new SamlAuthorizeState(privileges.Admin, privileges.EnableLiveTv, privileges.EnableLiveTvManagement, privileges.Folders);
+        // Assemble the generic role→permission grants for the full boolean PermissionKind surface (#164).
+        // Default-deny and empty when the feature is off, so it changes nothing for existing deployments.
+        var permissionGrants = PermissionRolePolicy.Map(roles, config);
+
+        return new SamlAuthorizeState(privileges.Admin, privileges.EnableLiveTv, privileges.EnableLiveTvManagement, privileges.Folders, permissionGrants);
     }
 
     /// <summary>
@@ -39,9 +43,11 @@ internal static class SamlAuthorizeStateBuilder
     /// <param name="EnableLiveTv">Whether the login grants Live TV access.</param>
     /// <param name="EnableLiveTvManagement">Whether the login grants Live TV management.</param>
     /// <param name="Folders">The enabled folders (statically enabled plus role-granted).</param>
+    /// <param name="PermissionGrants">The generic role→permission grants (#164); null (treated as empty) when the feature is off.</param>
     internal readonly record struct SamlAuthorizeState(
         bool Admin,
         bool EnableLiveTv,
         bool EnableLiveTvManagement,
-        List<string> Folders);
+        List<string> Folders,
+        IReadOnlyList<PermissionGrant>? PermissionGrants = null);
 }

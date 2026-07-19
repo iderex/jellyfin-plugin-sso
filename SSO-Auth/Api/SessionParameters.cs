@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 #nullable enable
 
@@ -47,6 +48,13 @@ internal sealed class SessionParameters
     /// Gets a value indicating whether the user may manage Live TV.
     /// </summary>
     public required bool EnableLiveTvManagement { get; init; }
+
+    /// <summary>
+    /// Gets the generic role→permission grants to apply at the mint (#164): one authoritative grant per
+    /// permission the administrator explicitly mapped, applied only when <see cref="EnableAuthorization"/>
+    /// is on. Required (no default) so a mint path cannot silently omit it; an empty list applies nothing.
+    /// </summary>
+    public required IReadOnlyList<PermissionGrant> PermissionGrants { get; init; }
 
     /// <summary>
     /// Gets the client identity (app, version, device) the session is bound to.
