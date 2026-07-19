@@ -3,7 +3,7 @@ using Jellyfin.Plugin.SSO_Auth.Api.Authz;
 
 #nullable enable
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Identity;
 
 /// <summary>
 /// The protocol-agnostic result of a completed login validation — the primitive facts a protocol validator

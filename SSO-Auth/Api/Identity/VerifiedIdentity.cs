@@ -5,7 +5,7 @@ using Jellyfin.Plugin.SSO_Auth.Api.Provider;
 
 #nullable enable
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Identity;
 
 /// <summary>
 /// The protocol-agnostic keystone the session-minting path is keyed on (#473): the fully-verified
