@@ -162,6 +162,7 @@ public class ArchitectureConformanceTests
     [InlineData("Audit")] // leaf — append-only audit logging: SsoAudit
     [InlineData("Avatar", "Net")] // avatar fetch — validates targets through the Net SSRF classifier
     [InlineData("RateLimit", "Net")] // login throttling — keys buckets by the Net client-IP classifier
+    [InlineData("Authz")] // leaf — role→permission mapping: PermissionGrant, PermissionRolePolicy, RolePrivilegeMapper
     public void ApiModule_ImportsOnlyItsAllowedApiModules(string module, params string[] allowed)
     {
         var moduleDir = Path.Combine(RepoRoot(), "SSO-Auth", "Api", module);

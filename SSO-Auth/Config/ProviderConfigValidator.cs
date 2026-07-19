@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Api.Authz;
 using Jellyfin.Plugin.SSO_Auth.Api.Net;
 
 namespace Jellyfin.Plugin.SSO_Auth.Config;

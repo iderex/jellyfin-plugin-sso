@@ -5,6 +5,7 @@ using System.Security.Claims;
 using FsCheck;
 using FsCheck.Fluent;
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Api.Authz;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Xunit;
 
