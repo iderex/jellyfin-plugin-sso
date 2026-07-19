@@ -243,4 +243,84 @@ public class ProviderConfigValidatorTests
 
         Assert.Null(ex);
     }
+
+    // --- ValidatePermissionRoleMappings (#164): reject a malformed generic permission-role mapping ---
+
+    private static System.Collections.Generic.List<PermissionRoleMap> Mappings(string permission) =>
+        new() { new PermissionRoleMap { Permission = permission, Roles = new[] { "role" } } };
+
+    [Theory]
+    [InlineData("OpenID", "kc")]
+    [InlineData("SAML", "adfs")]
+    public void ValidatePermissionRoleMappings_UnknownPermission_ThrowsNamingProtocolProviderAndPermission(string protocol, string provider)
+    {
+        var ex = Assert.Throws<ArgumentException>(() =>
+            ProviderConfigValidator.ValidatePermissionRoleMappings(protocol, provider, Mappings("NotARealPermission")));
+
+        Assert.Equal("mappings", ex.ParamName);
+        Assert.Contains(protocol, ex.Message, StringComparison.Ordinal);
+        Assert.Contains(provider, ex.Message, StringComparison.Ordinal);
+        Assert.Contains("NotARealPermission", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("not a known Jellyfin permission", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("IsAdministrator")]
+    [InlineData("EnableAllFolders")]
+    [InlineData("EnableLiveTvAccess")]
+    [InlineData("EnableLiveTvManagement")]
+    public void ValidatePermissionRoleMappings_DedicatedPermission_IsRejected_NoDoubleMapping(string permission)
+    {
+        // The anti-escalation / single-source guarantee at the admin write boundary: a dedicated permission
+        // (notably IsAdministrator) cannot be persisted into the generic map, so it can never be granted
+        // through it.
+        var ex = Assert.Throws<ArgumentException>(() =>
+            ProviderConfigValidator.ValidatePermissionRoleMappings("OpenID", "kc", Mappings(permission)));
+
+        Assert.Equal("mappings", ex.ParamName);
+        Assert.Contains("dedicated setting", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void ValidatePermissionRoleMappings_EmptyPermissionName_IsRejected(string? permission)
+    {
+        var ex = Assert.Throws<ArgumentException>(() =>
+            ProviderConfigValidator.ValidatePermissionRoleMappings("OpenID", "kc", Mappings(permission!)));
+
+        Assert.Equal("mappings", ex.ParamName);
+        Assert.Contains("empty permission name", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ValidatePermissionRoleMappings_ControlCharacterInPermission_IsStrippedFromTheEchoedMessage()
+    {
+        var ex = Assert.Throws<ArgumentException>(() =>
+            ProviderConfigValidator.ValidatePermissionRoleMappings("OpenID", "kc", Mappings("Enable\nDownloading")));
+
+        Assert.DoesNotContain('\n', ex.Message);
+        Assert.DoesNotContain('\r', ex.Message);
+    }
+
+    [Fact]
+    public void ValidatePermissionRoleMappings_ValidPermission_DoesNotThrow()
+    {
+        var ex = Record.Exception(() =>
+            ProviderConfigValidator.ValidatePermissionRoleMappings("OpenID", "kc", Mappings("EnableContentDownloading")));
+
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void ValidatePermissionRoleMappings_NullMappingsOrNullEntry_DoesNotThrow()
+    {
+        // A null list means "no mappings"; a null entry maps nothing and is tolerated (it grants nothing at
+        // runtime) — the same fail-closed-but-not-fatal posture as the runtime mapper.
+        Assert.Null(Record.Exception(() => ProviderConfigValidator.ValidatePermissionRoleMappings("OpenID", "kc", null)));
+
+        var withNullEntry = new System.Collections.Generic.List<PermissionRoleMap> { null! };
+        Assert.Null(Record.Exception(() => ProviderConfigValidator.ValidatePermissionRoleMappings("OpenID", "kc", withNullEntry)));
+    }
 }

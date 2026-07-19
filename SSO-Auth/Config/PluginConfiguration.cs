@@ -215,6 +215,31 @@ public abstract class ProviderConfigBase
     public List<FolderRoleMap> FolderRoleMapping { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the generic role-to-permission mapping
+    /// (<see cref="PermissionRoleMappings"/>) is applied at login (#164). Off by default (fail closed):
+    /// a deployment that does not set it sees no change on upgrade, and the extra permission surface is
+    /// only ever managed by SSO when an administrator opts in AND lists explicit mappings. Gated
+    /// additionally by <see cref="EnableAuthorization"/> at the mint, exactly like the admin/folder/Live TV
+    /// grants, so turning RBAC off leaves every permission untouched.
+    /// </summary>
+    public bool EnablePermissionRoles { get; set; }
+
+    /// <summary>
+    /// Gets or sets the generic role-to-permission mappings applied at login when
+    /// <see cref="EnablePermissionRoles"/> is on (#164): each entry names a single Jellyfin
+    /// <c>PermissionKind</c> and the roles that grant it. The mapping is authoritative and default-deny —
+    /// a listed permission is granted only when the login carries a matching role and is otherwise
+    /// explicitly revoked, so a missing or unmapped claim never silently grants a permission. Permissions
+    /// with their own dedicated configuration (administrator, all-folders, Live TV access/management) are
+    /// rejected here so each permission has exactly one authoritative source. A permission not listed at all
+    /// is never touched by SSO — Jellyfin's own default governs it. Validated fail-closed on save (an
+    /// unknown or dedicated permission name is rejected before it is persisted).
+    /// </summary>
+    [XmlArray("PermissionRoleMappings")]
+    [XmlArrayItem(typeof(PermissionRoleMap), ElementName = "PermissionRoleMappings")]
+    public List<PermissionRoleMap> PermissionRoleMappings { get; set; }
+
+    /// <summary>
     /// Gets or sets the authentication provider id written to the user's Jellyfin account
     /// (<c>User.AuthenticationProviderId</c>) after a successful SSO login. This is a Jellyfin-native
     /// user attribute; SSO logins themselves always resolve through the per-provider canonical-link maps,
@@ -532,4 +557,26 @@ public class FolderRoleMap
     /// Gets or sets the folders that are allowed from the given role.
     /// </summary>
     public List<string> Folders { get; set; }
+}
+
+/// <summary>
+/// Maps a single Jellyfin permission (by its <c>PermissionKind</c> name) to the roles that grant it,
+/// for the generic role-to-permission RBAC mapping (#164). The permission name is validated fail-closed
+/// on save; at login the permission is granted only when a matching role is present and otherwise
+/// explicitly revoked (default-deny).
+/// </summary>
+public class PermissionRoleMap
+{
+    /// <summary>
+    /// Gets or sets the Jellyfin permission this mapping grants, as the exact <c>PermissionKind</c>
+    /// enum name (e.g. <c>EnableContentDownloading</c>). An unknown name, or one of the dedicated
+    /// permissions managed elsewhere (administrator, all-folders, Live TV), is rejected on save.
+    /// </summary>
+    public string Permission { get; set; }
+
+    /// <summary>
+    /// Gets or sets the roles that grant the permission. A login holding any of these roles is granted
+    /// the permission; a login holding none has it explicitly revoked.
+    /// </summary>
+    public string[] Roles { get; set; }
 }

@@ -1,0 +1,167 @@
+# Deterministic PR-hygiene checks (#171). A "Danger-style" gate implemented as a
+# plain workflow + one first-party github-script step — no external Danger runtime,
+# bot, or third-party review service (the merge gate is internal-only by policy;
+# see the Review-Gate wiki page:
+# https://github.com/iderex/jellyfin-plugin-sso/wiki/Review-Gate). It complements,
+# never duplicates, the build/test, Prettier,
+# CodeQL, Opengrep, zizmor, and Unicode-guard checks: those reason about the code;
+# this reasons about the *pull request* (its linkage, size, and changelog/test
+# co-changes) — a class none of them cover.
+#
+# This workflow is deliberately ADVISORY: it is NOT wired into the "Protect main"
+# required-status-check ruleset, so it never blocks a merge. It surfaces a
+# deterministic hygiene signal for the maintainer, who keeps the final say. The
+# checks are tiered by confidence so it does not red-flag reasonable PRs:
+#   - FAIL  (high confidence, near-zero false-positive):
+#       * PR body carries an issue reference (Closes/Refs #N) — skipped for bots.
+#       * a build.yaml version bump also touches CHANGELOG.md.
+#   - WARN  (soft convention, annotation only — never fails):
+#       * the diff is large (>=400 changed lines) — advisory; a feature, doc
+#         migration, or bulk rename legitimately exceeds any cap, so size never reds.
+#       * SSO-Auth code changed without a matching SSO-Auth.Tests change.
+#
+# Two acceptance-criteria items from #171 are intentionally NOT implemented here
+# (sensitive-path sign-off grep, and issue-open triage-lint); the rationale is
+# recorded in the Review-Gate wiki page
+# (https://github.com/iderex/jellyfin-plugin-sso/wiki/Review-Gate) so the decision
+# is auditable, not silent.
+name: PR Hygiene
+
+on:
+  pull_request:
+    # edited: so editing the body to add the issue reference re-runs the check.
+    types: [opened, edited, synchronize, reopened]
+
+# Explicit deny-all at workflow level; the job below grants only what it reads.
+permissions: {}
+
+# Cancel a superseded run on the same PR; this is an advisory lint, not a publish,
+# so cancelling an obsolete run is safe.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hygiene:
+    name: Deterministic PR-hygiene checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read # read build.yaml/CHANGELOG changes via the pulls API
+      pull-requests: read # read the PR body, labels, and changed-file list
+    steps:
+      # No checkout: every input is read from the PR metadata and the changed-file
+      # patches via the API, so there is no untrusted working tree to guard.
+      # Untrusted values (the PR body, labels, filenames) are only ever read from
+      # the JS `context`/API objects — never interpolated into a shell `run:` — so
+      # there is no template-injection surface (zizmor-clean by construction).
+      - name: Run PR-hygiene checks
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const warnings = [];
+            const failures = [];
+
+            // --- Changed files (paginated) -------------------------------------
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+            const changed = files.map((f) => f.filename);
+            const labels = (pr.labels || []).map((l) => l.name);
+            const isBot = pr.user && pr.user.type === "Bot";
+
+            // --- Check 1: PR body references an issue (Closes/Refs #N) ----------
+            // Directive: every change is issue-driven and linked. Bots (Dependabot)
+            // open PRs with no issue, so they are exempt. A bare `#123`, a keyword
+            // form (`Closes #123`), or a full issue URL all satisfy it — lenient on
+            // purpose so a legitimately-linked PR is never flagged on phrasing.
+            const body = pr.body || "";
+            const hasIssueRef =
+              /(^|[^\w])#\d+\b/.test(body) ||
+              /github\.com\/[^\/\s]+\/[^\/\s]+\/issues\/\d+/i.test(body);
+            if (!isBot && !hasIssueRef) {
+              failures.push(
+                "PR body has no issue reference. Link the issue it addresses " +
+                  "(e.g. `Closes #123` or `Refs #123`).",
+              );
+            }
+
+            // --- Check 2: a build.yaml version bump must touch CHANGELOG.md -----
+            // The version field only changes in a release PR, which must also record
+            // the release in CHANGELOG.md. Near-zero false-positive: a non-release PR
+            // never edits the `version:` line, so this stays silent for it.
+            const buildYaml = files.find((f) => f.filename === "build.yaml");
+            const versionBumped =
+              buildYaml &&
+              buildYaml.patch &&
+              /^\+\s*version:/m.test(buildYaml.patch);
+            if (versionBumped && !changed.includes("CHANGELOG.md")) {
+              failures.push(
+                "build.yaml `version:` changed but CHANGELOG.md was not updated. " +
+                  "Record the release in CHANGELOG.md.",
+              );
+            }
+
+            // --- Check 3: PR size (WARN only — never fails) --------------------
+            // Rationale (#171): reviewer effectiveness — human and AI — degrades on
+            // very large diffs, so a big PR is worth a closer look. But "large" is
+            // not "wrong": a feature, a doc migration, or a bulk rename legitimately
+            // exceeds any line cap, so size is ADVISORY ONLY and never reds a
+            // legitimate PR (no hard cap, no override label needed). Generated/lock
+            // files are excluded so the count reflects human-authored change.
+            const isGenerated = (name) =>
+              name.endsWith("packages.lock.json") ||
+              name === "flake.lock" ||
+              name.endsWith(".min.js") ||
+              name.endsWith(".min.css");
+            const churn = files
+              .filter((f) => !isGenerated(f.filename))
+              .reduce((sum, f) => sum + f.additions + f.deletions, 0);
+            const WARN_AT = 400;
+            if (churn >= WARN_AT) {
+              warnings.push(
+                `PR changes ${churn} lines (excluding generated/lock files). ` +
+                  `Large PRs get a closer look — reviews degrade past ~${WARN_AT} lines.`,
+              );
+            }
+
+            // --- Check 4: code changed without a matching test change (WARN) ----
+            // Soft convention: a behavioural change to SSO-Auth should move a test.
+            // Warn only — a docs/comment-only edit, a pure refactor, or a project-file
+            // tweak legitimately touches no test, and hard-failing those would be the
+            // exact false-positive friction #171 warns against.
+            const codeChanged = changed.some(
+              (n) => n.startsWith("SSO-Auth/") && n.endsWith(".cs"),
+            );
+            const testsChanged = changed.some((n) =>
+              n.startsWith("SSO-Auth.Tests/"),
+            );
+            if (codeChanged && !testsChanged) {
+              warnings.push(
+                "SSO-Auth/*.cs changed but no SSO-Auth.Tests/* change is in this PR. " +
+                  "Confirm the change is genuinely untestable (docs/refactor) or add a test.",
+              );
+            }
+
+            // --- Report --------------------------------------------------------
+            for (const w of warnings) core.warning(w);
+            const summary = core.summary.addHeading("PR-hygiene checks", 2);
+            if (failures.length === 0 && warnings.length === 0) {
+              summary.addRaw("All deterministic PR-hygiene checks passed.");
+            } else {
+              if (failures.length) {
+                summary.addHeading("Failures", 3).addList(failures);
+              }
+              if (warnings.length) {
+                summary.addHeading("Warnings (non-blocking)", 3).addList(warnings);
+              }
+            }
+            await summary.write();
+
+            if (failures.length) {
+              core.setFailed(failures.join(" | "));
+            }

@@ -73,6 +73,10 @@ internal static class OidcAuthorizeStateBuilder
         var enableLiveTvManagement = privileges.EnableLiveTvManagement;
         var folders = privileges.Folders;
 
+        // Assemble the generic role→permission grants for the full boolean PermissionKind surface (#164).
+        // Default-deny and empty when the feature is off, so it changes nothing for existing deployments.
+        var permissionGrants = PermissionRolePolicy.Map(roles, config);
+
         // If nothing has validated the login yet, fall back to the stable "sub" as the username. The
         // subject was already resolved above (last "sub" wins), so this reuses it instead of scanning
         // the claims a second time. Faithful to the original: unlike the preferred-username branch, this
@@ -93,7 +97,7 @@ internal static class OidcAuthorizeStateBuilder
         // validation rejects it anyway, so no legitimate login can carry one.
         valid = valid && !string.IsNullOrWhiteSpace(username);
 
-        return new OidcAuthorizeState(username, subject, issuer, emailVerified, valid, admin, enableLiveTv, enableLiveTvManagement, folders, avatarUrl);
+        return new OidcAuthorizeState(username, subject, issuer, emailVerified, valid, admin, enableLiveTv, enableLiveTvManagement, folders, avatarUrl, permissionGrants);
     }
 
     // The last "sub" claim value, or null when none is present. Kept separate from the username
@@ -203,6 +207,7 @@ internal static class OidcAuthorizeStateBuilder
     /// <param name="EnableLiveTvManagement">Whether the login grants Live TV management.</param>
     /// <param name="Folders">The enabled folders (statically enabled plus role-granted).</param>
     /// <param name="AvatarUrl">The resolved avatar URL, or null when no avatar format is configured.</param>
+    /// <param name="PermissionGrants">The generic role→permission grants (#164); null (treated as empty) when the feature is off.</param>
     internal readonly record struct OidcAuthorizeState(
         string? Username,
         string? Subject,
@@ -213,5 +218,6 @@ internal static class OidcAuthorizeStateBuilder
         bool EnableLiveTv,
         bool EnableLiveTvManagement,
         List<string> Folders,
-        string? AvatarUrl);
+        string? AvatarUrl,
+        IReadOnlyList<PermissionGrant>? PermissionGrants = null);
 }

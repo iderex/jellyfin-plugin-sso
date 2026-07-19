@@ -101,6 +101,7 @@ internal sealed class LoginCompletionService
             EnabledFolders = identity.Folders.ToArray(),
             EnableLiveTv = identity.EnableLiveTv,
             EnableLiveTvManagement = identity.EnableLiveTvManagement,
+            PermissionGrants = identity.PermissionGrants,
             AuthResponse = response,
             DefaultProvider = defaultProvider,
             AvatarUrl = identity.AvatarUrl,

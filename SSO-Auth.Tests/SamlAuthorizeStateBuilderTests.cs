@@ -171,4 +171,49 @@ public class SamlAuthorizeStateBuilderTests
 
         Assert.False(result.EnableLiveTv);
     }
+
+    [Fact]
+    public void PermissionRoles_AreThreadedFromRolesOntoTheDerivedState()
+    {
+        // #164 wiring (SAML side, symmetric with the OIDC builder): the generic role→permission grants
+        // are derived from the assertion's roles and the provider config and carried on the derived state
+        // (thence to the mint). The matched role grants its permission; a configured-but-unmatched
+        // permission is explicitly revoked. Pins the SAML grant-threading branch so a regression that drops
+        // it (silently losing all SAML grants AND default-deny revokes) fails here.
+        var config = Config(c =>
+        {
+            c.EnablePermissionRoles = true;
+            c.PermissionRoleMappings = new List<PermissionRoleMap>
+            {
+                new PermissionRoleMap { Permission = "EnableContentDownloading", Roles = new[] { "downloaders" } },
+                new PermissionRoleMap { Permission = "EnableContentDeletion", Roles = new[] { "deleters" } },
+            };
+        });
+
+        var result = SamlAuthorizeStateBuilder.Build(new List<string> { "downloaders" }, config);
+
+        Assert.NotNull(result.PermissionGrants);
+        Assert.Contains(result.PermissionGrants!, g => g.Kind == Jellyfin.Database.Implementations.Enums.PermissionKind.EnableContentDownloading && g.Granted);
+        Assert.Contains(result.PermissionGrants!, g => g.Kind == Jellyfin.Database.Implementations.Enums.PermissionKind.EnableContentDeletion && !g.Granted);
+    }
+
+    [Fact]
+    public void PermissionRoles_FeatureOff_LeavesTheGrantsEmpty()
+    {
+        // With the master switch off, no generic grants are derived even when a mapping and a matching role
+        // are present (default-deny; Jellyfin's own defaults govern).
+        var config = Config(c =>
+        {
+            c.EnablePermissionRoles = false;
+            c.PermissionRoleMappings = new List<PermissionRoleMap>
+            {
+                new PermissionRoleMap { Permission = "EnableContentDownloading", Roles = new[] { "downloaders" } },
+            };
+        });
+
+        var result = SamlAuthorizeStateBuilder.Build(new List<string> { "downloaders" }, config);
+
+        Assert.NotNull(result.PermissionGrants);
+        Assert.Empty(result.PermissionGrants!);
+    }
 }

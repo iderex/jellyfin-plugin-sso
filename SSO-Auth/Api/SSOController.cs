@@ -262,6 +262,11 @@ public class SSOController : ControllerBase
     {
         RejectNullProviderBody(config);
         RejectInvalidBaseUrlOverride(config.BaseUrlOverride);
+        // Reject a malformed generic permission-role mapping (#164) at the door, exactly like the base-URL
+        // and certificate guards above: the Add endpoints persist through MutateConfiguration and so bypass
+        // the config-page save-time validation. Reuses the one shared validator so every admin write path
+        // agrees on what a valid mapping is.
+        ProviderConfigValidator.ValidatePermissionRoleMappings(OpenIdProtocol, provider, config.PermissionRoleMappings);
         SSOPlugin.Instance.MutateConfiguration(configuration =>
         {
             // The name guard needs the under-lock existence check (#336) and runs before any mutation,
@@ -526,6 +531,8 @@ public class SSOController : ControllerBase
         RejectInvalidSamlSecondaryCertificate(newConfig.SamlSecondaryCertificate);
         RejectInvalidSamlSigningKey(newConfig.SamlSigningKeyPfx);
         RejectInvalidSamlSigningKey(newConfig.SamlRolloverSigningKeyPfx);
+        // Reject a malformed generic permission-role mapping (#164) at the door, as OidAdd does.
+        ProviderConfigValidator.ValidatePermissionRoleMappings(SamlProtocol, provider, newConfig.PermissionRoleMappings);
         SSOPlugin.Instance.MutateConfiguration(configuration =>
         {
             // The name guard needs the under-lock existence check (#336) and runs before any mutation,
