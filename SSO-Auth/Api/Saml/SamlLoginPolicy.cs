@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Saml;
 
 /// <summary>
 /// Pure login-authorization gate for SAML: decides whether an assertion's roles satisfy the

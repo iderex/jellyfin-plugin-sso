@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using Jellyfin.Plugin.SSO_Auth.Config;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Saml;
 
 /// <summary>
 /// Names the per-provider SAML options that switch off a default-on protection (#672, the SAML parity of

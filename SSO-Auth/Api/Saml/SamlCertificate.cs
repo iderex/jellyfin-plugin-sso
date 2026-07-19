@@ -2,7 +2,7 @@ using System;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Saml;
 
 /// <summary>
 /// Validates the per-provider SAML signing certificate (#206). A non-blank but unloadable

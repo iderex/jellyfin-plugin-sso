@@ -1,5 +1,6 @@
 using System.Security.Cryptography.Xml;
 using Jellyfin.Plugin.SSO_Auth;
+using Jellyfin.Plugin.SSO_Auth.Api.Saml;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Xunit;
 

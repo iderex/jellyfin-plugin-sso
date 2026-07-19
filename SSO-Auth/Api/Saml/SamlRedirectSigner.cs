@@ -3,7 +3,7 @@ using System;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Saml;
 
 /// <summary>
 /// Signs an outgoing SAML message for the HTTP-Redirect binding (SAML Bindings 3.4.4.1, #167). The plugin

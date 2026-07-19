@@ -4,7 +4,7 @@ using System.IO;
 using System.Text;
 using System.Xml;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Saml;
 
 /// <summary>
 /// Builds SAML 2.0 service-provider metadata — an <c>EntityDescriptor</c> carrying an

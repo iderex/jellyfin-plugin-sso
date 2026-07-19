@@ -12,7 +12,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Authz;
 /// result into the authorize state (OR-ing the booleans, appending the folders). One mapper for both
 /// protocols, since every member it reads lives on <see cref="ProviderConfigBase"/> (#367). The SAML
 /// caller ignores <see cref="RoleGrants.Valid"/> — SAML login validity is decided by
-/// <see cref="SamlLoginPolicy"/>, not here.
+/// <see cref="Jellyfin.Plugin.SSO_Auth.Api.Saml.SamlLoginPolicy"/>, not here.
 /// </summary>
 internal static class RolePrivilegeMapper
 {
@@ -81,7 +81,7 @@ internal static class RolePrivilegeMapper
     /// merge that used to be duplicated, byte-identical, in the OpenID and SAML authorize-state builders
     /// (#508). The OpenID builder OR-s the returned <see cref="AssembledPrivileges.Valid"/> into its own
     /// running validity; the SAML builder ignores it — validity there is decided by
-    /// <see cref="SamlLoginPolicy"/>, not here.
+    /// <see cref="Jellyfin.Plugin.SSO_Auth.Api.Saml.SamlLoginPolicy"/>, not here.
     /// </summary>
     /// <param name="roles">The roles extracted from the verified login (OpenID claims or SAML attributes).</param>
     /// <param name="config">The provider configuration.</param>
@@ -114,7 +114,7 @@ internal static class RolePrivilegeMapper
     /// <summary>
     /// The privileges a set of roles grants under a provider configuration.
     /// </summary>
-    /// <param name="Valid">Whether any role is on the login allow-list (<see cref="ProviderConfigBase.Roles"/>). Ignored by the SAML caller, whose validity is decided by <see cref="SamlLoginPolicy"/>.</param>
+    /// <param name="Valid">Whether any role is on the login allow-list (<see cref="ProviderConfigBase.Roles"/>). Ignored by the SAML caller, whose validity is decided by <see cref="Jellyfin.Plugin.SSO_Auth.Api.Saml.SamlLoginPolicy"/>.</param>
     /// <param name="Admin">Whether any role is on the admin list (<see cref="ProviderConfigBase.AdminRoles"/>).</param>
     /// <param name="EnableLiveTv">Whether any role grants Live TV (only when role-based Live TV is enabled).</param>
     /// <param name="EnableLiveTvManagement">Whether any role grants Live TV management (only when role-based Live TV is enabled).</param>
@@ -129,7 +129,7 @@ internal static class RolePrivilegeMapper
     /// <summary>
     /// The assembled authorize-state privileges for a login, produced by <see cref="AssemblePrivileges"/>.
     /// </summary>
-    /// <param name="Valid">Whether any role is on the login allow-list. Ignored by the SAML caller, whose validity is decided by <see cref="SamlLoginPolicy"/>.</param>
+    /// <param name="Valid">Whether any role is on the login allow-list. Ignored by the SAML caller, whose validity is decided by <see cref="Jellyfin.Plugin.SSO_Auth.Api.Saml.SamlLoginPolicy"/>.</param>
     /// <param name="Admin">Whether the login grants administrator rights.</param>
     /// <param name="EnableLiveTv">Whether the login grants Live TV access (config default OR role grant).</param>
     /// <param name="EnableLiveTvManagement">Whether the login grants Live TV management (config default OR role grant).</param>

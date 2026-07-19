@@ -2,7 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Saml;
 
 /// <summary>
 /// Tracks the IDs of SAML AuthnRequests this service provider has issued but not yet seen answered,

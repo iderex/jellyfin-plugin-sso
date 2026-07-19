@@ -17,6 +17,7 @@ using System.Security.Cryptography.Xml;
 using System.Text;
 using System.Web;
 using System.Xml;
+using Jellyfin.Plugin.SSO_Auth.Api.Saml;
 
 namespace Jellyfin.Plugin.SSO_Auth;
 
@@ -716,6 +717,6 @@ internal sealed class SamlAuthnRequest
     {
         ArgumentNullException.ThrowIfNull(samlEndpoint);
 
-        return Api.SamlRedirectSigner.BuildSignedRedirectUrl(samlEndpoint, "SAMLRequest", GetRequest(), relayState, signingKey);
+        return SamlRedirectSigner.BuildSignedRedirectUrl(samlEndpoint, "SAMLRequest", GetRequest(), relayState, signingKey);
     }
 }

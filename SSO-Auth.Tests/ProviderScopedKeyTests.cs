@@ -1,5 +1,6 @@
 using System;
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Api.Saml;
 using Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
 using Xunit;
 
