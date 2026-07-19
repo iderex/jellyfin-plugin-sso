@@ -949,6 +949,27 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void RawServedLinkingPage_ContainsNoDashboardLocalizationPlaceholders()
+    {
+        // The self-service linking page is served raw by SSOViewsController.GetView (route
+        // /SSOViews/linking) — no Jellyfin dashboard, so no localization pass runs. A ${...} token the
+        // dashboard would substitute therefore leaks to the end user verbatim (the ${Help} button label
+        // was the live case, #666). Scan the raw-served page for such placeholders, ignoring inline
+        // <script> blocks where ${...} is a legitimate JS template-literal interpolation, not a
+        // dashboard token.
+        var html = File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "linking.html"));
+        var withoutScripts = Regex.Replace(html, "<script.*?</script>", string.Empty, RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+        var placeholders = Regex.Matches(withoutScripts, "\\$\\{[^}]*\\}", RegexOptions.Singleline)
+            .Select(m => m.Value)
+            .ToList();
+
+        Assert.True(
+            placeholders.Count == 0,
+            "The raw-served linking page must not carry dashboard ${...} localization placeholders (they are not substituted off the dashboard, #666); found: " + string.Join(", ", placeholders));
+    }
+
+    [Fact]
     public void ProviderFormFieldIds_MatchOidConfigProperties()
     {
         // The provider settings form's save contract (#365), locked in as a fitness function. config.js
