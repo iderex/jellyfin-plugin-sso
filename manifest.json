@@ -9,6 +9,14 @@
     "owner": "iderex",
     "versions": [
       {
+        "changelog": "Jellyfin 12.0 (.NET 10) beta 5.0.0-JF12-beta (plugin version 5.0.0.20).\nInstall via the beta repository URL (a Jellyfin 12.0 server picks this build automatically by targetAbi):\nhttps://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json\n\n\n## What's Changed\n* Test config XML lifecycle round-trip (#192) by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/635\n* Test [Authorize]-policy enforcement end-to-end (#192) by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/636\n* Test fake-IdP OIDC challenge->callback->auth round-trip (#192) by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/637\n* Record the manual release-QA checklist (#192) by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/638\n* Explicit deny in AssertCanUpdateUser on a null auth context (#626) by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/641\n* Fix .NET CI startup_failure on 4.2 (reusable build.yml permissions) by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/643\n\n\n**Full Changelog**: https://github.com/iderex/jellyfin-plugin-sso/compare/5.0.0-JF12-beta.19...5.0.0-JF12-beta.20",
+        "checksum": "b682d1d9e5f2c537d2f5ff33869de91a",
+        "sourceUrl": "https://github.com/iderex/jellyfin-plugin-sso/releases/download/5.0.0-JF12-beta.20/sso-authentication_5.0.0.20.zip",
+        "targetAbi": "12.0.0.0",
+        "timestamp": "2026-07-19T06:41:53Z",
+        "version": "5.0.0.20"
+      },
+      {
         "changelog": "Jellyfin 12.0 (.NET 10) beta 5.0.0-JF12-beta (plugin version 5.0.0.19).\nInstall via the beta repository URL (a Jellyfin 12.0 server picks this build automatically by targetAbi):\nhttps://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json\n\n\n## What's Changed\n* Publish JF12 beta daily, not per 4.2 merge (#632) by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/633\n\n\n**Full Changelog**: https://github.com/iderex/jellyfin-plugin-sso/compare/5.0.0-JF12-beta.18...5.0.0-JF12-beta.19",
         "checksum": "e775831b52973daf611381bcb0cac4a9",
         "sourceUrl": "https://github.com/iderex/jellyfin-plugin-sso/releases/download/5.0.0-JF12-beta.19/sso-authentication_5.0.0.19.zip",
