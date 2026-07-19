@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Jellyfin.Plugin.SSO_Auth.Api.Authz;
 using Jellyfin.Plugin.SSO_Auth.Api.Provider;
+using Jellyfin.Plugin.SSO_Auth.Api.Saml;
 
 #nullable enable
 

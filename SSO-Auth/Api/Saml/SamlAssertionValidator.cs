@@ -4,7 +4,7 @@ using Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Microsoft.Extensions.Logging;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Saml;
 
 /// <summary>
 /// The single home for inbound SAML assertion validation (#496, #318): parse plus signature, time-bound,

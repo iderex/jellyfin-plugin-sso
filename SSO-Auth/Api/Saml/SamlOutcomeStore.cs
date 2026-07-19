@@ -5,7 +5,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Saml;
 
 /// <summary>
 /// The in-flight SAML login-outcome store (#251): the assertion-consumer callback validates the signed

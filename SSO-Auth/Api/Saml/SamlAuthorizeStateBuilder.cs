@@ -4,7 +4,7 @@ using Jellyfin.Plugin.SSO_Auth.Config;
 
 #nullable enable
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Saml;
 
 /// <summary>
 /// Derives the per-login authorize-state privileges (admin, Live TV, Live TV management, folder

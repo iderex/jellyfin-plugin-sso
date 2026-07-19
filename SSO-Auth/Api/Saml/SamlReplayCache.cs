@@ -2,7 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Saml;
 
 /// <summary>
 /// Tracks SAML assertion IDs that have already been used to mint a session, so a captured assertion

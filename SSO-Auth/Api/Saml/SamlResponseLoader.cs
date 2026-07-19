@@ -2,7 +2,7 @@ using System;
 using System.Security.Cryptography;
 using System.Xml;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Saml;
 
 /// <summary>
 /// Safely constructs a <see cref="SamlResponse"/> from an untrusted SAML response string (#199). The

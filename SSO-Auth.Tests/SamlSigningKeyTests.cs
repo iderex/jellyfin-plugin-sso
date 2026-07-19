@@ -2,6 +2,7 @@ using System;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Api.Saml;
 using Xunit;
 
 namespace Jellyfin.Plugin.SSO_Auth.Tests;

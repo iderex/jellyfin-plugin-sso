@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Api.Saml;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Xunit;
 

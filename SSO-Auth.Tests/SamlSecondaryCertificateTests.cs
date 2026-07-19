@@ -195,7 +195,7 @@ public class SamlSecondaryCertificateTests
         // front; a hand-edited config is caught here.
         var fixture = SamlTestFactory.Create();
 
-        Assert.False(Jellyfin.Plugin.SSO_Auth.Api.SamlResponseLoader.TryParse(
+        Assert.False(Jellyfin.Plugin.SSO_Auth.Api.Saml.SamlResponseLoader.TryParse(
             fixture.CertificateBase64, "QUJD", fixture.EncodeResponse(), out var response));
         Assert.Null(response);
     }
