@@ -56,7 +56,7 @@ public class LoginCompletionServiceTests
         new AuthResponse { AppName = "app", AppVersion = "1", DeviceID = "d", DeviceName = "dev" };
 
     private static VerifiedIdentity OidcIdentity(string provider, string subject, string username) =>
-        VerifiedIdentity.FromOidcRedemption(provider, new OidcAuthorizeStateBuilder.OidcAuthorizeState(
+        TestIdentities.Oidc(provider, new OidcAuthorizeStateBuilder.OidcAuthorizeState(
             Username: username,
             Subject: subject,
             Issuer: null,
@@ -69,7 +69,7 @@ public class LoginCompletionServiceTests
             AvatarUrl: null));
 
     private static VerifiedIdentity SamlIdentity(string provider, string nameId) =>
-        VerifiedIdentity.FromValidatedSaml(provider, nameId, new SamlAuthorizeStateBuilder.SamlAuthorizeState(
+        TestIdentities.Saml(provider, nameId, new SamlAuthorizeStateBuilder.SamlAuthorizeState(
             Admin: false,
             EnableLiveTv: false,
             EnableLiveTvManagement: false,

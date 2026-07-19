@@ -25,7 +25,7 @@ public class SamlOutcomeStoreTests
     // A verified identity is opaque to the store; any real one will do. Built through the SAML factory so
     // the test does not forge one (its constructor is private).
     private static VerifiedIdentity Identity(string provider = "adfs") =>
-        VerifiedIdentity.FromValidatedSaml(provider, "alice", SamlAuthorizeStateBuilder.Build(new List<string>(), new SamlConfig()));
+        TestIdentities.Saml(provider, "alice", SamlAuthorizeStateBuilder.Build(new List<string>(), new SamlConfig()));
 
     private static SamlLoginOutcome Outcome(string token, string provider = "adfs", string inResponseTo = "", string? clientKey = null, DateTime? created = null) =>
         new SamlLoginOutcome(token, provider, Identity(provider), inResponseTo, clientKey, created ?? Now);

@@ -109,7 +109,7 @@ public class SSOControllerSamlTokenTests
 
         // Seed an outcome whose lifetime has already elapsed (Created well in the past): the redeem rejects
         // it as out of its window, so it cannot mint even though its token is otherwise well-formed.
-        var identity = VerifiedIdentity.FromValidatedSaml("adfs", "alice", SamlAuthorizeStateBuilder.Build(new System.Collections.Generic.List<string>(), new SamlConfig()));
+        var identity = TestIdentities.Saml("adfs", "alice", SamlAuthorizeStateBuilder.Build(new System.Collections.Generic.List<string>(), new SamlConfig()));
         var token = SamlOutcomeStore.NewToken();
         SamlLoginService.SeedSamlOutcomeForTests(new SamlLoginOutcome(token, "adfs", identity, string.Empty, null, DateTime.UtcNow.AddHours(-1)));
 
@@ -175,7 +175,7 @@ public class SSOControllerSamlTokenTests
         var store = new SamlOutcomeStore(1, TimeSpan.FromMinutes(15), TimeSpan.FromMinutes(1));
         SamlLoginService.SetSamlOutcomeStoreForTests(store);
         var filler = SamlOutcomeStore.NewToken();
-        var fillerIdentity = VerifiedIdentity.FromValidatedSaml("adfs", "filler", SamlAuthorizeStateBuilder.Build(new System.Collections.Generic.List<string>(), new SamlConfig()));
+        var fillerIdentity = TestIdentities.Saml("adfs", "filler", SamlAuthorizeStateBuilder.Build(new System.Collections.Generic.List<string>(), new SamlConfig()));
         Assert.True(store.TryAdd(new SamlLoginOutcome(filler, "adfs", fillerIdentity, string.Empty, null, DateTime.UtcNow), out _));
 
         // The callback is refused at the store cap — a fail-closed 500 — and the assertion's one-time replay

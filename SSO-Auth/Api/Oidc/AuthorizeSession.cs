@@ -1,5 +1,6 @@
 using System;
 using Duende.IdentityModel.OidcClient;
+using Jellyfin.Plugin.SSO_Auth.Api.Authz;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 
@@ -110,7 +111,24 @@ internal abstract class AuthorizeSession
             // VerifiedIdentity the mint path is keyed on. Building it here — inside the variant the store
             // only ever produces for a promoted state and only hands out through the one-time atomic
             // redeem — is what makes this the OpenID construction site the keystone's contract names.
-            Identity = VerifiedIdentity.FromOidcRedemption(pending.Provider, derived);
+            // Destructure the role-gate result into the protocol-agnostic ValidatedLogin the keystone takes
+            // (#790). The subject and username are non-null by this point: the callback rejects a valid login
+            // that resolved no subject (#155) or no username (#95) before the state is promoted, so the
+            // null-forgiving reads preserve that upstream fail-closed guarantee rather than re-deciding it.
+            Identity = VerifiedIdentity.FromValidatedOidc(new ValidatedLogin
+            {
+                Provider = pending.Provider,
+                Subject = derived.Subject!,
+                Issuer = derived.Issuer,
+                Username = derived.Username!,
+                EmailVerified = derived.EmailVerified,
+                Admin = derived.Admin,
+                Folders = derived.Folders,
+                EnableLiveTv = derived.EnableLiveTv,
+                EnableLiveTvManagement = derived.EnableLiveTvManagement,
+                AvatarUrl = derived.AvatarUrl,
+                PermissionGrants = derived.PermissionGrants ?? Array.Empty<PermissionGrant>(),
+            });
         }
 
         /// <summary>

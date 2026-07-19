@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Jellyfin.Plugin.SSO_Auth.Api.Authz;
 using Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Microsoft.Extensions.Logging;
@@ -196,7 +197,24 @@ internal sealed class SamlAssertionValidator
         // and carries no email_verified claim, so the verified-email gate is not applicable at the caller
         // (AdoptionGate.None); the resolver's unconditional admin-adoption refusal (#218) still applies.
         rejection = null;
-        identity = VerifiedIdentity.FromValidatedSaml(provider, nameId, derived);
+        // Destructure the validated assertion into the protocol-agnostic ValidatedLogin the keystone takes
+        // (#790). SAML keys the link directly on the NameID (subject and username are the same value) and
+        // carries no email_verified claim, avatar, or issuer binding (all null — issuer binding is OpenID
+        // only, #186).
+        identity = VerifiedIdentity.FromValidatedSaml(new ValidatedLogin
+        {
+            Provider = provider,
+            Subject = nameId,
+            Issuer = null,
+            Username = nameId,
+            EmailVerified = null,
+            Admin = derived.Admin,
+            Folders = derived.Folders,
+            EnableLiveTv = derived.EnableLiveTv,
+            EnableLiveTvManagement = derived.EnableLiveTvManagement,
+            AvatarUrl = null,
+            PermissionGrants = derived.PermissionGrants ?? Array.Empty<PermissionGrant>(),
+        });
         return true;
     }
 
