@@ -1,9 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Jellyfin.Plugin.SSO_Auth.Api.Authz;
-using Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 using Jellyfin.Plugin.SSO_Auth.Api.Provider;
-using Jellyfin.Plugin.SSO_Auth.Api.Saml;
 
 #nullable enable
 
@@ -18,20 +16,24 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 /// unvalidated response because there is no other way to obtain one.
 /// </summary>
 /// <remarks>
-/// The constructor is PRIVATE, so the type is unforgeable from outside: the only way to obtain an
-/// instance is one of the two named factories, each of which represents a completed protocol validation.
+/// The constructor is PRIVATE, so the type is unforgeable from outside: the only way to obtain an instance
+/// is one of the two protocol factories (<see cref="FromValidatedOidc"/>, <see cref="FromValidatedSaml"/>),
+/// each of which takes a protocol-agnostic
+/// <see cref="ValidatedLogin"/> — the primitive facts a completed validation resolved. Each protocol builds
+/// that bundle and calls the factory ONLY once its validation has passed:
 /// <list type="bullet">
-/// <item><see cref="FromOidcRedemption"/>, built inside <see cref="AuthorizeSession.Ready"/> and handed
-/// out only by <see cref="OidcStateStore.TryRedeem"/> after the atomic one-time claim of a promoted
-/// (role-gate-passed) state.</item>
-/// <item><see cref="FromValidatedSaml"/>, called only at the SAML session-minting endpoint after the
-/// response has passed signature, time-bound, audience, recipient and replay validation.</item>
+/// <item>OpenID: inside <c>AuthorizeSession.Ready</c>, handed out only by <c>OidcStateStore.TryRedeem</c>
+/// after the atomic one-time claim of a promoted (role-gate-passed) state.</item>
+/// <item>SAML: at the session-minting validator (<c>SamlAssertionValidator</c>) after the response has
+/// passed signature, time-bound, audience, recipient and replay validation.</item>
 /// </list>
-/// This construction lock is pinned as a fitness function
-/// (<c>ArchitectureConformanceTests.VerifiedIdentity_IsConstructedOnlyByProtocolValidators</c>). The two
-/// protocol-facing labels (<see cref="LinkMode"/>, <see cref="AuditProtocol"/>) are the only branch the
-/// completion path needs; a richer protocol abstraction is deferred to a later #318 step rather than
-/// pre-empted here.
+/// The construction lock is pinned as a fitness function
+/// (<c>ArchitectureConformanceTests.VerifiedIdentity_IsConstructedOnlyByProtocolValidators</c>): the private
+/// constructor keeps <c>new VerifiedIdentity(...)</c> inside this file, and the source scan keeps
+/// each factory's call site to its own validator. Taking a
+/// <see cref="ValidatedLogin"/> instead of the protocol state types is the #790 dependency inversion — the
+/// keystone no longer depends on the OpenID or SAML modules. The two protocol-facing labels
+/// (<see cref="LinkMode"/>, <see cref="AuditProtocol"/>) are the only branch the completion path needs.
 /// </remarks>
 internal sealed record VerifiedIdentity
 {
@@ -116,57 +118,40 @@ internal sealed record VerifiedIdentity
     internal IReadOnlyList<PermissionGrant> PermissionGrants { get; }
 
     /// <summary>
-    /// Builds the verified identity of an OpenID login from the role-gate result. Called from inside
-    /// <see cref="AuthorizeSession.Ready"/>, which the store produces only for a promoted (role-gate-passed)
-    /// state and hands out only through the one-time atomic redeem — so this can never run before that claim.
-    /// The subject and username are non-null by that point: the callback rejects a valid login that resolved
-    /// no subject (#155) and no username (#95) before the state is promoted, so the null-forgiving reads
-    /// preserve that upstream fail-closed guarantee rather than re-deciding it here.
+    /// Mints the verified identity of an OpenID login. Called only from the OpenID redeem path
+    /// (<c>AuthorizeSession.Ready</c>), which the store hands out only through its one-time atomic redeem of a
+    /// promoted (role-gate-passed) state — so a raw or unvalidated login can never reach it.
     /// </summary>
-    /// <param name="provider">The provider that verified the login.</param>
-    /// <param name="derived">The passed role-gate result carrying the resolved identity and privileges.</param>
+    /// <param name="login">The primitive facts the OpenID role-gate resolved for the completed login.</param>
     /// <returns>The verified OpenID identity.</returns>
-    internal static VerifiedIdentity FromOidcRedemption(string provider, OidcAuthorizeStateBuilder.OidcAuthorizeState derived) =>
-        new(
-            ProviderMode.Oid,
-            "OpenID",
-            provider,
-            derived.Subject!,
-            derived.Issuer,
-            derived.Username!,
-            derived.EmailVerified,
-            derived.Admin,
-            derived.Folders,
-            derived.EnableLiveTv,
-            derived.EnableLiveTvManagement,
-            derived.AvatarUrl,
-            derived.PermissionGrants ?? Array.Empty<PermissionGrant>());
+    internal static VerifiedIdentity FromValidatedOidc(ValidatedLogin login) => Build(ProviderMode.Oid, "OpenID", login);
 
     /// <summary>
-    /// Builds the verified identity of a SAML login. Called only at the SAML session-minting endpoint after
-    /// the response has passed signature, time-bound, audience, recipient and replay validation, the login
-    /// allow-list, and the non-empty-NameID guard (#95) — so a raw or unvalidated response can never reach
-    /// this factory. SAML keys the link directly on the NameID (subject and username are the same value) and
-    /// carries no <c>email_verified</c> claim, avatar, or issuer binding (all null — issuer binding is
-    /// OpenID-only, #186).
+    /// Mints the verified identity of a SAML login. Called only from the SAML session-minting validator
+    /// (<c>SamlAssertionValidator</c>), reached only after the response has passed signature, time-bound,
+    /// audience, recipient and replay validation, the login allow-list, and the non-empty-NameID guard (#95).
     /// </summary>
-    /// <param name="provider">The provider that verified the login.</param>
-    /// <param name="nameId">The validated, non-empty NameID; the link key and the username.</param>
-    /// <param name="privileges">The privileges derived from the assertion's roles and the provider configuration.</param>
+    /// <param name="login">The primitive facts the SAML validation resolved for the completed login.</param>
     /// <returns>The verified SAML identity.</returns>
-    internal static VerifiedIdentity FromValidatedSaml(string provider, string nameId, SamlAuthorizeStateBuilder.SamlAuthorizeState privileges) =>
+    internal static VerifiedIdentity FromValidatedSaml(ValidatedLogin login) => Build(ProviderMode.Saml, "SAML", login);
+
+    // The two protocol factories set the protocol label + link mode (the only protocol-facing branch, #369)
+    // and fold in the protocol-agnostic ValidatedLogin. Taking that neutral bundle rather than the OpenID /
+    // SAML state types is the #790 dependency inversion — the keystone no longer references either protocol
+    // module; the arrow points from each protocol INTO the keystone.
+    private static VerifiedIdentity Build(ProviderMode linkMode, string auditProtocol, ValidatedLogin login) =>
         new(
-            ProviderMode.Saml,
-            "SAML",
-            provider,
-            nameId,
-            null,
-            nameId,
-            null,
-            privileges.Admin,
-            privileges.Folders,
-            privileges.EnableLiveTv,
-            privileges.EnableLiveTvManagement,
-            null,
-            privileges.PermissionGrants ?? Array.Empty<PermissionGrant>());
+            linkMode,
+            auditProtocol,
+            login.Provider,
+            login.Subject,
+            login.Issuer,
+            login.Username,
+            login.EmailVerified,
+            login.Admin,
+            login.Folders,
+            login.EnableLiveTv,
+            login.EnableLiveTvManagement,
+            login.AvatarUrl,
+            login.PermissionGrants);
 }

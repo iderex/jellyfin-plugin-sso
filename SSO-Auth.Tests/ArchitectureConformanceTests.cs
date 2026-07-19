@@ -448,7 +448,7 @@ public class ArchitectureConformanceTests
         //    instance clones a valid identity verbatim; every property is get-only, so it can neither
         //    mutate nor forge one.) A future `public`/`internal` ctor added to the type would reopen that
         //    hole and fail HERE.
-        // 2. Source scan: each factory is INVOKED only from its protocol's validator. FromOidcRedemption
+        // 2. Source scan: each factory is INVOKED only from its protocol's validator. FromValidatedOidc
         //    belongs to the OpenID redeem path — built inside AuthorizeSession.Ready, which the store hands
         //    out only through the one-time atomic redeem — and FromValidatedSaml only at the SAML
         //    session-minting endpoint after full response validation. A call from anywhere else (a link
@@ -471,7 +471,7 @@ public class ArchitectureConformanceTests
         // role-gate result); the SAML factory is invoked from the dedicated SamlAssertionValidator, the
         // single home the SAML inbound validation moved into (#496) — downstream of every gate, so the
         // "constructed only after complete validation" invariant is local to the validator.
-        const string oidcFactory = "FromOidcRedemption";
+        const string oidcFactory = "FromValidatedOidc";
         const string samlFactory = "FromValidatedSaml";
         var factoryMethods = typeof(VerifiedIdentity)
             .GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)

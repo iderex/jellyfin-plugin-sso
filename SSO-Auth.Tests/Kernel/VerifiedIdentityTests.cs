@@ -1,9 +1,9 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using Jellyfin.Plugin.SSO_Auth.Api;
-using Jellyfin.Plugin.SSO_Auth.Api.Oidc;
-using Jellyfin.Plugin.SSO_Auth.Api.Saml;
+using Jellyfin.Plugin.SSO_Auth.Api.Authz;
 using Jellyfin.Plugin.SSO_Auth.Api.Provider;
 using Xunit;
 
@@ -23,29 +23,32 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 public class VerifiedIdentityTests
 {
     [Fact]
-    public void FromOidcRedemption_MapsEveryFieldFromTheRoleGateResult()
+    public void FromValidatedOidc_SetsTheOpenIdLabels_AndCopiesEveryValidatedField()
     {
-        var derived = new OidcAuthorizeStateBuilder.OidcAuthorizeState(
-            Username: "alice",
-            Subject: "sub-123",
-            Issuer: "https://issuer.example",
-            EmailVerified: true,
-            Valid: true,
-            Admin: true,
-            EnableLiveTv: true,
-            EnableLiveTvManagement: false,
-            Folders: new List<string> { "movies", "shows" },
-            AvatarUrl: "https://idp.example/a.png");
+        var login = new ValidatedLogin
+        {
+            Provider = "keycloak",
+            Subject = "sub-123",
+            Issuer = "https://issuer.example",
+            Username = "alice",
+            EmailVerified = true,
+            Admin = true,
+            Folders = new List<string> { "movies", "shows" },
+            EnableLiveTv = true,
+            EnableLiveTvManagement = false,
+            AvatarUrl = "https://idp.example/a.png",
+            PermissionGrants = Array.Empty<PermissionGrant>(),
+        };
 
-        var identity = VerifiedIdentity.FromOidcRedemption("keycloak", derived);
+        var identity = VerifiedIdentity.FromValidatedOidc(login);
 
-        // The two protocol-facing labels drive the link namespace and the audit line.
+        // The factory sets the two protocol-facing labels that drive the link namespace and the audit line...
         Assert.Equal(ProviderMode.Oid, identity.LinkMode);
         Assert.Equal("OpenID", identity.AuditProtocol);
-        Assert.Equal("keycloak", identity.Provider);
 
-        // OpenID keys the link on the stable subject; the username is derived independently. The issuer is
-        // carried onto the identity to issuer-bind the canonical link (#186).
+        // ...and copies every validated field verbatim. OpenID keys the link on the stable subject; the
+        // issuer is carried onto the identity to issuer-bind the canonical link (#186).
+        Assert.Equal("keycloak", identity.Provider);
         Assert.Equal("sub-123", identity.Subject);
         Assert.Equal("https://issuer.example", identity.Issuer);
         Assert.Equal("alice", identity.Username);
@@ -58,30 +61,33 @@ public class VerifiedIdentityTests
     }
 
     [Fact]
-    public void FromValidatedSaml_KeysSubjectAndUsernameOnTheNameId_AndCarriesNoEmailOrAvatar()
+    public void FromValidatedSaml_SetsTheSamlLabels_AndCopiesEveryValidatedField()
     {
-        var privileges = new SamlAuthorizeStateBuilder.SamlAuthorizeState(
-            Admin: true,
-            EnableLiveTv: false,
-            EnableLiveTvManagement: true,
-            Folders: new List<string> { "movies" });
+        var login = new ValidatedLogin
+        {
+            Provider = "okta",
+            Subject = "alice@example.com",
+            Issuer = null,
+            Username = "alice@example.com",
+            EmailVerified = null,
+            Admin = true,
+            Folders = new List<string> { "movies" },
+            EnableLiveTv = false,
+            EnableLiveTvManagement = true,
+            AvatarUrl = null,
+            PermissionGrants = Array.Empty<PermissionGrant>(),
+        };
 
-        var identity = VerifiedIdentity.FromValidatedSaml("okta", "alice@example.com", privileges);
+        var identity = VerifiedIdentity.FromValidatedSaml(login);
 
         Assert.Equal(ProviderMode.Saml, identity.LinkMode);
         Assert.Equal("SAML", identity.AuditProtocol);
         Assert.Equal("okta", identity.Provider);
-
-        // SAML keys the link directly on the NameID: subject and username are the same value.
         Assert.Equal("alice@example.com", identity.Subject);
         Assert.Equal("alice@example.com", identity.Username);
-
-        // SAML carries no email_verified claim, no avatar, and no issuer binding (#186), so the adoption
-        // gate, avatar step, and issuer check are all inert.
         Assert.Null(identity.EmailVerified);
         Assert.Null(identity.AvatarUrl);
         Assert.Null(identity.Issuer);
-
         Assert.True(identity.Admin);
         Assert.Equal(new[] { "movies" }, identity.Folders);
         Assert.False(identity.EnableLiveTv);
