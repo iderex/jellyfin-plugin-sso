@@ -196,7 +196,7 @@ public class ArchitectureConformanceTests
     [InlineData("Net")] // leaf — networking / URL / SSRF primitives: IpAddressClassifier, CanonicalBaseUrl, SsoHttp
     [InlineData("Secrets")] // leaf — secrets at rest: SecretStore, SecretEnvelope, ConfigSecretProtection
     [InlineData("Audit")] // leaf — append-only audit logging: SsoAudit
-    [InlineData("Avatar", "Net")] // avatar fetch — validates targets through the Net SSRF classifier
+    [InlineData("Avatar", "Net", "RateLimit")] // avatar fetch — validates targets through the Net SSRF classifier, per-user store locks via KeyedLockStore (RateLimit)
     [InlineData("RateLimit", "Net")] // login throttling — keys buckets by the Net client-IP classifier
     [InlineData("Authz")] // leaf — role→permission mapping: PermissionGrant, PermissionRolePolicy, RolePrivilegeMapper
     [InlineData("Provider", "Net", "RateLimit")] // provider config/test/naming — validates URLs (Net) and keys throttles (RateLimit)
