@@ -1,10 +1,8 @@
 <!-- markdownlint-disable MD041 -->
 
-> [!WARNING]
+> [!NOTE]
 >
-> ## 🟡 Alpha — for testing and evaluation only
->
-> This plugin is at the **Alpha** stage — the second rung of its maturity ladder (**In-Development → Alpha → Beta → Release Candidate → Full Release**; see the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap)). It is now installable, but **for testing and evaluation only** — do **not** put it in front of a real Jellyfin instance with real user accounts, and do **not** run it in production. This is a login path still being hardened, so you must expect **bugs, breaking changes, and security gaps that are still open**. Wait for a **Full Release** before using it anywhere that matters.
+> **Status: Beta** — the third rung of the maturity ladder (**In-Development → Alpha → Beta → Release Candidate → Full Release**; see the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap)). Installable from the Jellyfin plugin catalog.
 
 <h1 align="center">Jellyfin SSO Plugin</h1>
 
@@ -38,7 +36,7 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 >
 > This is a revival of [**9p4/jellyfin-plugin-sso**](https://github.com/9p4/jellyfin-plugin-sso), which its original author has since archived. It continues from the last upstream release (**4.0.0.x**, Jellyfin 10.11 / .NET 9) and is taken forward **security-first**. Its hardened sibling project, **`jellyfin-plugin-sso-V2`** (private), is the reference this repository draws on — ported across deliberately, one reviewed change at a time. Huge thanks to the original author and contributors for the foundation.
 >
-> **Status:** **Alpha** — the second stage of the maturity ladder. See the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap) for what each stage gates, and [Installing](#installing) — a packaged release is now installable from the Jellyfin plugin catalog, with build-from-source as the alternative.
+> **Status:** **Beta** — the third stage of the maturity ladder. See the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap) for what each stage gates, and [Installing](#installing) — a packaged release is now installable from the Jellyfin plugin catalog, with build-from-source as the alternative.
 >
 > ### How this project is developed
 >
