@@ -824,6 +824,48 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void RateLimitEndpointClass_UsesTypedConstants_NotLiterals()
+    {
+        // Locked in by #694: the per-client rate-limit bucket key is built as `class + ":" + clientKey` in
+        // SsoRateLimitGate.Check, so the endpoint-class string IS the limiter grouping. Passed as a bare
+        // literal at each call site, a single typo ("challange") compiles cleanly and silently mints a
+        // separate, empty bucket — weakening the rate limit undetectably, with nothing to fail. Every call
+        // site now references a SsoRateLimitClass member instead, so a typo is a compile error; this rule
+        // forbids a raw literal from creeping back in. Call-level property, so it is a source scan like the
+        // other controller rules above. The scan covers BOTH the controller's RateLimitCheck wrapper and any
+        // direct SsoRateLimitGate.Check invocation (belt-and-braces: a future controller could call the gate
+        // straight, bypassing the wrapper), and flags a string-literal FIRST argument to either — never the
+        // typed SsoRateLimitClass member reference.
+        var literalCall = new Regex("(?:RateLimitCheck|SsoRateLimitGate\\.Check)\\(\\s*\"");
+        var offenders = ControllerSourceFiles()
+            .SelectMany(path => File.ReadAllLines(path)
+                .Select((line, index) => (File: Path.GetFileName(path), Text: line.Trim(), Number: index + 1)))
+            .Where(l => literalCall.IsMatch(l.Text))
+            .Select(l => $"{l.File} line {l.Number}: {l.Text}")
+            .ToList();
+
+        Assert.True(
+            offenders.Count == 0,
+            "A rate-limited endpoint must pass its endpoint class as a SsoRateLimitClass member, never a raw string literal — a literal typo silently mints a separate empty limiter bucket (#694). Found: " + string.Join(" | ", offenders));
+
+        // Sentinel against a vacuous pass: the scan only means something while the typed call sites exist. A
+        // rename of the wrapper or a restructure that dropped every RateLimitCheck call would make the
+        // offender scan match nothing and pass for the wrong reason, so pin the count of typed call sites. All
+        // rate-limited endpoints route through the RateLimitCheck(SsoRateLimitClass.X) wrapper today; extend
+        // this expected count in the same PR that adds or removes a rate-limited endpoint (as the provider-form
+        // roster rules do), so a change to the limiter surface is a conscious update here rather than a silent
+        // drift the offender scan cannot see.
+        const int expectedTypedCallSites = 11;
+        var typedCall = new Regex("RateLimitCheck\\(\\s*SsoRateLimitClass\\.");
+        var typedCallSites = ControllerSourceFiles()
+            .Sum(path => typedCall.Matches(File.ReadAllText(path)).Count);
+
+        Assert.True(
+            typedCallSites == expectedTypedCallSites,
+            $"Expected {expectedTypedCallSites} typed RateLimitCheck(SsoRateLimitClass.X) call sites (#694); found {typedCallSites}. A rate-limited endpoint was added or removed — update this sentinel in the same PR so the literal scan cannot pass vacuously.");
+    }
+
+    [Fact]
     public void Controller_HoldsNoMutableStaticState()
     {
         // Locked in by the rate-limit-gate extraction (#160, #318): after the OpenID (#500), SAML (#501) and
