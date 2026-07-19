@@ -140,13 +140,14 @@ public class SSOController : ControllerBase
     {
         if (RateLimitCheck(SsoRateLimitClass.Callback) is { } throttled)
         {
-            return throttled;
+            return BrowserErrorPage.Wrap(throttled, Request, Response);
         }
 
         // The OpenID redirect callback lives in the flow service (#160, #318): it validates the
         // browser-bound state, exchanges the code, validates the id_token and RFC 9207 response issuer,
         // applies the role gate, and renders the security-headered intermediate auth page on the response.
-        return await _oidc.CallbackAsync(provider, state, Request, Response).ConfigureAwait(false);
+        // This endpoint is browser-navigated, so a plain-text rejection is restyled as an HTML page (#668).
+        return BrowserErrorPage.Wrap(await _oidc.CallbackAsync(provider, state, Request, Response).ConfigureAwait(false), Request, Response);
     }
 
     /// <summary>
@@ -161,13 +162,14 @@ public class SSOController : ControllerBase
     {
         if (RateLimitCheck(SsoRateLimitClass.Challenge) is { } throttled)
         {
-            return throttled;
+            return BrowserErrorPage.Wrap(throttled, Request, Response);
         }
 
         // The OpenID challenge lives in the flow service (#160, #318): it reads discovery, applies the
         // PKCE gate, prepares the authorization request, registers the browser-bound authorize state, and
         // redirects to the identity provider (setting the binding cookie on the response).
-        return await _oidc.ChallengeAsync(provider, isLinking, Request, Response).ConfigureAwait(false);
+        // This endpoint is browser-navigated, so a plain-text rejection is restyled as an HTML page (#668).
+        return BrowserErrorPage.Wrap(await _oidc.ChallengeAsync(provider, isLinking, Request, Response).ConfigureAwait(false), Request, Response);
     }
 
     // Rejects a malformed canonical base-URL override (#139) at the OID/SAML Add endpoints. These persist
@@ -461,13 +463,14 @@ public class SSOController : ControllerBase
     {
         if (RateLimitCheck(SsoRateLimitClass.Callback) is { } throttled)
         {
-            return throttled;
+            return BrowserErrorPage.Wrap(throttled, Request, Response);
         }
 
         // The SAML assertion-consumer callback lives in the flow service (#160, #318): it validates the
         // signed response and, on a passing role gate, renders the security-headered intermediate auth
         // page on the response.
-        return _saml.Callback(provider, relayState, formSamlResponse, Request, Response);
+        // This endpoint is browser-navigated, so a plain-text rejection is restyled as an HTML page (#668).
+        return BrowserErrorPage.Wrap(_saml.Callback(provider, relayState, formSamlResponse, Request, Response), Request, Response);
     }
 
     /// <summary>
@@ -482,13 +485,14 @@ public class SSOController : ControllerBase
     {
         if (RateLimitCheck(SsoRateLimitClass.Challenge) is { } throttled)
         {
-            return throttled;
+            return BrowserErrorPage.Wrap(throttled, Request, Response);
         }
 
         // The SAML challenge lives in the flow service (#160, #318): it builds the AuthnRequest, binds it
         // to the initiating browser (setting the binding cookie on the response), signs it when the
         // provider opts in (#167), and redirects to the identity provider.
-        return _saml.Challenge(provider, isLinking, Request, Response);
+        // This endpoint is browser-navigated, so a plain-text rejection is restyled as an HTML page (#668).
+        return BrowserErrorPage.Wrap(_saml.Challenge(provider, isLinking, Request, Response), Request, Response);
     }
 
     /// <summary>
