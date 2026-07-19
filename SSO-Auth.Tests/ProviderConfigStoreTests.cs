@@ -157,6 +157,27 @@ public class ProviderConfigStoreTests
     }
 
     [Fact]
+    public void Save_FreshConfigWithInsecureSamlOptions_PersistsAndAuditsThem()
+    {
+        // The #672 SAML parity of the #140 audit: saving a SAML provider with DoNotValidateAudience set
+        // emits a warning naming the provider and the option (protocol SAML), the same trace the OpenID
+        // escape hatches leave.
+        var logger = new CapturingLogger();
+        var (store, _, persisted) = CreateStore(logger);
+        var incoming = new PluginConfiguration();
+        incoming.SamlConfigs["corp"] = new SamlConfig { DoNotValidateAudience = true };
+
+        store.Save(incoming);
+
+        Assert.Single(persisted);
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Warning, entry.Level);
+        Assert.Contains("corp", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("DoNotValidateAudience", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("SAML", entry.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Save_WithoutALogger_StillPersistsInsecureOptions_WithoutThrowing()
     {
         // The audit is best-effort: a missing logger must never turn a valid save into a failure.

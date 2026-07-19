@@ -551,6 +551,15 @@ public class SSOController : ControllerBase
             configuration.SamlConfigs[provider] = newConfig;
         });
         SsoAudit.ProviderConfigured(_logger, SamlProtocol, provider);
+
+        // Mirror OidAdd (#140/#672): a SAML provider added with a default-on protection disabled
+        // (DoNotValidateAudience) leaves the same auditable [SSO Audit] trace an OpenID escape hatch does.
+        var insecure = SamlInsecureToggles.Enabled(newConfig);
+        if (insecure.Count > 0)
+        {
+            SsoAudit.InsecureOptionsEnabled(_logger, SamlProtocol, provider, insecure);
+        }
+
         return Ok();
     }
 
@@ -679,6 +688,26 @@ public class SSOController : ControllerBase
                 if (insecure.Count > 0)
                 {
                     SsoAudit.InsecureOptionsEnabled(_logger, OpenIdProtocol, kvp.Key, insecure);
+                }
+            }
+        }
+
+        // A mistaken or hostile import that disables a default-on SAML protection (DoNotValidateAudience)
+        // must leave the same [SSO Audit] trace the OpenID escape hatches above do (#672) — the import path
+        // is exactly one of the failure scenarios that issue calls out.
+        if (document.Configuration?.SamlConfigs is { } samlConfigs)
+        {
+            foreach (var kvp in samlConfigs)
+            {
+                if (kvp.Value is null)
+                {
+                    continue;
+                }
+
+                var insecure = SamlInsecureToggles.Enabled(kvp.Value);
+                if (insecure.Count > 0)
+                {
+                    SsoAudit.InsecureOptionsEnabled(_logger, SamlProtocol, kvp.Key, insecure);
                 }
             }
         }

@@ -110,7 +110,7 @@ internal sealed class ProviderConfigStore
     public void Save(BasePluginConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        List<(string Provider, IReadOnlyList<string> Options)> insecureToAudit = null;
+        List<(string Protocol, string Provider, IReadOnlyList<string> Options)> insecureToAudit = null;
         lock (Sync)
         {
             if (configuration is PluginConfiguration incoming && !ReferenceEquals(incoming, _live()))
@@ -141,31 +141,42 @@ internal sealed class ProviderConfigStore
         // provider can neither block config reads/writes nor turn a completed save into a failure.
         if (insecureToAudit != null && _logger != null)
         {
-            foreach (var (provider, options) in insecureToAudit)
+            foreach (var (protocol, provider, options) in insecureToAudit)
             {
-                SsoAudit.InsecureOptionsEnabled(_logger, "OpenID", provider, options);
+                SsoAudit.InsecureOptionsEnabled(_logger, protocol, provider, options);
             }
         }
     }
 
-    // Snapshots, under the caller's lock, the OpenID providers saved with a security check disabled
-    // (#140), as (provider, enabled-option-names) pairs. Pure read: it does not log, so the audit
-    // warnings can be emitted after the config lock is released. Only the admin save path reaches
-    // here (a fresh incoming config), so it fires once per save, not per login.
-    private static List<(string Provider, IReadOnlyList<string> Options)> CollectInsecureOptions(PluginConfiguration incoming)
+    // Snapshots, under the caller's lock, the OpenID and SAML providers saved with a default-on security
+    // check disabled (#140, #672), as (protocol, provider, enabled-option-names) triples. Pure read: it
+    // does not log, so the audit warnings can be emitted after the config lock is released. Only the admin
+    // save path reaches here (a fresh incoming config), so it fires once per save, not per login.
+    private static List<(string Protocol, string Provider, IReadOnlyList<string> Options)> CollectInsecureOptions(PluginConfiguration incoming)
     {
-        var records = new List<(string, IReadOnlyList<string>)>();
-        if (incoming.OidConfigs == null)
+        var records = new List<(string, string, IReadOnlyList<string>)>();
+
+        if (incoming.OidConfigs != null)
         {
-            return records;
+            foreach (var kvp in incoming.OidConfigs)
+            {
+                var insecure = OidcInsecureToggles.Enabled(kvp.Value);
+                if (insecure.Count > 0)
+                {
+                    records.Add(("OpenID", kvp.Key, insecure));
+                }
+            }
         }
 
-        foreach (var kvp in incoming.OidConfigs)
+        if (incoming.SamlConfigs != null)
         {
-            var insecure = OidcInsecureToggles.Enabled(kvp.Value);
-            if (insecure.Count > 0)
+            foreach (var kvp in incoming.SamlConfigs)
             {
-                records.Add((kvp.Key, insecure));
+                var insecure = SamlInsecureToggles.Enabled(kvp.Value);
+                if (insecure.Count > 0)
+                {
+                    records.Add(("SAML", kvp.Key, insecure));
+                }
             }
         }
 
