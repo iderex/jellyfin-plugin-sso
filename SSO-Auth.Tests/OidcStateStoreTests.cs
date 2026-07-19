@@ -444,6 +444,60 @@ public class OidcStateStoreTests
         Assert.Null(store.TryRedeem("tok", "p", Now, Binding));
     }
 
+    // --- UTC-consistent lifetime boundary (#676): expiry keys on the SAME basis the challenge stamped
+    // Created with. The production call sites now pass DateTime.UtcNow (matching the SAML flow), never the
+    // machine-LOCAL DateTime.Now — so a DST transition or a clock step cannot shift an in-flight state's
+    // window and expire a valid login early. These drive the whole basis off a real DateTime.UtcNow to pin
+    // the read predicates' lifetime edge and the challenge -> peek -> promote -> redeem round-trip on one
+    // consistent UTC clock, the invariant the call-site fix restores. ---
+
+    [Fact]
+    public void ReadPredicates_OnAConsistentUtcBasis_HonorTheStateThroughItsLifetime_ThenRejectPastIt()
+    {
+        // T is a real UTC instant — the same DateTime.UtcNow the production challenge stamps Created with;
+        // every comparison below is measured on that one basis, so the boundary is exact and clock-anomaly
+        // free.
+        var t = DateTime.UtcNow;
+
+        // PeekCurrent (the callback precondition) keys on the still-pending variant: valid just inside and
+        // exactly at the lifetime ('<= lifetime' acceptance edge), rejected one tick past it.
+        var peekStore = Store();
+        peekStore.Seed("s", Pending("p", "s", t));
+        Assert.NotNull(peekStore.PeekCurrent("s", "p", t + Lifetime - TimeSpan.FromTicks(1), Binding));
+        Assert.NotNull(peekStore.PeekCurrent("s", "p", t + Lifetime, Binding));
+        Assert.Null(peekStore.PeekCurrent("s", "p", t + Lifetime + TimeSpan.FromTicks(1), Binding));
+
+        // TryRedeem (the mint/link claim) shares IsCurrentFor over the promoted variant: one tick past the
+        // lifetime is rejected WITHOUT consuming the state (fail closed, non-consuming) — then it still
+        // redeems within the lifetime, single-use.
+        var redeemStore = Store();
+        redeemStore.Seed("tok", Ready("p", "tok", t));
+        Assert.Null(redeemStore.TryRedeem("tok", "p", t + Lifetime + TimeSpan.FromTicks(1), Binding));
+        Assert.Equal(1, redeemStore.Count);
+        Assert.NotNull(redeemStore.TryRedeem("tok", "p", t + Lifetime - TimeSpan.FromTicks(1), Binding));
+        Assert.Equal(0, redeemStore.Count);
+    }
+
+    [Fact]
+    public void ChallengeToRedeem_RoundTripsOnOneUtcBasis()
+    {
+        // The full production path on a single UTC basis (the regression #676 guards): register at UtcNow,
+        // peek + promote at UtcNow, redeem at UtcNow — one session minted, the replay rejected. A state
+        // created and consumed on the same UTC clock round-trips exactly as it did on a same-local-clock
+        // basis, but now without the DST/clock-step window shift a machine-local basis carried.
+        var t = DateTime.UtcNow;
+        var store = Store();
+        Assert.True(store.TryAdd(Pending("p", "tok", t), out _));
+
+        var pending = store.PeekCurrent("tok", "p", t, Binding);
+        Assert.NotNull(pending);
+        Assert.True(store.Promote(pending, FullDerived()));
+
+        Assert.NotNull(store.TryRedeem("tok", "p", t, Binding));
+        Assert.Null(store.TryRedeem("tok", "p", t, Binding));
+        Assert.Equal(0, store.Count);
+    }
+
     // --- Single-use / invalidate-immediately (#138: upstream 9p4 v4.0.0.4 fix) ---
     // Upstream v4.0.0.3 invalidated the OpenID authorize state only by expiry after a successful
     // auth, leaving the consumed state redeemable again within its ~15-min lifetime — a replay. The
@@ -612,7 +666,7 @@ public class OidcStateStoreTests
     {
         // The warning signal is bounded exactly like the sweeps: the first refusal signals, further
         // refusals inside the interval stay silent, so a flood cannot amplify into log volume. The gate
-        // is driven by the Pending's Created instant (which is the challenge's DateTime.Now).
+        // is driven by the Pending's Created instant (which is the challenge's DateTime.UtcNow).
         var store = Store(maxEntries: 1);
         Assert.True(store.TryAdd(Pending("p", "a", Now), out _));
 

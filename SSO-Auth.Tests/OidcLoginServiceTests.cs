@@ -87,7 +87,7 @@ public class OidcLoginServiceTests
     {
         var (service, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
 
-        var pending = new AuthorizeSession.Pending(new AuthorizeState { State = "seed-1" }, "kc", isLinking: false, DateTime.Now, "binding", clientKey: null, providerInformation: null, responseIssuerRequired: false);
+        var pending = new AuthorizeSession.Pending(new AuthorizeState { State = "seed-1" }, "kc", isLinking: false, DateTime.UtcNow, "binding", clientKey: null, providerInformation: null, responseIssuerRequired: false);
         OidcLoginService.SeedOidStateForTests("seed-1", pending);
 
         Assert.Contains(service.StateSummaries(), s => s.Provider == "kc" && !s.Valid);
