@@ -156,6 +156,7 @@ public class ArchitectureConformanceTests
     [Theory]
     [InlineData("Net")] // networking / URL / SSRF primitives: IpAddressClassifier, CanonicalBaseUrl, SsoHttp
     [InlineData("Secrets")] // secrets at rest: SecretStore, SecretEnvelope, ConfigSecretProtection
+    [InlineData("Audit")] // append-only audit logging: SsoAudit
     public void ApiModule_IsALeaf_ImportsNoOtherApiModule(string module)
     {
         var moduleDir = Path.Combine(RepoRoot(), "SSO-Auth", "Api", module);

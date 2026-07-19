@@ -1,5 +1,6 @@
 using System;
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Api.Audit;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Microsoft.Extensions.Logging;
 using Xunit;
