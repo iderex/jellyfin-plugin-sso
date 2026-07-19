@@ -157,7 +157,7 @@ CI restores in a separate step, so its build/test use `--no-restore`/`--no-build
 
 **Branching and pull requests.** `main` is the released line and is PR-only. Branch every change — even a one-liner — off `main` for fixes and security work, or off the feature branch for features, using a short kebab-case name with a `fix/`, `harden/`, `feature/`, `chore/`, or `refactor/` prefix. Reference the issue your change addresses (`Closes #N`) and fill in the [pull request template](.github/pull_request_template.md).
 
-This is a security-sensitive login path: before opening a pull request, understand and own every line you propose, and be ready to explain what it does and why.
+This is a security-sensitive login path: before opening a pull request, understand and own every line you propose, and be ready to explain what it does and why. The merge gate is internal-only (CI, the adversarial review, and the maintainer); [REVIEW-GATE.md](REVIEW-GATE.md) maps how those controls cover each class of issue an automated PR reviewer would catch.
 
 ### Improving The Documentation
 
