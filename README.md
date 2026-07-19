@@ -22,10 +22,10 @@
 <img alt="Documentation" src="https://img.shields.io/badge/docs-wiki-blue"/>
 </a>
 <!-- OpenSSF Best Practices badge. The project meets the passing-level criteria
-     (see OPENSSF-BEST-PRACTICES.md); the badge goes live once the maintainer
+     (see the OpenSSF-Best-Practices wiki page); the badge goes live once the maintainer
      registers at bestpractices.dev and swaps PROJECT_ID below for the real id.
      Until then this links to the readiness mapping. -->
-<a href="OPENSSF-BEST-PRACTICES.md">
+<a href="https://github.com/iderex/jellyfin-plugin-sso/wiki/OpenSSF-Best-Practices">
 <img alt="OpenSSF Best Practices" src="https://img.shields.io/badge/OpenSSF_Best_Practices-passing_criteria_met-informational"/>
 </a>
 </p>
@@ -52,7 +52,7 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 
 ## Features
 
-- **OpenID Connect and SAML 2.0** — either or both, multiple providers side by side. See the [Provider Guides](providers.md).
+- **OpenID Connect and SAML 2.0** — either or both, multiple providers side by side. See the [Provider Setup](https://github.com/iderex/jellyfin-plugin-sso/wiki/Provider-Setup).
 - **Role-based access control** — map identity-provider groups/roles to login, administrator, library folders, and Live TV.
 - **Hardened, fail-closed login path** — identities bound to the stable `sub` / `NameID`, fail-closed SAML and `id_token` validation, and SSRF-guarded avatar fetches. Details on the [Security Model](https://github.com/iderex/jellyfin-plugin-sso/wiki/Security-Model) page.
 - **Avatar sync, Quick Connect, and self-service account linking**.
@@ -92,7 +92,7 @@ Copy the **full publish output** (`SSO-Auth.dll` and every dependency DLL beside
 
 ## Configuration
 
-Configure your providers on the plugin's settings page (**Dashboard → Plugins → SSO-Auth**) and via the admin API. The [Provider Guides](providers.md) walk through setup for common identity providers.
+Configure your providers on the plugin's settings page (**Dashboard → Plugins → SSO-Auth**) and via the admin API. The [Provider Setup](https://github.com/iderex/jellyfin-plugin-sso/wiki/Provider-Setup) walks through setup for common identity providers.
 
 Provider names become part of the callback URLs you register with your identity provider — OpenID Connect: `.../sso/OID/redirect/PROVIDER_NAME`; SAML: `.../sso/SAML/post/PROVIDER_NAME` — so a newly added name on **either protocol** must not contain control characters (such as a tab or newline), `%`, a backslash, or URI-reserved characters (`: / ? # [ ] @ ! $ & ' ( ) * + , ; =`) — registration rejects such names. Names that are already configured keep working unchanged; note that this exemption is by live configuration, so once you **delete** a provider whose name uses one of these characters you cannot re-add it through the UI or API (nor restore it from a full-config backup) — recover by editing `config.xml` on disk.
 
@@ -103,15 +103,15 @@ Provider names become part of the callback URLs you register with your identity 
 Broader documentation lives in the **[Wiki](https://github.com/iderex/jellyfin-plugin-sso/wiki)**:
 
 - [Installation](https://github.com/iderex/jellyfin-plugin-sso/wiki/Installation) · [Login Flow](https://github.com/iderex/jellyfin-plugin-sso/wiki/Login-Flow) · [Security Model](https://github.com/iderex/jellyfin-plugin-sso/wiki/Security-Model) · [Troubleshooting](https://github.com/iderex/jellyfin-plugin-sso/wiki/Troubleshooting)
-- Per-identity-provider setup: [Provider Guides](providers.md)
-- In-tree contributor map of the login flow and code layout: [ARCHITECTURE.md](ARCHITECTURE.md)
+- Per-identity-provider setup: [Provider Setup](https://github.com/iderex/jellyfin-plugin-sso/wiki/Provider-Setup)
+- In-tree contributor map of the login flow and code layout: [Architecture Internals](https://github.com/iderex/jellyfin-plugin-sso/wiki/Architecture-Internals)
 
 ## Security
 
 This plugin is built to **fail closed by default**: a missing signature, a weak SHA-1 signature, an out-of-bounds time window, a wrong audience, a replayed assertion, or an unrecognized identity is rejected rather than waved through. A few documented per-provider options (e.g. `DoNotValidateAudience`, `DoNotValidateIssuerName`) can deliberately relax specific checks for providers that need it — the [Security Model](https://github.com/iderex/jellyfin-plugin-sso/wiki/Security-Model) page notes which. Two operator-facing controls:
 
 - **Write-only client secret** — the OpenID secret is stored but never returned in a config response; on the settings page, leave it blank to keep the current value or type a new one to replace it.
-- **Secrets encrypted at rest** — the OpenID client secret and the SAML request-signing key are stored in the config XML as AES-256-GCM `ssoenc:v1:` envelopes, encrypted under a key kept in a separate file (`sso-secret.key`) in the plugin data folder, so a leaked config alone cannot reveal them. Existing plaintext values keep working and are re-encrypted on the next save (transparent migration). This changes the on-disk format — see the [downgrade / rollback note](providers.md#secrets-encrypted-at-rest-and-downgrade) before rolling back.
+- **Secrets encrypted at rest** — the OpenID client secret and the SAML request-signing key are stored in the config XML as AES-256-GCM `ssoenc:v1:` envelopes, encrypted under a key kept in a separate file (`sso-secret.key`) in the plugin data folder, so a leaked config alone cannot reveal them. Existing plaintext values keep working and are re-encrypted on the next save (transparent migration). This changes the on-disk format — see the [downgrade / rollback note](https://github.com/iderex/jellyfin-plugin-sso/wiki/Provider-Setup#secrets-encrypted-at-rest-and-downgrade) before rolling back.
 - **Optional rate limiting** on the anonymous SSO endpoints (opt-in, off by default) to blunt brute force. Behind a reverse proxy, configure Jellyfin's _Known proxies_ setting so it targets the real client.
 
 Details and tuning are on the [Security Model](https://github.com/iderex/jellyfin-plugin-sso/wiki/Security-Model) wiki page; security-relevant behavior is covered by the test suite.

@@ -140,7 +140,7 @@ Any code editor or IDE with .NET support will work out of the box with this prog
 - [VSCode](https://code.visualstudio.com/docs/languages/dotnet)
 - [N/Vim](https://github.com/OmniSharp/Omnisharp-vim)
 
-**Getting oriented.** Before diving into `SSOController.cs` and the SAML/OpenID helpers, read the [Login Flow](https://github.com/iderex/jellyfin-plugin-sso/wiki/Login-Flow) wiki page and the in-tree [ARCHITECTURE.md](ARCHITECTURE.md) — together they walk an OpenID and a SAML sign-in from challenge to session and map the code layout, so you can place a change onto the flow instead of reverse-engineering it. ARCHITECTURE.md also separates that current shape from the [#318](https://github.com/iderex/jellyfin-plugin-sso/issues/318) target architecture the codebase is migrating toward.
+**Getting oriented.** Before diving into `SSOController.cs` and the SAML/OpenID helpers, read the [Login Flow](https://github.com/iderex/jellyfin-plugin-sso/wiki/Login-Flow) wiki page and the in-tree [Architecture Internals](https://github.com/iderex/jellyfin-plugin-sso/wiki/Architecture-Internals) — together they walk an OpenID and a SAML sign-in from challenge to session and map the code layout, so you can place a change onto the flow instead of reverse-engineering it. The Architecture Internals page also separates that current shape from the [#318](https://github.com/iderex/jellyfin-plugin-sso/issues/318) target architecture the codebase is migrating toward.
 
 **Building and testing.** CI runs these on every pull request and they must pass:
 
@@ -157,11 +157,11 @@ CI restores in a separate step, so its build/test use `--no-restore`/`--no-build
 
 **Branching and pull requests.** `main` is the released line and is PR-only. Branch every change — even a one-liner — off `main` for fixes and security work, or off the feature branch for features, using a short kebab-case name with a `fix/`, `harden/`, `feature/`, `chore/`, or `refactor/` prefix. Reference the issue your change addresses (`Closes #N`) and fill in the [pull request template](.github/pull_request_template.md).
 
-This is a security-sensitive login path: before opening a pull request, understand and own every line you propose, and be ready to explain what it does and why. The merge gate is internal-only (CI, the adversarial review, and the maintainer); [REVIEW-GATE.md](REVIEW-GATE.md) maps how those controls cover each class of issue an automated PR reviewer would catch.
+This is a security-sensitive login path: before opening a pull request, understand and own every line you propose, and be ready to explain what it does and why. The merge gate is internal-only (CI, the adversarial review, and the maintainer); [Review Gate](https://github.com/iderex/jellyfin-plugin-sso/wiki/Review-Gate) maps how those controls cover each class of issue an automated PR reviewer would catch.
 
 ### Improving The Documentation
 
-We are always open to better docs! The main place documentation could be improved is the [providers](https://github.com/iderex/jellyfin-plugin-sso/blob/main/providers.md) documentation. This file keeps track of configurations that are known to work with common SSO providers.
+We are always open to better docs! The main place documentation could be improved is the [provider setup](https://github.com/iderex/jellyfin-plugin-sso/wiki/Provider-Setup) documentation. This file keeps track of configurations that are known to work with common SSO providers.
 
 ## Styleguides
 

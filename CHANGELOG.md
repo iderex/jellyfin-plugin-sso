@@ -92,7 +92,7 @@ that decomposes the login controller into small, testable services.
   values. Before rolling back, open each provider on the settings page and
   re-enter its secret in plaintext (or restore the pre-upgrade config backup),
   then install the older build. See
-  [Secrets encrypted at rest and downgrade](providers.md#secrets-encrypted-at-rest-and-downgrade).
+  [Secrets encrypted at rest and downgrade](https://github.com/iderex/jellyfin-plugin-sso/wiki/Provider-Setup#secrets-encrypted-at-rest-and-downgrade).
 - **OpenID logins that relied on legacy username matching are refused until you
   migrate (#358).** Links created by 4.0.0.4 and earlier are keyed on the
   username, which the IdP controls. After upgrade, a login carrying such a
@@ -103,7 +103,7 @@ that decomposes the login controller into small, testable services.
   a pre-existing legacy link must be linked by an admin; self-migration is
   refused for admins even with the flag on. Plan this before upgrading — see the
   migration runbook under
-  [OpenID Connect id_token requirements](providers.md#openid-connect-id_token-requirements)
+  [OpenID Connect id_token requirements](https://github.com/iderex/jellyfin-plugin-sso/wiki/Provider-Setup#openid-connect-id_token-requirements)
   and the
   [Security Model](https://github.com/iderex/jellyfin-plugin-sso/wiki/Security-Model)
   wiki page.

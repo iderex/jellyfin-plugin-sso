@@ -8,7 +8,8 @@
 # when the `gh` CLI is authenticated — the `bug`-labelled issue timeline. No new tooling.
 #
 # The operational definitions, and where a metric is only an approximation given the small
-# dataset, are documented in DORA-METRICS.md at the repo root. Read that first.
+# dataset, are documented in the Delivery-Metrics wiki page
+# (https://github.com/iderex/jellyfin-plugin-sso/wiki/Delivery-Metrics). Read that first.
 #
 # The script is READ-ONLY and deterministic: it only reads local git objects and (optionally)
 # makes read-only `gh` queries. It never writes to git or GitHub. Re-running it on the same
@@ -226,7 +227,7 @@ fi
 # --- 5. Supplementary AI-risk indicators (cheap, git-derived) ---------------------------------
 # The DORA 2025/26 guidance flags instability in agent-authored change as the leading risk; revert
 # rate and a rework signal are the cheapest leading indicators derivable from git. Review-finding
-# density needs /security-review output and is tracked manually (see DORA-METRICS.md).
+# density needs /security-review output and is tracked manually (see the Delivery-Metrics wiki page).
 echo
 echo "5) AI-RISK / DELIVERY-STABILITY INDICATORS (supplementary)"
 range="${TAG_NAME[0]}..${TAG_NAME[$((N-1))]}"
@@ -241,7 +242,7 @@ fi
 # Rework signal: fixup/amend-style subjects landing on top of recent work.
 rework=$(git log --no-merges -i -E --grep='^(fixup|amend|re-?fix|follow-?up)' --format='%h' "$range" 2>/dev/null | wc -l | tr -d ' ')
 echo "   Rework signal: $rework fixup/follow-up commit subject(s) in the stable window (heuristic)."
-echo "   Review-finding density: manually tracked per /security-review — see DORA-METRICS.md."
+echo "   Review-finding density: manually tracked per /security-review — see the Delivery-Metrics wiki page."
 
 echo
 echo "=================================================================="

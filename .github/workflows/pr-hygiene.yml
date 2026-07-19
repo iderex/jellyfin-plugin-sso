@@ -1,7 +1,9 @@
 # Deterministic PR-hygiene checks (#171). A "Danger-style" gate implemented as a
 # plain workflow + one first-party github-script step — no external Danger runtime,
 # bot, or third-party review service (the merge gate is internal-only by policy;
-# see REVIEW-GATE.md). It complements, never duplicates, the build/test, Prettier,
+# see the Review-Gate wiki page:
+# https://github.com/iderex/jellyfin-plugin-sso/wiki/Review-Gate). It complements,
+# never duplicates, the build/test, Prettier,
 # CodeQL, Opengrep, zizmor, and Unicode-guard checks: those reason about the code;
 # this reasons about the *pull request* (its linkage, size, and changelog/test
 # co-changes) — a class none of them cover.
@@ -20,7 +22,9 @@
 #
 # Two acceptance-criteria items from #171 are intentionally NOT implemented here
 # (sensitive-path sign-off grep, and issue-open triage-lint); the rationale is
-# recorded in REVIEW-GATE.md so the decision is auditable, not silent.
+# recorded in the Review-Gate wiki page
+# (https://github.com/iderex/jellyfin-plugin-sso/wiki/Review-Gate) so the decision
+# is auditable, not silent.
 name: PR Hygiene
 
 on:
