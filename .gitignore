@@ -463,6 +463,8 @@ AGENTS.md
 # Internal project-process docs are maintained LOCALLY, not published. Public
 # user documentation lives in README.md and the GitHub wiki; if
 # a genuinely public doc is ever added under docs/, un-ignore it explicitly
-# (e.g. `!docs/CONFIGURATION.md`).
-docs/
+# (e.g. `!docs/CONFIGURATION.md`). Ignore the CONTENTS of docs/ (docs/*) rather
+# than the directory itself, so such an exception can re-include a file — a
+# `!` rule cannot re-include a file whose parent directory is excluded.
+docs/*
 !docs/README.md
