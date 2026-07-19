@@ -45,7 +45,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Flows;
 /// two response shapes both flows share — the security-headered auth page and the manual-link write mapping —
 /// are rendered from the shared <see cref="FlowResponses"/> home rather than a controller delegate (#160).
 /// </remarks>
-internal sealed class SamlLoginService
+internal sealed class SamlLoginService : ILoginService
 {
     // Outstanding SAML AuthnRequest IDs, for InResponseTo correlation of solicited responses (#156) and the
     // browser binding (#415). One process-wide instance.
@@ -572,7 +572,7 @@ internal sealed class SamlLoginService
     /// <param name="bindingCookie">The browser-binding cookie value the redeem presented (#415).</param>
     /// <param name="remoteEndPointResolver">Resolves the normalized client IP for the activity log (#177).</param>
     /// <returns>The minted session, or a fail-closed rejection.</returns>
-    internal async Task<ActionResult> AuthenticateAsync(string provider, AuthResponse response, string bindingCookie, Func<string> remoteEndPointResolver)
+    public async Task<ActionResult> AuthenticateAsync(string provider, AuthResponse response, string bindingCookie, Func<string> remoteEndPointResolver)
     {
         // Unknown and disabled providers share one rejection so neither can be probed apart — this
         // unifies the previously JSON unknown-provider body and the disabled provider's 500.

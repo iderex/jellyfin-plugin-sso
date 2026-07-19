@@ -126,6 +126,36 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void ProtocolLoginServices_ImplementTheSharedContract()
+    {
+        // #790: OIDC and SAML are polymorphic implementations of ONE login contract, not two parallel paths.
+        // Every concrete per-protocol session-minting service in Flows (a *LoginService, excluding the shared
+        // LoginCompletionService tail) implements ILoginService, so a future protocol slots in by implementing
+        // the interface instead of forking a third path. Composition-first: a shared interface, not a deep
+        // inheritance base.
+        var contract = typeof(SSOPlugin).Assembly.GetType(Root + ".Api.Flows.ILoginService");
+        Assert.NotNull(contract);
+
+        var protocolServices = PluginClasses
+            .Where(t => !t.IsAbstract
+                && t.Namespace == Root + ".Api.Flows"
+                && SimpleName(t).EndsWith("LoginService", StringComparison.Ordinal)
+                && SimpleName(t) != "LoginCompletionService")
+            .ToList();
+
+        Assert.NotEmpty(protocolServices); // non-vacuous: a rename must not silently empty this set
+
+        var offenders = protocolServices
+            .Where(t => !contract!.IsAssignableFrom(t))
+            .Select(SimpleName)
+            .ToList();
+
+        Assert.True(
+            offenders.Count == 0,
+            "Every protocol login service in Flows must implement ILoginService (#790): " + string.Join(", ", offenders));
+    }
+
+    [Fact]
     public void Controllers_DeriveFromControllerBase()
     {
         var stray = PluginClasses
