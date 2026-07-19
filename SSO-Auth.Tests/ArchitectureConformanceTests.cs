@@ -188,6 +188,47 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void ModuleTests_MirrorTheSourceModuleFolders()
+    {
+        // #791: a test that covers a type in Api/<Module>/ lives under SSO-Auth.Tests/<Module>/, so a test is
+        // as easy to place and find as the code it covers, and the test tree cannot drift back into a flat
+        // pile. Governs the per-source-module tests (found by the <Type> -> <Type>Tests.cs naming); the
+        // kernel/controller, Config, SAML-core, and shared-infrastructure tests are organised in their own
+        // folders (Kernel, Config, _Support, …) and are not module-scoped, so they are out of scope here. A
+        // type with no matching test file is simply skipped.
+        var apiRoot = Path.Combine(RepoRoot(), "SSO-Auth", "Api");
+        var testsRoot = Path.Combine(RepoRoot(), "SSO-Auth.Tests");
+        var testFiles = Directory.EnumerateFiles(testsRoot, "*Tests.cs", SearchOption.AllDirectories)
+            .Where(p => !p.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                && !p.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .ToList();
+
+        var offenders = new List<string>();
+        foreach (var src in Directory.EnumerateFiles(apiRoot, "*.cs", SearchOption.AllDirectories))
+        {
+            var relative = Path.GetRelativePath(apiRoot, src);
+            var separator = relative.IndexOf(Path.DirectorySeparatorChar);
+            if (separator < 0)
+            {
+                continue; // a flat Api/ kernel file — not module-scoped
+            }
+
+            var module = relative[..separator];
+            var expectedDir = Path.Combine(testsRoot, module) + Path.DirectorySeparatorChar;
+            var testName = Path.GetFileNameWithoutExtension(src) + "Tests.cs";
+            var test = testFiles.FirstOrDefault(p => string.Equals(Path.GetFileName(p), testName, StringComparison.Ordinal));
+            if (test is not null && !test.StartsWith(expectedDir, StringComparison.Ordinal))
+            {
+                offenders.Add($"{testName} (covers Api/{module}) is at {Path.GetRelativePath(testsRoot, test)} — expected under {module}/");
+            }
+        }
+
+        Assert.True(
+            offenders.Count == 0,
+            "Each module's tests must mirror its source folder under SSO-Auth.Tests/<Module>/ (#791): " + string.Join(" | ", offenders));
+    }
+
+    [Fact]
     public void MutableKeyedState_LivesOnlyInsideStoreLikeTypes()
     {
         // Locked in by the OidcStateStore consolidation (#318): a raw dictionary holding runtime state
