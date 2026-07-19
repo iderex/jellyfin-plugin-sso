@@ -1,7 +1,8 @@
 name: Publish Release
 
 # A three-part stable tag push (e.g. 4.1.1-stable) is the ONLY publish trigger,
-# per docs/RELEASE-POLICY.md. The channel/generation is the tag SUFFIX — this is
+# per RELEASE-POLICY.md (the beta soak / promotion gate a stable tag clears). The
+# channel/generation is the tag SUFFIX — this is
 # the JF10.11 line, so `X.Y.Z-stable`; the JF12 line publishes from `X.Y.Z-JF12-stable`
 # on its own branch. The numeric X.Y.Z is the plugin version Jellyfin installs (it
 # must be numeric — the suffix lives only in the tag + release name); it must match

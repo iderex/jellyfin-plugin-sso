@@ -8,7 +8,10 @@ provider, a browser DOM, or live packaging/install. Per #192's acceptance
 ("every behaviour automated-tested **or** an explicit release-QA item"), they are
 enumerated here as explicit manual checks, each with the reason it stays manual.
 
-Run these against a release candidate before publishing a stable.
+Run these against a release candidate before publishing a stable. They are the
+manual E2E gate the beta soak requires: a candidate clears
+[RELEASE-POLICY.md](RELEASE-POLICY.md)'s promotion gate only once this checklist
+passes against its soaked beta build.
 
 ## Federation against a real IdP
 
