@@ -22,6 +22,17 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 internal readonly record struct SsoOnlyEnableOutcome(SsoOnlyGuardVerdict Verdict, int RepointedCount, string BreakGlassAdmin);
 
 /// <summary>
+/// The login-path re-assertion outcome for a resolved account (#165, Findings A/B/H1): the
+/// <c>AuthenticationProviderId</c> the mint must persist, and whether the account is the designated
+/// break-glass admin while SSO-only mode is on. Both are derived from the RESOLVED account (its own
+/// username), never the mutable IdP-supplied username, so the login path and the enable sweep can never
+/// disagree on who the break-glass admin is.
+/// </summary>
+/// <param name="DefaultProvider">The provider id to persist as the account's default login provider (or the configured default when the mode is off).</param>
+/// <param name="IsBreakGlassAdmin">True only when the account is the break-glass admin AND the mode is on, so the mint must leave its admin/enabled recovery state intact.</param>
+internal readonly record struct SsoOnlyLoginDecision(string DefaultProvider, bool IsBreakGlassAdmin);
+
+/// <summary>
 /// The plugin-driven per-user enforcement of SSO-only login (#165). Jellyfin has no server-wide "disable
 /// password login" switch, so the only lever is each account's <c>AuthenticationProviderId</c>
 /// (SSO-ONLY-LOGIN-DESIGN.md §2). This service owns that lever: it runs the fail-closed last-admin guard
@@ -75,6 +86,72 @@ internal sealed class SsoOnlyLoginService
             IsAdministrator: user.HasPermission(PermissionKind.IsAdministrator),
             IsEnabled: !user.HasPermission(PermissionKind.IsDisabled),
             HasUsablePasswordLogin: usablePasswordLogin);
+    }
+
+    /// <summary>
+    /// Re-asserts SSO-only enforcement for a resolved login on the LOGIN path (#165, Findings A/B/H1),
+    /// mirroring the enable sweep's discipline so the two paths agree. The break-glass decision is judged on
+    /// the RESOLVED account's own username (the sweep's <c>user.Username</c> basis), NOT the mutable
+    /// IdP-supplied username, so a rename, a manual link, or a differing username claim can never treat the
+    /// break-glass admin's own SSO login as non-exempt and strip its password door (Finding A). While the
+    /// mode is on, a non-exempt account still on the password provider is TRACKED — persisted to
+    /// <c>SsoOnlyRepointedUserIds</c> — BEFORE the mint repoints it, so the reversible off-switch and the boot
+    /// reconciliation restore exactly the accounts the mode moved (Finding B); the break-glass admin and an
+    /// account already on the SSO provider (plugin-created natively-SSO accounts included) are never tracked.
+    /// The returned <see cref="SsoOnlyLoginDecision.IsBreakGlassAdmin"/> lets the mint keep the recovery
+    /// account admin/enabled (Finding H1). When the mode is off, the configured default is returned unchanged
+    /// and nothing is tracked (a read only, no config write).
+    /// </summary>
+    /// <param name="userId">The Jellyfin user id the login resolved to.</param>
+    /// <param name="configuredDefaultProvider">The provider config's own <c>DefaultProvider</c> (already trimmed), used unchanged while the mode is off.</param>
+    /// <returns>The provider id to persist and whether this is the break-glass admin under an active mode.</returns>
+    internal SsoOnlyLoginDecision ResolveLoginEnforcement(Guid userId, string configuredDefaultProvider)
+    {
+        // Decide under one locked read for the common paths (mode off, break-glass, already-SSO or
+        // already-tracked) so a login does NOT pay a config persist; only a first-time repoint of a
+        // non-exempt account needs the tracking write below.
+        var (decision, shouldTrack) = _configStore.Read(configuration =>
+        {
+            var resolved = _userManager.GetUserById(userId);
+            if (resolved is null)
+            {
+                // Deleted between resolution and here; the mint fails closed on the null user, so enforce
+                // nothing and track nothing.
+                return (new SsoOnlyLoginDecision(configuredDefaultProvider, false), false);
+            }
+
+            var provider = SsoOnlyLoginGuard.ResolveLoginProvider(configuration, resolved.Username, configuredDefaultProvider);
+            var modeOn = configuration is { DisablePasswordLogin: true };
+            var isBreakGlass = modeOn && SsoOnlyLoginGuard.IsBreakGlass(configuration, resolved.Username);
+
+            // Track a non-exempt account only when this login is actually moving it off the password provider:
+            // never the break-glass admin, never an account already on the SSO provider (so a plugin-created
+            // natively-SSO account is never handed a password door on restore), never a duplicate entry.
+            var track = modeOn
+                && !isBreakGlass
+                && SsoAuthenticationProviders.IsDefaultPasswordProvider(resolved.AuthenticationProviderId)
+                && !configuration.SsoOnlyRepointedUserIds.Contains(userId);
+
+            return (new SsoOnlyLoginDecision(provider, isBreakGlass), track);
+        });
+
+        if (shouldTrack)
+        {
+            // Track FIRST — persisted before the mint repoints — exactly as SweepEnableAsync does: a crash
+            // between tracking and the repoint leaves the account tracked-but-not-moved, which the idempotent,
+            // IsSsoProvider-gated restore simply no-ops and clears. The reverse (moved-but-untracked, which the
+            // tracked-set restore could never auto-recover) cannot happen. Re-checked under the lock so a
+            // concurrent login for the same account cannot double-add.
+            _configStore.Mutate(configuration =>
+            {
+                if (!configuration.SsoOnlyRepointedUserIds.Contains(userId))
+                {
+                    configuration.SsoOnlyRepointedUserIds.Add(userId);
+                }
+            });
+        }
+
+        return decision;
     }
 
     /// <summary>

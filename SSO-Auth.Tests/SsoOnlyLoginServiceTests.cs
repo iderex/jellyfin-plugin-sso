@@ -311,6 +311,137 @@ public class SsoOnlyLoginServiceTests
         await users.DidNotReceive().UpdateUserAsync(Arg.Any<User>());
     }
 
+    // --- Finding A/B/H1: the login-path re-assertion (ResolveLoginEnforcement) ---
+
+    [Fact]
+    public void ResolveLoginEnforcement_ModeOff_ReturnsConfiguredDefault_NotBreakGlass_TracksNothing_DoesNotPersist()
+    {
+        // Mode off (the default): the provider's own configured default is returned unchanged, the account is
+        // not the break-glass admin, nothing is tracked — and, being a pure read, the common no-op login pays
+        // NO config persist.
+        var alice = PasswordUser("alice", AliceId);
+        var cfg = new PluginConfiguration { DisablePasswordLogin = false, BreakGlassAdminUsername = "root" };
+        var persists = 0;
+        var store = new ProviderConfigStore(() => cfg, _ => persists++, new CapturingLogger());
+        var users = Substitute.For<IUserManager>();
+        users.GetUserById(AliceId).Returns(alice);
+        var service = new SsoOnlyLoginService(users, store, new CapturingLogger());
+
+        var decision = service.ResolveLoginEnforcement(AliceId, "configured-default");
+
+        Assert.Equal("configured-default", decision.DefaultProvider);
+        Assert.False(decision.IsBreakGlassAdmin);
+        Assert.Empty(cfg.SsoOnlyRepointedUserIds);
+        Assert.Equal(0, persists);
+    }
+
+    [Fact]
+    public void ResolveLoginEnforcement_ModeOn_BreakGlassByResolvedAccount_PinsToPassword_FlagsBreakGlass_NeverTracked()
+    {
+        // Finding A: the break-glass identity is judged on the RESOLVED account's own username ("root"), so
+        // the break-glass admin's own SSO login is pinned to the password provider and flagged for the mint to
+        // keep it admin/enabled — never routed to the SSO provider and never tracked. Even with the provider's
+        // DefaultProvider pointing at the SSO provider (the common operator setup), the door survives.
+        var root = PasswordAdmin("root", RootId);
+        var (service, config, _) = Build(new[] { root }, c =>
+        {
+            c.DisablePasswordLogin = true;
+            c.BreakGlassAdminUsername = "root";
+        });
+
+        var decision = service.ResolveLoginEnforcement(RootId, SsoAuthenticationProviders.SsoProviderId);
+
+        Assert.Equal(SsoAuthenticationProviders.DefaultPasswordProviderId, decision.DefaultProvider);
+        Assert.True(decision.IsBreakGlassAdmin);
+        Assert.Empty(config.SsoOnlyRepointedUserIds);
+    }
+
+    [Fact]
+    public void ResolveLoginEnforcement_ModeOn_NonExemptPasswordAccount_ForcedToSso_NotBreakGlass_AndTracked()
+    {
+        // Finding B: a non-exempt account still on the password provider is forced onto the SSO provider AND
+        // tracked (track-first) so the off-switch/boot reconcile can restore it. It is not the break-glass admin.
+        var root = PasswordAdmin("root", RootId);
+        var alice = PasswordUser("alice", AliceId);
+        var (service, config, _) = Build(new[] { root, alice }, c =>
+        {
+            c.DisablePasswordLogin = true;
+            c.BreakGlassAdminUsername = "root";
+        });
+
+        var decision = service.ResolveLoginEnforcement(AliceId, configuredDefaultProvider: null);
+
+        Assert.Equal(SsoAuthenticationProviders.SsoProviderId, decision.DefaultProvider);
+        Assert.False(decision.IsBreakGlassAdmin);
+        Assert.Contains(AliceId, config.SsoOnlyRepointedUserIds);
+    }
+
+    [Fact]
+    public void ResolveLoginEnforcement_ModeOn_NativelySsoAccount_ForcedToSso_ButNeverTracked()
+    {
+        // A plugin-created (natively-SSO) account is already off the password provider, so the login path must
+        // NOT track it — tracking it would wrongly hand it a password door on restore. It still resolves to
+        // the SSO provider (a no-op write), and it is not the break-glass admin.
+        var root = PasswordAdmin("root", RootId);
+        var carol = SsoOnlyUser("carol", SsoUserId);
+        var (service, config, _) = Build(new[] { root, carol }, c =>
+        {
+            c.DisablePasswordLogin = true;
+            c.BreakGlassAdminUsername = "root";
+        });
+
+        var decision = service.ResolveLoginEnforcement(SsoUserId, configuredDefaultProvider: null);
+
+        Assert.Equal(SsoAuthenticationProviders.SsoProviderId, decision.DefaultProvider);
+        Assert.DoesNotContain(SsoUserId, config.SsoOnlyRepointedUserIds);
+    }
+
+    [Fact]
+    public async Task ResolveLoginEnforcement_LoginPathRepoint_IsRestoredByDisable()
+    {
+        // Finding B end-to-end: an account driven onto the SSO provider by the LOGIN PATH (not the enable
+        // sweep) is restored to the password provider by the off-switch — because the login path tracked it.
+        // The mint performs the actual provider write, modelled here by setting the provider id after the
+        // login-path decision recorded the account.
+        var root = PasswordAdmin("root", RootId);
+        var alice = PasswordUser("alice", AliceId);
+        var (service, config, _) = Build(new[] { root, alice }, c =>
+        {
+            c.DisablePasswordLogin = true;
+            c.BreakGlassAdminUsername = "root";
+        });
+
+        var decision = service.ResolveLoginEnforcement(AliceId, configuredDefaultProvider: null);
+        alice.AuthenticationProviderId = decision.DefaultProvider; // the mint repoints to what the decision returned
+        Assert.Equal(SsoAuthenticationProviders.SsoProviderId, alice.AuthenticationProviderId);
+        Assert.Contains(AliceId, config.SsoOnlyRepointedUserIds);
+
+        var restored = await service.DisableAsync();
+
+        Assert.Equal(1, restored);
+        Assert.Equal(SsoAuthenticationProviders.DefaultPasswordProviderId, alice.AuthenticationProviderId);
+        Assert.Empty(config.SsoOnlyRepointedUserIds);
+    }
+
+    [Fact]
+    public void ResolveLoginEnforcement_ModeOn_AlreadyTrackedNonExempt_IsNotDoubleTracked()
+    {
+        // Idempotent: a non-exempt account already recorded (e.g. by the enable sweep or a prior login) is not
+        // added a second time when it logs in again.
+        var root = PasswordAdmin("root", RootId);
+        var alice = PasswordUser("alice", AliceId);
+        var (service, config, _) = Build(new[] { root, alice }, c =>
+        {
+            c.DisablePasswordLogin = true;
+            c.BreakGlassAdminUsername = "root";
+            c.SsoOnlyRepointedUserIds.Add(AliceId);
+        });
+
+        service.ResolveLoginEnforcement(AliceId, configuredDefaultProvider: null);
+
+        Assert.Single(config.SsoOnlyRepointedUserIds, id => id == AliceId);
+    }
+
     [Fact]
     public async Task Disable_DoesNotRestoreNativelySsoAccounts_OnlyTrackedOnes()
     {

@@ -149,11 +149,11 @@ internal static class ProviderConfigValidator
             var reason = status switch
             {
                 PermissionRolePolicy.PermissionNameStatus.Empty => "has an empty permission name",
-                PermissionRolePolicy.PermissionNameStatus.Dedicated => $"names '{echoPerm}', which is managed by its own dedicated setting (administrator, all-folders, or Live TV) and may not be mapped here",
+                PermissionRolePolicy.PermissionNameStatus.Dedicated => $"names '{echoPerm}', which is managed by its own dedicated setting (administrator, all-folders, or Live TV) or is barred from role mapping (account-disable) and may not be mapped here",
                 _ => $"names '{echoPerm}', which is not a known Jellyfin permission",
             };
             throw new ArgumentException(
-                $"{protocol} provider '{echoName}' has an invalid permission-role mapping: it {reason}. Each mapping's Permission must be the exact name of a Jellyfin PermissionKind (for example EnableContentDownloading) other than IsAdministrator, EnableAllFolders, EnableLiveTvAccess, or EnableLiveTvManagement.",
+                $"{protocol} provider '{echoName}' has an invalid permission-role mapping: it {reason}. Each mapping's Permission must be the exact name of a Jellyfin PermissionKind (for example EnableContentDownloading) other than IsAdministrator, EnableAllFolders, EnableLiveTvAccess, EnableLiveTvManagement, or IsDisabled.",
                 nameof(mappings));
         }
     }

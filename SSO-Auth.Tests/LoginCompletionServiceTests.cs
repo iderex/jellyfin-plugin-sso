@@ -44,7 +44,8 @@ public class LoginCompletionServiceTests
         // A real AvatarService (its deps stubbed): a null AvatarUrl early-returns, so no network is reached.
         var avatar = new AvatarService(users, Substitute.For<IProviderManager>(), Substitute.For<IServerConfigurationManager>(), new CapturingLogger(), "test-agent");
         var minter = new SessionMinter(users, avatar, sessions, new CapturingLogger());
-        return (new LoginCompletionService(canonicalLinks, minter, new CapturingLogger()), cfg, users, sessions);
+        var ssoOnly = new SsoOnlyLoginService(users, store, new CapturingLogger());
+        return (new LoginCompletionService(canonicalLinks, minter, ssoOnly, new CapturingLogger()), cfg, users, sessions);
     }
 
     private static AuthResponse Response() =>
@@ -114,6 +115,77 @@ public class LoginCompletionServiceTests
         Assert.NotNull(captured);
         Assert.Equal(Created, captured!.UserId);
         Assert.Equal("203.0.113.9", captured.RemoteEndPoint);
+    }
+
+    [Fact]
+    public async Task CompleteAsync_SsoOnly_BreakGlassAdmin_RenamedOnIdp_KeepsPasswordDoorAndAdmin()
+    {
+        // Findings A + H1 end to end: SSO-only mode is on and the login RESOLVES (by subject link) to the
+        // break-glass admin "root", but the IdP now supplies a DIFFERENT username ("root-renamed"). The
+        // break-glass decision must be judged on the RESOLVED account, so root's password door is NOT stripped
+        // (its provider stays the password provider even though the config's DefaultProvider is the SSO
+        // provider) and its own SSO login — carrying no admin claim — does NOT demote it. Either failure is a
+        // whole-org lockout / recovery-defeat once the IdP is down.
+        var config = new OidConfig
+        {
+            Enabled = true,
+            EnableAuthorization = true, // so the mint would apply the (non-)admin grant if not exempt
+            DefaultProvider = SsoAuthenticationProviders.SsoProviderId, // the common operator setup
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-root"] = Existing },
+        };
+        var (service, cfg, users, sessions) = Build(c =>
+        {
+            c.OidConfigs["kc"] = config;
+            c.DisablePasswordLogin = true;
+            c.BreakGlassAdminUsername = "root";
+        });
+        var root = UserNamed("root", Existing);
+        root.AuthenticationProviderId = SsoAuthenticationProviders.DefaultPasswordProviderId;
+        root.SetPermission(Jellyfin.Database.Implementations.Enums.PermissionKind.IsAdministrator, true);
+        users.GetUserById(Existing).Returns(root);
+        users.GetUserByName("root-renamed").Returns((User?)null);
+        sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
+
+        var result = await service.CompleteAsync(
+            OidcIdentity("kc", "sub-root", "root-renamed"), Response(), config, AdoptionGate.None, () => "203.0.113.9");
+
+        Assert.IsType<OkObjectResult>(result);
+        // The password door survives, and the recovery admin is not demoted.
+        Assert.Equal(SsoAuthenticationProviders.DefaultPasswordProviderId, root.AuthenticationProviderId);
+        Assert.True(root.HasPermission(Jellyfin.Database.Implementations.Enums.PermissionKind.IsAdministrator));
+        // The break-glass admin is never tracked as a repointed account.
+        Assert.DoesNotContain(Existing, cfg.SsoOnlyRepointedUserIds);
+    }
+
+    [Fact]
+    public async Task CompleteAsync_SsoOnly_NonExemptAccount_IsRepointedAndTracked()
+    {
+        // Finding B end to end: an account onboarded after enable that logs in via SSO while the mode is on is
+        // forced onto the SSO provider AND recorded in the tracking set, so the reversible off-switch can
+        // restore it. Without the login-path tracking this account would escape the off-switch entirely.
+        var config = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-alice"] = Existing },
+        };
+        var (service, cfg, users, sessions) = Build(c =>
+        {
+            c.OidConfigs["kc"] = config;
+            c.DisablePasswordLogin = true;
+            c.BreakGlassAdminUsername = "root";
+        });
+        var alice = UserNamed("alice", Existing);
+        alice.AuthenticationProviderId = SsoAuthenticationProviders.DefaultPasswordProviderId; // still had a password door
+        users.GetUserById(Existing).Returns(alice);
+        users.GetUserByName("alice").Returns(alice);
+        sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
+
+        var result = await service.CompleteAsync(
+            OidcIdentity("kc", "sub-alice", "alice"), Response(), config, AdoptionGate.None, () => "203.0.113.9");
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Equal(SsoAuthenticationProviders.SsoProviderId, alice.AuthenticationProviderId); // repointed off the password door
+        Assert.Contains(Existing, cfg.SsoOnlyRepointedUserIds); // and tracked so DisableAsync can restore it
     }
 
     [Fact]

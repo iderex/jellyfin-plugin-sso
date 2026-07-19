@@ -60,7 +60,18 @@ internal sealed class SessionMinter
 
         if (parameters.EnableAuthorization)
         {
-            user.SetPermission(PermissionKind.IsAdministrator, parameters.IsAdmin);
+            // Break-glass survivability (#165, Finding H1): while SSO-only mode is on, the designated
+            // recovery admin's OWN SSO login must never demote it. A provider whose claims do not grant
+            // admin would otherwise strip IsAdministrator from the one account guaranteed to keep a
+            // password door, so the guaranteed recovery account becomes useless exactly when the identity
+            // provider is down. Leave its admin state intact; every non-break-glass account (and the whole
+            // userbase when the mode is off) is unaffected. IsDisabled is separately barred from any SSO
+            // role mapping (PermissionRolePolicy), so no login can disable this account either.
+            if (!parameters.IsBreakGlassAdmin)
+            {
+                user.SetPermission(PermissionKind.IsAdministrator, parameters.IsAdmin);
+            }
+
             user.SetPermission(PermissionKind.EnableAllFolders, parameters.EnableAllFolders);
             if (!parameters.EnableAllFolders)
             {

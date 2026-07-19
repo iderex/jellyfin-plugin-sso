@@ -269,16 +269,18 @@ public class ProviderConfigValidatorTests
     [InlineData("EnableAllFolders")]
     [InlineData("EnableLiveTvAccess")]
     [InlineData("EnableLiveTvManagement")]
+    [InlineData("IsDisabled")] // #165 Finding H1: rejected fail-closed at the save boundary too
     public void ValidatePermissionRoleMappings_DedicatedPermission_IsRejected_NoDoubleMapping(string permission)
     {
         // The anti-escalation / single-source guarantee at the admin write boundary: a dedicated permission
         // (notably IsAdministrator) cannot be persisted into the generic map, so it can never be granted
-        // through it.
+        // through it. IsDisabled is barred here for the stronger whole-org-lockout reason (#165 Finding H1):
+        // it must never be reachable as a role-mapped grant.
         var ex = Assert.Throws<ArgumentException>(() =>
             ProviderConfigValidator.ValidatePermissionRoleMappings("OpenID", "kc", Mappings(permission)));
 
         Assert.Equal("mappings", ex.ParamName);
-        Assert.Contains("dedicated setting", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("may not be mapped here", ex.Message, StringComparison.Ordinal);
     }
 
     [Theory]

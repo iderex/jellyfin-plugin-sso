@@ -152,7 +152,8 @@ public class SamlLoginServiceTests
         var canonicalLinks = new CanonicalLinkService(harness.UserManager, new FakeCryptoProvider(), SSOPlugin.Instance.ConfigStore, logger);
         var avatarService = new AvatarService(harness.UserManager, Substitute.For<IProviderManager>(), Substitute.For<IServerConfigurationManager>(), logger, SsoHttp.UserAgent);
         var sessionMinter = new SessionMinter(harness.UserManager, avatarService, Substitute.For<ISessionManager>(), logger);
-        var loginCompletion = new LoginCompletionService(canonicalLinks, sessionMinter, logger);
+        var ssoOnly = new SsoOnlyLoginService(harness.UserManager, SSOPlugin.Instance.ConfigStore, logger);
+        var loginCompletion = new LoginCompletionService(canonicalLinks, sessionMinter, ssoOnly, logger);
         var service = new SamlLoginService(loginCompletion, canonicalLinks, logger);
 
         var context = new DefaultHttpContext();
