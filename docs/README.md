@@ -17,3 +17,8 @@ Start there for:
 
 The [README](../README.md) has the overview and quick start; the Wiki is the
 reference documentation.
+
+For contributors, the in-repo
+**[ARCHITECTURE.md](ARCHITECTURE.md)** describes the module structure, the
+enforced dependency graph, and the contract every change follows — it lives with
+the code because it is tied to it.
