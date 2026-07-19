@@ -48,8 +48,10 @@ internal static class RolePrivilegeMapper
                 {
                     // The configured (trusted, admin-authored) map-role is trimmed before comparison; the
                     // IdP-supplied role is compared raw, so there is no whitespace-injection vector (#367).
-                    if (string.Equals(role, folderRoleMap.Role?.Trim(), StringComparison.Ordinal))
+                    if (string.Equals(role, folderRoleMap.Role?.Trim(), StringComparison.Ordinal) && folderRoleMap.Folders != null)
                     {
+                        // A null Folders on a matching entry (a config/deserialization edge) grants nothing
+                        // for it rather than throwing an ArgumentNullException — fail closed, like IsOnList (#675).
                         folders.AddRange(folderRoleMap.Folders);
                     }
                 }

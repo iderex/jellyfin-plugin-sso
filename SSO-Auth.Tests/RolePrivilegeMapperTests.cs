@@ -231,6 +231,28 @@ public class RolePrivilegeMapperTests
         Assert.Empty(RolePrivilegeMapper.Evaluate(new[] { "media" }, config).Folders);
     }
 
+    [Fact]
+    public void FolderRolesEnabled_NullFoldersOnMatchingEntry_DoesNotThrow_GrantsNoFoldersForIt()
+    {
+        // #675: a matching FolderRoleMap whose Folders list is null (a config/deserialization edge)
+        // formerly threw an ArgumentNullException on AddRange(null) — a 500. It is now null-guarded, so
+        // the entry grants nothing (fail closed) and other valid entries are unaffected.
+        var config = Oid(c =>
+        {
+            c.EnableFolderRoles = true;
+            c.FolderRoleMapping = new List<FolderRoleMap>
+            {
+                new FolderRoleMap { Role = "media", Folders = null! },
+                new FolderRoleMap { Role = "music", Folders = new List<string> { "songs" } },
+            };
+        });
+
+        var grants = RolePrivilegeMapper.Evaluate(new[] { "media", "music" }, config);
+
+        // The null-Folders "media" entry contributes nothing; the valid "music" entry still grants.
+        Assert.Equal(new List<string> { "songs" }, grants.Folders);
+    }
+
     // --- Null-safe comparison (reconciled) ---
 
     [Fact]
