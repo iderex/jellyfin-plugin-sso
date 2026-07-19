@@ -24,6 +24,15 @@ internal sealed class SessionParameters
     public required bool IsAdmin { get; init; }
 
     /// <summary>
+    /// Gets a value indicating whether the resolved account is the designated break-glass admin while
+    /// SSO-only mode is on (#165, Finding H1). When true the mint must leave the account's administrator
+    /// state intact — its own SSO login must never be able to demote the one guaranteed recovery account,
+    /// which would lock the whole org out once the identity provider is unreachable. False for every other
+    /// account and whenever the mode is off, so the ordinary role-derived admin grant applies unchanged.
+    /// </summary>
+    public required bool IsBreakGlassAdmin { get; init; }
+
+    /// <summary>
     /// Gets a value indicating whether role-based authorization is applied (when false, the
     /// admin/folder permissions are left untouched).
     /// </summary>

@@ -27,12 +27,14 @@ internal sealed class LoginCompletionService
 {
     private readonly CanonicalLinkService _canonicalLinks;
     private readonly SessionMinter _sessionMinter;
+    private readonly SsoOnlyLoginService _ssoOnly;
     private readonly ILogger _logger;
 
-    internal LoginCompletionService(CanonicalLinkService canonicalLinks, SessionMinter sessionMinter, ILogger logger)
+    internal LoginCompletionService(CanonicalLinkService canonicalLinks, SessionMinter sessionMinter, SsoOnlyLoginService ssoOnly, ILogger logger)
     {
         _canonicalLinks = canonicalLinks ?? throw new ArgumentNullException(nameof(canonicalLinks));
         _sessionMinter = sessionMinter ?? throw new ArgumentNullException(nameof(sessionMinter));
+        _ssoOnly = ssoOnly ?? throw new ArgumentNullException(nameof(ssoOnly));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -76,10 +78,24 @@ internal sealed class LoginCompletionService
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.AccountLinkForbidden));
         }
 
+        // SSO-only re-assertion on the login path (#165, criterion 5 / T-S1, Findings A/B/H1). While
+        // DisablePasswordLogin is on, an SSO login must not leave the account's provider routing in a state
+        // that undermines the mode: a non-exempt account is forced onto the SSO (non-password) provider so no
+        // residual password door survives, and the break-glass admin is PINNED to the built-in password
+        // provider so an SSO login can never strip its own password door (which would risk a total lockout
+        // once the IdP fails). The single decision is derived from the RESOLVED account (by userId), not the
+        // mutable IdP-supplied identity.Username, so it matches the enable sweep's break-glass basis exactly;
+        // it also tracks a first-time non-exempt repoint (so the off-switch/boot reconcile can restore it) and
+        // returns whether this is the break-glass admin so the mint can keep it admin/enabled. When the mode
+        // is off (the default), the provider's own DefaultProvider is used unchanged and nothing is tracked.
+        var configuredDefaultProvider = config.DefaultProvider?.Trim();
+        var enforcement = _ssoOnly.ResolveLoginEnforcement(userId, configuredDefaultProvider);
+
         var sessionParameters = new SessionParameters
         {
             UserId = userId,
             IsAdmin = identity.Admin,
+            IsBreakGlassAdmin = enforcement.IsBreakGlassAdmin,
             EnableAuthorization = config.EnableAuthorization,
             EnableAllFolders = config.EnableAllFolders,
             EnabledFolders = identity.Folders.ToArray(),
@@ -87,7 +103,7 @@ internal sealed class LoginCompletionService
             EnableLiveTvManagement = identity.EnableLiveTvManagement,
             PermissionGrants = identity.PermissionGrants,
             AuthResponse = response,
-            DefaultProvider = config.DefaultProvider?.Trim(),
+            DefaultProvider = enforcement.DefaultProvider,
             AvatarUrl = identity.AvatarUrl,
         };
 

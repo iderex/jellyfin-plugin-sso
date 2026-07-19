@@ -26,20 +26,28 @@ namespace Jellyfin.Plugin.SSO_Auth.Api;
 /// <see cref="PermissionKind.IsAdministrator"/>, <see cref="PermissionKind.EnableAllFolders"/>,
 /// <see cref="PermissionKind.EnableLiveTvAccess"/>, <see cref="PermissionKind.EnableLiveTvManagement"/> —
 /// are refused here (see <see cref="DedicatedPermissions"/>) so each permission has exactly one
-/// authoritative source and two sources can never disagree. That refusal is enforced fail-closed at
+/// authoritative source and two sources can never disagree. <see cref="PermissionKind.IsDisabled"/> is
+/// refused for a stronger reason (#165, Finding H1): no SSO role mapping may ever disable an account, which
+/// would be a whole-org lockout / recovery-defeat vector. That refusal is enforced fail-closed at
 /// config-save validation; at login an entry that still names one (or an unknown/blank name) simply grants
 /// nothing rather than throwing.
 /// </remarks>
 internal static class PermissionRolePolicy
 {
-    // The permissions that already have a dedicated configuration surface and are therefore not allowed in
-    // the generic map — mapping them here would create a second, conflicting authoritative source.
+    // The permissions the generic map may never set. The first four already have a dedicated configuration
+    // surface — mapping them here would create a second, conflicting authoritative source. IsDisabled is
+    // excluded for a stronger reason (#165, Finding H1): no SSO role mapping may ever disable an account, or
+    // an admin could map a role to IsDisabled and a single SSO login would lock the account (including the
+    // break-glass admin) out — a whole-org lockout / recovery-defeat vector. Excluding it here makes it
+    // rejected fail-closed at config-save and a no-op grant at runtime, so IsDisabled is never in the mint's
+    // grant list.
     private static readonly HashSet<PermissionKind> DedicatedPermissions = new()
     {
         PermissionKind.IsAdministrator,
         PermissionKind.EnableAllFolders,
         PermissionKind.EnableLiveTvAccess,
         PermissionKind.EnableLiveTvManagement,
+        PermissionKind.IsDisabled,
     };
 
     /// <summary>

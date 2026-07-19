@@ -39,6 +39,7 @@ public class SessionMinterTests
     private static SessionParameters Params(
         bool enableAuthorization = false,
         bool isAdmin = false,
+        bool isBreakGlassAdmin = false,
         bool enableAllFolders = false,
         string[]? enabledFolders = null,
         bool enableLiveTv = false,
@@ -49,6 +50,7 @@ public class SessionMinterTests
     {
         UserId = UserId,
         IsAdmin = isAdmin,
+        IsBreakGlassAdmin = isBreakGlassAdmin,
         EnableAuthorization = enableAuthorization,
         EnableAllFolders = enableAllFolders,
         EnabledFolders = enabledFolders ?? Array.Empty<string>(),
@@ -211,6 +213,48 @@ public class SessionMinterTests
             () => true);
 
         Assert.DoesNotContain(user.Permissions, perm => perm.Kind == PermissionKind.EnableContentDownloading && perm.Value); // seed left untouched
+    }
+
+    [Fact]
+    public async Task MintAsync_BreakGlassAdmin_UnderNonAdminLogin_KeepsAdministrator()
+    {
+        // #165 Finding H1: while SSO-only mode is on, the designated break-glass admin's OWN SSO login must
+        // not be able to demote it. Even with EnableAuthorization on and a login whose claims do NOT grant
+        // admin (isAdmin: false), the recovery account keeps IsAdministrator — otherwise the guaranteed
+        // recovery admin becomes useless once the IdP is down. Seed admin=true so the assertion proves the
+        // demotion was SUPPRESSED, not that a fresh user happened to be non-admin.
+        var (minter, users, sessions) = Build();
+        var user = new User("root", "SSO-Auth", "Default") { Id = UserId };
+        user.SetPermission(PermissionKind.IsAdministrator, true);
+        users.GetUserById(UserId).Returns(user);
+        sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
+
+        await minter.MintAsync(
+            Params(enableAuthorization: true, isAdmin: false, isBreakGlassAdmin: true),
+            () => "203.0.113.7",
+            () => true);
+
+        Assert.Contains(user.Permissions, perm => perm.Kind == PermissionKind.IsAdministrator && perm.Value); // admin preserved
+    }
+
+    [Fact]
+    public async Task MintAsync_NonBreakGlassAccount_UnderNonAdminLogin_IsDemotedAsUsual()
+    {
+        // The negative of the break-glass exemption: a NON-break-glass account is authoritatively demoted when
+        // its login carries no admin claim (default-deny). The exemption is narrow — it must never leak to
+        // ordinary accounts. Seed admin=true; a correct write flips it to false.
+        var (minter, users, sessions) = Build();
+        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        user.SetPermission(PermissionKind.IsAdministrator, true);
+        users.GetUserById(UserId).Returns(user);
+        sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
+
+        await minter.MintAsync(
+            Params(enableAuthorization: true, isAdmin: false, isBreakGlassAdmin: false),
+            () => "203.0.113.7",
+            () => true);
+
+        Assert.DoesNotContain(user.Permissions, perm => perm.Kind == PermissionKind.IsAdministrator && perm.Value); // demoted as usual
     }
 
     [Fact]

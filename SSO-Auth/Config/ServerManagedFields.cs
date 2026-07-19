@@ -29,6 +29,21 @@ internal static class ServerManagedFields
     {
         Preserve(incoming?.OidConfigs, live?.OidConfigs, Preserve);
         Preserve(incoming?.SamlConfigs, live?.SamlConfigs, Preserve);
+
+        // SSO-only login state is server-managed (#165): the config-page save must not be able to flip
+        // DisablePasswordLogin or repoint the break-glass admin. The plugin-config PUT carries no user
+        // context, so it cannot run the last-admin guard or the enforcement sweep — re-injecting the live
+        // values here freezes the pair on this path, leaving the RequiresElevation-gated SSO-Only endpoints
+        // (which DO run the guard, the sweep, and the audit) as the only way to change them. This is
+        // stronger than re-validating an incoming toggle: an unsafe (or accidental) value can never be
+        // introduced via the config-page save at all. A raw config.xml edit is the documented total-lockout
+        // recovery path and is out of the plugin's reach either way (SSO-ONLY-LOGIN-DESIGN.md §3 option B).
+        if (incoming is not null && live is not null)
+        {
+            incoming.DisablePasswordLogin = live.DisablePasswordLogin;
+            incoming.BreakGlassAdminUsername = live.BreakGlassAdminUsername;
+            incoming.SsoOnlyRepointedUserIds = live.SsoOnlyRepointedUserIds;
+        }
     }
 
     // One generic loop for both protocols — the maps differ only in the per-provider overload the method

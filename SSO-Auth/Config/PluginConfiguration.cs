@@ -9,6 +9,8 @@ namespace Jellyfin.Plugin.SSO_Auth.Config;
 /// </summary>
 public class PluginConfiguration : MediaBrowser.Model.Plugins.BasePluginConfiguration
 {
+    private List<Guid> _ssoOnlyRepointedUserIds;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="PluginConfiguration"/> class.
     /// </summary>
@@ -54,6 +56,54 @@ public class PluginConfiguration : MediaBrowser.Model.Plugins.BasePluginConfigur
     /// Gets or sets the rate-limit window length in seconds. The default is 60.
     /// </summary>
     public int RateLimitWindowSeconds { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether SSO-only login is on (#165): native password login is
+    /// disabled per account by repointing each non-exempt user's <c>AuthenticationProviderId</c> away from
+    /// Jellyfin's password provider, EXCEPT a designated break-glass admin whose password door is always
+    /// kept. Default <c>false</c> so no upgrade silently loses its password door. This is a server-managed
+    /// field: the config-page save re-injects the live value (see
+    /// <see cref="ServerManagedFields.Preserve(PluginConfiguration, PluginConfiguration)"/>), so it can only
+    /// be changed through the <c>RequiresElevation</c>-gated SSO-Only endpoints, which run the fail-closed
+    /// last-admin guard (<see cref="SsoOnlyLoginGuard"/>) and the per-user enforcement sweep. Jellyfin has
+    /// no global "disable password login" switch, so this is plugin-driven per-user enforcement, not a core
+    /// setting the plugin toggles (SSO-ONLY-LOGIN-DESIGN.md §2/§5).
+    /// </summary>
+    public bool DisablePasswordLogin { get; set; }
+
+    /// <summary>
+    /// Gets or sets the username of the designated break-glass administrator — the one account SSO-only mode
+    /// never repoints, so it always retains native password login (SSO-ONLY-LOGIN-DESIGN.md §3 option A).
+    /// Its continued existence is what satisfies the activation guard, and unlike an admin's SSO link it
+    /// does not depend on the identity provider being reachable, which is the entire point. Server-managed
+    /// like <see cref="DisablePasswordLogin"/>: set only through the elevated, audited SSO-Only endpoints,
+    /// and only ever pointed at an account that is ALREADY an administrator (it cannot grant admin — T-E1).
+    /// Blank means no break-glass admin is designated, so the mode cannot be enabled.
+    /// </summary>
+    public string BreakGlassAdminUsername { get; set; }
+
+    /// <summary>
+    /// Gets or sets the ids of the accounts SSO-only mode has repointed off the built-in password provider
+    /// (#165). This is server-managed bookkeeping, NOT an admin setting: the enable sweep records each
+    /// account it moves, the disable/off-switch and the boot-time reconciliation restore <em>only</em> these
+    /// accounts, and the set is cleared once they are restored. Tracking is essential for correctness — the
+    /// plugin's own created accounts permanently carry the SSO provider id, so an untracked "restore every
+    /// SSO-provider account" sweep would wrongly hand them a password door. It persists in the config XML so
+    /// the documented recovery (set <see cref="DisablePasswordLogin"/> to <c>false</c> and restart) can
+    /// reconcile the user database back to the flag. Withheld from JSON (<c>[JsonIgnore]</c>) and re-injected
+    /// on save like the other server-managed fields, so a config PUT can neither read nor set it.
+    /// </summary>
+    [XmlArray("SsoOnlyRepointedUserIds")]
+    [XmlArrayItem("UserId")]
+    [System.Text.Json.Serialization.JsonIgnore]
+    public List<Guid> SsoOnlyRepointedUserIds
+    {
+        // Self-healing lazy init (mirrors CanonicalLinks): a config PUT deserializes this to null (it is
+        // JSON-ignored), so a later `.Add` under the config lock must land in a stored list, not a discarded
+        // throwaway. Every access is under ReadConfiguration/MutateConfiguration, so it cannot race.
+        get => _ssoOnlyRepointedUserIds ??= new List<Guid>();
+        set => _ssoOnlyRepointedUserIds = value;
+    }
 }
 
 /// <summary>

@@ -104,16 +104,35 @@ public class PermissionRolePolicyTests
     [InlineData("EnableAllFolders")]
     [InlineData("EnableLiveTvAccess")]
     [InlineData("EnableLiveTvManagement")]
+    [InlineData("IsDisabled")] // #165 Finding H1: never role-mappable — an SSO login must not disable an account
     public void Map_DedicatedPermission_IsNeverGrantedThroughTheGenericMap_EvenWithAMatchingRole(string permission)
     {
         // The four permissions with their own dedicated config fields/flows cannot be granted here — this is
         // the anti-escalation guarantee: an admin cannot mint IsAdministrator (or all-folders / Live TV)
-        // through the generic map, even when the login carries the mapped role. They resolve to no grant.
+        // through the generic map, even when the login carries the mapped role. IsDisabled is barred for a
+        // stronger reason (#165 Finding H1): a role that mapped to it would let a single SSO login lock the
+        // account (including the break-glass admin) out. All resolve to no grant.
         var config = Config(enable: true, Map(permission, "privileged"));
 
         var grants = PermissionRolePolicy.Map(new[] { "privileged" }, config);
 
         Assert.Empty(grants);
+    }
+
+    [Fact]
+    public void Map_IsDisabled_IsNeverEmitted_EvenWithoutAMatchingRole()
+    {
+        // #165 Finding H1, the negative fail-closed branch: because IsDisabled is barred from the generic map,
+        // it is emitted NEITHER as a grant NOR as an authoritative revoke — it never reaches the mint's grant
+        // list in any form, so no SSO login can ever toggle the account-disabled flag. (Contrast an ordinary
+        // permission, which is emitted as an explicit revoke when no role matches.)
+        var config = Config(enable: true, Map("IsDisabled", "some-role"));
+
+        var granted = PermissionRolePolicy.Map(new[] { "some-role" }, config);
+        var revoked = PermissionRolePolicy.Map(new[] { "no-match" }, config);
+
+        Assert.Null(GrantFor(granted, PermissionKind.IsDisabled));
+        Assert.Null(GrantFor(revoked, PermissionKind.IsDisabled));
     }
 
     [Fact]
@@ -242,6 +261,7 @@ public class PermissionRolePolicyTests
     [InlineData("EnableAllFolders")]
     [InlineData("EnableLiveTvAccess")]
     [InlineData("EnableLiveTvManagement")]
+    [InlineData("IsDisabled")] // #165 Finding H1: barred from role mapping alongside the dedicated set
     public void Classify_DedicatedPermission_IsDedicated(string permission)
     {
         Assert.Equal(PermissionRolePolicy.PermissionNameStatus.Dedicated, PermissionRolePolicy.Classify(permission));
