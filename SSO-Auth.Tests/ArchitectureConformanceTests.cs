@@ -263,6 +263,49 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void SourceModuleNamespaces_MirrorTheirFolder()
+    {
+        // #873: every type in Api/<Module>/ declares namespace <Root>.Api.<Module>, so the namespace and the
+        // folder can never drift apart. RequestHelpers once sat physically in Api/Http/ under the stale
+        // namespace ...Helpers and no fitness function caught it until #867 moved it; this locks the invariant
+        // in as an executable guard. Files directly in the flat Api/ root are out of scope — FlatApi_HoldsNoSourceFiles
+        // keeps that empty.
+        var apiRoot = Path.Combine(RepoRoot(), "SSO-Auth", "Api");
+        var offenders = new List<string>();
+        foreach (var src in Directory.EnumerateFiles(apiRoot, "*.cs", SearchOption.AllDirectories))
+        {
+            if (src.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                || src.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var relative = Path.GetRelativePath(apiRoot, src);
+            var separator = relative.IndexOf(Path.DirectorySeparatorChar);
+            if (separator < 0)
+            {
+                continue; // a flat Api/ file — not module-scoped
+            }
+
+            var module = relative[..separator];
+            var expected = $"{Root}.Api.{module}";
+            var declared = File.ReadLines(src)
+                .Select(line => line.Trim())
+                .FirstOrDefault(line => line.StartsWith("namespace ", StringComparison.Ordinal))
+                ?.Substring("namespace ".Length)
+                .TrimEnd(';', ' ', '{');
+            if (!string.Equals(declared, expected, StringComparison.Ordinal))
+            {
+                offenders.Add($"Api/{relative} declares '{declared ?? "(no namespace)"}' — expected '{expected}'");
+            }
+        }
+
+        Assert.True(
+            offenders.Count == 0,
+            "Every type in Api/<Module>/ must declare namespace <Root>.Api.<Module> so the namespace and folder cannot drift (#873): " + string.Join(" | ", offenders));
+    }
+
+    [Fact]
     public void MutableKeyedState_LivesOnlyInsideStoreLikeTypes()
     {
         // Locked in by the OidcStateStore consolidation (#318): a raw dictionary holding runtime state
