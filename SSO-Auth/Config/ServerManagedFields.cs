@@ -43,6 +43,13 @@ internal static class ServerManagedFields
             incoming.DisablePasswordLogin = live.DisablePasswordLogin;
             incoming.BreakGlassAdminUsername = live.BreakGlassAdminUsername;
             incoming.SsoOnlyRepointedUserIds = live.SsoOnlyRepointedUserIds;
+
+            // The Single Logout session store is server-managed runtime state (#727): it is withheld from
+            // JSON, so a config-page PUT arrives with it empty. Re-inject the live map so a save never wipes
+            // the captured sessions (which would strand every live session's id_token_hint) and a config PUT
+            // can neither read the stored id_tokens nor forge session entries — the login/logout paths are the
+            // only writers, exactly as for the SSO-only bookkeeping above.
+            incoming.LogoutSessions = live.LogoutSessions;
         }
     }
 

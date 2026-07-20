@@ -203,6 +203,8 @@ public class ArchitectureConformanceTests
     [InlineData("Routing")] // leaf — the plugin's route-shape contract: RouteSuffix ({protocol}/{path-kind}/{provider} reader), ChallengePath (new/legacy classifier)
     [InlineData("Crypto")] // leaf — the shared asymmetric signing-key strength policy (min RSA bits / approved EC curves), referenced by both protocol paths so they cannot drift (#733)
     [InlineData("LoginButtons")] // leaf — login-page button rendering (#722): pure injector/builder over the config + a branding-sync hosted service; imports no other Api module
+    [InlineData("Logout")] // leaf — Single Logout session-state store (#727): pure bounded operations over the config's LogoutSessions map; imports no other Api module
+
 
     [InlineData("Provider", "Net", "RateLimit")] // provider config/test/naming — validates URLs (Net) and keys throttles (RateLimit)
     [InlineData("Linking", "Audit", "Provider", "RateLimit")] // account linking — audits writes, validates providers, throttles
@@ -303,8 +305,11 @@ public class ArchitectureConformanceTests
         //   wrong home; it is config state, not in-flight state.
         // - OidConfig._canonicalLinkIssuers: the per-link issuer binding (#186), the exact parallel of
         //   _canonicalLinks — serialized config mutated only under the config lock, same rationale.
+        // - PluginConfiguration._logoutSessions: the persisted Single Logout session map (#727) — serialized
+        //   config mutated only under the config lock via SessionLogoutStore, so it is config state, not
+        //   in-flight state; the store type (SessionLogoutStore) holds the bounding logic, not the field.
         var storeLike = new[] { "Store", "Cache", "Limiter" };
-        var exemptions = new[] { "ProviderConfigBase._canonicalLinks", "OidConfig._canonicalLinkIssuers" };
+        var exemptions = new[] { "ProviderConfigBase._canonicalLinks", "OidConfig._canonicalLinkIssuers", "PluginConfiguration._logoutSessions" };
 
         var offenders = PluginClasses
             .Where(t => !storeLike.Any(s => SimpleName(t).EndsWith(s, StringComparison.Ordinal)))
