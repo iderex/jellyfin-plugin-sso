@@ -19,6 +19,8 @@ internal static class SamlResponseLoader
     // parse on the unauthenticated callback path (#249), where a multi-MB body would otherwise cost ~100 MB
     // of transient allocations before any signature is checked. The DTD prohibition stops entity expansion
     // but not raw bulk, and the rate limiter is opt-in — this is the always-on cap.
+
+    /// <summary>The always-on ceiling (256 KB) on the Base64 SAMLResponse length, bounding the decode and DOM parse on the unauthenticated callback path before any signature is checked (#249).</summary>
     internal const int MaxEncodedResponseLength = 256 * 1024;
 
     /// <summary>

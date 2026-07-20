@@ -37,6 +37,15 @@ internal sealed class LoginCompletionService
     private readonly ProviderConfigStore _configStore;
     private readonly ILogger _logger;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="LoginCompletionService"/> class, wiring the account-
+    /// linking, session-minting, SSO-only-enforcement and configuration collaborators the login tail needs.
+    /// </summary>
+    /// <param name="canonicalLinks">The account-linking workflow (resolve/adopt/create).</param>
+    /// <param name="sessionMinter">The session minter run under the in-flight revocation gate.</param>
+    /// <param name="ssoOnly">The SSO-only login enforcement service.</param>
+    /// <param name="configStore">The provider configuration store.</param>
+    /// <param name="logger">The logger.</param>
     internal LoginCompletionService(CanonicalLinkService canonicalLinks, SessionMinter sessionMinter, SsoOnlyLoginService ssoOnly, ProviderConfigStore configStore, ILogger logger)
     {
         _canonicalLinks = canonicalLinks ?? throw new ArgumentNullException(nameof(canonicalLinks));

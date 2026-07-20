@@ -27,6 +27,14 @@ internal sealed class SessionMinter
     private readonly ISessionManager _sessionManager;
     private readonly ILogger _logger;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SessionMinter"/> class, wiring the user, avatar and
+    /// session-manager collaborators the mint applies grants and authenticates through.
+    /// </summary>
+    /// <param name="userManager">The Jellyfin user manager the granted privileges are applied to.</param>
+    /// <param name="avatarService">The avatar fetch/store service run during the mint.</param>
+    /// <param name="sessionManager">The session manager that authenticates the client.</param>
+    /// <param name="logger">The logger.</param>
     internal SessionMinter(IUserManager userManager, AvatarService avatarService, ISessionManager sessionManager, ILogger logger)
     {
         _userManager = userManager ?? throw new ArgumentNullException(nameof(userManager));

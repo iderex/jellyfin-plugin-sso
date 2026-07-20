@@ -36,6 +36,16 @@ internal static class ProviderConfigValidator
     // ValidateProviderName). Only the admin config-page save path validates the whole config; the Add
     // endpoints validate their own incoming provider at the controller, and login-path writes reuse
     // the live object and are never revalidated.
+
+    /// <summary>
+    /// Validates an entire incoming provider configuration fail-closed before the config-page save
+    /// persists it, throwing on the first invalid provider found. Composes the per-provider name,
+    /// base-URL-override, certificate, signing-key, ACR, permission-role and parental-rating checks
+    /// over every OpenID and SAML provider; a valid config returns without effect.
+    /// </summary>
+    /// <param name="incoming">The configuration about to be persisted.</param>
+    /// <param name="live">The current live configuration, used to tell a newly added provider from an existing one.</param>
+    /// <exception cref="ArgumentException">A provider fails any per-provider rule.</exception>
     internal static void Validate(PluginConfiguration incoming, PluginConfiguration live)
     {
         if (incoming.OidConfigs != null)
@@ -75,6 +85,17 @@ internal static class ProviderConfigValidator
     // rejected — an existing name, whose URL bytes the identity provider already has registered, must
     // keep saving unchanged or the deployment would be stranded behind a rename. The echoed name gets a
     // full control strip (stronger than the line-ending strip below — see the inline comment).
+
+    /// <summary>
+    /// Rejects a NEW provider whose name would corrupt the login callback URL it becomes part of: a name
+    /// that is new to the live configuration and contains control characters, a backslash, or a
+    /// URI-reserved character is refused. An already-registered name is exempt so a deployment is never
+    /// stranded behind a rename.
+    /// </summary>
+    /// <param name="protocol">The protocol label ("OpenID" or "SAML") echoed in the rejection message.</param>
+    /// <param name="provider">The provider name to check.</param>
+    /// <param name="isNew">Whether this name is absent from the live configuration; only new names are validated.</param>
+    /// <exception cref="ArgumentException">The name is new and contains a forbidden character.</exception>
     internal static void ValidateProviderName(string protocol, string provider, bool isNew)
     {
         if (isNew && ProviderNameValidator.IsInvalid(provider))
@@ -94,6 +115,15 @@ internal static class ProviderConfigValidator
     // allow-list is empty, so no returned acr can satisfy it) — a silent lockout (#757). Reject it at save so
     // the mis-set is caught before it takes effect, rather than failing open (a no-op) or locking out. The
     // provider name is line-ending-stripped inline in case it reaches a log through the thrown exception.
+
+    /// <summary>
+    /// Rejects an OpenID provider that requires an ACR but supplies no acr_values, which would otherwise
+    /// persist and then silently lock out every login for that provider (the allow-list is empty, so no
+    /// returned acr can satisfy it). Caught at save rather than failing open or locking out (#757).
+    /// </summary>
+    /// <param name="provider">The provider name, echoed (line-ending-stripped) in the rejection message.</param>
+    /// <param name="config">The OpenID provider configuration to check; a null config is tolerated.</param>
+    /// <exception cref="ArgumentException">RequireAcr is set with blank AcrValues.</exception>
     internal static void ValidateAcrRequirement(string provider, OidConfig config)
     {
         if (config?.RequireAcr == true && string.IsNullOrWhiteSpace(config.AcrValues))
@@ -107,6 +137,16 @@ internal static class ProviderConfigValidator
     // A malformed override would be persisted and then silently fall back to the request Host at
     // login (#139). The provider name is line-ending-stripped inline in case it reaches a log through
     // the thrown exception.
+
+    /// <summary>
+    /// Rejects a canonical base-URL override that is set but is not a valid absolute http(s) base URL,
+    /// which would otherwise persist and then silently fall back to the request Host at login (#139). A
+    /// blank override is valid (the feature is off).
+    /// </summary>
+    /// <param name="protocol">The protocol label ("OpenID" or "SAML") echoed in the rejection message.</param>
+    /// <param name="provider">The provider name, echoed (line-ending-stripped) in the rejection message.</param>
+    /// <param name="baseUrlOverride">The override value to check.</param>
+    /// <exception cref="ArgumentException">The override is non-blank and not a valid absolute http(s) URL.</exception>
     internal static void ValidateBaseUrlOverride(string protocol, string provider, string baseUrlOverride)
     {
         if (CanonicalBaseUrl.IsInvalidOverride(baseUrlOverride))
@@ -119,6 +159,15 @@ internal static class ProviderConfigValidator
 
     // A garbage certificate would be persisted and then throw a CryptographicException on every
     // callback — an unhandled 500 (#206). Same inline line-ending strip as above.
+
+    /// <summary>
+    /// Rejects a SAML provider whose signing certificate is set but is not a loadable X.509 certificate,
+    /// which would otherwise persist and then throw on every callback (an unhandled 500, #206). A blank
+    /// certificate is valid (a half-configured provider).
+    /// </summary>
+    /// <param name="provider">The provider name, echoed (line-ending-stripped) in the rejection message.</param>
+    /// <param name="certificate">The Base64-encoded (DER) X.509 certificate to check.</param>
+    /// <exception cref="ArgumentException">The certificate is non-blank and not loadable.</exception>
     internal static void ValidateSamlCertificate(string provider, string certificate)
     {
         if (SamlCertificate.IsInvalid(certificate))
@@ -134,6 +183,15 @@ internal static class ProviderConfigValidator
     // set-but-unloadable value would be persisted and then throw a CryptographicException on every callback
     // (an unhandled 500, #206). Blank is valid (no overlap window configured). Same inline line-ending
     // strip as above.
+
+    /// <summary>
+    /// Rejects a SAML provider whose OPTIONAL secondary verification certificate (#491) is set but not
+    /// loadable — the identity provider's public certificate for a key-overlap window, validated exactly
+    /// like the primary. A blank value is valid (no overlap window configured).
+    /// </summary>
+    /// <param name="provider">The provider name, echoed (line-ending-stripped) in the rejection message.</param>
+    /// <param name="certificate">The Base64-encoded (DER) X.509 certificate to check.</param>
+    /// <exception cref="ArgumentException">The certificate is non-blank and not loadable.</exception>
     internal static void ValidateSamlSecondaryCertificate(string provider, string certificate)
     {
         if (SamlCertificate.IsInvalid(certificate))
@@ -153,6 +211,17 @@ internal static class ProviderConfigValidator
     // (it grants nothing at runtime). Both the config-page save and the Add endpoints run this. The
     // provider name and the echoed permission are control-stripped in case they reach a log through the
     // thrown exception.
+
+    /// <summary>
+    /// Rejects a permission-role mapping (#164) whose Permission is empty, is not a known Jellyfin
+    /// PermissionKind, or names one of the dedicated permissions owned by their own fields (administrator,
+    /// all-folders, Live TV, account-disable). Such an entry would otherwise persist and silently grant
+    /// nothing at login. A null mappings collection or a null entry maps nothing and is tolerated.
+    /// </summary>
+    /// <param name="protocol">The protocol label ("OpenID" or "SAML") echoed in the rejection message.</param>
+    /// <param name="provider">The provider name, echoed (control-stripped) in the rejection message.</param>
+    /// <param name="mappings">The permission-role mappings to check.</param>
+    /// <exception cref="ArgumentException">An entry names an invalid or dedicated permission.</exception>
     internal static void ValidatePermissionRoleMappings(string protocol, string provider, System.Collections.Generic.IEnumerable<PermissionRoleMap> mappings)
     {
         if (mappings == null)
@@ -192,6 +261,16 @@ internal static class ProviderConfigValidator
     // caught before it takes effect. A null entry maps nothing and is tolerated (it contributes nothing at
     // runtime). Both the config-page save and the Add endpoints run this. The provider name is control-
     // stripped in case it reaches a log through the thrown exception.
+
+    /// <summary>
+    /// Rejects a parental-rating mapping (#736) with a negative score or with no roles — the former is a
+    /// nonsensical ceiling, the latter would never apply. Both are caught at save so a mis-set is found
+    /// before it takes effect. A null mappings collection or a null entry maps nothing and is tolerated.
+    /// </summary>
+    /// <param name="protocol">The protocol label ("OpenID" or "SAML") echoed in the rejection message.</param>
+    /// <param name="provider">The provider name, echoed (line-ending-stripped) in the rejection message.</param>
+    /// <param name="mappings">The parental-rating mappings to check.</param>
+    /// <exception cref="ArgumentException">An entry has a negative score or lists no roles.</exception>
     internal static void ValidateParentalRatingMappings(string protocol, string provider, System.Collections.Generic.IEnumerable<ParentalRatingRoleMap> mappings)
     {
         if (mappings == null)
@@ -227,6 +306,16 @@ internal static class ProviderConfigValidator
     // challenge. On the config-page save the key is withheld from JSON so it arrives blank (valid) and the
     // stored one is re-injected afterwards; this rejects the case where a non-blank, unloadable key is
     // posted. Same inline line-ending strip as above.
+
+    /// <summary>
+    /// Rejects a service-provider request signing key (#167/#491) that is non-blank but not a loadable
+    /// unencrypted PKCS#12 blob, which would otherwise persist and fail every signed challenge. A blank
+    /// key is valid — a config-page save withholds the key from JSON, so it arrives blank and the stored
+    /// one is re-injected afterwards.
+    /// </summary>
+    /// <param name="provider">The provider name, echoed (line-ending-stripped) in the rejection message.</param>
+    /// <param name="signingKeyPfx">The Base64-encoded PKCS#12 (PFX) signing key to check.</param>
+    /// <exception cref="ArgumentException">The key is non-blank and not a loadable PFX with an RSA or ECDSA private key.</exception>
     internal static void ValidateSamlSigningKey(string provider, string signingKeyPfx)
     {
         if (SamlSigningKey.IsInvalid(signingKeyPfx))

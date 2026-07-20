@@ -12,6 +12,15 @@ internal static class ProviderScopedKey
 {
     // The newline separator cannot occur in a Guid-based AuthnRequest id, and both parts come from the
     // same trusted config/flow, so it partitions the key space by provider without collision.
+
+    /// <summary>
+    /// Forms the provider-scoped cache key <c>provider + "\n" + id</c>, so a one-time-use key issued under
+    /// one provider cannot be consumed on another's callback (#156, #219). A null or empty
+    /// <paramref name="id"/> passes through unchanged so the caller handles an absent correlation id itself.
+    /// </summary>
+    /// <param name="provider">The provider the key is scoped to.</param>
+    /// <param name="id">The correlation id (e.g. AuthnRequest id); null/empty returns unchanged.</param>
+    /// <returns>The scoped key, or the original null/empty id.</returns>
     internal static string? For(string provider, string? id) =>
         string.IsNullOrEmpty(id) ? id : provider + "\n" + id;
 }

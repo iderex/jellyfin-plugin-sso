@@ -65,6 +65,18 @@ internal abstract class AuthorizeSession
     /// </summary>
     internal sealed class Pending : AuthorizeSession
     {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="Pending"/> class, capturing everything the callback's
+        /// token exchange needs and nothing derived from an identity, so a Pending cannot mint a session.
+        /// </summary>
+        /// <param name="oidcState">The OidcClient authorize state (code_verifier, redirect URI); its <c>State</c> is the store key.</param>
+        /// <param name="provider">The provider the challenge was minted for.</param>
+        /// <param name="isLinking">Whether the challenge intends to link an account rather than authenticate.</param>
+        /// <param name="created">When the state was created, used to time it out.</param>
+        /// <param name="bindingId">The browser-binding id tying the state to the initiating browser.</param>
+        /// <param name="clientKey">The normalized client key whose per-client budget slot this state holds, or null for an exempt source.</param>
+        /// <param name="providerInformation">The challenge-time discovery metadata to reuse at the callback (#247), or null to rediscover.</param>
+        /// <param name="responseIssuerRequired">Whether the callback must require the RFC 9207 response <c>iss</c> (#210).</param>
         internal Pending(
             AuthorizeState oidcState,
             string provider,
@@ -105,6 +117,14 @@ internal abstract class AuthorizeSession
     /// </summary>
     internal sealed class Ready : AuthorizeSession
     {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="Ready"/> class from the peeked <paramref name="pending"/>
+        /// and the passed role-gate result, folding them into the one protocol-agnostic verified identity the
+        /// mint path is keyed on. Reachable only from <see cref="OidcStateStore.Promote"/>, so its existence is
+        /// evidence the role gate passed (#341, #473).
+        /// </summary>
+        /// <param name="pending">The pending state this Ready supersedes; its correlation fields are carried over.</param>
+        /// <param name="derived">The passed role-gate result snapshotted into the redeemable identity.</param>
         internal Ready(Pending pending, OidcAuthorizeStateBuilder.OidcAuthorizeState derived)
             : base(pending.Token, pending.Provider, pending.IsLinking, pending.BindingId, pending.ClientKey, pending.Created)
         {

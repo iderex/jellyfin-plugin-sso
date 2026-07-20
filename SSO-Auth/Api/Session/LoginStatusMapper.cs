@@ -42,6 +42,16 @@ internal static class LoginStatusMapper
     /// </summary>
     internal const string RateLimitedMessage = "Too many attempts. Please wait a moment and try again.";
 
+    /// <summary>
+    /// Translates a login outcome into its HTTP result, mapping success to the session body and each refusal
+    /// to its fail-closed public status/message. A <see cref="LoginOutcome.Throttled"/> cannot be rendered
+    /// here because it needs the response for its Retry-After header — it throws, forcing callers through the
+    /// response-aware overload — and an impossible case is a server fault that also throws (never a
+    /// default-accept).
+    /// </summary>
+    /// <param name="outcome">The login outcome to translate.</param>
+    /// <returns>The HTTP action result.</returns>
+    /// <exception cref="InvalidOperationException">The outcome is Throttled (needs the response) or an unmapped case.</exception>
     internal static ActionResult ToActionResult(LoginOutcome outcome) => outcome switch
     {
         LoginOutcome.Success success => new OkObjectResult(success.Session),

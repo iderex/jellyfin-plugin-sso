@@ -65,6 +65,16 @@ internal sealed class OidcLoginService
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger _logger;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="OidcLoginService"/> class, wiring the shared login
+    /// completion and account-linking collaborators plus the HTTP-client and logger factories the
+    /// token-exchange leg needs.
+    /// </summary>
+    /// <param name="loginCompletion">The shared post-validation login completion pipeline.</param>
+    /// <param name="canonicalLinks">The account-linking workflow used by the OID manual-link redeem.</param>
+    /// <param name="httpClientFactory">The factory for the token-endpoint client.</param>
+    /// <param name="loggerFactory">The factory for the underlying OIDC client's logger.</param>
+    /// <param name="logger">The service logger.</param>
     internal OidcLoginService(
         LoginCompletionService loginCompletion,
         CanonicalLinkService canonicalLinks,
@@ -91,6 +101,11 @@ internal sealed class OidcLoginService
     // Also resets the shared NewPath persist-throttle gate (#412 review follow-up, #670): SsoControllerHarness
     // calls this for every test, so a change persisted in one test can never throttle a genuine change in
     // the next one. The gate now lives on the shared ChallengeNewPathResolver, so the reset delegates there.
+
+    /// <summary>
+    /// Test-only. Clears the process-wide OpenID authorize-state store and resets the shared NewPath
+    /// persist-throttle gate so state does not leak into a sibling test in the same non-parallel collection.
+    /// </summary>
     internal static void ResetOidStateForTests()
     {
         StateStore.Clear();
@@ -101,6 +116,13 @@ internal sealed class OidcLoginService
     // (which consume an already-validated state that the browser redirect leg normally populates) without
     // standing up the full token-exchange flow. Same test-only surface as ResetOidStateForTests (internal,
     // InternalsVisibleTo, no endpoint/DI) — never reachable in production. Moved here with the statics (#160).
+
+    /// <summary>
+    /// Test-only. Seeds a single authorize-state entry so a test can exercise the callback/authenticate legs
+    /// without standing up the full token-exchange flow.
+    /// </summary>
+    /// <param name="token">The state token to key the seeded entry under.</param>
+    /// <param name="state">The authorize state to store (a Pending or a promoted Ready).</param>
     internal static void SeedOidStateForTests(string token, AuthorizeSession state) => StateStore.Seed(token, state);
 
     /// <summary>
@@ -530,6 +552,14 @@ internal sealed class OidcLoginService
     // anonymous challenge endpoint) or pads the scope string with null entries. Blank elements inside a
     // non-null array are dropped too, so a persisted null/empty/whitespace scope cannot inject a
     // doubled or trailing separator (#407). Shared by both sites.
+
+    /// <summary>
+    /// Builds the space-delimited OpenID scope string, always leading with the base "openid profile" and
+    /// dropping null/empty/whitespace entries so a persisted bad scope cannot inject a doubled or trailing
+    /// separator (#407) or throw on a provider stored without scopes (#368).
+    /// </summary>
+    /// <param name="config">The provider configuration whose <c>OidScopes</c> are appended.</param>
+    /// <returns>The normalized scope string.</returns>
     internal static string BuildScopeString(OidConfig config)
         => string.Join(" ", (config.OidScopes ?? Array.Empty<string>())
             .Where(s => !string.IsNullOrWhiteSpace(s))

@@ -52,6 +52,13 @@ internal sealed class SsoOnlyLoginService
     private readonly ProviderConfigStore _configStore;
     private readonly ILogger _logger;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SsoOnlyLoginService"/> class, wiring the user manager it
+    /// sweeps accounts through and the configuration store whose lock guards every read/write of the mode flags.
+    /// </summary>
+    /// <param name="userManager">The Jellyfin user manager used to enumerate and re-route accounts.</param>
+    /// <param name="configStore">The provider configuration store owning the SSO-only mode flags and their lock.</param>
+    /// <param name="logger">The logger.</param>
     internal SsoOnlyLoginService(IUserManager userManager, ProviderConfigStore configStore, ILogger logger)
     {
         _userManager = userManager ?? throw new ArgumentNullException(nameof(userManager));

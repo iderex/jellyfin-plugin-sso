@@ -29,6 +29,8 @@ internal sealed class SamlReplayCache
     // runs only after signature validation — but a defense-in-depth memory bound. The check-then-insert is
     // not serialized, so concurrent consumes can transiently overshoot by at most the number of in-flight
     // threads; immaterial against a best-effort backstop.
+
+    /// <summary>The production ceiling on retained consumed-assertion IDs; at the cap a new login is refused fail-closed, never a still-valid entry evicted.</summary>
     internal const int DefaultMaxEntries = 100_000;
 
     // The expired-entry sweep is an O(n) scan; throttling it to at most once per this interval matches the
@@ -55,6 +57,10 @@ internal sealed class SamlReplayCache
     // crosses a helper boundary; this cache only decides WHETHER to warn.
     private readonly IntervalGate _capWarnGate;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SamlReplayCache"/> class with the production cap and
+    /// prune interval.
+    /// </summary>
     internal SamlReplayCache()
         : this(DefaultMaxEntries, DefaultPruneInterval)
     {
@@ -62,6 +68,13 @@ internal sealed class SamlReplayCache
 
     // Test constructor: a small cap and short interval make the cap and prune-throttle paths reachable in
     // unit tests (the production values are unreachable there). IntervalGate rejects a non-positive interval.
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SamlReplayCache"/> class with explicit bounds, so a unit
+    /// test can reach the cap and prune-throttle paths the production values make unreachable.
+    /// </summary>
+    /// <param name="maxEntries">The global ceiling on retained consumed-assertion IDs.</param>
+    /// <param name="pruneInterval">The minimum interval between expired-entry sweeps.</param>
     internal SamlReplayCache(int maxEntries, TimeSpan pruneInterval)
     {
         _maxEntries = maxEntries;

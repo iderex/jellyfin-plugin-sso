@@ -82,6 +82,14 @@ internal static class SamlAssertionTime
         return true;
     }
 
+    /// <summary>
+    /// Parses a SAML xsd:dateTime condition bound to UTC using the faithful <see cref="XmlConvert"/> grammar,
+    /// failing closed (returning false) on any malformed value. Normalizes any offset to UTC and asserts the
+    /// resulting <see cref="DateTimeKind.Utc"/> so a bound is never compared in a mismatched kind (#677).
+    /// </summary>
+    /// <param name="raw">The raw xsd:dateTime string from the assertion; null fails closed.</param>
+    /// <param name="utc">On success, the parsed UTC instant; otherwise <c>default</c>.</param>
+    /// <returns>True if the value parsed to a UTC instant; false otherwise.</returns>
     internal static bool TryParseUtc(string? raw, out DateTime utc)
     {
         utc = default;

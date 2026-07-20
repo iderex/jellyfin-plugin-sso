@@ -23,6 +23,13 @@ internal sealed class KeyedLockStore
     // key identity: the avatar store passes Ordinal so the key is exactly the profile-path determinant.
     private readonly ConcurrentDictionary<string, Holder> _holders;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="KeyedLockStore"/> class. The comparer decides key
+    /// identity: the avatar store passes <see cref="StringComparer.Ordinal"/> so a key is exactly its
+    /// profile-path determinant.
+    /// </summary>
+    /// <param name="comparer">The comparer determining key identity.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="comparer"/> is null.</exception>
     internal KeyedLockStore(IEqualityComparer<string> comparer)
     {
         _holders = new ConcurrentDictionary<string, Holder>(comparer ?? throw new ArgumentNullException(nameof(comparer)));
