@@ -113,41 +113,25 @@ internal static class ServerManagedFields
         }
 
         incoming.CanonicalLinks = live.CanonicalLinks;
-        incoming.SamlSigningKeyPfx = ResolveUpdatedSigningKey(incoming, live);
-
-        // The rollover signing key (#491) is withheld from JSON exactly like the primary, so a config-page
-        // save arrives with it blank and must keep the stored value; a non-blank incoming value is an
-        // intentional rotation of the overlap key and wins. Same no-identity-guard reasoning as the primary.
-        incoming.SamlRolloverSigningKeyPfx = ResolveUpdatedRolloverSigningKey(incoming, live);
+        incoming.SamlSigningKeyPfx = PreserveSigningKeyIfBlank(incoming.SamlSigningKeyPfx, live.SamlSigningKeyPfx);
+        incoming.SamlRolloverSigningKeyPfx = PreserveSigningKeyIfBlank(incoming.SamlRolloverSigningKeyPfx, live.SamlRolloverSigningKeyPfx);
     }
 
     /// <summary>
-    /// Decides which service-provider signing key an updated SAML provider should keep (#167). A non-blank
-    /// incoming key is an explicit rotation and wins; a blank one keeps the stored key, so a config-page
-    /// save (which never carries the withheld key) does not wipe it. Unlike the OpenID client secret this
-    /// has no provider-identity guard: the key is never transmitted anywhere — it is used only to sign a
-    /// public AuthnRequest locally — so repointing the endpoint cannot exfiltrate it, and carrying it over
-    /// keeps a working signed-login provider from breaking on an unrelated edit.
+    /// Decides which service-provider signing key an updated SAML provider should keep — the one rule shared
+    /// by the primary key (#167) and the OPTIONAL rollover key (#491). A non-blank incoming key is an explicit
+    /// rotation and wins; a blank one keeps the stored key, so a config-page save (which never carries the
+    /// withheld keys) neither wipes the key nor silently ends a rollover overlap window. Unlike the OpenID
+    /// client secret these carry NO provider-identity guard: a signing key is never transmitted anywhere — it
+    /// signs a public AuthnRequest locally, and only its public certificate is ever published into metadata —
+    /// so repointing the endpoint cannot exfiltrate it, and carrying it over keeps a working signed-login
+    /// provider from breaking on an unrelated edit.
     /// </summary>
-    /// <param name="incoming">The provider config about to be persisted.</param>
-    /// <param name="live">The current live provider config.</param>
-    /// <returns>The signing key to persist for the updated provider.</returns>
-    internal static string ResolveUpdatedSigningKey(SamlConfig incoming, SamlConfig live)
-        => string.IsNullOrWhiteSpace(incoming.SamlSigningKeyPfx) ? live.SamlSigningKeyPfx : incoming.SamlSigningKeyPfx;
-
-    /// <summary>
-    /// Decides which OPTIONAL rollover signing key an updated SAML provider should keep (#491), the exact
-    /// same blank-keeps-stored / non-blank-rotates rule as <see cref="ResolveUpdatedSigningKey"/>: the
-    /// rollover key is withheld from JSON, so a config-page save arrives blank and must keep the stored
-    /// value rather than silently ending the overlap window, while an explicit non-blank value stages a new
-    /// overlap certificate. Like the primary it is never transmitted (publish-only, used to export its
-    /// public certificate into metadata), so it carries no provider-identity guard.
-    /// </summary>
-    /// <param name="incoming">The provider config about to be persisted.</param>
-    /// <param name="live">The current live provider config.</param>
-    /// <returns>The rollover signing key to persist for the updated provider.</returns>
-    internal static string ResolveUpdatedRolloverSigningKey(SamlConfig incoming, SamlConfig live)
-        => string.IsNullOrWhiteSpace(incoming.SamlRolloverSigningKeyPfx) ? live.SamlRolloverSigningKeyPfx : incoming.SamlRolloverSigningKeyPfx;
+    /// <param name="incoming">The key about to be persisted; blank when the save did not rotate it.</param>
+    /// <param name="live">The corresponding stored key.</param>
+    /// <returns>The incoming key when non-blank, otherwise the stored key.</returns>
+    private static string PreserveSigningKeyIfBlank(string incoming, string live)
+        => string.IsNullOrWhiteSpace(incoming) ? live : incoming;
 
     /// <summary>
     /// Decides which OpenID client secret an updated provider should keep (#189), the single rule
