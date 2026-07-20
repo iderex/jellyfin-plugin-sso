@@ -1,4 +1,7 @@
+#nullable enable
+
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -30,7 +33,7 @@ internal static class SecretEnvelope
     /// </summary>
     /// <param name="value">The stored value.</param>
     /// <returns>True when the value carries the envelope prefix.</returns>
-    internal static bool IsProtected(string value)
+    internal static bool IsProtected([NotNullWhen(true)] string? value)
         => value != null && value.StartsWith(Prefix, StringComparison.Ordinal);
 
     /// <summary>
@@ -41,7 +44,7 @@ internal static class SecretEnvelope
     /// </summary>
     /// <param name="value">The stored value.</param>
     /// <returns>True when the value is a structurally valid envelope.</returns>
-    internal static bool IsWellFormedEnvelope(string value)
+    internal static bool IsWellFormedEnvelope(string? value)
     {
         if (!IsProtected(value))
         {
@@ -147,7 +150,7 @@ internal static class SecretEnvelope
     /// <param name="value">The envelope string.</param>
     /// <param name="plaintext">The recovered plaintext when successful; otherwise null.</param>
     /// <returns>True when the value decrypted and its tag verified.</returns>
-    internal static bool TryUnprotect(byte[] key, string value, out string plaintext)
+    internal static bool TryUnprotect(byte[] key, string value, [NotNullWhen(true)] out string? plaintext)
     {
         try
         {

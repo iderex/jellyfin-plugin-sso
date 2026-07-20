@@ -1,3 +1,5 @@
+#nullable enable
+
 using Jellyfin.Database.Implementations.Enums;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api.Authz;
