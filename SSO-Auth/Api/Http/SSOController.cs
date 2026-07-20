@@ -592,12 +592,9 @@ public class SSOController : ControllerBase
     }
 
     /// <summary>
-    /// Serves this service provider's SAML 2.0 metadata for <paramref name="provider"/> (#162), so an
-    /// administrator can register the SP at the identity provider by URL instead of hand-configuring the
-    /// entity id, assertion-consumer URL and signing certificate. Anonymous by design — SP metadata is
-    /// public (a real identity provider fetches it unauthenticated) — and deliberately request-free: the
-    /// published entity id and ACS URL are built only from the provider's configured canonical Base URL,
-    /// never the request Host.
+    /// Serves this service provider's SAML 2.0 metadata for <paramref name="provider"/> (#162). The
+    /// request-free, canonical-Base-URL-only construction and its fail-closed rationale live on the single
+    /// authoritative implementation, <see cref="SamlLoginService.Metadata"/>.
     /// </summary>
     /// <param name="provider">The SAML provider whose metadata to serve.</param>
     /// <returns>The SP metadata document, or a fail-closed rejection when the provider is unknown/disabled or its canonical Base URL is unconfigured.</returns>

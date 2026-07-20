@@ -124,6 +124,7 @@ internal sealed class KeyedLockStore
             _holder = holder;
         }
 
+        /// <inheritdoc/>
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
