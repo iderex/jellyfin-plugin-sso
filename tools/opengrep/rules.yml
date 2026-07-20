@@ -125,13 +125,14 @@ rules:
       include:
         - "SSO-Auth/**/*.cs"
 
-  # Invariant (architecture, #318/#378 outbound policy): factory-based outbound
-  # HTTP clients are created only through SsoHttp.CreateClient, so the
-  # User-Agent and any future outbound policy (timeouts, headers) stay in one
-  # place. The SSRF-guarded avatar fetch is the documented exception and builds
-  # its own hardened SocketsHttpHandler (it never uses the factory). SsoHttp
-  # itself receives the factory as a parameter named `factory`, so the clean
-  # tree has zero findings for the controller-field pattern below.
+  # Invariant (architecture, #318/#378 outbound policy; SSRF #755): factory-based
+  # outbound HTTP clients are created only through SsoHttp.CreateClient, which
+  # resolves the SSRF-hardened named "sso-outbound" client, so the User-Agent and
+  # the transport-level SSRF guard stay in one place. The avatar fetch builds its
+  # own long-lived client but on SsoHttp.CreateHardenedHandler (the same shared
+  # guard), and never uses the factory. SsoHttp itself receives the factory as a
+  # parameter named `factory`, so the clean tree has zero findings for the
+  # controller-field pattern below.
   - id: no-raw-outbound-httpclient
     languages: [generic]
     severity: ERROR
