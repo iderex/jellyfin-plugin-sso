@@ -4,7 +4,6 @@ using System;
 using System.IO;
 using System.Net;
 using System.Net.Http;
-using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations.Entities;
@@ -364,77 +363,7 @@ internal sealed class AvatarService
     // deadline (see TrySetAsync), so this Timeout bounds only connect + header wait. Never disposed —
     // it lives for the process, the intended lifetime of a shared HttpClient.
     private static HttpClient CreateHardenedClient() =>
-        new HttpClient(CreateHardenedHandler(), disposeHandler: true) { Timeout = TimeSpan.FromSeconds(10) };
-
-    // The production handler: routes every connection (including redirect targets) through a callback
-    // that rejects private/loopback addresses, closing the SSRF and DNS-rebinding vectors. Redirects
-    // stay enabled (many avatar URLs redirect) but are bounded, each hop is IP-validated, and both the
-    // request and the download are bounded. Built once for the shared client above.
-    private static SocketsHttpHandler CreateHardenedHandler() => new SocketsHttpHandler
-    {
-        AllowAutoRedirect = true,
-        MaxAutomaticRedirections = 5,
-        ConnectCallback = ConnectToAllowedAddressAsync,
-
-        // A system proxy would be the connection target, so the connect callback would validate the
-        // proxy's address rather than the avatar host's - bypassing the guard.
-        UseProxy = false,
-
-        // The handler is reused across logins, so bound how long a pooled connection lives — after this
-        // the connection is recycled and the host re-resolved, so DNS changes are honored despite reuse.
-        PooledConnectionLifetime = TimeSpan.FromMinutes(2),
-    };
-
-    // Resolves the target host and connects only to a non-blocked (public) address, so a hostname that
-    // resolves to an internal address - including via DNS rebinding on a redirect hop - cannot be reached.
-    private static async ValueTask<Stream> ConnectToAllowedAddressAsync(SocketsHttpConnectionContext context, CancellationToken cancellationToken)
-    {
-        var addresses = await Dns.GetHostAddressesAsync(context.DnsEndPoint.Host, cancellationToken).ConfigureAwait(false);
-
-        // Try every non-blocked address in turn (a per-address connect fallback for dual-stack /
-        // multi-record hosts, since supplying a ConnectCallback replaces the handler's built-in one),
-        // connecting to the validated IP rather than the hostname so a DNS rebind cannot redirect the
-        // connection to an internal address.
-        Exception? lastError = null;
-        var attempted = false;
-        foreach (var address in addresses)
-        {
-            if (IpAddressClassifier.IsBlockedAddress(address))
-            {
-                continue;
-            }
-
-            attempted = true;
-            var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
-            var connected = false;
-            try
-            {
-                await socket.ConnectAsync(address, context.DnsEndPoint.Port, cancellationToken).ConfigureAwait(false);
-                connected = true;
-                return new NetworkStream(socket, ownsSocket: true);
-            }
-            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
-            {
-                lastError = ex;
-            }
-            finally
-            {
-                // Dispose unless ownership passed to the returned NetworkStream. Runs on the
-                // cancellation path too, where the catch filter is skipped and the socket would leak.
-                if (!connected)
-                {
-                    socket.Dispose();
-                }
-            }
-        }
-
-        if (attempted)
-        {
-            throw new HttpRequestException("Could not connect to any allowed address for the avatar host.", lastError);
-        }
-
-        throw new HttpRequestException("Avatar host resolves only to blocked addresses.");
-    }
+        new HttpClient(SsoHttp.CreateHardenedHandler(), disposeHandler: true) { Timeout = TimeSpan.FromSeconds(10) };
 
     // Copies the response body into memory, aborting if it exceeds the cap, so a hostile endpoint cannot
     // exhaust resources with an unbounded (or Content-Length-lying) download. Internal so the streamed
