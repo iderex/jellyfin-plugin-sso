@@ -87,7 +87,7 @@ internal static class SessionLogoutStore
     /// <param name="sessionIndex">The SessionIndex to match, or blank to match every session for the subject.</param>
     /// <returns>The matching (sessionKey, state) pairs.</returns>
     internal static IReadOnlyList<KeyValuePair<string, LogoutSession>> FindByProviderSubject(
-        PluginConfiguration configuration, string provider, string subject, string sessionIndex)
+        PluginConfiguration configuration, string provider, string? subject, string sessionIndex)
     {
         ArgumentNullException.ThrowIfNull(configuration);
 
