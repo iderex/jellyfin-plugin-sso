@@ -330,6 +330,45 @@
                 are required.
               </p>
 
+              <!--
+                Start from a template (#726): a NON-persisting picker (no marker class, so it is never
+                saved and the conformance scan ignores it). Choosing a provider pre-fills only the
+                non-secret provider-specific fields (scopes, role-claim path, username claim, an endpoint
+                PLACEHOLDER) and pre-checks only the compatibility toggles that identity provider genuinely
+                needs. It never fills a secret and never auto-saves; any pre-enabled insecure/compatibility
+                toggle surfaces in the auto-expanded danger zone. The options are populated from
+                OIDC_PRESETS in config.js so the catalog is the single source of truth.
+              -->
+              <div class="inputContainer sso-preset-picker">
+                <label class="inputLabel inputLabelUnfocused" for="OidPreset"
+                  >Start from a template
+                  <span class="sso-optional">(optional)</span></label
+                >
+                <select
+                  is="emby-select"
+                  id="OidPreset"
+                  name="OidPreset"
+                  class="emby-select-withcolor emby-select"
+                >
+                  <option value="">
+                    &mdash; Choose a provider template &mdash;
+                  </option>
+                </select>
+                <div
+                  id="OidPreset-note"
+                  class="sso-preset-note fieldDescription"
+                  role="status"
+                  aria-live="polite"
+                ></div>
+                <div class="fieldDescription">
+                  Pre-fills the scopes, role-claim path, username claim, and an
+                  endpoint placeholder for a known identity provider, and
+                  enables only the compatibility options it needs. Review every
+                  field &mdash; especially the endpoint &mdash; and enter your
+                  client secret before saving. Nothing is saved automatically.
+                </div>
+              </div>
+
               <!-- Section 1: Connection -->
               <div
                 is="emby-collapse"
@@ -1624,6 +1663,40 @@
                 <span class="sso-required" aria-hidden="true">*</span>
                 are required.
               </p>
+
+              <!--
+                Start from a template (#726) — the SAML counterpart of the OpenID picker above.
+                Non-persisting (no marker class); options populated from SAML_PRESETS in config.js.
+                Pre-fills only the non-secret endpoint placeholder; never a signing key, never auto-saves.
+              -->
+              <div class="inputContainer sso-preset-picker">
+                <label class="inputLabel inputLabelUnfocused" for="saml-Preset"
+                  >Start from a template
+                  <span class="sso-optional">(optional)</span></label
+                >
+                <select
+                  is="emby-select"
+                  id="saml-Preset"
+                  name="saml-Preset"
+                  class="emby-select-withcolor emby-select"
+                >
+                  <option value="">
+                    &mdash; Choose a provider template &mdash;
+                  </option>
+                </select>
+                <div
+                  id="saml-Preset-note"
+                  class="sso-preset-note fieldDescription"
+                  role="status"
+                  aria-live="polite"
+                ></div>
+                <div class="fieldDescription">
+                  Pre-fills an endpoint placeholder for a SAML identity
+                  provider. Use the metadata import below to fill the endpoint
+                  and signing certificate from your IdP, then review and save.
+                  Nothing is saved automatically.
+                </div>
+              </div>
 
               <!-- SAML Section 1: Connection -->
               <div

@@ -316,6 +316,20 @@
   min-height: 4em;
 }
 
+/* Provider template picker (#726): a prominent "start from a template" entry point at the top of each
+   editor. Grouped like the metadata-import block; the note shows the selected preset's assumptions. */
+.sso-preset-picker {
+  margin-bottom: 1em;
+  padding: 0.75em 1em;
+  border: 1px solid rgba(255, 255, 255, 0.135);
+  border-radius: 0.25em;
+}
+
+.sso-preset-note:not(:empty) {
+  margin-top: 0.4em;
+  font-style: italic;
+}
+
 /* Callout (promotes the former inline-red BaseUrlOverride warning) */
 .sso-callout {
   margin-top: 0.5em;

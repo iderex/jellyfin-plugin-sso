@@ -1,3 +1,150 @@
+// Provider templates (#726) — the single source of truth for the "Start from a template" pickers.
+// Applying a preset writes ONLY into existing marker-classed fields by their id (OpenID: the property
+// name; SAML: "saml-" + the property name) and pre-checks ONLY the compatibility toggles a given IdP
+// genuinely needs. Presets are plain data so they are trivial to extend and to lock in with a fitness
+// test (ProviderPresets_* in ArchitectureConformanceTests): every `fields` key / `toggles` entry must be
+// a real config property, no preset may fill a secret, and toggles may only pre-check a known
+// compatibility toggle. `fields` values are non-secret placeholders — endpoints use an example host and
+// UPPERCASE tokens the admin replaces (realm/tenant/domain), never a hard-coded production host, so they
+// never go stale. OidScopes holds the ADDITIONAL scopes only (one per line) — the server always prepends
+// "openid profile", so a preset lists just what a provider needs on top (e.g. "email", or "email\ngroups"
+// where roles ride a groups scope), never "openid"/"profile" again. Every OpenID preset sets the SAME four
+// fields (blank where a provider has none), so switching templates is idempotent — no stale value survives;
+// ProviderPresets_OidcPresetsShareTheSameFieldKeySet locks that shared-key-set invariant in.
+const OIDC_PRESETS = {
+  keycloak: {
+    label: "Keycloak",
+    note: "Keycloak realm client with the default mappers. Roles come from realm_access.roles (or resource_access.<clientId>.roles for client roles). Replace YOUR_REALM in the endpoint.",
+    fields: {
+      OidEndpoint:
+        "https://keycloak.example.com/realms/YOUR_REALM/.well-known/openid-configuration",
+      OidScopes: "email",
+      RoleClaim: "realm_access.roles",
+      DefaultUsernameClaim: "preferred_username",
+    },
+    toggles: [],
+  },
+  authelia: {
+    label: "Authelia",
+    note: "Authelia OpenID Connect provider. Groups are exposed via the `groups` claim (add the `groups` scope in Authelia). Pushed Authorization Requests are disabled here because some Authelia versions do not support them.",
+    fields: {
+      OidEndpoint: "https://auth.example.com/.well-known/openid-configuration",
+      OidScopes: "email\ngroups",
+      RoleClaim: "groups",
+      DefaultUsernameClaim: "preferred_username",
+    },
+    toggles: ["DisablePushedAuthorization"],
+  },
+  authentik: {
+    label: "Authentik",
+    note: "Authentik OAuth2/OpenID provider application. Groups are exposed via the `groups` claim. Replace YOUR_APP_SLUG in the endpoint with the application slug.",
+    fields: {
+      OidEndpoint:
+        "https://authentik.example.com/application/o/YOUR_APP_SLUG/.well-known/openid-configuration",
+      OidScopes: "email",
+      RoleClaim: "groups",
+      DefaultUsernameClaim: "preferred_username",
+    },
+    toggles: [],
+  },
+  entra: {
+    label: "Microsoft Entra ID (Azure AD)",
+    note: "Entra ID app registration. App roles come from the `roles` claim (assign them under the app registration). Replace YOUR_TENANT_ID in the endpoint.",
+    fields: {
+      OidEndpoint:
+        "https://login.microsoftonline.com/YOUR_TENANT_ID/v2.0/.well-known/openid-configuration",
+      OidScopes: "email",
+      RoleClaim: "roles",
+      DefaultUsernameClaim: "preferred_username",
+    },
+    toggles: [],
+  },
+  google: {
+    label: "Google",
+    note: "Google issues no group or role claim, so Roles is left blank — grant access with folder/role mapping or leave it open. Endpoint validation is relaxed because Google's discovery document does not list every endpoint the strict check expects.",
+    fields: {
+      OidEndpoint:
+        "https://accounts.google.com/.well-known/openid-configuration",
+      OidScopes: "email",
+      RoleClaim: "",
+      DefaultUsernameClaim: "email",
+    },
+    toggles: ["DoNotValidateEndpoints"],
+  },
+  auth0: {
+    label: "Auth0",
+    note: "Auth0 application. Roles require a custom claim added by an Auth0 Action/Rule under a namespace you choose — set RoleClaim to that namespaced claim (e.g. https://your-app/roles). Replace YOUR_TENANT in the endpoint.",
+    fields: {
+      OidEndpoint:
+        "https://YOUR_TENANT.us.auth0.com/.well-known/openid-configuration",
+      OidScopes: "email",
+      RoleClaim: "",
+      DefaultUsernameClaim: "nickname",
+    },
+    toggles: [],
+  },
+  okta: {
+    label: "Okta",
+    note: "Okta OIDC app. Groups come from the `groups` claim (add a groups claim + the `groups` scope in the Okta authorization server). Replace YOUR_DOMAIN in the endpoint.",
+    fields: {
+      OidEndpoint:
+        "https://YOUR_DOMAIN.okta.com/.well-known/openid-configuration",
+      OidScopes: "email\ngroups",
+      RoleClaim: "groups",
+      DefaultUsernameClaim: "preferred_username",
+    },
+    toggles: [],
+  },
+  gitlab: {
+    label: "GitLab",
+    note: "GitLab as an OpenID provider. Direct group paths come from the `groups_direct` claim. For self-managed GitLab, replace gitlab.com in the endpoint with your host.",
+    fields: {
+      OidEndpoint: "https://gitlab.com/.well-known/openid-configuration",
+      OidScopes: "email",
+      RoleClaim: "groups_direct",
+      DefaultUsernameClaim: "preferred_username",
+    },
+    toggles: [],
+  },
+  "generic-oidc": {
+    label: "Generic OpenID Connect",
+    note: "A standards-compliant OpenID provider. Point the endpoint at its discovery document and set the role claim to whatever your IdP issues (often `groups` or `roles`).",
+    fields: {
+      OidEndpoint: "https://idp.example.com/.well-known/openid-configuration",
+      OidScopes: "email",
+      RoleClaim: "",
+      DefaultUsernameClaim: "preferred_username",
+    },
+    toggles: [],
+  },
+};
+
+const SAML_PRESETS = {
+  "generic-saml": {
+    label: "Generic SAML 2.0",
+    note: "A generic SAML 2.0 identity provider. Use the metadata import below to fill the SSO endpoint and signing certificate from your IdP's metadata, then set the SAML Client ID (this service provider's entity id) and review before saving.",
+    fields: {
+      SamlEndpoint: "https://idp.example.com/sso/saml",
+    },
+    toggles: [],
+  },
+};
+
+// The compatibility/insecure toggles a preset is ALLOWED to pre-check. A preset never pre-checks a
+// fail-closed HARDENING toggle (RequirePkce, RequireVerifiedEmail*, RequireAcr, SAML ValidateRecipient/
+// ValidateInResponseTo/SignAuthnRequests) — enabling those is a deliberate admin decision, and silently
+// turning them on could lock out a not-yet-ready IdP. This set is also what applyOidcPreset/applySamlPreset
+// clear before applying, so switching templates never leaves a previous preset's toggle checked.
+const OIDC_PRESET_MANAGED_TOGGLES = [
+  "DisablePushedAuthorization",
+  "DoNotValidateEndpoints",
+  "DoNotValidateIssuerName",
+  "DoNotValidateResponseIssuer",
+  "DisableHttps",
+  "DoNotLoadProfile",
+];
+const SAML_PRESET_MANAGED_TOGGLES = ["DoNotValidateAudience"];
+
 const ssoConfigurationPage = {
   pluginUniqueId: "505ce9d1-d916-42fa-86ca-673ef241d7df",
   // Toggles that disable an OpenID Connect security defense. An active one is a downgrade the admin must
@@ -188,6 +335,12 @@ const ssoConfigurationPage = {
     ssoConfigurationPage.syncDependentFields(page);
     // Clear the computed redirect URI back to its placeholder for the fresh/blank editor (#724).
     ssoConfigurationPage.updateRedirectUri(page);
+    // Reset the template picker + its note so opening/adding a provider never shows a stale template (#726).
+    const oidPreset = page.querySelector("#OidPreset");
+    if (oidPreset) {
+      oidPreset.value = "";
+    }
+    ssoConfigurationPage.renderPresetNote(page, "OidPreset-note", "");
   },
   // Return every accordion section INSIDE the editor to its authored default collapse state (the sections
   // with data-expanded="true" open, the rest — including "Security & hardening" — collapsed). Scoped to
@@ -1055,6 +1208,107 @@ const ssoConfigurationPage = {
     view.appendChild(style);
   },
 
+  // ---- Provider templates (#726) ----
+  // Fill a preset picker's options from its catalog (createElement/textContent — the labels are our own
+  // fixed strings, but building them inertly keeps the one-DOM-construction idiom). The leading blank
+  // "Choose a template" option authored in the HTML is preserved.
+  populatePresetPicker: (page, selectId, presets) => {
+    const select = page.querySelector("#" + selectId);
+    if (!select) {
+      return;
+    }
+    Object.keys(presets).forEach((key) => {
+      const option = document.createElement("option");
+      option.value = key;
+      option.textContent = presets[key].label;
+      select.appendChild(option);
+    });
+  },
+  renderPresetNote: (page, noteId, message) => {
+    const box = page.querySelector("#" + noteId);
+    if (box) {
+      box.textContent = message || "";
+    }
+  },
+  // Apply an OpenID preset onto the editor. Writes ONLY into existing marker-classed fields by their id
+  // (every field key is a real OidConfig property, pinned by ProviderPresets_ReferenceOnlyRealOidcProperties)
+  // and pre-checks ONLY the listed compatibility toggles. It first clears every preset-managed toggle so
+  // switching templates cannot leave a previous preset's toggle checked, never touches the secret, and
+  // never saves. syncDependentFields then surfaces any pre-enabled insecure toggle in the auto-expanded
+  // danger zone. The provider name and client secret the admin may have typed are left untouched.
+  applyOidcPreset: (page, key) => {
+    OIDC_PRESET_MANAGED_TOGGLES.forEach((prop) => {
+      const el = page.querySelector("#" + prop);
+      if (el) {
+        el.checked = false;
+      }
+    });
+
+    const preset = OIDC_PRESETS[key];
+    if (!preset) {
+      // The blank "choose a template" option: clear the note and re-sync (so a just-cleared toggle
+      // collapses its danger-zone surfacing) without altering the admin's fields.
+      ssoConfigurationPage.renderPresetNote(page, "OidPreset-note", "");
+      ssoConfigurationPage.syncDependentFields(page);
+      return;
+    }
+
+    Object.keys(preset.fields).forEach((prop) => {
+      const el = page.querySelector("#" + prop);
+      if (el) {
+        el.value = preset.fields[prop];
+      }
+    });
+    preset.toggles.forEach((prop) => {
+      const el = page.querySelector("#" + prop);
+      if (el) {
+        el.checked = true;
+      }
+    });
+
+    ssoConfigurationPage.syncDependentFields(page);
+    ssoConfigurationPage.updateRedirectUri(page);
+    ssoConfigurationPage.renderPresetNote(page, "OidPreset-note", preset.note);
+  },
+  // The SAML counterpart. Field ids are "saml-" + the SamlConfig property; toggles likewise. Same
+  // clear-then-apply discipline, and syncSamlDependentFields surfaces a pre-enabled insecure toggle.
+  applySamlPreset: (page, key) => {
+    SAML_PRESET_MANAGED_TOGGLES.forEach((prop) => {
+      const el = page.querySelector("#saml-" + prop);
+      if (el) {
+        el.checked = false;
+      }
+    });
+
+    const preset = SAML_PRESETS[key];
+    if (!preset) {
+      ssoConfigurationPage.renderPresetNote(page, "saml-Preset-note", "");
+      ssoConfigurationPage.syncSamlDependentFields(page);
+      return;
+    }
+
+    Object.keys(preset.fields).forEach((prop) => {
+      const el = page.querySelector("#saml-" + prop);
+      if (el) {
+        el.value = preset.fields[prop];
+      }
+    });
+    preset.toggles.forEach((prop) => {
+      const el = page.querySelector("#saml-" + prop);
+      if (el) {
+        el.checked = true;
+      }
+    });
+
+    ssoConfigurationPage.syncSamlDependentFields(page);
+    ssoConfigurationPage.updateSamlUrls(page);
+    ssoConfigurationPage.renderPresetNote(
+      page,
+      "saml-Preset-note",
+      preset.note,
+    );
+  },
+
   // ============================================================================
   // SAML provider workspace (#725)
   // ----------------------------------------------------------------------------
@@ -1205,6 +1459,12 @@ const ssoConfigurationPage = {
     ssoConfigurationPage.resetSamlEditorSections(page);
     ssoConfigurationPage.syncSamlDependentFields(page);
     ssoConfigurationPage.updateSamlUrls(page);
+    // Reset the template picker + its note so opening/adding a provider never shows a stale template (#726).
+    const samlPreset = page.querySelector("#saml-Preset");
+    if (samlPreset) {
+      samlPreset.value = "";
+    }
+    ssoConfigurationPage.renderPresetNote(page, "saml-Preset-note", "");
   },
   // Return every accordion INSIDE the SAML editor to its authored default; scoped to #saml-editor so the
   // OpenID editor and the page-level collapses are untouched.
@@ -2176,4 +2436,14 @@ export default function initSsoConfigurationPage(view) {
 
   // Populate the computed URLs once at init (blank editor shows the placeholders until a name is typed).
   ssoConfigurationPage.updateSamlUrls(view);
+
+  // ---- Provider template pickers (#726) ----
+  ssoConfigurationPage.populatePresetPicker(view, "OidPreset", OIDC_PRESETS);
+  ssoConfigurationPage.populatePresetPicker(view, "saml-Preset", SAML_PRESETS);
+  view.querySelector("#OidPreset").addEventListener("change", (e) => {
+    ssoConfigurationPage.applyOidcPreset(view, e.target.value);
+  });
+  view.querySelector("#saml-Preset").addEventListener("change", (e) => {
+    ssoConfigurationPage.applySamlPreset(view, e.target.value);
+  });
 }
