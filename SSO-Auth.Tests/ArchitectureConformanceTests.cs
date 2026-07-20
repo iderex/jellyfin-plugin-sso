@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Jellyfin.Plugin.SSO_Auth.Api.Routing;
 using Jellyfin.Plugin.SSO_Auth;
 using Jellyfin.Plugin.SSO_Auth.Api.Session;
 using Jellyfin.Plugin.SSO_Auth.Api.Identity;
@@ -199,10 +200,11 @@ public class ArchitectureConformanceTests
     [InlineData("Avatar", "Net", "RateLimit")] // avatar fetch — validates targets through the Net SSRF classifier, per-user store locks via KeyedLockStore (RateLimit)
     [InlineData("RateLimit", "Net")] // login throttling — keys buckets by the Net client-IP classifier
     [InlineData("Authz")] // leaf — role→permission mapping: PermissionGrant, PermissionRolePolicy, RolePrivilegeMapper
+    [InlineData("Routing")] // leaf — the plugin's route-shape contract: RouteSuffix ({protocol}/{path-kind}/{provider} reader), ChallengePath (new/legacy classifier)
     [InlineData("Provider", "Net", "RateLimit")] // provider config/test/naming — validates URLs (Net) and keys throttles (RateLimit)
     [InlineData("Linking", "Audit", "Provider", "RateLimit")] // account linking — audits writes, validates providers, throttles
     [InlineData("Saml", "Authz", "Identity", "RateLimit", "Session")] // SAML core/validators — mints the keystone (Identity), returns login outcomes (Session), maps roles (Authz), throttles (RateLimit)
-    [InlineData("Oidc", "Authz", "Avatar", "Identity", "Net", "Provider", "RateLimit")] // OIDC flow — mints the keystone (Identity), orchestrates roles, avatar, net, provider, throttle
+    [InlineData("Oidc", "Authz", "Avatar", "Identity", "Net", "Provider", "RateLimit", "Routing")] // OIDC flow — mints the keystone (Identity), orchestrates roles, avatar, net, provider, throttle; reads its callback path through the Routing suffix reader
     [InlineData("Identity", "Authz", "Provider")] // the identity keystone — grants (Authz) + link mode (Provider); decoupled from the protocols by #790
     [InlineData("Session", "Authz", "Avatar", "Linking")] // session mint + login outcomes — applies grants (Authz), sets avatars (Avatar), reconciles links (Linking)
     public void ApiModule_ImportsOnlyItsAllowedApiModules(string module, params string[] allowed)

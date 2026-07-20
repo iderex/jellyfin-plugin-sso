@@ -2,7 +2,7 @@ using System;
 
 #nullable enable
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Routing;
 
 /// <summary>
 /// Decides whether a challenge arrived on the "new", descriptive route

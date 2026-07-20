@@ -1,6 +1,6 @@
 #nullable enable
 
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Routing;
 
 /// <summary>
 /// The trailing <c>{protocol}/{path-kind}/{provider}</c> suffix that both <see cref="ChallengePath"/>
