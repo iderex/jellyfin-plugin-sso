@@ -41,6 +41,7 @@ longer a flat `Api` core to import (see _The kernel is dissolved_ below).
 | `Audit`     | Append-only SSO audit logging                                                       | — (leaf)                                                                                            |
 | `Authz`     | Role → permission mapping                                                           | — (leaf)                                                                                            |
 | `Routing`   | Route-shape contract (suffix reader, path classifier)                               | — (leaf)                                                                                            |
+| `Crypto`    | Shared asymmetric signing-key strength policy (min RSA bits / approved EC curves)   | — (leaf)                                                                                            |
 | `Avatar`    | Avatar fetch + SSRF-gated validation                                                | `Net`, `RateLimit`                                                                                  |
 | `RateLimit` | Login throttling (buckets, gates, keys)                                             | `Net`                                                                                               |
 | `Provider`  | Provider config / naming / test-result                                              | `Net`, `RateLimit`                                                                                  |

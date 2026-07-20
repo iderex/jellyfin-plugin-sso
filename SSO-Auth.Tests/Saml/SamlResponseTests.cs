@@ -35,6 +35,17 @@ public class SamlResponseTests
     }
 
     [Fact]
+    public void IsValid_ResponseSignedByUnderStrengthKey_ReturnsFalse()
+    {
+        // #733 end-to-end: a response correctly signed by an RSA-1024 certificate must fail validation —
+        // the under-strength candidate is skipped before CheckSignature, so no trusted key verifies it and
+        // IsValid fails closed exactly as for a wrong key. The 2048-bit baseline above proves this rejects
+        // on key strength, not on a broken signature.
+        var fixture = SamlTestFactory.Create(signingKeyBits: 1024);
+        Assert.False(Load(fixture).IsValid());
+    }
+
+    [Fact]
     public void GetRecipient_And_GetInResponseTo_ReadFromSignedAssertion()
     {
         // Recipient and InResponseTo live inside the assertion, so they are covered even when only

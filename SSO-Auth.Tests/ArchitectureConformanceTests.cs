@@ -201,10 +201,11 @@ public class ArchitectureConformanceTests
     [InlineData("RateLimit", "Net")] // login throttling — keys buckets by the Net client-IP classifier
     [InlineData("Authz")] // leaf — role→permission mapping: PermissionGrant, PermissionRolePolicy, RolePrivilegeMapper
     [InlineData("Routing")] // leaf — the plugin's route-shape contract: RouteSuffix ({protocol}/{path-kind}/{provider} reader), ChallengePath (new/legacy classifier)
+    [InlineData("Crypto")] // leaf — the shared asymmetric signing-key strength policy (min RSA bits / approved EC curves), referenced by both protocol paths so they cannot drift (#733)
     [InlineData("Provider", "Net", "RateLimit")] // provider config/test/naming — validates URLs (Net) and keys throttles (RateLimit)
     [InlineData("Linking", "Audit", "Provider", "RateLimit")] // account linking — audits writes, validates providers, throttles
-    [InlineData("Saml", "Authz", "Identity", "RateLimit", "Session")] // SAML core/validators — mints the keystone (Identity), returns login outcomes (Session), maps roles (Authz), throttles (RateLimit)
-    [InlineData("Oidc", "Authz", "Avatar", "Identity", "Net", "Provider", "RateLimit", "Routing")] // OIDC flow — mints the keystone (Identity), orchestrates roles, avatar, net, provider, throttle; reads its callback path through the Routing suffix reader
+    [InlineData("Saml", "Authz", "Crypto", "Identity", "RateLimit", "Session")] // SAML core/validators — mints the keystone (Identity), returns login outcomes (Session), maps roles (Authz), throttles (RateLimit), enforces the signing-key floor (Crypto)
+    [InlineData("Oidc", "Authz", "Avatar", "Crypto", "Identity", "Net", "Provider", "RateLimit", "Routing")] // OIDC flow — mints the keystone (Identity), orchestrates roles, avatar, net, provider, throttle; reads its callback path through the Routing suffix reader; enforces the signing-key floor (Crypto)
     [InlineData("Identity", "Authz", "Provider")] // the identity keystone — grants (Authz) + link mode (Provider); decoupled from the protocols by #790
     [InlineData("Session", "Authz", "Avatar", "Linking")] // session mint + login outcomes — applies grants (Authz), sets avatars (Avatar), reconciles links (Linking)
     [InlineData("Shared", "Avatar", "Linking", "RateLimit", "Routing", "Session")] // shared served-page / flow-response + rate-limit-gate helpers — depend downward on the session/linking/avatar/throttle/route tiers, never on a protocol or the boundary

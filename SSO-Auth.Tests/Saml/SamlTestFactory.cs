@@ -44,6 +44,7 @@ internal static class SamlTestFactory
     /// <param name="audiences">When set, emits a Conditions/AudienceRestriction with these Audiences (overrides audience).</param>
     /// <param name="scope">Which element to sign.</param>
     /// <param name="signWithSha1">When true, sign with RSA-SHA1/SHA1 digest (for weak-algorithm tests).</param>
+    /// <param name="signingKeyBits">RSA signing-key size in bits; defaults to 2048. Set below the floor (e.g. 1024) for the minimum signing-key-strength tests (#733).</param>
     /// <returns>A fixture exposing the certificate and the signed document.</returns>
     internal static SamlFixture Create(
         string nameId = "alice",
@@ -66,7 +67,8 @@ internal static class SamlTestFactory
         string? subjectConfirmationMethod = "urn:oasis:names:tc:SAML:2.0:cm:bearer",
         string[][]? audienceRestrictions = null,
         DateTimeOffset? certNotBefore = null,
-        DateTimeOffset? certNotAfter = null)
+        DateTimeOffset? certNotAfter = null,
+        int signingKeyBits = 2048)
     {
         var audienceList = audiences ?? (audience == null ? null : new[] { audience });
         const string TimeFormat = "yyyy-MM-ddTHH:mm:ssZ";
@@ -77,7 +79,10 @@ internal static class SamlTestFactory
         // not-yet-valid) certificate; signing uses the private key and is unaffected by these dates, so the
         // fixture stays a real, correctly-signed response whose acceptance turns solely on the validator's
         // certificate-expiry gate.
-        using var rsa = RSA.Create(2048);
+        // Default 2048; overridable so the minimum signing-key-strength floor (#733) can be exercised
+        // end-to-end with an under-strength (e.g. 1024-bit) signing key. Signing itself works at any size —
+        // acceptance turns solely on the validator's strength gate.
+        using var rsa = RSA.Create(signingKeyBits);
         var request = new CertificateRequest("CN=Test SAML IdP", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         var certificate = request.CreateSelfSigned(
             certNotBefore ?? DateTimeOffset.UtcNow.AddDays(-1),

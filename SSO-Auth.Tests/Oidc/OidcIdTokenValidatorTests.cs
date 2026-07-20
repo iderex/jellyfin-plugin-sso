@@ -264,6 +264,50 @@ public sealed class OidcIdTokenValidatorTests : IDisposable
     }
 
     [Fact]
+    public async Task UnderStrengthRsaKeyInJwks_IsSkipped_LoginFailsClosed()
+    {
+        // #733: an RSA JWKS key below the 2048-bit floor is as forgeable as a broken key — it is skipped
+        // exactly like malformed material, so a token SIGNED by that weak key has no usable key to resolve
+        // against and the login fails closed via the key-not-found ("invalid_signature") path.
+        using var weakRsa = RSA.Create(1024);
+        var p = weakRsa.ExportParameters(false);
+        var options = Options(jwks: $$"""
+            {"keys":[{"kty":"RSA","use":"sig","kid":"{{KeyId}}",
+              "n":"{{Base64UrlEncoder.Encode(p.Modulus)}}","e":"{{Base64UrlEncoder.Encode(p.Exponent)}}"}]}
+            """);
+        var descriptor = Descriptor();
+        descriptor.SigningCredentials = new SigningCredentials(
+            new RsaSecurityKey(weakRsa) { KeyId = KeyId }, SecurityAlgorithms.RsaSha256);
+        var token = new JsonWebTokenHandler().CreateToken(descriptor);
+
+        var result = await _validator.ValidateAsync(token, options, TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsError);
+        Assert.Equal("invalid_signature", result.Error);
+    }
+
+    [Fact]
+    public async Task UnderStrengthRsaKeyInSet_IsSkipped_GoodKeyStillValidates()
+    {
+        // #733 sits alongside the malformed-key skip: a weak RSA key advertised next to a good one must be
+        // dropped without taking down a login the good (>= 2048-bit) key can validate.
+        using var weakRsa = RSA.Create(1024);
+        var weak = weakRsa.ExportParameters(false);
+        var good = _rsa.ExportParameters(false);
+        var options = Options(jwks: $$"""
+            {"keys":[
+              {"kty":"RSA","use":"sig","kid":"weak-1024",
+               "n":"{{Base64UrlEncoder.Encode(weak.Modulus)}}","e":"{{Base64UrlEncoder.Encode(weak.Exponent)}}"},
+              {"kty":"RSA","use":"sig","kid":"{{KeyId}}",
+               "n":"{{Base64UrlEncoder.Encode(good.Modulus)}}","e":"{{Base64UrlEncoder.Encode(good.Exponent)}}"}]}
+            """);
+
+        var result = await _validator.ValidateAsync(CreateToken(), options, TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsError, result.Error);
+    }
+
+    [Fact]
     public async Task MalformedKeyInSet_IsSkipped_GoodKeyStillValidates()
     {
         // One broken advertised key must not take down logins signed by the good one.
