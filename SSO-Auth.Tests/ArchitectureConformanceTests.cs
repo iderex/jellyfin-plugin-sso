@@ -202,6 +202,8 @@ public class ArchitectureConformanceTests
     [InlineData("Authz")] // leaf — role→permission mapping: PermissionGrant, PermissionRolePolicy, RolePrivilegeMapper
     [InlineData("Routing")] // leaf — the plugin's route-shape contract: RouteSuffix ({protocol}/{path-kind}/{provider} reader), ChallengePath (new/legacy classifier)
     [InlineData("Crypto")] // leaf — the shared asymmetric signing-key strength policy (min RSA bits / approved EC curves), referenced by both protocol paths so they cannot drift (#733)
+    [InlineData("LoginButtons")] // leaf — login-page button rendering (#722): pure injector/builder over the config + a branding-sync hosted service; imports no other Api module
+
     [InlineData("Provider", "Net", "RateLimit")] // provider config/test/naming — validates URLs (Net) and keys throttles (RateLimit)
     [InlineData("Linking", "Audit", "Provider", "RateLimit")] // account linking — audits writes, validates providers, throttles
     [InlineData("Saml", "Authz", "Crypto", "Identity", "RateLimit", "Session")] // SAML core/validators — mints the keystone (Identity), returns login outcomes (Session), maps roles (Authz), throttles (RateLimit), enforces the signing-key floor (Crypto)
