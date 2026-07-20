@@ -274,7 +274,13 @@ internal sealed class SamlResponse : IDisposable
         var utcNow = DateTime.UtcNow;
         foreach (var certificate in _certificates)
         {
-            if (IsWithinValidityPeriod(certificate, utcNow) && signedXml.CheckSignature(certificate, true))
+            // Skip a certificate whose signing key is below the minimum strength floor (#733) before the
+            // cryptographic check — an RSA key under 2048 bits (or a non-approved EC curve) is as forgeable as
+            // a weak hash, so its signature is not accepted. If every candidate is under-strength (or expired),
+            // verification fails closed exactly as for a wrong key.
+            if (SamlCertificate.HasAcceptableSigningKey(certificate)
+                && IsWithinValidityPeriod(certificate, utcNow)
+                && signedXml.CheckSignature(certificate, true))
             {
                 return true;
             }

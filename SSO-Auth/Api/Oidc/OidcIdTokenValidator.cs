@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Duende.IdentityModel.OidcClient;
 using Duende.IdentityModel.OidcClient.Results;
+using Jellyfin.Plugin.SSO_Auth.Api.Crypto;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
 
@@ -211,17 +212,27 @@ internal sealed class OidcIdTokenValidator : IIdentityTokenValidator
     }
 
     // RSA signing key from the JWK e/n pair (RFC 7518). Returns null when the key does not carry both
-    // parameters, so it is not RSA-shaped and the EC conversion is tried instead. A non-base64url
+    // parameters (not RSA-shaped, so the EC conversion is tried instead) OR when the built key is below the
+    // minimum size floor (#733) — an under-strength RSA key from the discovery JWKS (or a compromised one) is
+    // as forgeable as a weak hash, so it is skipped exactly like a malformed key; the remaining advertised
+    // keys decide, and if none is usable the login fails via the key-not-found path. A non-base64url
     // exponent/modulus throws FormatException, surfaced to TryConvertSigningKey's skip path.
-    private static RsaSecurityKey? ConvertRsaSigningKey(Duende.IdentityModel.Jwk.JsonWebKey webKey) =>
-        !string.IsNullOrEmpty(webKey.E) && !string.IsNullOrEmpty(webKey.N)
-            ? new RsaSecurityKey(new RSAParameters
-            {
-                Exponent = Base64UrlEncoder.DecodeBytes(webKey.E),
-                Modulus = Base64UrlEncoder.DecodeBytes(webKey.N),
-            })
-            { KeyId = webKey.Kid }
-            : null;
+    private static RsaSecurityKey? ConvertRsaSigningKey(Duende.IdentityModel.Jwk.JsonWebKey webKey)
+    {
+        if (string.IsNullOrEmpty(webKey.E) || string.IsNullOrEmpty(webKey.N))
+        {
+            return null;
+        }
+
+        var key = new RsaSecurityKey(new RSAParameters
+        {
+            Exponent = Base64UrlEncoder.DecodeBytes(webKey.E),
+            Modulus = Base64UrlEncoder.DecodeBytes(webKey.N),
+        })
+        { KeyId = webKey.Kid };
+
+        return SigningKeyStrength.IsAcceptableRsaKeySize(key.KeySize) ? key : null;
+    }
 
     // EC signing key from the JWK crv/x/y triple. Returns null when a coordinate is absent or the curve is
     // unsupported (TryGetCurve false), so the key is skipped. The ECDsa instance is registered in
