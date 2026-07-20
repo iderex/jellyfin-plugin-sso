@@ -47,7 +47,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Flows;
 /// two response shapes both flows share — the security-headered auth page and the manual-link write mapping —
 /// are rendered from the shared <see cref="FlowResponses"/> home rather than a controller delegate (#160).
 /// </remarks>
-internal sealed class SamlLoginService : ILoginService
+internal sealed class SamlLoginService
 {
     // Outstanding SAML AuthnRequest IDs, for InResponseTo correlation of solicited responses (#156) and the
     // browser binding (#415). One process-wide instance.
