@@ -1,3 +1,5 @@
+#nullable enable
+
 using Jellyfin.Plugin.SSO_Auth.Config;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api.Secrets;

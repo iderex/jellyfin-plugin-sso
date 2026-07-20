@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -56,7 +58,7 @@ internal sealed class PerClientBudgetLimiter
     /// </summary>
     /// <param name="clientKey">The normalized client key, or null for an unattributable/exempt source.</param>
     /// <returns>True if a slot was reserved (or the key is exempt); false when the key is at its share.</returns>
-    internal bool TryReserve(string clientKey)
+    internal bool TryReserve(string? clientKey)
     {
         if (clientKey is null)
         {
@@ -96,7 +98,7 @@ internal sealed class PerClientBudgetLimiter
     /// under-count and let the bucket admit past its cap.
     /// </summary>
     /// <param name="clientKey">The client key whose slot is freed, or null (a no-op).</param>
-    internal void Release(string clientKey)
+    internal void Release(string? clientKey)
     {
         if (clientKey is null)
         {

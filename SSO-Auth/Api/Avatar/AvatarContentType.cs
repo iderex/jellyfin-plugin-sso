@@ -1,3 +1,7 @@
+#nullable enable
+
+using System.Diagnostics.CodeAnalysis;
+
 namespace Jellyfin.Plugin.SSO_Auth.Api.Avatar;
 
 /// <summary>
@@ -18,7 +22,7 @@ internal static class AvatarContentType
     /// a bare form produced dotless filenames like <c>profilepng</c> (#384).
     /// </param>
     /// <returns><c>true</c> when the media type is an allowed raster image; otherwise <c>false</c>.</returns>
-    internal static bool TryResolveExtension(string mediaType, out string extension)
+    internal static bool TryResolveExtension(string? mediaType, [NotNullWhen(true)] out string? extension)
     {
         extension = (mediaType ?? string.Empty).ToLowerInvariant() switch
         {

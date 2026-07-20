@@ -1,4 +1,7 @@
+#nullable enable
+
 using System;
+using System.Diagnostics.CodeAnalysis;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api.Net;
 
@@ -23,7 +26,7 @@ internal static class CanonicalBaseUrl
     /// <param name="raw">The configured override value.</param>
     /// <param name="normalized">The normalized base URL when the value is a valid override.</param>
     /// <returns><see langword="true"/> if <paramref name="raw"/> is a valid absolute http/https base URL.</returns>
-    internal static bool TryNormalize(string raw, out string normalized)
+    internal static bool TryNormalize(string? raw, [NotNullWhen(true)] out string? normalized)
     {
         normalized = null;
         if (string.IsNullOrWhiteSpace(raw))
@@ -59,7 +62,7 @@ internal static class CanonicalBaseUrl
     /// </summary>
     /// <param name="raw">The configured override value.</param>
     /// <returns><see langword="true"/> if the value is set but not a valid base URL.</returns>
-    internal static bool IsInvalidOverride(string raw)
+    internal static bool IsInvalidOverride(string? raw)
         => !string.IsNullOrWhiteSpace(raw) && !TryNormalize(raw, out _);
 
     /// <summary>
@@ -81,7 +84,7 @@ internal static class CanonicalBaseUrl
     /// <param name="schemeOverride">The per-provider scheme override, or null.</param>
     /// <param name="portOverride">The per-provider port override, or null.</param>
     /// <returns>The external base URL, without a trailing slash.</returns>
-    internal static string Resolve(string baseUrlOverride, string scheme, string host, int? port, string pathBase, string schemeOverride, int? portOverride)
+    internal static string Resolve(string? baseUrlOverride, string scheme, string host, int? port, string pathBase, string? schemeOverride, int? portOverride)
     {
         if (!string.IsNullOrWhiteSpace(baseUrlOverride))
         {

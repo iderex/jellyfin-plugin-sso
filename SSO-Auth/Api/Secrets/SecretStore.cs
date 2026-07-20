@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.IO;
 using System.Security.Cryptography;
@@ -20,7 +22,7 @@ internal sealed class SecretStore
 {
     private readonly string _keyFilePath;
     private readonly System.Threading.Lock _lock = new();
-    private byte[] _cachedKey;
+    private byte[]? _cachedKey;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SecretStore"/> class.
@@ -53,7 +55,7 @@ internal sealed class SecretStore
     /// <exception cref="CryptographicException">
     /// <paramref name="configHasEnvelopes"/> is true and the key file is missing (a key existed and was lost).
     /// </exception>
-    internal string Protect(string storedValue, bool configHasEnvelopes = false)
+    internal string? Protect(string? storedValue, bool configHasEnvelopes = false)
     {
         // Skip only a genuinely-encrypted value (idempotency); a plaintext that merely starts with the
         // envelope prefix is not a well-formed envelope and is still encrypted here rather than stored raw.
@@ -73,7 +75,7 @@ internal sealed class SecretStore
     /// <param name="storedValue">The secret as read from configuration.</param>
     /// <returns>The plaintext secret.</returns>
     /// <exception cref="CryptographicException">The key file is missing/corrupt, or the value did not decrypt.</exception>
-    internal string Reveal(string storedValue)
+    internal string? Reveal(string? storedValue)
     {
         if (string.IsNullOrEmpty(storedValue) || !SecretEnvelope.IsProtected(storedValue))
         {

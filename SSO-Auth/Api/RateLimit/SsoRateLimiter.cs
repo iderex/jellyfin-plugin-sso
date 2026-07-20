@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Concurrent;
 using System.Globalization;
@@ -81,7 +83,7 @@ internal sealed class SsoRateLimiter
     /// value visible here is client-supplied and spoofable — keying on it would let an attacker
     /// rotate keys to evade or pin a victim's address to lock them out.</param>
     /// <returns>The rate-limit key, or null when the client cannot be attributed.</returns>
-    internal static string NormalizeClientKey(IPAddress remoteIp)
+    internal static string? NormalizeClientKey(IPAddress? remoteIp)
     {
         var ip = remoteIp;
         if (ip == null)
@@ -149,7 +151,7 @@ internal sealed class SsoRateLimiter
     /// <param name="nowUtc">The current time.</param>
     /// <param name="retryAfterSeconds">Whole seconds until the window expires, when refused.</param>
     /// <returns>True when the hit is allowed; false when the client is over the limit.</returns>
-    internal bool IsAllowed(string key, int maxAttempts, TimeSpan window, DateTime nowUtc, out int retryAfterSeconds)
+    internal bool IsAllowed(string? key, int maxAttempts, TimeSpan window, DateTime nowUtc, out int retryAfterSeconds)
     {
         retryAfterSeconds = 0;
         if (string.IsNullOrEmpty(key) || maxAttempts < 1)

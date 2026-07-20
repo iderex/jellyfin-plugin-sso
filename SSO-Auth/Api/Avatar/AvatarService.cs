@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.IO;
 using System.Net;
@@ -97,8 +99,8 @@ internal sealed class AvatarService
         ILogger logger,
         string userAgent,
         HttpClient httpClient,
-        KeyedLockStore userStoreLocks = null,
-        Func<string, bool> fileExists = null,
+        KeyedLockStore? userStoreLocks = null,
+        Func<string, bool>? fileExists = null,
         TimeSpan? storeLockAcquireTimeout = null)
     {
         _userManager = userManager ?? throw new ArgumentNullException(nameof(userManager));
@@ -120,7 +122,7 @@ internal sealed class AvatarService
     /// <param name="user">The user whose profile image is set.</param>
     /// <param name="avatarUrl">The provider-supplied avatar URL, or null to skip.</param>
     /// <returns>A <see cref="Task"/> that completes when the avatar has been set or skipped.</returns>
-    internal async Task TrySetAsync(User user, string avatarUrl)
+    internal async Task TrySetAsync(User user, string? avatarUrl)
     {
         if (avatarUrl is null)
         {
@@ -202,7 +204,9 @@ internal sealed class AvatarService
 
             using var stream = await ReadCappedAsync(avatarResponse, MaxAvatarBytes, timeout.Token).ConfigureAwait(false);
 
-            await StoreAsync(user, stream, mediaType, extension).ConfigureAwait(false);
+            // mediaType is non-null here: TryResolveExtension above returns false (and this method throws)
+            // for a null or unresolvable media type, so reaching this line proves it matched the allow-list.
+            await StoreAsync(user, stream, mediaType!, extension).ConfigureAwait(false);
         }
         catch (Exception e)
         {
@@ -391,7 +395,7 @@ internal sealed class AvatarService
         // multi-record hosts, since supplying a ConnectCallback replaces the handler's built-in one),
         // connecting to the validated IP rather than the hostname so a DNS rebind cannot redirect the
         // connection to an internal address.
-        Exception lastError = null;
+        Exception? lastError = null;
         var attempted = false;
         foreach (var address in addresses)
         {

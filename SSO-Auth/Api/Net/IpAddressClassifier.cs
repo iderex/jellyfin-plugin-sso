@@ -1,3 +1,6 @@
+#nullable enable
+
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.Sockets;
 
@@ -52,7 +55,7 @@ internal static class IpAddressClassifier
     /// <param name="bytes">The 16 bytes of the IPv6 address.</param>
     /// <param name="embedded">The embedded IPv4 address when one is present; otherwise null.</param>
     /// <returns>True when an embedded IPv4 address was extracted.</returns>
-    internal static bool TryExtractEmbeddedIPv4(byte[] bytes, out IPAddress embedded)
+    internal static bool TryExtractEmbeddedIPv4(byte[] bytes, [NotNullWhen(true)] out IPAddress? embedded)
     {
         embedded = null;
 

@@ -1,3 +1,5 @@
+#nullable enable
+
 namespace Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
 
 /// <summary>
@@ -10,6 +12,6 @@ internal static class ProviderScopedKey
 {
     // The newline separator cannot occur in a Guid-based AuthnRequest id, and both parts come from the
     // same trusted config/flow, so it partitions the key space by provider without collision.
-    internal static string For(string provider, string id) =>
+    internal static string? For(string provider, string? id) =>
         string.IsNullOrEmpty(id) ? id : provider + "\n" + id;
 }

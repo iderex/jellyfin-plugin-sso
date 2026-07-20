@@ -1,4 +1,7 @@
+#nullable enable
+
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using Jellyfin.Plugin.SSO_Auth.Api.Net;
 
@@ -20,7 +23,7 @@ internal static class AvatarUrlValidator
     /// <param name="url">The candidate avatar URL.</param>
     /// <param name="uri">The parsed URI when allowed; otherwise null.</param>
     /// <returns>True when the URL is allowed to be fetched.</returns>
-    internal static bool IsAllowedUrl(string url, out Uri uri)
+    internal static bool IsAllowedUrl(string url, [NotNullWhen(true)] out Uri? uri)
     {
         uri = null;
         if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out var parsed))
