@@ -118,6 +118,17 @@ internal sealed class CanonicalLinkService
     private readonly IntervalGate _legacyLinkWarnGate;
     private readonly Func<DateTime> _clock;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="CanonicalLinkService"/> class. The optional gate and
+    /// clock are test seams: production omits them, taking the process-wide legacy-link warn gate and the
+    /// wall clock so the warning throttle survives this per-request service's reconstruction.
+    /// </summary>
+    /// <param name="userManager">The Jellyfin user manager.</param>
+    /// <param name="cryptoProvider">The crypto provider used for legacy link hashing.</param>
+    /// <param name="configStore">The provider configuration store the link maps live in.</param>
+    /// <param name="logger">The logger.</param>
+    /// <param name="legacyLinkWarnGate">The pending-legacy-link warning throttle; null takes the shared process-wide gate.</param>
+    /// <param name="clock">The clock driving the warning throttle; null uses the wall clock.</param>
     internal CanonicalLinkService(
         IUserManager userManager,
         ICryptoProvider cryptoProvider,

@@ -265,6 +265,13 @@ public class SSOController : ControllerBase
     // incoming config). Without this, a malformed override set via the Add API would be persisted and then
     // silently fall back to the request Host at login. Throwing keeps it out of the store, so the
     // "rejected at every admin write path" invariant holds. Blank is valid (the feature is off).
+
+    /// <summary>
+    /// Rejects a malformed canonical base-URL override at the OID/SAML Add endpoints (#139), the door that
+    /// mirrors the config-page save-time check for the Add path that bypasses it. A blank override is valid.
+    /// </summary>
+    /// <param name="baseUrlOverride">The override value posted to the Add endpoint.</param>
+    /// <exception cref="ArgumentException">The override is non-blank and not a valid absolute http(s) URL.</exception>
     internal static void RejectInvalidBaseUrlOverride(string baseUrlOverride)
     {
         if (CanonicalBaseUrl.IsInvalidOverride(baseUrlOverride))
@@ -278,6 +285,13 @@ public class SSOController : ControllerBase
     // ProviderConfigValidator.Validate. Without this, a garbage certificate set via the Add API would be
     // persisted and then throw a CryptographicException on every callback (an unhandled 500). Blank is
     // valid (a half-configured provider).
+
+    /// <summary>
+    /// Rejects a non-loadable SAML signing certificate at the SAML/Add endpoint (#206), the Add-path
+    /// counterpart to the config-page save-time certificate check. A blank certificate is valid.
+    /// </summary>
+    /// <param name="certificateStr">The Base64-encoded (DER) X.509 certificate posted to the Add endpoint.</param>
+    /// <exception cref="ArgumentException">The certificate is non-blank and not loadable.</exception>
     internal static void RejectInvalidSamlCertificate(string certificateStr)
     {
         if (SamlCertificate.IsInvalid(certificateStr))
@@ -291,6 +305,14 @@ public class SSOController : ControllerBase
     // secondary would persist and then throw a CryptographicException on every callback (an unhandled
     // 500). It is the identity provider's PUBLIC certificate, so it is validated exactly like the primary.
     // Blank is valid (no overlap window configured).
+
+    /// <summary>
+    /// Rejects a non-loadable inbound secondary verification certificate at the SAML/Add endpoint (#491) —
+    /// the identity provider's public certificate for a key-overlap window, validated like the primary. A
+    /// blank value is valid (no overlap window configured).
+    /// </summary>
+    /// <param name="certificateStr">The Base64-encoded (DER) X.509 certificate posted to the Add endpoint.</param>
+    /// <exception cref="ArgumentException">The certificate is non-blank and not loadable.</exception>
     internal static void RejectInvalidSamlSecondaryCertificate(string certificateStr)
     {
         if (SamlCertificate.IsInvalid(certificateStr))
@@ -303,6 +325,13 @@ public class SSOController : ControllerBase
     // fail-closed door as the inbound certificate guard above: a garbage or private-key-less PKCS#12 set
     // here would persist and then fail every signed challenge. Blank is valid (signing simply stays off,
     // or the stored key is preserved on save).
+
+    /// <summary>
+    /// Rejects a non-loadable service-provider request signing key at the SAML/Add endpoint (#167). A blank
+    /// key is valid (signing stays off, or the stored key is preserved on save).
+    /// </summary>
+    /// <param name="signingKeyPfx">The Base64-encoded PKCS#12 (PFX) signing key posted to the Add endpoint.</param>
+    /// <exception cref="ArgumentException">The key is non-blank and not a loadable PFX with an RSA or ECDSA private key.</exception>
     internal static void RejectInvalidSamlSigningKey(string signingKeyPfx)
     {
         if (SamlSigningKey.IsInvalid(signingKeyPfx))
@@ -316,6 +345,13 @@ public class SSOController : ControllerBase
     // in the config map that then NREs the config-page save (ServerManagedFields.Preserve). Reject at
     // the door so the store never holds a null provider — the same fail-closed posture as the other
     // Add-endpoint gates.
+
+    /// <summary>
+    /// Rejects a null provider body at the Add endpoints (#350), so a null or literal "null" JSON payload
+    /// can never put a null entry in the config map that would later NRE the config-page save.
+    /// </summary>
+    /// <param name="config">The model-bound provider configuration body.</param>
+    /// <exception cref="ArgumentException">The body is null.</exception>
     internal static void RejectNullProviderBody(object config)
     {
         if (config is null)
@@ -332,6 +368,15 @@ public class SSOController : ControllerBase
     // EXISTING name stays allowed: its URL bytes are already registered at the IdP, and blocking the
     // update would strand the deployment behind a rename (encoding the built URLs instead is pinned
     // off by SsoUrlBuilderTests).
+
+    /// <summary>
+    /// Rejects a NEW provider name containing control characters, a backslash, or a URI-reserved character
+    /// (#336, #360), because the name is appended raw to the callback URLs registered with the identity
+    /// provider. Updating an existing name stays allowed so a deployment is not stranded behind a rename.
+    /// </summary>
+    /// <param name="provider">The provider name posted to the Add endpoint.</param>
+    /// <param name="providerExists">Whether the name already names a registered provider; only new names are validated.</param>
+    /// <exception cref="ArgumentException">The name is new and contains a forbidden character.</exception>
     internal static void RejectInvalidNewProviderName(string provider, bool providerExists)
     {
         if (!providerExists && ProviderNameValidator.IsInvalid(provider))

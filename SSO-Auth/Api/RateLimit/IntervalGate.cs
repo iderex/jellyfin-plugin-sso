@@ -21,6 +21,13 @@ internal sealed class IntervalGate
     // torn-read-safe). Starts at MinValue so the first call always sees a full interval and enters.
     private long _cursor = DateTime.MinValue.Ticks;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="IntervalGate"/> class with the throttle interval,
+    /// throwing on a non-positive interval so a field-ordering mistake cannot silently disable the throttle
+    /// and turn the gate into the flood amplifier it exists to prevent.
+    /// </summary>
+    /// <param name="interval">The minimum span between admissions; must be strictly positive.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="interval"/> is zero or negative.</exception>
     internal IntervalGate(TimeSpan interval)
     {
         // A non-positive interval would silently disable the throttle (every call enters), turning the

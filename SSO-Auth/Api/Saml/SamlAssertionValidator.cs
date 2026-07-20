@@ -47,6 +47,11 @@ internal sealed class SamlAssertionValidator
 
     private readonly ILogger _logger;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SamlAssertionValidator"/> class. Constructed per request
+    /// by the SAML flow service, though it owns the process-wide replay cache as a static.
+    /// </summary>
+    /// <param name="logger">The logger for validation-failure diagnostics.</param>
     internal SamlAssertionValidator(ILogger logger)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -56,6 +61,11 @@ internal sealed class SamlAssertionValidator
     // reason as the flow service's request/outcome resets — a test that consumed an assertion id must not
     // leak it into a sibling test. Internal, reachable only through InternalsVisibleTo; never wired to an
     // endpoint or DI, so it adds no runtime or security surface.
+
+    /// <summary>
+    /// Test-only. Clears the process-wide one-time replay cache between tests so a consumed assertion id
+    /// does not leak into a sibling test.
+    /// </summary>
     internal static void ResetReplaysForTests() => SamlReplays.Clear();
 
     /// <summary>
@@ -225,6 +235,15 @@ internal sealed class SamlAssertionValidator
     // unless explicitly opted out. Expected audience is the configured SamlAudience, falling back to the
     // SamlClientId (SP entity id). Both are trimmed so the comparison matches the trimmed Issuer sent in the
     // AuthnRequest, and an empty SamlAudience falls through to the client id.
+
+    /// <summary>
+    /// Validates a SAML response's signature and time bounds, and — unless the provider explicitly opts out —
+    /// its AudienceRestriction binding to this service provider. The expected audience is the configured
+    /// <c>SamlAudience</c>, falling back to the <c>SamlClientId</c>.
+    /// </summary>
+    /// <param name="samlResponse">The response to validate.</param>
+    /// <param name="config">The provider configuration supplying the expected audience and the opt-out flag.</param>
+    /// <returns>True if the response passes every applicable check; false otherwise.</returns>
     internal static bool ValidateSaml(SamlResponse samlResponse, SamlConfig config)
     {
         if (config.DoNotValidateAudience)

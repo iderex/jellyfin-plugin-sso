@@ -18,11 +18,24 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Shared;
 /// </summary>
 internal static class SsoRateLimitClass
 {
+    /// <summary>The anonymous login-challenge stage that begins an OpenID/SAML flow.</summary>
     internal const string Challenge = "challenge";
+
+    /// <summary>The anonymous callback stage where the identity provider returns the login result.</summary>
     internal const string Callback = "callback";
+
+    /// <summary>The anonymous authentication stage that mints the Jellyfin session.</summary>
     internal const string Auth = "auth";
+
+    /// <summary>The elevation-gated Test-connection provider probe.</summary>
     internal const string Test = "test";
+
+    /// <summary>The anonymous service-provider SAML metadata read.</summary>
     internal const string Metadata = "metadata";
+
+    /// <summary>The admin SSO-revoke (unregister) surface (#516).</summary>
     internal const string Unregister = "unregister";
+
+    /// <summary>The authenticated account link/unlink write surface (#382).</summary>
     internal const string Link = "link";
 }

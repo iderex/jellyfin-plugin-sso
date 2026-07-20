@@ -31,16 +31,22 @@ internal sealed class SamlOutcomeStore
     // refused rather than evicting an in-flight one; the callback path is reached only after full signature
     // validation, so it is not anonymously floodable, and rate-limiting at the edge (#128) is the primary
     // defense.
+
+    /// <summary>The production ceiling on outstanding login outcomes; at the cap a fresh outcome is refused, never an in-flight one evicted.</summary>
     internal const int DefaultMaxEntries = 100_000;
 
     // How long a stored login outcome may live before it is rejected/pruned. It bounds the gap between the
     // ACS callback rendering the page and the browser posting the token back — a fast same-origin round
     // trip — so it matches the sibling in-flight lifetimes (the outstanding-request/authorize-state window).
+
+    /// <summary>How long a stored outcome may live before it is rejected and pruned; bounds the ACS-render-to-mint round trip.</summary>
     internal static readonly TimeSpan DefaultLifetime = TimeSpan.FromMinutes(15);
 
     // The expired-entry sweep is an O(n) scan; throttling it to at most once per this interval keeps it off
     // the hot path (mirrors the siblings). Throttling only defers memory reclamation — the redeem predicate
     // rejects an expired outcome independently, so a not-yet-swept entry never completes a login.
+
+    /// <summary>The minimum interval between expired-entry sweeps, keeping the O(n) scan off the hot path.</summary>
     internal static readonly TimeSpan DefaultPruneInterval = TimeSpan.FromMinutes(1);
 
     private readonly int _maxEntries;
@@ -62,6 +68,10 @@ internal sealed class SamlOutcomeStore
     // a single source cannot fill the store and lock out everyone else's logins.
     private readonly PerClientBudgetLimiter _perClient;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SamlOutcomeStore"/> class with the production cap,
+    /// lifetime and prune interval.
+    /// </summary>
     internal SamlOutcomeStore()
         : this(DefaultMaxEntries, DefaultLifetime, DefaultPruneInterval)
     {
@@ -69,6 +79,14 @@ internal sealed class SamlOutcomeStore
 
     // Test constructor: small caps and lifetimes make the cap and expiry paths reachable in unit tests (the
     // production values are unreachable there). IntervalGate rejects a non-positive interval.
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SamlOutcomeStore"/> class with explicit bounds, so a
+    /// unit test can reach the cap and expiry paths that the production values make unreachable.
+    /// </summary>
+    /// <param name="maxEntries">The global ceiling on outstanding outcomes.</param>
+    /// <param name="lifetime">How long a stored outcome may live before it expires.</param>
+    /// <param name="pruneInterval">The minimum interval between expired-entry sweeps.</param>
     internal SamlOutcomeStore(int maxEntries, TimeSpan lifetime, TimeSpan pruneInterval)
     {
         _maxEntries = maxEntries;

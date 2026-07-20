@@ -65,6 +65,16 @@ internal sealed class AvatarService
     private readonly Func<string, bool> _fileExists;
     private readonly TimeSpan _storeLockAcquireTimeout;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="AvatarService"/> class for production, fetching over
+    /// the process-wide shared client built on the hardened SSRF-safe handler. Delegates to the injectable
+    /// constructor; the test seam (#385) uses that overload directly with a stubbed client.
+    /// </summary>
+    /// <param name="userManager">The Jellyfin user manager.</param>
+    /// <param name="providerManager">The Jellyfin provider manager (image saving).</param>
+    /// <param name="serverConfigurationManager">The server configuration manager (user data paths).</param>
+    /// <param name="logger">The logger.</param>
+    /// <param name="userAgent">The outbound User-Agent.</param>
     internal AvatarService(
         IUserManager userManager,
         IProviderManager providerManager,
@@ -369,6 +379,15 @@ internal sealed class AvatarService
     // exhaust resources with an unbounded (or Content-Length-lying) download. Internal so the streamed
     // size cap (#220) — the most security-relevant branch — is unit-testable over a StreamContent body
     // without live HTTP (#385).
+
+    /// <summary>
+    /// Copies a response body into memory, aborting the moment it exceeds <paramref name="maxBytes"/>, so a
+    /// hostile or Content-Length-lying endpoint cannot exhaust memory with an unbounded download (#220).
+    /// </summary>
+    /// <param name="response">The response whose content stream is read.</param>
+    /// <param name="maxBytes">The inclusive byte ceiling; the read aborts once the total would exceed it.</param>
+    /// <param name="cancellationToken">Cancels the streamed read (the end-to-end fetch deadline).</param>
+    /// <returns>The buffered body, positioned at its start.</returns>
     internal static async ValueTask<MemoryStream> ReadCappedAsync(HttpResponseMessage response, long maxBytes, CancellationToken cancellationToken)
     {
         var buffer = new MemoryStream();

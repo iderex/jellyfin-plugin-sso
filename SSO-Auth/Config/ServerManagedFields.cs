@@ -77,6 +77,14 @@ internal static class ServerManagedFields
 
     // Links + issuer bindings + secret: an OpenID provider carries these server-managed fields
     // (#157/#189/#186).
+
+    /// <summary>
+    /// Re-injects an OpenID provider's server-managed fields (#157/#189/#186): its canonical links and their
+    /// issuer bindings — carried over only while the discovery endpoint is unchanged, dropped on a repoint so
+    /// a re-identified provider does not silently inherit another's mappings — and its write-only client secret.
+    /// </summary>
+    /// <param name="incoming">The provider config about to be persisted; a null entry is skipped.</param>
+    /// <param name="live">The current live provider config to read server-managed values from; null skips.</param>
     internal static void Preserve(OidConfig incoming, OidConfig live)
     {
         // A null provider entry (a malformed Add before #350, or a legacy store) carries no
@@ -107,6 +115,15 @@ internal static class ServerManagedFields
     // since #167, an optional service-provider signing key plus its optional rollover key (#491), each
     // withheld from JSON like the OpenID secret, so a save that did not rotate one arrives blank and must
     // keep the stored value.
+
+    /// <summary>
+    /// Re-injects a SAML provider's server-managed fields: its canonical link map (#157) and its write-only
+    /// service-provider signing keys — the primary (#167) and optional rollover key (#491) — each kept when
+    /// the incoming value is blank (a save that did not rotate it) so a config-page save neither wipes the
+    /// key nor silently ends a rollover overlap.
+    /// </summary>
+    /// <param name="incoming">The provider config about to be persisted; a null entry is skipped.</param>
+    /// <param name="live">The current live provider config to read server-managed values from; null skips.</param>
     internal static void Preserve(SamlConfig incoming, SamlConfig live)
     {
         if (incoming is null || live is null)

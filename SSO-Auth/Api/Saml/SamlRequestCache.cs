@@ -19,6 +19,8 @@ internal sealed class SamlRequestCache
     // transiently overshoot by at most the number of in-flight threads — immaterial against a
     // best-effort DoS backstop. Given the short request lifetime, real load never approaches it;
     // rate-limiting at the edge (#128) is the primary defense.
+
+    /// <summary>The production ceiling on outstanding AuthnRequest entries; at the cap a fresh challenge is refused, never an in-flight entry evicted.</summary>
     internal const int DefaultMaxEntries = 100_000;
 
     // Expired-entry sweeping is throttled to at most once per this interval. The sweep is an O(n)
@@ -46,6 +48,10 @@ internal sealed class SamlRequestCache
     // so a single anonymous source cannot fill the cache and deny every other login's callback.
     private readonly PerClientBudgetLimiter _perClient;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SamlRequestCache"/> class with the production cap and
+    /// prune interval.
+    /// </summary>
     internal SamlRequestCache()
         : this(DefaultMaxEntries, DefaultPruneInterval)
     {
@@ -53,6 +59,13 @@ internal sealed class SamlRequestCache
 
     // Test constructor: a small cap makes the global-cap and per-client sub-cap paths reachable in unit
     // tests (the production values are unreachable there).
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SamlRequestCache"/> class with explicit bounds, so a
+    /// unit test can reach the global-cap and per-client sub-cap paths the production values make unreachable.
+    /// </summary>
+    /// <param name="maxEntries">The global ceiling on outstanding entries.</param>
+    /// <param name="pruneInterval">The minimum interval between expired-entry sweeps.</param>
     internal SamlRequestCache(int maxEntries, TimeSpan pruneInterval)
     {
         _maxEntries = maxEntries;

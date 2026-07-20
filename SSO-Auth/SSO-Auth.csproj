@@ -85,4 +85,11 @@
     <PackageReference Include="SmartAnalyzers.MultithreadingAnalyzer" Version="1.1.31" PrivateAssets="All" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- StyleCop settings live at the repo root and are shared into this project (the only one that
+         references StyleCop.Analyzers). documentInternalElements=true makes SA1600 require XML docs on
+         the internal surface too (#864); private members stay exempt. -->
+    <AdditionalFiles Include="..\stylecop.json" Link="stylecop.json" />
+  </ItemGroup>
+
 </Project>

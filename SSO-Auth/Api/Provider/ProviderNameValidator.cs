@@ -32,6 +32,14 @@ internal static class ProviderNameValidator
     // A null or blank name yields an empty span, so the loop never runs and it stays valid — no route can
     // produce an empty provider segment, matching the blank-is-valid convention of the sibling predicates
     // (CanonicalBaseUrl, SamlCertificate).
+
+    /// <summary>
+    /// Determines whether a provider name would corrupt the login callback URL it becomes part of — true if
+    /// it contains any control character, a backslash, or a URI-reserved character. A null or blank name is
+    /// valid (no route produces an empty provider segment), matching the sibling predicates.
+    /// </summary>
+    /// <param name="name">The provider name to check.</param>
+    /// <returns>True if the name contains a forbidden character; otherwise false.</returns>
     internal static bool IsInvalid(string? name)
     {
         foreach (char c in name.AsSpan())

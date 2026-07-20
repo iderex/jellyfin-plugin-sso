@@ -29,6 +29,8 @@ internal static class FlowResponses
     // is denied with an empty allowlist. HSTS is deliberately NOT set per page: transport security for the
     // whole origin is the operator's reverse proxy / Jellyfin global responsibility (#756), not a per-response
     // plugin header.
+
+    /// <summary>The restrictive Permissions-Policy header value shared by both served HTML pages (the auth-completion and browser-navigated error pages), denying every listed browser feature so the two cannot drift.</summary>
     internal const string ServedPagePermissionsPolicy =
         "camera=(), microphone=(), geolocation=(), payment=(), usb=(), accelerometer=(), gyroscope=(), magnetometer=(), autoplay=(), display-capture=()";
 

@@ -18,17 +18,23 @@ internal sealed class OidcStateStore
     // cannot grow the store without bound (mirrors SamlRequestCache); at the cap a fresh challenge is
     // refused rather than evicting an in-flight state, and rate-limiting at the edge (#128) is the
     // primary defense (#246).
+
+    /// <summary>The production ceiling on outstanding authorize states; at the cap a fresh challenge is refused, never an in-flight state evicted.</summary>
     internal const int DefaultMaxEntries = 100_000;
 
     // How long an in-flight OpenID authorize state may live before it is rejected/pruned. This bounds
     // the whole interactive leg (OidChallenge -> IdP login/MFA/consent -> callback -> mint), so it
     // must accommodate a real user completing MFA, not just a fast round trip.
+
+    /// <summary>How long an in-flight authorize state may live before it is rejected and pruned; bounds the whole challenge-to-mint interactive leg (including MFA).</summary>
     internal static readonly TimeSpan DefaultLifetime = TimeSpan.FromMinutes(15);
 
     // The expired-state sweep (PruneExpired) is an O(n) scan; throttling it to at most once per this
     // interval stops an anonymous challenge flood from amplifying into CPU load (mirrors
     // SamlRequestCache). This only defers memory reclamation — the peek/redeem predicates reject an
     // expired state independently, so a not-yet-swept entry never grants a login (#246).
+
+    /// <summary>The minimum interval between expired-state sweeps, keeping the O(n) scan off the anonymous hot path.</summary>
     internal static readonly TimeSpan DefaultPruneInterval = TimeSpan.FromMinutes(1);
 
     private readonly int _maxEntries;
@@ -55,6 +61,10 @@ internal sealed class OidcStateStore
     // so a single anonymous source cannot fill the store and lock out everyone else's logins.
     private readonly PerClientBudgetLimiter _perClient;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="OidcStateStore"/> class with the production cap,
+    /// lifetime and prune interval.
+    /// </summary>
     internal OidcStateStore()
         : this(DefaultMaxEntries, DefaultLifetime, DefaultPruneInterval)
     {
@@ -62,6 +72,14 @@ internal sealed class OidcStateStore
 
     // Test constructor: small caps and lifetimes make the cap and expiry paths reachable in unit
     // tests (the production values are unreachable there). IntervalGate rejects a non-positive interval.
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="OidcStateStore"/> class with explicit bounds, so a
+    /// unit test can reach the cap and expiry paths that the production values make unreachable.
+    /// </summary>
+    /// <param name="maxEntries">The global ceiling on outstanding authorize states.</param>
+    /// <param name="lifetime">How long a stored state may live before it expires.</param>
+    /// <param name="pruneInterval">The minimum interval between expired-state sweeps.</param>
     internal OidcStateStore(int maxEntries, TimeSpan lifetime, TimeSpan pruneInterval)
     {
         _maxEntries = maxEntries;

@@ -67,6 +67,21 @@ internal static class ChallengeNewPathResolver
     // for a later login, never a requirement for THIS one to succeed. Internal (not private) so
     // ProviderConfigStoreTests-style callers can exercise the race-window fallback branch directly and
     // deterministically, the way the flow services' test hooks already do for other login-flow internals.
+
+    /// <summary>
+    /// Resolves the NewPath spelling for a login challenge and, for a non-linking challenge whose derived
+    /// spelling differs from the stored one, best-effort persists it through <c>MutateConfiguration</c> under
+    /// the write lock (throttled, race-safe, failure-swallowed). The returned value always reflects this
+    /// request's own path whether or not the write landed; a linking challenge only reads the stored value (#412).
+    /// </summary>
+    /// <typeparam name="T">The provider configuration type (OpenID or SAML), selected via <paramref name="selectConfigs"/>.</typeparam>
+    /// <param name="provider">The provider name, used to re-resolve the live entry inside the mutation.</param>
+    /// <param name="config">The provider configuration read outside the write lock; its stored NewPath is compared, never written directly.</param>
+    /// <param name="isLinking">Whether this is a linking challenge (read-only) rather than a login challenge.</param>
+    /// <param name="request">The current request, whose path the derived spelling comes from.</param>
+    /// <param name="logger">The logger for a swallowed best-effort persist failure; may be null.</param>
+    /// <param name="selectConfigs">Selects the provider map (OidConfigs or SamlConfigs) to re-resolve the live entry from.</param>
+    /// <returns>The NewPath spelling this login/redirect should use.</returns>
     internal static bool ResolveChallengeNewPath<T>(
         string provider,
         T config,

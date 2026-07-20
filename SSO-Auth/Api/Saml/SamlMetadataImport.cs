@@ -35,11 +35,22 @@ internal sealed record SamlMetadataImport(
 /// </summary>
 internal sealed class SamlMetadataException : Exception
 {
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SamlMetadataException"/> class with an admin-facing
+    /// message.
+    /// </summary>
+    /// <param name="message">The admin-facing failure message, free of internal detail.</param>
     internal SamlMetadataException(string message)
         : base(message)
     {
     }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SamlMetadataException"/> class wrapping the underlying
+    /// parse failure.
+    /// </summary>
+    /// <param name="message">The admin-facing failure message, free of internal detail.</param>
+    /// <param name="innerException">The underlying exception that caused the failure.</param>
     internal SamlMetadataException(string message, Exception innerException)
         : base(message, innerException)
     {

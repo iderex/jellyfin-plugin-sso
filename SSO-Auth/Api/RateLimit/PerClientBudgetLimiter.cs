@@ -23,6 +23,8 @@ internal sealed class PerClientBudgetLimiter
     // distinct attributable public sources to exhaust the budget and no single one can lock out logins,
     // while >=99% stays free for everyone else. A constant, not config — a login-path safety limit whose
     // mis-set value would itself be a lockout (too low) or a no-op (too high).
+
+    /// <summary>The reciprocal of one client's share of the global cap (1/100): it takes at least this many distinct sources to exhaust the budget, and no single one can lock out logins.</summary>
     internal const int ShareDivisor = 100;
 
     // clientKey -> live reservations; a key is present only while it holds >=1 (dropped at zero), so
@@ -31,6 +33,11 @@ internal sealed class PerClientBudgetLimiter
     private readonly ConcurrentDictionary<string, int> _counts = new(StringComparer.Ordinal);
     private readonly int _perKeyCap;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="PerClientBudgetLimiter"/> class with an explicit
+    /// per-key cap. Most callers use <see cref="FromGlobalCap"/> so the 1/100 policy lives in one place.
+    /// </summary>
+    /// <param name="perKeyCap">The maximum concurrent reservations a single client key may hold.</param>
     internal PerClientBudgetLimiter(int perKeyCap) => _perKeyCap = perKeyCap;
 
     /// <summary>Gets the derived per-key cap. Test-only.</summary>

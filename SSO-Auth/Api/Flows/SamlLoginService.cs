@@ -84,6 +84,13 @@ internal sealed class SamlLoginService
 
     private readonly ILogger _logger;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SamlLoginService"/> class, wiring the shared login
+    /// completion and account-linking collaborators and constructing the per-request assertion validator.
+    /// </summary>
+    /// <param name="loginCompletion">The shared post-validation login completion pipeline.</param>
+    /// <param name="canonicalLinks">The account-linking workflow used by the SAML manual-link redeem.</param>
+    /// <param name="logger">The logger, also passed to the constructed assertion validator.</param>
     internal SamlLoginService(
         LoginCompletionService loginCompletion,
         CanonicalLinkService canonicalLinks,
@@ -102,6 +109,11 @@ internal sealed class SamlLoginService
     // resets the shared NewPath persist-throttle gate (#412 review follow-up, #670): SsoControllerHarness
     // calls this for every test, so a change persisted in one test can never throttle a genuine change in
     // the next one. The gate now lives on the shared ChallengeNewPathResolver, so the reset delegates there.
+
+    /// <summary>
+    /// Test-only. Clears the outstanding-SAML-request cache and resets the shared NewPath persist-throttle
+    /// gate so no seeded or in-flight state leaks between tests.
+    /// </summary>
     internal static void ResetSamlRequestsForTests()
     {
         SamlRequests.Clear();
@@ -112,21 +124,47 @@ internal sealed class SamlLoginService
     // process-wide-static reset reason as ResetSamlRequestsForTests. Installing a new instance (rather than
     // Clear) also un-swaps any small-cap store a prior test installed via SetSamlOutcomeStoreForTests, so cap
     // state cannot leak across tests. Internal, InternalsVisibleTo, never wired to an endpoint/DI.
+
+    /// <summary>
+    /// Test-only. Installs a fresh in-flight login-outcome store between tests, also un-swapping any
+    /// small-cap store a prior test installed so cap state cannot leak across tests.
+    /// </summary>
     internal static void ResetSamlOutcomesForTests() => _outcomes = new SamlOutcomeStore();
 
     // Test-only: swaps in a specific outcome store so a test can drive the cap path the production ceiling
     // (100k) makes unreachable — e.g. proving a cap refusal at the ACS callback no longer burns the assertion
     // (#539). Un-swapped by the next ResetSamlOutcomesForTests. Internal, InternalsVisibleTo, no endpoint/DI.
+
+    /// <summary>
+    /// Test-only. Swaps in a specific outcome store so a test can drive the cap path the production ceiling
+    /// makes unreachable; un-swapped by the next <see cref="ResetSamlOutcomesForTests"/>.
+    /// </summary>
+    /// <param name="store">The outcome store to install.</param>
     internal static void SetSamlOutcomeStoreForTests(SamlOutcomeStore store) => _outcomes = store;
 
     // Test-only: seeds a single login outcome so a test can drive the token-redeem mint leg without first
     // running the callback that normally populates the store. Same test-only surface as the resets above.
+
+    /// <summary>
+    /// Test-only. Seeds a single login outcome so a test can drive the token-redeem mint leg without first
+    /// running the callback that normally populates the store.
+    /// </summary>
+    /// <param name="outcome">The login outcome to seed.</param>
     internal static void SeedSamlOutcomeForTests(SamlLoginOutcome outcome) => _outcomes.Seed(outcome);
 
     // Test-only seed of an outstanding SAML AuthnRequest so a test can exercise SamlAuth's browser
     // binding (#415) — normally populated by the challenge redirect leg — without deriving the random
     // request id from the emitted AuthnRequest. Same test-only surface as SeedOidStateForTests
     // (internal, InternalsVisibleTo, no endpoint/DI); never reachable in production. Moved here (#160).
+
+    /// <summary>
+    /// Test-only. Seeds an outstanding SAML AuthnRequest so a test can exercise the browser-binding leg
+    /// without deriving the random request id from an emitted AuthnRequest.
+    /// </summary>
+    /// <param name="provider">The provider the request belongs to.</param>
+    /// <param name="requestId">The AuthnRequest id to register.</param>
+    /// <param name="bindingId">The browser-binding id tied to the request.</param>
+    /// <param name="expiryUtc">The UTC expiry of the outstanding request.</param>
     internal static void SeedSamlRequestForTests(string provider, string requestId, string bindingId, DateTime expiryUtc) =>
         SamlRequests.Register(ProviderScopedKey.For(provider, requestId), bindingId, expiryUtc, DateTime.UtcNow, clientKey: null, out _);
 
