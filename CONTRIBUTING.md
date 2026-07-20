@@ -169,7 +169,7 @@ We are always open to better docs! The main place documentation could be improve
 
 ### Commit Messages
 
-Short, imperative subject line (`Add SAML replay cache`, not `feat: add ...`); explain the _why_ in the body and reference the issue it closes.
+Short, imperative subject line (`Add SAML replay cache`, not `feat: add ...`); explain the _why_ in the body. **Every commit subject ends with its issue reference(s) in brackets** — `Add SAML replay cache [#123]`, multiple issues as `[#123][#456]` — so the link survives `git blame`/`bisect`/`log`, which show only the subject. GitHub's auto-close keywords (`Closes #N`) additionally go in the body when the commit resolves the issue. The PR-hygiene gate enforces the bracketed subject reference per commit (bots and merge commits exempt).
 
 ### C#
 
