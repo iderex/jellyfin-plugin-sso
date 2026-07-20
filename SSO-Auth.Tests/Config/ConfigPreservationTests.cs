@@ -1,5 +1,6 @@
 using System;
 using System.Xml.Serialization;
+using Jellyfin.Plugin.SSO_Auth.Api.Logout;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Xunit;
 
@@ -865,5 +866,111 @@ public class ConfigPreservationTests
 
         var ex = Assert.Throws<ArgumentException>(() => ProviderConfigValidator.Validate(incoming, new PluginConfiguration()));
         Assert.Contains("secondary", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Preserve_ReinjectsLiveLogoutSessions_OverAnEmptyIncomingMap()
+    {
+        // The Single Logout session store (#727) is server-managed and JSON-ignored, so a config-page PUT
+        // arrives with it empty. Preserve must re-inject the live map, so a save never strands the captured
+        // sessions and a PUT can neither wipe nor forge them.
+        var live = new PluginConfiguration();
+        live.LogoutSessions["session-1"] = new LogoutSession { Provider = "keycloak", Subject = "sub-1", IdToken = "tok" };
+
+        var incoming = new PluginConfiguration(); // empty LogoutSessions, as a JSON round-trip produces
+
+        ServerManagedFields.Preserve(incoming, live);
+
+        Assert.Same(live.LogoutSessions, incoming.LogoutSessions);
+        Assert.True(incoming.LogoutSessions.ContainsKey("session-1"));
+    }
+
+    [Fact]
+    public void LogoutSessions_AreOmittedFromJson_UnderEveryNamingPolicy_SoTheIdTokenNeverLeaks()
+    {
+        // The captured id_token is a bearer secret; the whole map is [JsonIgnore] (#727). Pin that it — its
+        // key, its fields, and above all the raw id_token — never appears in a JSON response, under both the
+        // default and the camelCase policy, exactly as OidSecret/CanonicalLinks are pinned. The field-level
+        // [JsonIgnore] on IdToken is a second layer, checked by serializing a LogoutSession directly too.
+        var config = new PluginConfiguration();
+        config.LogoutSessions["session-key-1"] = new LogoutSession
+        {
+            Protocol = "OID",
+            Provider = "keycloak",
+            Subject = "sub-secret",
+            IdToken = "RAW-ID-TOKEN-SECRET",
+        };
+
+        foreach (var options in new[]
+        {
+            null,
+            new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase },
+        })
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(config, options);
+            Assert.DoesNotContain("LogoutSessions", json, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("session-key-1", json, StringComparison.Ordinal);
+            Assert.DoesNotContain("RAW-ID-TOKEN-SECRET", json, StringComparison.Ordinal);
+        }
+
+        // Serialize a LogoutSession directly: the field-level [JsonIgnore] keeps the id_token out even off the map.
+        var direct = System.Text.Json.JsonSerializer.Serialize(config.LogoutSessions["session-key-1"]);
+        Assert.DoesNotContain("RAW-ID-TOKEN-SECRET", direct, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LogoutSessions_RoundTripThroughConfigXml_KeepingTheIdTokenAndFields()
+    {
+        // The load-bearing claim is that a captured session survives a restart with a usable id_token_hint, so
+        // pin the config XML round-trip (the id_token persists to disk as-is — encryption is layered on at the
+        // persist boundary and covered by ConfigSecretProtectionTests). Mirrors CanonicalLinks_...ButKeptInXml.
+        var config = new PluginConfiguration();
+        config.LogoutSessions["session-key-1"] = new LogoutSession
+        {
+            Protocol = "OID",
+            Provider = "keycloak",
+            Subject = "sub-1",
+            SessionIndex = "sid-1",
+            Issuer = "https://idp.example",
+            IdToken = "ssoenc:v1:PERSISTED-ENVELOPE",
+            UserId = User,
+            CapturedUtcTicks = 638000000000000000,
+        };
+
+        var serializer = new XmlSerializer(typeof(PluginConfiguration));
+        using var writer = new System.IO.StringWriter();
+        serializer.Serialize(writer, config);
+        var xml = writer.ToString();
+        Assert.Contains("LogoutSessions", xml, StringComparison.Ordinal);
+        Assert.Contains("ssoenc:v1:PERSISTED-ENVELOPE", xml, StringComparison.Ordinal);
+
+        // Hardened reader (DTD prohibited, no resolver) so the round-trip deserialize is not itself an XXE
+        // sink (CA5369) — the same fail-closed XML posture the SAML parsers use.
+        using var reader = System.Xml.XmlReader.Create(
+            new System.IO.StringReader(xml),
+            new System.Xml.XmlReaderSettings { DtdProcessing = System.Xml.DtdProcessing.Prohibit, XmlResolver = null });
+        var restored = (PluginConfiguration)serializer.Deserialize(reader)!;
+
+        Assert.True(restored.LogoutSessions.ContainsKey("session-key-1"));
+        var entry = restored.LogoutSessions["session-key-1"];
+        Assert.Equal("keycloak", entry.Provider);
+        Assert.Equal("sub-1", entry.Subject);
+        Assert.Equal("sid-1", entry.SessionIndex);
+        Assert.Equal("https://idp.example", entry.Issuer);
+        Assert.Equal("ssoenc:v1:PERSISTED-ENVELOPE", entry.IdToken);
+        Assert.Equal(User, entry.UserId);
+        Assert.Equal(638000000000000000, entry.CapturedUtcTicks);
+    }
+
+    [Fact]
+    public void FindByProviderSubject_BlankSubject_MatchesNothing()
+    {
+        // A blank subject must not sweep every blank-subject entry (it feeds token revocation, #727): the store
+        // returns nothing rather than a broad match, independent of any caller guard.
+        var config = new PluginConfiguration();
+        config.LogoutSessions["a"] = new LogoutSession { Provider = "keycloak", Subject = string.Empty };
+
+        Assert.Empty(SessionLogoutStore.FindByProviderSubject(config, "keycloak", string.Empty, string.Empty));
+        Assert.Empty(SessionLogoutStore.FindByProviderSubject(config, "keycloak", null, string.Empty));
     }
 }

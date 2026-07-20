@@ -110,6 +110,57 @@ public class ConfigSecretProtectionTests
     }
 
     [Fact]
+    public void ProtectAll_EncryptsTheCapturedLogoutIdToken_AndRevealRecoversIt()
+    {
+        WithStore(store =>
+        {
+            // The Single Logout id_token (#727) is a bearer secret used as an id_token_hint at logout, so it
+            // must be encrypted at rest exactly like the provider secrets — a plaintext id_token in config.xml
+            // would be a secrets-at-rest regression.
+            var config = new PluginConfiguration();
+            config.LogoutSessions["session-1"] = new LogoutSession
+            {
+                Protocol = "OID",
+                Provider = "keycloak",
+                Subject = "sub-1",
+                IdToken = "raw.id.token",
+            };
+
+            ConfigSecretProtection.ProtectAll(config, store);
+
+            Assert.True(SecretEnvelope.IsProtected(config.LogoutSessions["session-1"].IdToken));
+            Assert.Equal("raw.id.token", store.Reveal(config.LogoutSessions["session-1"].IdToken));
+        });
+    }
+
+    [Fact]
+    public void HasAnyEnvelope_ALogoutIdTokenEnvelopeAlone_IsDetected_SoAMissingKeyFailsClosed()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "sso-cfgsec-" + Guid.NewGuid().ToString("N") + ".key");
+        try
+        {
+            // An envelope living ONLY in a captured logout id_token must still be seen as "config holds an
+            // envelope", so a lost key fails closed (orphan-prevention must cover the logout store too).
+            var envelope = new SecretStore(path).Protect("old-id-token");
+            File.Delete(path);
+
+            var config = new PluginConfiguration();
+            config.LogoutSessions["s"] = new LogoutSession { Provider = "keycloak", Subject = "sub", IdToken = envelope };
+            config.OidConfigs["b"] = new OidConfig { OidSecret = "new-plaintext" };
+
+            Assert.Throws<CryptographicException>(() => ConfigSecretProtection.ProtectAll(config, new SecretStore(path)));
+            Assert.False(File.Exists(path)); // no replacement key minted
+        }
+        finally
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    [Fact]
     public void HasAnyEnvelope_ARolloverEnvelopeAlone_IsDetected_SoAMissingKeyFailsClosed()
     {
         var path = Path.Combine(Path.GetTempPath(), "sso-cfgsec-" + Guid.NewGuid().ToString("N") + ".key");

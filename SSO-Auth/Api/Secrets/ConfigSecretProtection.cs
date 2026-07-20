@@ -60,6 +60,22 @@ internal static class ConfigSecretProtection
                 saml.SamlRolloverSigningKeyPfx = store.Protect(saml.SamlRolloverSigningKeyPfx, configHasEnvelopes);
             }
         }
+
+        if (configuration.LogoutSessions != null)
+        {
+            foreach (var session in configuration.LogoutSessions.Values)
+            {
+                if (session == null)
+                {
+                    continue;
+                }
+
+                // The captured id_token (#727) is a bearer secret used as an id_token_hint at logout, so it
+                // is encrypted at rest exactly like the provider secrets — a plaintext id_token in config.xml
+                // would be a secrets-at-rest regression.
+                session.IdToken = store.Protect(session.IdToken, configHasEnvelopes);
+            }
+        }
     }
 
     // True when any protected field already carries a well-formed envelope. Inspects exactly the fields
@@ -86,6 +102,17 @@ internal static class ConfigSecretProtection
                 if (saml != null
                     && (SecretEnvelope.IsWellFormedEnvelope(saml.SamlSigningKeyPfx)
                         || SecretEnvelope.IsWellFormedEnvelope(saml.SamlRolloverSigningKeyPfx)))
+                {
+                    return true;
+                }
+            }
+        }
+
+        if (configuration.LogoutSessions != null)
+        {
+            foreach (var session in configuration.LogoutSessions.Values)
+            {
+                if (session != null && SecretEnvelope.IsWellFormedEnvelope(session.IdToken))
                 {
                     return true;
                 }

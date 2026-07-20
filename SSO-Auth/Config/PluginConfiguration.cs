@@ -10,6 +10,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Config;
 public class PluginConfiguration : MediaBrowser.Model.Plugins.BasePluginConfiguration
 {
     private List<Guid> _ssoOnlyRepointedUserIds;
+    private SerializableDictionary<string, LogoutSession> _logoutSessions;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PluginConfiguration"/> class.
@@ -69,6 +70,17 @@ public class PluginConfiguration : MediaBrowser.Model.Plugins.BasePluginConfigur
     public bool ManageLoginPageButtons { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether Single Logout is on (#727). Off by default (fail safe): a
+    /// deployment that does not opt in captures no per-session logout state and exposes no logout surface.
+    /// When on, each successful login persists the state a logout needs (<see cref="LogoutSessions"/>) — for
+    /// OpenID the <c>id_token</c> used as an <c>id_token_hint</c>, for both protocols the subject/session
+    /// index a logout is matched on — so an RP-initiated OpenID logout or an inbound SAML <c>LogoutRequest</c>
+    /// can terminate the linked Jellyfin session. It gates only the capture and the (later) logout endpoints;
+    /// local Jellyfin logout is unaffected either way.
+    /// </summary>
+    public bool EnableSingleLogout { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether SSO-only login is on (#165): native password login is
     /// disabled per account by repointing each non-exempt user's <c>AuthenticationProviderId</c> away from
     /// Jellyfin's password provider, EXCEPT a designated break-glass admin whose password door is always
@@ -114,6 +126,25 @@ public class PluginConfiguration : MediaBrowser.Model.Plugins.BasePluginConfigur
         // throwaway. Every access is under ReadConfiguration/MutateConfiguration, so it cannot race.
         get => _ssoOnlyRepointedUserIds ??= new List<Guid>();
         set => _ssoOnlyRepointedUserIds = value;
+    }
+
+    /// <summary>
+    /// Gets or sets the per-session Single Logout state captured at login (#727), keyed by an opaque session
+    /// key. Server-managed RUNTIME state, NOT an admin setting: the login path writes it (only while
+    /// <see cref="EnableSingleLogout"/> is on), the logout path reads and removes it, and it is bounded so it
+    /// cannot grow without limit. It persists in the config XML so a session survives a restart with a usable
+    /// <c>id_token_hint</c>. Withheld from JSON (<c>[JsonIgnore]</c>) and re-injected on save like the other
+    /// server-managed fields, so a config PUT can neither read the stored id_tokens nor forge session state;
+    /// each entry's <see cref="LogoutSession.IdToken"/> is additionally encrypted at rest.
+    /// </summary>
+    [XmlElement("LogoutSessions")]
+    [System.Text.Json.Serialization.JsonIgnore]
+    public SerializableDictionary<string, LogoutSession> LogoutSessions
+    {
+        // Self-healing lazy init (mirrors CanonicalLinks/SsoOnlyRepointedUserIds): a config PUT deserializes
+        // this to null (it is JSON-ignored), so a later write under the config lock must land in a stored map.
+        get => _logoutSessions ??= new SerializableDictionary<string, LogoutSession>();
+        set => _logoutSessions = value;
     }
 }
 
