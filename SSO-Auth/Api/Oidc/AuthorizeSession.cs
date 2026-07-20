@@ -136,7 +136,7 @@ internal abstract class AuthorizeSession
             // Carry the OpenID logout material (#727, SLO-1b) alongside the keystone rather than inside it:
             // the id_token and sid are needed only by the (opt-in) logout capture at the mint, so keeping them
             // off VerifiedIdentity leaves the keystone's minimal contract intact.
-            LogoutContext = new LogoutContext(derived.SessionIndex, derived.IdToken);
+            LogoutContext = new LogoutContext(derived.SessionIndex, derived.IdToken, derived.EndSessionEndpoint);
         }
 
         /// <summary>

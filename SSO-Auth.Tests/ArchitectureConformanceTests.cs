@@ -214,7 +214,7 @@ public class ArchitectureConformanceTests
     [InlineData("Session", "Authz", "Avatar", "Linking")] // session mint + login outcomes — applies grants (Authz), sets avatars (Avatar), reconciles links (Linking)
     [InlineData("Shared", "Avatar", "Linking", "RateLimit", "Routing", "Session")] // shared served-page / flow-response + rate-limit-gate helpers — depend downward on the session/linking/avatar/throttle/route tiers, never on a protocol or the boundary
     [InlineData("Flows", "Audit", "Identity", "Linking", "Logout", "Net", "Oidc", "Provider", "RateLimit", "Saml", "Session", "Shared")] // per-protocol login orchestration — drives both protocol modules (Oidc/Saml) and the downstream mint/link/session tiers; persists the captured logout state at the mint (Logout, #727); nothing above the boundary imports it
-    [InlineData("Http", "Audit", "Avatar", "Flows", "Linking", "Net", "Oidc", "Provider", "Saml", "Session", "Shared")] // the web boundary (SSOController + request helpers + the admin test-connection probe): the composition top of the DAG — it fronts every flow, so its import list is deliberately wide; nothing imports it back (#790/#807)
+    [InlineData("Http", "Audit", "Avatar", "Flows", "Linking", "Logout", "Net", "Oidc", "Provider", "Saml", "Session", "Shared")] // the web boundary (SSOController + request helpers + the admin test-connection probe): the composition top of the DAG — it fronts every flow, so its import list is deliberately wide (incl. the RP-initiated logout store, #727); nothing imports it back (#790/#807)
     public void ApiModule_ImportsOnlyItsAllowedApiModules(string module, params string[] allowed)
     {
         var moduleDir = Path.Combine(RepoRoot(), "SSO-Auth", "Api", module);

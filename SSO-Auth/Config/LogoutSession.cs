@@ -48,6 +48,13 @@ public class LogoutSession
     public string Issuer { get; set; }
 
     /// <summary>
+    /// Gets or sets the OpenID <c>end_session_endpoint</c> captured from discovery at login (#727, SLO-2),
+    /// so an RP-initiated logout needs no runtime rediscovery. Blank when the OP advertises none (or for
+    /// SAML), in which case logout falls back to local-only. Not a secret — a public provider URL.
+    /// </summary>
+    public string EndSessionEndpoint { get; set; }
+
+    /// <summary>
     /// Gets or sets the raw OpenID <c>id_token</c> used as the <c>id_token_hint</c> for an RP-initiated
     /// logout (OpenID only; blank for SAML). A bearer secret: encrypted at rest and never returned over JSON.
     /// </summary>

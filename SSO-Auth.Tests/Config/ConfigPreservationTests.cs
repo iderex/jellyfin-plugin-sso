@@ -932,6 +932,7 @@ public class ConfigPreservationTests
             Subject = "sub-1",
             SessionIndex = "sid-1",
             Issuer = "https://idp.example",
+            EndSessionEndpoint = "https://idp.example/logout",
             IdToken = "ssoenc:v1:PERSISTED-ENVELOPE",
             UserId = User,
             CapturedUtcTicks = 638000000000000000,
@@ -957,6 +958,7 @@ public class ConfigPreservationTests
         Assert.Equal("sub-1", entry.Subject);
         Assert.Equal("sid-1", entry.SessionIndex);
         Assert.Equal("https://idp.example", entry.Issuer);
+        Assert.Equal("https://idp.example/logout", entry.EndSessionEndpoint);
         Assert.Equal("ssoenc:v1:PERSISTED-ENVELOPE", entry.IdToken);
         Assert.Equal(User, entry.UserId);
         Assert.Equal(638000000000000000, entry.CapturedUtcTicks);

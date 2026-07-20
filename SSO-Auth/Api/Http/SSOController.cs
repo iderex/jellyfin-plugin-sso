@@ -12,6 +12,7 @@ using Jellyfin.Plugin.SSO_Auth.Api.Audit;
 using Jellyfin.Plugin.SSO_Auth.Api.Avatar;
 using Jellyfin.Plugin.SSO_Auth.Api.Flows;
 using Jellyfin.Plugin.SSO_Auth.Api.Linking;
+using Jellyfin.Plugin.SSO_Auth.Api.Logout;
 using Jellyfin.Plugin.SSO_Auth.Api.Net;
 using Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 using Jellyfin.Plugin.SSO_Auth.Api.Provider;
@@ -178,6 +179,71 @@ public class SSOController : ControllerBase
         // redirects to the identity provider (setting the binding cookie on the response).
         // This endpoint is browser-navigated, so a plain-text rejection is restyled as an HTML page (#668).
         return BrowserErrorPage.Wrap(await _oidc.ChallengeAsync(provider, isLinking, Request, Response).ConfigureAwait(false), Request, Response);
+    }
+
+    /// <summary>
+    /// RP-initiated OpenID logout (#727, SLO-2). Ends the CALLER's local Jellyfin session, then — when the
+    /// caller has a captured OpenID session for this provider (Single Logout enabled) — redirects the browser
+    /// to the identity provider's <c>end_session_endpoint</c> with the stored <c>id_token_hint</c>, so the IdP
+    /// session is terminated too. Fail-safe: a missing/unsafe endpoint or a disabled feature degrades to a
+    /// local-only logout (the browser returns to this server). Authenticated, and every action is scoped
+    /// strictly to the caller's own user id — a user can only log THEMSELVES out.
+    /// </summary>
+    /// <param name="provider">The OpenID provider to end the session at.</param>
+    /// <returns>A redirect to the IdP end-session URL, or to this server for a local-only logout.</returns>
+    [Authorize]
+    [HttpGet("OID/logout/{provider}")]
+    public async Task<ActionResult> OidLogout(string provider)
+    {
+        var auth = await _authContext.GetAuthorizationInfo(HttpContext.Request).ConfigureAwait(false);
+
+        // The caller's most recent captured OpenID session for this provider (an id_token distinguishes an
+        // OpenID capture from a SAML one). Scoped to the caller's own user id, read under the config lock.
+        var match = SSOPlugin.Instance.ReadConfiguration(configuration =>
+            SessionLogoutStore.FindByUser(configuration, auth.UserId)
+                .FirstOrDefault(pair =>
+                    string.Equals(pair.Value.Provider, provider, StringComparison.Ordinal)
+                    && !string.IsNullOrEmpty(pair.Value.IdToken)));
+
+        // End the caller's local Jellyfin session (their current token only), then drop the consumed entry so
+        // the id_token is not retained past the logout.
+        if (!string.IsNullOrEmpty(auth.Token))
+        {
+            await _sessionManager.Logout(auth.Token).ConfigureAwait(false);
+        }
+
+        if (match.Value is not null)
+        {
+            SSOPlugin.Instance.MutateConfiguration(configuration => SessionLogoutStore.Remove(configuration, match.Key));
+        }
+
+        var config = SSOPlugin.Instance.ReadConfiguration(configuration =>
+            configuration.OidConfigs.TryGetValue(provider, out var oidConfig) ? oidConfig : null);
+
+        // This server's canonical base — the allow-list root for the post-logout return URL, and the
+        // local-only fallback target. Derived exactly as the login builds its own external URLs.
+        var canonicalBase = CanonicalBaseUrl.Resolve(
+            config?.BaseUrlOverride, Request.Scheme, Request.Host.Host, Request.Host.Port, Request.PathBase, config?.SchemeOverride, config?.PortOverride);
+
+        string endSessionUrl = null;
+        if (match.Value is { } captured)
+        {
+            // Reveal the encrypted id_token only now, at the moment it is sent as the id_token_hint.
+            endSessionUrl = OidcLogout.BuildEndSessionUrl(
+                captured.EndSessionEndpoint,
+                captured.Issuer,
+                SSOPlugin.Instance.Secrets.Reveal(captured.IdToken),
+                config?.OidClientId,
+                config?.PostLogoutRedirectUri,
+                canonicalBase);
+        }
+
+        // Redirect to the IdP end-session URL (an absolute URL host-bound to the discovered issuer by
+        // OidcLogout), or — local-only — back to this server via a LOCAL redirect. The local fallback must NOT
+        // reuse the canonical base as an absolute target: with no Base URL Override that base is derived from
+        // the request Host header, so a spoofed Host would turn the fallback into an open redirect. A local
+        // ("~/") redirect is host-independent and ASP.NET Core rejects any non-local value outright.
+        return endSessionUrl is null ? LocalRedirect("~/") : Redirect(endSessionUrl);
     }
 
     // Rejects a malformed canonical base-URL override (#139) at the OID/SAML Add endpoints. These persist
