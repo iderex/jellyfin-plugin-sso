@@ -12,11 +12,11 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Session;
 /// </summary>
 /// <remarks>
 /// Jellyfin has no server-wide "disable password login" switch (see SSO-ONLY-LOGIN-DESIGN.md §2); the only
-/// lever is the per-user provider id. Setting it to <see cref="SsoProviderId"/> — the plugin controller's
-/// full type name, which is NOT a registered <c>IAuthenticationProvider</c> — makes Jellyfin route that
-/// account's password attempts to its <c>InvalidAuthenticationProvider</c>, which rejects every password.
-/// This is the exact lever <see cref="CanonicalLinkService"/> already uses for the accounts it
-/// creates (<c>user.AuthenticationProviderId = typeof(SSOController).FullName</c>). Restoring
+/// lever is the per-user provider id. Setting it to <see cref="SsoProviderId"/> — a value that is NOT a
+/// registered <c>IAuthenticationProvider</c> — makes Jellyfin route that account's password attempts to its
+/// <c>InvalidAuthenticationProvider</c>, which rejects every password. This is the exact same pinned value
+/// (<see cref="SsoManagedProviderId"/>) that <see cref="CanonicalLinkService"/> stamps on the accounts it
+/// creates, so the stamp and this detector can never disagree. Restoring
 /// <see cref="DefaultPasswordProviderId"/> re-opens native password login, exactly as the Unregister revoke
 /// path does. Neither value is a secret; both are stable, documented Jellyfin identifiers.
 /// </remarks>
@@ -31,13 +31,14 @@ internal static class SsoAuthenticationProviders
     internal const string DefaultPasswordProviderId = "Jellyfin.Server.Implementations.Users.DefaultAuthenticationProvider";
 
     /// <summary>
-    /// Gets the provider id that disables native password login for an account: the SSO controller's full
-    /// type name, which resolves to no registered password provider (so core substitutes its
-    /// <c>InvalidAuthenticationProvider</c>). Computed from <see cref="SSOController"/> so a namespace/rename
-    /// tracks automatically rather than drifting from the value <see cref="CanonicalLinkService"/>
-    /// stamps on created accounts.
+    /// Gets the provider id that disables native password login for an account: a value that resolves to no
+    /// registered password provider (so core substitutes its <c>InvalidAuthenticationProvider</c>). It is the
+    /// pinned <see cref="SsoManagedProviderId.Value"/> — the exact string <see cref="CanonicalLinkService"/>
+    /// stamps on created accounts — so the stamp and this detector are guaranteed identical. Pinned to a
+    /// fixed literal (rather than derived from the controller's runtime type name) precisely so a future move
+    /// of that type never orphans the already-persisted accounts that carry this literal (#837).
     /// </summary>
-    internal static string SsoProviderId { get; } = typeof(SSOController).FullName!;
+    internal static string SsoProviderId => SsoManagedProviderId.Value;
 
     /// <summary>Whether the given provider id is the plugin's SSO (password-disabling) provider.</summary>
     /// <param name="authenticationProviderId">The account's <c>AuthenticationProviderId</c>.</param>
