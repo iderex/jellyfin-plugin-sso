@@ -1,4 +1,5 @@
 using System.Threading;
+using Jellyfin.Plugin.SSO_Auth.Api.LoginButtons;
 using Jellyfin.Plugin.SSO_Auth.Api.Net;
 using Jellyfin.Plugin.SSO_Auth.Api.Session;
 using MediaBrowser.Controller;
@@ -25,6 +26,10 @@ public sealed class SsoOnlyServiceRegistrator : IPluginServiceRegistrator
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
         serviceCollection.AddHostedService<SsoOnlyReconciliationService>();
+
+        // Keeps the login-page "Sign in with …" buttons (#722) in sync with the configured providers by
+        // splicing a managed block into the server's branding login disclaimer on every config change.
+        serviceCollection.AddHostedService<LoginButtonManager>();
 
         // The plugin's SSRF-hardened outbound client (#755). The OpenID discovery / token / JWKS fetches
         // resolve this named client through SsoHttp.CreateClient, so a provider endpoint that resolves to a

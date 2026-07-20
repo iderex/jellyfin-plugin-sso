@@ -58,6 +58,17 @@ public class PluginConfiguration : MediaBrowser.Model.Plugins.BasePluginConfigur
     public int RateLimitWindowSeconds { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the plugin manages the "Sign in with …" buttons on the
+    /// Jellyfin login page (#722), by splicing a marker-fenced block into the server's branding login
+    /// disclaimer. Off by default (fail safe): a deployment that does not opt in never has its branding
+    /// mutated. When on, the managed block lists one button per ENABLED provider that does not set
+    /// <see cref="ProviderConfigBase.HideLoginButton"/>; turning it off removes only the managed region,
+    /// preserving any surrounding admin disclaimer content. The button labels/names are HTML-encoded into the
+    /// disclaimer (an anonymous, pre-auth page), so a hostile provider name or label renders inert.
+    /// </summary>
+    public bool ManageLoginPageButtons { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether SSO-only login is on (#165): native password login is
     /// disabled per account by repointing each non-exempt user's <c>AuthenticationProviderId</c> away from
     /// Jellyfin's password provider, EXCEPT a designated break-glass admin whose password door is always
@@ -143,6 +154,21 @@ public abstract class ProviderConfigBase
     /// Gets or sets a value indicating whether the provider is enabled.
     /// </summary>
     public bool Enabled { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether this provider is HIDDEN from the managed login-page buttons
+    /// (#722), when <see cref="PluginConfiguration.ManageLoginPageButtons"/> is on. Off by default: an enabled
+    /// provider gets a button. Set it to keep a provider usable via its direct start URL without advertising a
+    /// button on the login page. No effect while managed buttons are off.
+    /// </summary>
+    public bool HideLoginButton { get; set; }
+
+    /// <summary>
+    /// Gets or sets the label for this provider's managed login-page button (#722). Blank uses the provider
+    /// name. The value is HTML-encoded into the login disclaimer, so any text is safe. No effect while
+    /// <see cref="PluginConfiguration.ManageLoginPageButtons"/> is off or <see cref="HideLoginButton"/> is on.
+    /// </summary>
+    public string LoginButtonText { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether RBAC is enabled.
