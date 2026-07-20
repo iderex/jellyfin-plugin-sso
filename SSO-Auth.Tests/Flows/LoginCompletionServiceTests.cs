@@ -213,4 +213,81 @@ public class LoginCompletionServiceTests
         await sessions.DidNotReceive().AuthenticateDirect(Arg.Any<AuthenticationRequest>());
         await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
     }
+
+    [Fact]
+    public async Task CompleteAsync_ProvisionNewUsersDisabled_UnknownIdentity_RefusesAwaitingApprovalWithoutMinting()
+    {
+        // #737: with ProvisionNewUsersDisabled on, an unknown identity's first login creates the account
+        // disabled (no permissions) and the login is refused with an awaiting-approval 403 — NO session is
+        // minted. This is the core fail-closed onboarding control.
+        var config = new OidConfig { Enabled = true, ProvisionNewUsersDisabled = true };
+        var (service, _, users, sessions) = Build(c => c.OidConfigs["kc"] = config);
+        var created = UserNamed("alice", Created);
+        users.GetUserByName("alice").Returns((User?)null);
+        users.CreateUserAsync("alice").Returns(created);
+        users.GetUserById(Created).Returns(created);
+
+        var result = await service.CompleteAsync(
+            OidcIdentity("kc", "sub-1", "alice"), Response(), config, AdoptionGate.None, () => "203.0.113.9");
+
+        var content = Assert.IsType<ContentResult>(result);
+        Assert.Equal(403, content.StatusCode);
+        Assert.Contains("awaiting administrator approval", content.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.True(created.HasPermission(Jellyfin.Database.Implementations.Enums.PermissionKind.IsDisabled)); // created inert
+        await sessions.DidNotReceive().AuthenticateDirect(Arg.Any<AuthenticationRequest>()); // and never a session
+    }
+
+    [Fact]
+    public async Task CompleteAsync_ProvisionNewUsersDisabled_ExistingLinkedAdmin_IsNeverDisabledAndMints()
+    {
+        // The invariant #737 must not regress: the policy disables only a BRAND-NEW account. An existing,
+        // enabled admin that resolves by its subject link logs in normally — it is never disabled, no new
+        // account is created, and a session is minted (mirrors the break-glass "never demote an existing
+        // admin" posture).
+        var config = new OidConfig
+        {
+            Enabled = true,
+            ProvisionNewUsersDisabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        };
+        var (service, _, users, sessions) = Build(c => c.OidConfigs["kc"] = config);
+        var existing = UserNamed("alice", Existing);
+        existing.SetPermission(Jellyfin.Database.Implementations.Enums.PermissionKind.IsAdministrator, true);
+        users.GetUserById(Existing).Returns(existing);
+        sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
+
+        var result = await service.CompleteAsync(
+            OidcIdentity("kc", "sub-1", "alice"), Response(), config, AdoptionGate.None, () => "203.0.113.9");
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.False(existing.HasPermission(Jellyfin.Database.Implementations.Enums.PermissionKind.IsDisabled)); // never disabled
+        await sessions.Received(1).AuthenticateDirect(Arg.Any<AuthenticationRequest>());
+        await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
+    }
+
+    [Fact]
+    public async Task CompleteAsync_ProvisionNewUsersDisabled_SecondLoginOfPendingAccount_RefusesAgainWithoutMinting()
+    {
+        // A still-disabled linked account (provisioned pending on an earlier login) logs in again: the resolved
+        // account is disabled, so the uniform gate refuses with awaiting-approval again — never a session, and
+        // the account is never re-enabled by the login path.
+        var config = new OidConfig
+        {
+            Enabled = true,
+            ProvisionNewUsersDisabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        };
+        var (service, _, users, sessions) = Build(c => c.OidConfigs["kc"] = config);
+        var pending = UserNamed("alice", Existing);
+        pending.SetPermission(Jellyfin.Database.Implementations.Enums.PermissionKind.IsDisabled, true);
+        users.GetUserById(Existing).Returns(pending);
+
+        var result = await service.CompleteAsync(
+            OidcIdentity("kc", "sub-1", "alice"), Response(), config, AdoptionGate.None, () => "203.0.113.9");
+
+        var content = Assert.IsType<ContentResult>(result);
+        Assert.Equal(403, content.StatusCode);
+        await sessions.DidNotReceive().AuthenticateDirect(Arg.Any<AuthenticationRequest>());
+        await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
+    }
 }

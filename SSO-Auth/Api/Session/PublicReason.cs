@@ -30,4 +30,7 @@ internal enum PublicReason
 
     /// <summary>RequireVerifiedEmailForLogin is set but the login carried no verified email (absent/false/unparseable) (#166). Operator-facing by design.</summary>
     EmailNotVerified,
+
+    /// <summary>The resolved account is disabled — a new user provisioned pending approval (ProvisionNewUsersDisabled), or an account an admin disabled — so no session is minted (#737). User-facing by design.</summary>
+    AwaitingApproval,
 }

@@ -158,8 +158,14 @@ internal sealed class CanonicalLinkService
     /// and a link with no stored issuer is stamped with this value on first use (trust-on-first-use). Null
     /// for SAML and for a token that carried no <c>iss</c>; both skip the binding.
     /// </param>
+    /// <param name="provisionDisabled">
+    /// The provider's ProvisionNewUsersDisabled policy (#737): when a brand-new account is created on this
+    /// login (the create arm only), provision it disabled and persisted so it exists inert for an administrator
+    /// to approve. Never disables an existing or adopted account. Default off (a new account is created
+    /// enabled); the caller inspects the resolved account via <see cref="IsAccountAwaitingApproval"/>.
+    /// </param>
     /// <returns>The resolved Jellyfin user id.</returns>
-    internal async Task<Guid> ResolveOrCreateAsync(ProviderMode mode, string provider, string canonicalKey, string username, bool allowExistingAccountLink, AdoptionGate adoptionGate = default, string? issuer = null)
+    internal async Task<Guid> ResolveOrCreateAsync(ProviderMode mode, string provider, string canonicalKey, string username, bool allowExistingAccountLink, AdoptionGate adoptionGate = default, string? issuer = null, bool provisionDisabled = false)
     {
         // Defense in depth (#95, #155): a login that resolved no stable identity key (OpenID sub /
         // SAML NameID) or no username must never create, adopt, or look up an account. Both callbacks
@@ -228,7 +234,7 @@ internal sealed class CanonicalLinkService
                 return AdoptExistingAccount(mode, provider, canonicalKey, username, issuer, existingAccount!, adoptionGate, decision.UserId);
 
             case AccountLinkAction.CreateNewAccount:
-                return await CreateNewAccountAsync(mode, provider, canonicalKey, username, issuer, candidates.LegacyLink).ConfigureAwait(false);
+                return await CreateNewAccountAsync(mode, provider, canonicalKey, username, issuer, candidates.LegacyLink, provisionDisabled).ConfigureAwait(false);
 
             case AccountLinkAction.RejectNameTaken:
                 throw RejectNameTaken(candidates.LegacyLink, mode, provider, username);
@@ -425,8 +431,10 @@ internal sealed class CanonicalLinkService
     };
 
     // Provisions a fresh Jellyfin account for this identity and links it on the subject key, warning first
-    // when a now-orphaned legacy link is being left behind.
-    private async Task<Guid> CreateNewAccountAsync(ProviderMode mode, string provider, string canonicalKey, string username, string? issuer, Guid? legacyLink)
+    // when a now-orphaned legacy link is being left behind. When provisionDisabled is set (the provider's
+    // ProvisionNewUsersDisabled policy, #737), the brand-new account is created disabled and persisted here
+    // so it exists inert for an administrator to approve; the caller then refuses the login without minting.
+    private async Task<Guid> CreateNewAccountAsync(ProviderMode mode, string provider, string canonicalKey, string username, string? issuer, Guid? legacyLink, bool provisionDisabled)
     {
         if (legacyLink.HasValue && _legacyLinkWarnGate.TryEnter(_clock()))
         {
@@ -462,12 +470,64 @@ internal sealed class CanonicalLinkService
         // https://jonathancrozier.com/blog/how-to-generate-a-cryptographically-secure-random-string-in-dot-net-with-c-sharp
         user.Password = _cryptoProvider.CreatePasswordHash(Convert.ToBase64String(RandomNumberGenerator.GetBytes(64))).ToString();
 
+        if (provisionDisabled)
+        {
+            // Pending-approval provisioning (#737): create the account inert. IsDisabled is otherwise never
+            // written by this plugin and is barred from SSO role mapping (PermissionRolePolicy) precisely so
+            // no login can disable an EXISTING account; this is the one sanctioned write, and it targets ONLY
+            // a brand-new account on this create arm — never an existing or adopted one. The normal path lets
+            // the session minter persist the account; this deferred path short-circuits before the mint, so it
+            // must persist the disabled flag (and this account's SSO provider id / password) itself. No
+            // permissions are applied — the account carries Jellyfin's default new-user policy until an
+            // administrator enables it. The caller reads the disabled state and refuses the login.
+            user.SetPermission(PermissionKind.IsDisabled, true);
+            var persisted = false;
+            try
+            {
+                await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
+                persisted = true;
+            }
+            finally
+            {
+                if (!persisted)
+                {
+                    // If persisting the disabled flag failed, the just-created account would otherwise survive
+                    // ENABLED and link-less, and a later login could adopt it (with AllowExistingAccountLink on)
+                    // and mint a session — defeating the hold. Roll it back so the login fails closed with no
+                    // orphan. The original failure still propagates out of this finally.
+                    await _userManager.DeleteUserAsync(user.Id).ConfigureAwait(false);
+                }
+            }
+
+            // Audited here, at the actual provisioning event, so the line fires exactly once (not on every
+            // later refused login of the now-pending account) and is always accurate — the completion-path
+            // gate that refuses the login covers any disabled account, including one an admin disabled, so
+            // auditing there would mislabel a deliberate ban as a fresh provisioning.
+            SsoAudit.ProvisionedPendingApproval(_logger, mode == ProviderMode.Oid ? "OpenID" : "SAML", provider, username);
+        }
+
         // Atomic check-then-link (#133): if a concurrent first-login for the same identity
         // linked meanwhile, use its account — this freshly created user is left unlinked rather
         // than overwriting the winner's link (a rare, benign orphan, not a duplicate login). The
         // link write stamps the login's issuer (#186), so the new link is issuer-bound.
         var (effectiveUserId, _) = LinkCanonicalIfAbsent(mode, provider, canonicalKey, user.Id, issuer);
         return effectiveUserId;
+    }
+
+    /// <summary>
+    /// Whether the resolved account is disabled and so must not be issued a session — a brand-new user
+    /// provisioned pending approval (ProvisionNewUsersDisabled, #737) or an account an administrator disabled.
+    /// A read-only check the completion path uses to refuse the login with an "awaiting approval" message
+    /// instead of attempting to mint (which would fail on a disabled user). A user that vanished between
+    /// resolution and here is left to the minter's own null guard (its AuthenticationException), not
+    /// mislabelled as pending approval.
+    /// </summary>
+    /// <param name="userId">The resolved Jellyfin user id.</param>
+    /// <returns><see langword="true"/> when the account exists and is disabled.</returns>
+    internal bool IsAccountAwaitingApproval(Guid userId)
+    {
+        var user = _userManager.GetUserById(userId);
+        return user is not null && user.HasPermission(PermissionKind.IsDisabled);
     }
 
     // Logs the name-taken refusal (distinguishing a pending migratable legacy link from an ordinary #95

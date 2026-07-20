@@ -1134,6 +1134,36 @@
                       <label>
                         <input
                           is="emby-checkbox"
+                          id="ProvisionNewUsersDisabled"
+                          name="ProvisionNewUsersDisabled"
+                          type="checkbox"
+                          class="sso-toggle"
+                        />
+                        <span
+                          >Provision New Users Disabled (Pending Approval)</span
+                        >
+                      </label>
+                      <div class="fieldDescription checkboxFieldDescription">
+                        When the identity provider's audience is broader than
+                        your intended Jellyfin audience: an unknown identity's
+                        first successful SSO login creates its account
+                        <strong>disabled, with no permissions</strong>, and the
+                        login is refused with an "awaiting administrator
+                        approval" message instead of a session. Approve the
+                        account by enabling it in the Jellyfin dashboard
+                        (Administration → Users). Off by default (new accounts
+                        are created enabled). This never disables an existing or
+                        adopted account — only a brand-new one — and each
+                        deferred provisioning is recorded as an audit event.
+                      </div>
+                    </div>
+
+                    <div
+                      class="checkboxContainer checkboxContainer-withDescription"
+                    >
+                      <label>
+                        <input
+                          is="emby-checkbox"
                           id="RequireVerifiedEmailForAdoption"
                           name="RequireVerifiedEmailForAdoption"
                           type="checkbox"

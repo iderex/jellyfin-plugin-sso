@@ -38,6 +38,28 @@ internal static class SsoAudit
             isAdmin);
     }
 
+    /// <summary>
+    /// Records a new SSO identity being provisioned as a disabled account pending administrator approval
+    /// (#737, ProvisionNewUsersDisabled). No session was issued; an administrator must enable the account.
+    /// </summary>
+    /// <param name="logger">The logger.</param>
+    /// <param name="protocol">The protocol (OpenID or SAML).</param>
+    /// <param name="provider">The provider name.</param>
+    /// <param name="username">The Jellyfin username the disabled account was created under.</param>
+    internal static void ProvisionedPendingApproval(ILogger logger, string protocol, string provider, string username)
+    {
+        if (!logger.IsEnabled(LogLevel.Warning))
+        {
+            return;
+        }
+
+        logger.LogWarning(
+            "[SSO Audit] New account provisioned pending approval: '{Username}' via {Protocol} provider '{Provider}' was created disabled (ProvisionNewUsersDisabled); no session issued. Enable it in the Jellyfin dashboard to approve.",
+            username?.ReplaceLineEndings(string.Empty),
+            protocol,
+            provider?.ReplaceLineEndings(string.Empty));
+    }
+
     /// <summary>Records an SSO identity being linked to a pre-existing account (the opt-in adoption path).</summary>
     /// <param name="logger">The logger.</param>
     /// <param name="protocol">The protocol (OpenID or SAML).</param>

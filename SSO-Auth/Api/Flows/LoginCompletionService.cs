@@ -75,11 +75,25 @@ internal sealed class LoginCompletionService
                 identity.Username,
                 config.AllowExistingAccountLink,
                 adoptionGate,
-                identity.Issuer).ConfigureAwait(false);
+                identity.Issuer,
+                config.ProvisionNewUsersDisabled).ConfigureAwait(false);
         }
         catch (AccountLinkForbiddenException)
         {
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.AccountLinkForbidden));
+        }
+
+        // Pending-approval gate (#737): a resolved account that is disabled — a brand-new user just
+        // provisioned inert under ProvisionNewUsersDisabled, OR any account an administrator disabled — must
+        // not be issued a session. This single read-only check fails closed for both the first login (the
+        // account was just created disabled above) and every later login of a still-pending account, and it
+        // fires BEFORE any SSO-only repoint or mint side effect. It never disables an account; it only refuses
+        // to mint for one already disabled. The provisioning event itself is audited at its source
+        // (CanonicalLinkService), so this uniform gate refuses silently rather than mislabelling an
+        // admin-disabled account's refused login as a fresh provisioning.
+        if (_canonicalLinks.IsAccountAwaitingApproval(userId))
+        {
+            return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.AwaitingApproval));
         }
 
         // SSO-only re-assertion on the login path (#165, criterion 5 / T-S1, Findings A/B/H1). While
