@@ -365,15 +365,17 @@ internal sealed class OidcLoginService : ILoginService
         }
 
         // Step-up / MFA enforcement (#757): when the provider requires an authentication-context class, the
-        // signature-verified id_token's acr claim must be one of the configured acr_values. Read from the
-        // validated principal (result.User.Claims — the same source the role and subject gates above use, so
-        // an unverified value can never satisfy it), and checked here before Promote so a login lacking the
-        // required context never becomes a redeemable Ready — which also covers the manual-link redeem. Off
-        // by default; fail closed when on (an absent or non-listed acr is refused). A save with RequireAcr on
-        // but no acr_values is rejected by the config validator, so this never lands on an empty allow-list.
+        // acr claim must be one of the configured acr_values. Read from the RAW, signature-verified id_token
+        // (OidcIdTokenAcr), NOT result.User — with LoadProfile on (the default) OidcClient merges the unsigned
+        // UserInfo response into result.User, so only the id_token's own acr is trustworthy (the same reason
+        // the RFC 9207 iss check above re-reads iss from result.IdentityToken). Checked here before Promote so
+        // a login lacking the required context never becomes a redeemable Ready — which also covers the
+        // manual-link redeem. Off by default; fail closed when on (an absent or non-listed acr is refused). A
+        // save with RequireAcr on but no acr_values is rejected by the config validator, so this never lands
+        // on an empty allow-list.
         if (config.RequireAcr)
         {
-            var acr = result.User.Claims.LastOrDefault(c => string.Equals(c.Type, "acr", StringComparison.Ordinal))?.Value;
+            var acr = OidcIdTokenAcr.Read(result.IdentityToken);
             if (!AcrPolicy.IsSatisfied(acr, config.AcrValues))
             {
                 if (_logger.IsEnabled(LogLevel.Warning))

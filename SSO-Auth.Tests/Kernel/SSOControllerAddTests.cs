@@ -46,6 +46,30 @@ public class SSOControllerAddTests
     }
 
     [Fact]
+    public void OidAdd_RequireAcrWithoutAcrValues_Throws_AndDoesNotPersist()
+    {
+        // #757: the Add API persists through MutateConfiguration and so bypasses the config-page save-time
+        // Validate; the acr footgun guard must be mirrored here too, or RequireAcr with no acr_values would
+        // persist and refuse every login for the provider (a silent single-provider lockout).
+        var harness = new SsoControllerHarness();
+
+        Assert.Throws<ArgumentException>(() => harness.Controller.OidAdd("keycloak", new OidConfig { RequireAcr = true }));
+
+        Assert.False(SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs.ContainsKey("keycloak")));
+    }
+
+    [Fact]
+    public void OidAdd_RequireAcrWithAcrValues_Persists()
+    {
+        // The valid combination is accepted and stored.
+        var harness = new SsoControllerHarness();
+
+        harness.Controller.OidAdd("keycloak", new OidConfig { RequireAcr = true, AcrValues = "mfa" });
+
+        Assert.True(SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs.ContainsKey("keycloak")));
+    }
+
+    [Fact]
     public void OidAdd_NullBody_Throws_AndDoesNotPersist()
     {
         var harness = new SsoControllerHarness();

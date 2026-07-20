@@ -277,6 +277,11 @@ public class SSOController : ControllerBase
         // the config-page save-time validation. Reuses the one shared validator so every admin write path
         // agrees on what a valid mapping is.
         ProviderConfigValidator.ValidatePermissionRoleMappings(OpenIdProtocol, provider, config.PermissionRoleMappings);
+        // Reject RequireAcr with no acr_values at the door too (#757): an empty allow-list would refuse every
+        // login for the provider (a silent single-provider lockout). Mirrors the config-page/import validation
+        // so this Add path — which persists through MutateConfiguration and bypasses the save-time Validate —
+        // shares the same fail-closed guard.
+        ProviderConfigValidator.ValidateAcrRequirement(provider, config);
         SSOPlugin.Instance.MutateConfiguration(configuration =>
         {
             // The name guard needs the under-lock existence check (#336) and runs before any mutation,
