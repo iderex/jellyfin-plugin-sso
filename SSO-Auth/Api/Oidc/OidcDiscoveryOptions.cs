@@ -10,7 +10,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 /// <c>ValidateIssuerName</c>, <c>ValidateEndpoints</c>, and the additional base address for providers whose
 /// endpoints sit off the authority — from a provider config, in ONE place. Both the login path
 /// (<see cref="Flows.OidcLoginService"/>, which layers the client credentials, redirect URI, scope and the
-/// id_token validator on top) and the admin Test-connection probe (<see cref="Jellyfin.Plugin.SSO_Auth.Api.ProviderConnectionTester"/>,
+/// id_token validator on top) and the admin Test-connection probe (<c>ProviderConnectionTester</c>,
 /// which reads discovery only) build their options here, so the test fetch runs under the EXACT same
 /// SSRF/TLS posture as the real login discovery (#163) — a later change to the login's discovery policy
 /// cannot silently leave the probe on a weaker one. The client secret is deliberately NOT set here:

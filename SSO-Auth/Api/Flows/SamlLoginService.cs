@@ -22,7 +22,7 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.SSO_Auth.Api.Flows;
 
 /// <summary>
-/// The SAML login flow, extracted whole off <see cref="SSOController"/> (#160, #318 step 13), symmetric to
+/// The SAML login flow, extracted whole off <c>SSOController</c> (#160, #318 step 13), symmetric to
 /// <see cref="OidcLoginService"/>: the challenge (redirect the browser to the identity provider with an
 /// optionally-signed AuthnRequest, #167), the assertion-consumer callback (validate the signed response and
 /// render the intermediate auth page), the session-minting authenticate leg, and the manual link redeem. The

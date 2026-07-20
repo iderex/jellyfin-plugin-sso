@@ -15,7 +15,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Shared;
 /// The shared per-client rate-limit gate over the SSO flow endpoints (#128, #160): the anonymous login
 /// endpoints, the authenticated link/unlink admin write surface (#382) and the admin SSO-revoke (#516). It owns the ONE
 /// process-wide <see cref="SsoRateLimiter"/> instance and the opt-in check every rate-limited endpoint
-/// fronts itself with — the last mutable process-wide static that lived on <see cref="SSOController"/> (#318).
+/// fronts itself with — the last mutable process-wide static that lived on <c>SSOController</c> (#318).
 /// Relocating it into the shared tier leaves the controller a stateless request dispatcher (every store,
 /// cache and limiter now lives in a flow service or here) while keeping the gate byte-for-byte identical: the
 /// same fire points, the same fail-open classifier, and the same <see cref="LoginOutcome.Throttled"/> 429
