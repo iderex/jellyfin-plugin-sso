@@ -3,6 +3,7 @@ using System.IO;
 using System.Xml;
 using System.Xml.Serialization;
 using Jellyfin.Plugin.SSO_Auth;
+using Jellyfin.Plugin.SSO_Auth.Config;
 using Xunit;
 
 namespace Jellyfin.Plugin.SSO_Auth.Tests;

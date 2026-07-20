@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using System.Xml.Serialization;
 
-namespace Jellyfin.Plugin.SSO_Auth;
+namespace Jellyfin.Plugin.SSO_Auth.Config;
 
 /// <summary>
 /// For some reason, the generic Dictionary in .net 2.0 is not XML serializable. The following code snippet is a xml serializable generic dictionary. The dictionary is serializable by implementing the IXmlSerializable interface.

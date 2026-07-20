@@ -21,7 +21,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 /// stub, so signature, issuer, audience and lifetime all went unchecked. This validator restores the
 /// mandatory checks — signature against the discovery JWKS, iss against the discovery issuer,
 /// aud/azp against the client id, exp/nbf with the client's clock skew — under an asymmetric-only
-/// signature-algorithm allowlist (the posture of the SAML side's <see cref="SamlSignatureAlgorithms"/>).
+/// signature-algorithm allowlist (the posture of the SAML side's SamlSignatureAlgorithms).
 /// Every failure rejects the login (fail closed).
 /// </summary>
 internal sealed class OidcIdTokenValidator : IIdentityTokenValidator
