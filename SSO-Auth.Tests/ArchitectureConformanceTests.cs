@@ -207,6 +207,8 @@ public class ArchitectureConformanceTests
     [InlineData("Oidc", "Authz", "Avatar", "Identity", "Net", "Provider", "RateLimit", "Routing")] // OIDC flow — mints the keystone (Identity), orchestrates roles, avatar, net, provider, throttle; reads its callback path through the Routing suffix reader
     [InlineData("Identity", "Authz", "Provider")] // the identity keystone — grants (Authz) + link mode (Provider); decoupled from the protocols by #790
     [InlineData("Session", "Authz", "Avatar", "Linking")] // session mint + login outcomes — applies grants (Authz), sets avatars (Avatar), reconciles links (Linking)
+    [InlineData("Shared", "Avatar", "Linking", "RateLimit", "Routing", "Session")] // shared served-page / flow-response + rate-limit-gate helpers — depend downward on the session/linking/avatar/throttle/route tiers, never on a protocol or the boundary
+    [InlineData("Flows", "Audit", "Identity", "Linking", "Net", "Oidc", "Provider", "RateLimit", "Saml", "Session", "Shared")] // per-protocol login orchestration — drives both protocol modules (Oidc/Saml) and the downstream mint/link/session tiers; nothing above the boundary imports it
     [InlineData("Http", "Audit", "Avatar", "Flows", "Linking", "Net", "Oidc", "Provider", "Saml", "Session", "Shared")] // the web boundary (SSOController + request helpers + the admin test-connection probe): the composition top of the DAG — it fronts every flow, so its import list is deliberately wide; nothing imports it back (#790/#807)
     public void ApiModule_ImportsOnlyItsAllowedApiModules(string module, params string[] allowed)
     {
