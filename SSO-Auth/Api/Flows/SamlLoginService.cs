@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Linq;
 using System.Security.Cryptography;
@@ -179,7 +181,7 @@ internal sealed class SamlLoginService
     /// <param name="request">The current request; read for the assertion-consumer base URL.</param>
     /// <param name="response">The response the auth page's defensive headers are written to.</param>
     /// <returns>The rendered auth page on success, or a fail-closed rejection.</returns>
-    internal ActionResult Callback(string provider, string relayState, string formSamlResponse, HttpRequest request, HttpResponse response)
+    internal ActionResult Callback(string provider, string? relayState, string? formSamlResponse, HttpRequest request, HttpResponse response)
     {
         // Unknown and disabled providers share one rejection so neither can be probed apart — this
         // retires the unique "No active providers found" wording that distinguished the disabled case
@@ -373,7 +375,7 @@ internal sealed class SamlLoginService
         bool newPath = ChallengeNewPathResolver.ResolveChallengeNewPath(provider, config, isLinking, request, _logger, c => c.SamlConfigs);
 
         string redirectUri = SamlAcsUrlBuilder.AcsUrl(GetRequestBase(request, config.SchemeOverride, config.PortOverride, config.BaseUrlOverride), newPath, provider);
-        string relayState = isLinking ? "linking" : null;
+        string? relayState = isLinking ? "linking" : null;
 
         var samlRequest = new SamlAuthnRequest(
             config.SamlClientId.Trim(),
@@ -537,7 +539,7 @@ internal sealed class SamlLoginService
     // the redundant second descriptor is dropped, returning to a single descriptor without needing to blank
     // the write-only, blank-keeps-stored rollover key. Only the public RawData of each certificate is
     // exported; no private key ever leaves this method.
-    private static bool TryResolveSigningCertificates(SamlConfig config, out string signingCertificateBase64, out string rolloverSigningCertificateBase64)
+    private static bool TryResolveSigningCertificates(SamlConfig config, out string? signingCertificateBase64, out string? rolloverSigningCertificateBase64)
     {
         signingCertificateBase64 = null;
         rolloverSigningCertificateBase64 = null;
@@ -573,11 +575,11 @@ internal sealed class SamlLoginService
     // (DER). Fail-closed: a missing/corrupt at-rest key throws CryptographicException, and a garbage or
     // private-key-less PKCS#12 fails to load — both return false so the caller emits no descriptor for it.
     // The private key never leaves this method; only certificate.RawData (the public DER) is exported.
-    private static bool TryRevealPublicCertificate(string storedPfx, out string publicCertificateBase64)
+    private static bool TryRevealPublicCertificate(string storedPfx, out string? publicCertificateBase64)
     {
         publicCertificateBase64 = null;
 
-        string revealed;
+        string? revealed;
         try
         {
             revealed = SSOPlugin.Instance.Secrets.Reveal(storedPfx);
@@ -587,7 +589,8 @@ internal sealed class SamlLoginService
             return false;
         }
 
-        if (!SamlSigningKey.TryLoad(revealed, out var certificate))
+        // Fail-closed: a null reveal (a decrypt that yielded nothing) cannot produce a certificate.
+        if (revealed is null || !SamlSigningKey.TryLoad(revealed, out var certificate))
         {
             return false;
         }
@@ -612,7 +615,7 @@ internal sealed class SamlLoginService
     /// <param name="bindingCookie">The browser-binding cookie value the redeem presented (#415).</param>
     /// <param name="remoteEndPointResolver">Resolves the normalized client IP for the activity log (#177).</param>
     /// <returns>The minted session, or a fail-closed rejection.</returns>
-    public async Task<ActionResult> AuthenticateAsync(string provider, AuthResponse response, string bindingCookie, Func<string> remoteEndPointResolver)
+    public async Task<ActionResult> AuthenticateAsync(string provider, AuthResponse response, string? bindingCookie, Func<string> remoteEndPointResolver)
     {
         // Unknown and disabled providers share one rejection so neither can be probed apart — this
         // unifies the previously JSON unknown-provider body and the disabled provider's 500.
@@ -631,7 +634,7 @@ internal sealed class SamlLoginService
         // — it simply is not a live token, so it is rejected the same uniform way as any other non-token, never
         // falling through open. The removal is the wire-contract break #251 flagged: a scripted client that
         // POSTs a raw assertion straight to SAML/Auth (bypassing the rendered page) is now rejected.
-        if (_outcomes.TryRedeem(response?.Data, provider, DateTime.UtcNow) is not { } outcome)
+        if (response is null || _outcomes.TryRedeem(response.Data, provider, DateTime.UtcNow) is not { } outcome)
         {
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
@@ -669,7 +672,7 @@ internal sealed class SamlLoginService
     // same-origin auth endpoint, not at the cross-site ACS POST which would not carry a SameSite=Lax cookie.
     // Called by the token-redeem mint path on the stored outcome's InResponseTo (the sole caller since the
     // pre-#251 deprecation branch was removed in #528).
-    private bool CorrelateAndBind(string provider, string inResponseTo, string bindingCookie, bool validateInResponseTo)
+    private bool CorrelateAndBind(string provider, string inResponseTo, string? bindingCookie, bool validateInResponseTo)
     {
         if (!string.IsNullOrEmpty(inResponseTo))
         {
@@ -747,14 +750,14 @@ internal sealed class SamlLoginService
     // KeyNotFoundException as control flow (#241). An uncontended lock is nanoseconds; it is only held long
     // during a first-login/admin persist, which is exactly when a consistent read matters. Moved off the
     // controller with the SAML flow (#160); the OpenID twin lives on OidcLoginService.
-    private static SamlConfig FindSamlConfig(string provider) =>
+    private static SamlConfig? FindSamlConfig(string provider) =>
         SSOPlugin.Instance.ReadConfiguration(configuration => configuration.SamlConfigs.TryGetValue(provider, out var config) ? config : null);
 
     // Builds the redirect URL to the identity provider, signing the outgoing AuthnRequest when the provider
     // opts in (#167). Fail-closed: signing enabled but the signing key missing/unloadable throws, so the
     // caller returns an error rather than silently sending an unsigned request — an operator who turned
     // signing on never gets a silent downgrade. Default off is byte-for-byte the previous unsigned URL.
-    private static string BuildChallengeRedirectUrl(SamlConfig config, SamlAuthnRequest request, string relayState)
+    private static string BuildChallengeRedirectUrl(SamlConfig config, SamlAuthnRequest request, string? relayState)
     {
         var endpoint = config.SamlEndpoint.Trim();
         if (!config.SignAuthnRequests)

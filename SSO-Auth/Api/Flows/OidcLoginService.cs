@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -450,7 +452,7 @@ internal sealed class OidcLoginService
     /// <param name="bindingCookie">The browser-binding cookie value the redeem presented (#326).</param>
     /// <param name="remoteEndPointResolver">Resolves the normalized client IP for the activity log (#177).</param>
     /// <returns>The minted session, or a fail-closed rejection.</returns>
-    public async Task<ActionResult> AuthenticateAsync(string provider, AuthResponse response, string bindingCookie, Func<string> remoteEndPointResolver)
+    public async Task<ActionResult> AuthenticateAsync(string provider, AuthResponse response, string? bindingCookie, Func<string> remoteEndPointResolver)
     {
         if (string.IsNullOrEmpty(response?.Data))
         {
@@ -571,7 +573,7 @@ internal sealed class OidcLoginService
     // Returns null for an unknown provider so call sites branch on a null check instead of catching
     // KeyNotFoundException as control flow (#241). An uncontended lock is nanoseconds; it is only held long
     // during a first-login/admin persist, which is exactly when a consistent read matters.
-    private static OidConfig FindOidConfig(string provider) =>
+    private static OidConfig? FindOidConfig(string provider) =>
         SSOPlugin.Instance.ReadConfiguration(configuration => configuration.OidConfigs.TryGetValue(provider, out var config) ? config : null);
 
     // Runs an options/client build step that reveals the at-rest client secret (#158), failing closed if
@@ -583,7 +585,7 @@ internal sealed class OidcLoginService
     // the challenge builds the options (revealing the secret up front, before the discovery read) while the
     // callback builds the whole client. Returns null on success (the built value is set); otherwise the
     // fail-closed result to return.
-    private ContentResult TryReveal<T>(Func<T> build, string provider, out T built)
+    private ContentResult? TryReveal<T>(Func<T> build, string provider, out T built)
     {
         try
         {
@@ -592,7 +594,9 @@ internal sealed class OidcLoginService
         }
         catch (Exception ex) when (ex is CryptographicException or FormatException)
         {
-            built = default;
+            // Only read by the caller on the success path (return null); the fail-closed path returns a
+            // non-null result, so this default is never observed.
+            built = default!;
             if (_logger.IsEnabled(LogLevel.Error))
             {
                 _logger.LogError("OpenID login refused for provider {Provider}: the stored client secret could not be decrypted ({Reason}); the at-rest key file is missing or corrupt.", provider?.ReplaceLineEndings(string.Empty), ex.Message?.ReplaceLineEndings(string.Empty));
