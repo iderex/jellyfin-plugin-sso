@@ -13,7 +13,9 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 /// <summary>
 /// Pins the <see cref="PluginPageInfo"/> set <see cref="SSOPlugin.GetPages"/> and
 /// <see cref="SSOPlugin.GetViews"/> emit — the (name, embedded resource) contract Jellyfin resolves
-/// static assets by — so the #458 factory-collapse refactor stays behavior-preserving.
+/// static assets by — so the #458 factory-collapse refactor stays behavior-preserving, and asserts every
+/// emitted resource path actually resolves to an embedded resource so a moved or renamed asset (#869) is
+/// caught here as a build-time failure instead of a runtime 404.
 /// </summary>
 [Collection("SSOController")]
 public class SSOPluginPageManifestTests
@@ -37,11 +39,11 @@ public class SSOPluginPageManifestTests
         Assert.Equal(
             new[]
             {
-                ("SSO-Auth", $"{ns}.Config.configPage.html"),
-                ("SSO-Auth.js", $"{ns}.Config.config.js"),
-                ("SSO-Auth.css", $"{ns}.Config.style.css"),
-                ("SSO-Auth-linking", $"{ns}.Config.linking.html"),
-                ("SSO-Auth-linking.js", $"{ns}.Config.linking.js"),
+                ("SSO-Auth", $"{ns}.Web.configPage.html"),
+                ("SSO-Auth.js", $"{ns}.Web.config.js"),
+                ("SSO-Auth.css", $"{ns}.Web.style.css"),
+                ("SSO-Auth-linking", $"{ns}.Web.linking.html"),
+                ("SSO-Auth-linking.js", $"{ns}.Web.linking.js"),
             },
             actual);
     }
@@ -57,13 +59,30 @@ public class SSOPluginPageManifestTests
         Assert.Equal(
             new[]
             {
-                ("style.css", $"{ns}.Config.style.css"),
-                ("linking", $"{ns}.Config.linking.html"),
-                ("linking.js", $"{ns}.Config.linking.js"),
-                ("ApiClient.js", $"{ns}.Views.ApiClient.js"),
-                ("emby-restyle.css", $"{ns}.Views.emby-restyle.css"),
-                ("jellyfin-apiClient.esm.min.js", $"{ns}.Views.jellyfin-apiClient.esm.min.js"),
+                ("style.css", $"{ns}.Web.style.css"),
+                ("linking", $"{ns}.Web.linking.html"),
+                ("linking.js", $"{ns}.Web.linking.js"),
+                ("ApiClient.js", $"{ns}.Web.ApiClient.js"),
+                ("emby-restyle.css", $"{ns}.Web.emby-restyle.css"),
+                ("jellyfin-apiClient.esm.min.js", $"{ns}.Web.jellyfin-apiClient.esm.min.js"),
             },
             actual);
+    }
+
+    [Fact]
+    public void EveryManifestResourcePath_ResolvesToAnEmbeddedResource()
+    {
+        var plugin = CreatePlugin();
+        var assembly = typeof(SSOPlugin).Assembly;
+
+        var paths = plugin.GetPages().Concat(plugin.GetViews())
+            .Select(p => p.EmbeddedResourcePath)
+            .Distinct();
+
+        foreach (var path in paths)
+        {
+            using var stream = assembly.GetManifestResourceStream(path);
+            Assert.True(stream is not null, $"Embedded resource does not resolve (a moved or renamed asset would 404 at runtime): {path}");
+        }
     }
 }
