@@ -1,4 +1,7 @@
+#nullable enable
+
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Net.Mime;
 using System.Security.Cryptography;
@@ -62,7 +65,7 @@ internal static class BrowserErrorPage
     // A rejection worth restyling is a 4xx/5xx carrying a plain-text body: either a text/plain
     // ContentResult (FlowResponses.PlainTextError, LoginStatusMapper) or a string-valued ObjectResult
     // (BadRequestObjectResult). A success, a redirect, or the already-HTML auth page yields no message.
-    private static bool TryExtractPlainTextError(ActionResult result, out int status, out string message)
+    private static bool TryExtractPlainTextError(ActionResult result, out int status, [NotNullWhen(true)] out string? message)
     {
         switch (result)
         {

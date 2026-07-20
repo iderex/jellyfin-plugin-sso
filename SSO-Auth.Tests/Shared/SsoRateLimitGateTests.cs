@@ -48,7 +48,7 @@ public class SsoRateLimitGateTests
     // remoteIp is nullable here on purpose: the no-attributable-address case (a null connection peer) is one
     // of the fail-open inputs under test. The gate's own NormalizeClientKey handles null (returns no key), so
     // forwarding it is the behavior being exercised, not a defect — hence the deliberate null-forgiving pass.
-    private static ActionResult Check(string endpointClass, IPAddress? remoteIp, HttpResponse response) =>
+    private static ActionResult? Check(string endpointClass, IPAddress? remoteIp, HttpResponse response) =>
         SsoRateLimitGate.Check(endpointClass, remoteIp!, Substitute.For<ILogger>(), response);
 
     [Fact]
