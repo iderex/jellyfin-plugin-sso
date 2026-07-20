@@ -90,6 +90,44 @@ jobs:
               );
             }
 
+            // --- Check 1b: every commit subject carries [#N] refs (#817) ---------
+            // Maintainer rule: traceability must survive down to the single commit —
+            // blame/bisect/log show a commit's SUBJECT line without its PR, so the
+            // PR-body link (check 1) is not enough. The reference lives in the
+            // subject, bracketed, one bracket per issue: `Fix the thing [#12][#34]`.
+            // (GitHub's auto-close keywords still go in the body — `[#N]` in a
+            // subject does not close anything.) Bots and merge commits (subject
+            // starts with "Merge ") are exempt; merge commits are machine-generated
+            // and inherit the merged PR's own linkage.
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+            const subjectHasBracketedRef = (message) =>
+              /\[#\d+\]/.test(message.split("\n")[0]);
+            const unlinked = commits.filter((c) => {
+              const authorIsBot =
+                (c.author && c.author.type === "Bot") ||
+                /\[bot\]/.test((c.commit.author && c.commit.author.name) || "");
+              const isMerge =
+                c.parents.length > 1 || c.commit.message.startsWith("Merge ");
+              return (
+                !authorIsBot && !isMerge && !subjectHasBracketedRef(c.commit.message)
+              );
+            });
+            if (!isBot && unlinked.length > 0) {
+              const list = unlinked
+                .map((c) => `${c.sha.slice(0, 7)} ("${c.commit.message.split("\n")[0]}")`)
+                .join(", ");
+              failures.push(
+                `Commit subject(s) without a bracketed issue reference: ${list}. ` +
+                  "Every commit subject must end with its issue reference(s) in " +
+                  "the form `[#N]` (multiple issues: `[#N][#M]`).",
+              );
+            }
+
             // --- Check 2: a build.yaml version bump must touch CHANGELOG.md -----
             // The version field only changes in a release PR, which must also record
             // the release in CHANGELOG.md. Near-zero false-positive: a non-release PR
