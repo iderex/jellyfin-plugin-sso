@@ -46,7 +46,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Flows;
 /// <see cref="LoginCompletionService"/>: the authenticate leg takes only the redeemed model, the presented
 /// binding cookie value, and the remote-endpoint resolver (#177).
 /// </remarks>
-internal sealed class OidcLoginService : ILoginService
+internal sealed class OidcLoginService
 {
     // The in-flight OpenID authorize-state store (cap, lifetime, throttled sweep and capacity signal all
     // live inside; see OidcStateStore). One process-wide instance, like the SAML caches the controller keeps.
