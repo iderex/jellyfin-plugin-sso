@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Api.Avatar;

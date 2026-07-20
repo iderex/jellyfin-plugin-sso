@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Net.Mime;
 using System.Security.Cryptography;
