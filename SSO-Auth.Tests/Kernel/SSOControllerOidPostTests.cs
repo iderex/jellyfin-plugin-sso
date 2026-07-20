@@ -73,7 +73,7 @@ public class SSOControllerOidPostTests
         // LoginCompletionService -> CanonicalLinkService runs against the fixture's actual token here.
         using var fixture = new OidcTokenFixture(Authority, "jf");
         var harness = ArrangeCallback(fixture, query: "?code=test-code&state=state-1");
-        var user = new User("alice", "SSO-Auth", "Default") { Id = Guid.Parse("55555555-5555-5555-5555-555555555555") };
+        var user = TestUsers.Named("alice", Guid.Parse("55555555-5555-5555-5555-555555555555"));
         harness.UserManager.CreateUserAsync("alice").Returns(user);
         harness.UserManager.GetUserById(user.Id).Returns(user);
 

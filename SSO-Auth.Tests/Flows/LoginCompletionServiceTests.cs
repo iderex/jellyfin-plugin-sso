@@ -39,7 +39,6 @@ public class LoginCompletionServiceTests
     private static readonly Guid Created = Guid.Parse("33333333-3333-3333-3333-333333333333");
     private static readonly Guid Existing = Guid.Parse("11111111-1111-1111-1111-111111111111");
 
-    private static User UserNamed(string name, Guid id) => new User(name, "SSO-Auth", "Default") { Id = id };
 
     private static (LoginCompletionService Service, PluginConfiguration Config, IUserManager Users, ISessionManager Sessions) Build(Action<PluginConfiguration> seed)
     {
@@ -85,7 +84,7 @@ public class LoginCompletionServiceTests
     {
         var config = new OidConfig { Enabled = true };
         var (service, _, users, sessions) = Build(c => c.OidConfigs["kc"] = config);
-        var created = UserNamed("alice", Created);
+        var created = TestUsers.Named("alice", Created);
         users.GetUserByName("alice").Returns((User?)null);
         users.CreateUserAsync("alice").Returns(created);
         users.GetUserById(Created).Returns(created);
@@ -109,7 +108,7 @@ public class LoginCompletionServiceTests
         // when the OpenID path supplies the id_token/sid.
         var config = new OidConfig { Enabled = true };
         var (service, cfg, users, sessions) = Build(c => c.OidConfigs["kc"] = config); // EnableSingleLogout defaults off
-        var created = UserNamed("alice", Created);
+        var created = TestUsers.Named("alice", Created);
         users.GetUserByName("alice").Returns((User?)null);
         users.CreateUserAsync("alice").Returns(created);
         users.GetUserById(Created).Returns(created);
@@ -133,7 +132,7 @@ public class LoginCompletionServiceTests
             c.EnableSingleLogout = true;
             c.OidConfigs["kc"] = config;
         });
-        var created = UserNamed("alice", Created);
+        var created = TestUsers.Named("alice", Created);
         users.GetUserByName("alice").Returns((User?)null);
         users.CreateUserAsync("alice").Returns(created);
         users.GetUserById(Created).Returns(created);
@@ -158,7 +157,7 @@ public class LoginCompletionServiceTests
             c.EnableSingleLogout = true;
             c.OidConfigs["kc"] = config;
         });
-        var created = UserNamed("alice", Created);
+        var created = TestUsers.Named("alice", Created);
         users.GetUserByName("alice").Returns((User?)null);
         users.CreateUserAsync("alice").Returns(created);
         users.GetUserById(Created).Returns(created);
@@ -189,7 +188,7 @@ public class LoginCompletionServiceTests
         // and pass the per-unit tests while silently failing to reach the mint; this fails if it does.
         var config = new OidConfig { Enabled = true, EnableAuthorization = true };
         var (service, _, users, sessions) = Build(c => c.OidConfigs["kc"] = config);
-        var created = UserNamed("alice", Created);
+        var created = TestUsers.Named("alice", Created);
         created.MaxParentalRatingScore = 100; // a looser existing value the resolved ceiling must overwrite
         users.GetUserByName("alice").Returns((User?)null);
         users.CreateUserAsync("alice").Returns(created);
@@ -210,7 +209,7 @@ public class LoginCompletionServiceTests
         // account, mint the session, carry the supplied remote endpoint — indistinguishable from OpenID.
         var config = new SamlConfig { Enabled = true };
         var (service, _, users, sessions) = Build(c => c.SamlConfigs["okta"] = config);
-        var created = UserNamed("bob", Created);
+        var created = TestUsers.Named("bob", Created);
         users.GetUserByName("bob").Returns((User?)null);
         users.CreateUserAsync("bob").Returns(created);
         users.GetUserById(Created).Returns(created);
@@ -249,7 +248,7 @@ public class LoginCompletionServiceTests
             c.DisablePasswordLogin = true;
             c.BreakGlassAdminUsername = "root";
         });
-        var root = UserNamed("root", Existing);
+        var root = TestUsers.Named("root", Existing);
         root.AuthenticationProviderId = SsoAuthenticationProviders.DefaultPasswordProviderId;
         root.SetPermission(Jellyfin.Database.Implementations.Enums.PermissionKind.IsAdministrator, true);
         users.GetUserById(Existing).Returns(root);
@@ -284,7 +283,7 @@ public class LoginCompletionServiceTests
             c.DisablePasswordLogin = true;
             c.BreakGlassAdminUsername = "root";
         });
-        var alice = UserNamed("alice", Existing);
+        var alice = TestUsers.Named("alice", Existing);
         alice.AuthenticationProviderId = SsoAuthenticationProviders.DefaultPasswordProviderId; // still had a password door
         users.GetUserById(Existing).Returns(alice);
         users.GetUserByName("alice").Returns(alice);
@@ -307,7 +306,7 @@ public class LoginCompletionServiceTests
         // moved as a whole unit, so a refusal cannot fall through to the mint.
         var config = new OidConfig { Enabled = true, AllowExistingAccountLink = false };
         var (service, _, users, sessions) = Build(c => c.OidConfigs["kc"] = config);
-        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
+        users.GetUserByName("alice").Returns(TestUsers.Named("alice", Existing));
 
         var result = await service.CompleteAsync(
             OidcIdentity("kc", "sub-1", "alice"), Response(), config, AdoptionGate.None, () => "203.0.113.9");
@@ -326,7 +325,7 @@ public class LoginCompletionServiceTests
         // minted. This is the core fail-closed onboarding control.
         var config = new OidConfig { Enabled = true, ProvisionNewUsersDisabled = true };
         var (service, _, users, sessions) = Build(c => c.OidConfigs["kc"] = config);
-        var created = UserNamed("alice", Created);
+        var created = TestUsers.Named("alice", Created);
         users.GetUserByName("alice").Returns((User?)null);
         users.CreateUserAsync("alice").Returns(created);
         users.GetUserById(Created).Returns(created);
@@ -355,7 +354,7 @@ public class LoginCompletionServiceTests
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
         };
         var (service, _, users, sessions) = Build(c => c.OidConfigs["kc"] = config);
-        var existing = UserNamed("alice", Existing);
+        var existing = TestUsers.Named("alice", Existing);
         existing.SetPermission(Jellyfin.Database.Implementations.Enums.PermissionKind.IsAdministrator, true);
         users.GetUserById(Existing).Returns(existing);
         sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
@@ -382,7 +381,7 @@ public class LoginCompletionServiceTests
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
         };
         var (service, _, users, sessions) = Build(c => c.OidConfigs["kc"] = config);
-        var pending = UserNamed("alice", Existing);
+        var pending = TestUsers.Named("alice", Existing);
         pending.SetPermission(Jellyfin.Database.Implementations.Enums.PermissionKind.IsDisabled, true);
         users.GetUserById(Existing).Returns(pending);
 

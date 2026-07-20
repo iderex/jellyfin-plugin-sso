@@ -25,7 +25,7 @@ public class SSOControllerLogoutTests
     private static SsoControllerHarness ForCaller(string token, Action<PluginConfiguration> configure)
     {
         var harness = new SsoControllerHarness(configure);
-        var user = new User("caller", "SSO-Auth", "Default") { Id = Caller };
+        var user = TestUsers.Named("caller", Caller);
         harness.AuthContext.GetAuthorizationInfo(Arg.Any<HttpRequest>())
             .Returns(System.Threading.Tasks.Task.FromResult(new AuthorizationInfo { User = user, Token = token }));
         return harness;

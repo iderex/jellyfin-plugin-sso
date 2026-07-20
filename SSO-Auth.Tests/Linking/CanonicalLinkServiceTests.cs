@@ -27,11 +27,10 @@ public class CanonicalLinkServiceTests
     private static readonly Guid Existing = Guid.Parse("11111111-1111-1111-1111-111111111111");
     private static readonly Guid Other = Guid.Parse("22222222-2222-2222-2222-222222222222");
 
-    private static User UserNamed(string name, Guid id) => new User(name, "SSO-Auth", "Default") { Id = id };
 
     private static User AdminUserNamed(string name, Guid id)
     {
-        var user = UserNamed(name, id);
+        var user = TestUsers.Named(name, id);
         user.SetPermission(PermissionKind.IsAdministrator, true);
         return user;
     }
@@ -60,7 +59,7 @@ public class CanonicalLinkServiceTests
             Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
         });
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
 
         var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: false);
 
@@ -72,7 +71,7 @@ public class CanonicalLinkServiceTests
     public async Task ResolveOrCreateAsync_NoLinkNoAccount_CreatesAndLinksOnTheSubjectKey()
     {
         var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
-        var created = UserNamed("alice", Other);
+        var created = TestUsers.Named("alice", Other);
         users.GetUserByName("alice").Returns((User?)null);
         users.CreateUserAsync("alice").Returns(created);
         users.GetUserById(Other).Returns(created);
@@ -92,7 +91,7 @@ public class CanonicalLinkServiceTests
         // once at the provisioning event, and it is then reported as awaiting approval so the completion path
         // refuses the login.
         var (service, cfg, users, log) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
-        var created = UserNamed("alice", Other);
+        var created = TestUsers.Named("alice", Other);
         users.GetUserByName("alice").Returns((User?)null);
         users.CreateUserAsync("alice").Returns(created);
         users.GetUserById(Other).Returns(created);
@@ -114,7 +113,7 @@ public class CanonicalLinkServiceTests
         // ENABLED and link-less (a later login could adopt it and mint a session). It is deleted, the login
         // fails closed (the failure propagates), and no canonical link is written.
         var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
-        var created = UserNamed("alice", Other);
+        var created = TestUsers.Named("alice", Other);
         users.GetUserByName("alice").Returns((User?)null);
         users.CreateUserAsync("alice").Returns(created);
         users.GetUserById(Other).Returns(created);
@@ -137,7 +136,7 @@ public class CanonicalLinkServiceTests
             Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
         });
-        var pending = UserNamed("alice", Existing);
+        var pending = TestUsers.Named("alice", Existing);
         pending.SetPermission(PermissionKind.IsDisabled, true);
         users.GetUserById(Existing).Returns(pending);
 
@@ -155,7 +154,7 @@ public class CanonicalLinkServiceTests
         // Default (policy off): the new account is NOT disabled and is NOT persisted by the linking layer —
         // the session minter persists it, exactly as before #737. No behavior change for existing deployments.
         var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
-        var created = UserNamed("alice", Other);
+        var created = TestUsers.Named("alice", Other);
         users.GetUserByName("alice").Returns((User?)null);
         users.CreateUserAsync("alice").Returns(created);
         users.GetUserById(Other).Returns(created);
@@ -172,10 +171,10 @@ public class CanonicalLinkServiceTests
     public void IsAccountAwaitingApproval_DisabledUser_True_EnabledUser_False_MissingUser_False()
     {
         var (service, _, users, _) = Build();
-        var disabled = UserNamed("alice", Existing);
+        var disabled = TestUsers.Named("alice", Existing);
         disabled.SetPermission(PermissionKind.IsDisabled, true);
         users.GetUserById(Existing).Returns(disabled);
-        users.GetUserById(Other).Returns(UserNamed("bob", Other)); // enabled
+        users.GetUserById(Other).Returns(TestUsers.Named("bob", Other)); // enabled
         users.GetUserById(Arg.Is<Guid>(g => g != Existing && g != Other)).Returns((User?)null); // missing
 
         Assert.True(service.IsAccountAwaitingApproval(Existing));
@@ -187,8 +186,8 @@ public class CanonicalLinkServiceTests
     public async Task ResolveOrCreateAsync_ExistingAccountAndAdoptionAllowed_AdoptsAndLinks()
     {
         var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
-        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserByName("alice").Returns(TestUsers.Named("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
 
         var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: true);
 
@@ -204,7 +203,7 @@ public class CanonicalLinkServiceTests
         // with adoption off, must be refused — not silently take the account over. No controller test
         // reached this path before the extraction; this pins it directly.
         var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
-        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
+        users.GetUserByName("alice").Returns(TestUsers.Named("alice", Existing));
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
             service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: false));
@@ -241,8 +240,8 @@ public class CanonicalLinkServiceTests
             Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
         });
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
-        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
+        users.GetUserByName("alice").Returns(TestUsers.Named("alice", Existing));
 
         var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: true);
 
@@ -264,8 +263,8 @@ public class CanonicalLinkServiceTests
             Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
         });
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
-        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
+        users.GetUserByName("alice").Returns(TestUsers.Named("alice", Existing));
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
             service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "attacker-sub", "alice", allowExistingAccountLink: false));
@@ -295,9 +294,9 @@ public class CanonicalLinkServiceTests
             Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
         });
-        users.GetUserById(Existing).Returns(UserNamed("renamed-alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("renamed-alice", Existing));
         users.GetUserByName("alice").Returns((User?)null);
-        var created = UserNamed("alice", Other);
+        var created = TestUsers.Named("alice", Other);
         users.CreateUserAsync("alice").Returns(created);
         users.GetUserById(Other).Returns(created);
 
@@ -335,8 +334,8 @@ public class CanonicalLinkServiceTests
         };
         var store = new ProviderConfigStore(() => cfg, _ => { }, new CapturingLogger());
         var users = Substitute.For<IUserManager>();
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
-        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
+        users.GetUserByName("alice").Returns(TestUsers.Named("alice", Existing));
         var log = new CapturingLogger();
 
         var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -386,9 +385,9 @@ public class CanonicalLinkServiceTests
             Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["oldname"] = Existing },
         });
-        users.GetUserById(Existing).Returns(UserNamed("newname", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("newname", Existing));
         users.GetUserByName("oldname").Returns((User?)null); // renamed: no live account bears the key
-        var created = UserNamed("oldname", Other);
+        var created = TestUsers.Named("oldname", Other);
         users.CreateUserAsync("oldname").Returns(created);
         users.GetUserById(Other).Returns(created);
 
@@ -419,9 +418,9 @@ public class CanonicalLinkServiceTests
             Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["oldname"] = Existing },
         });
-        users.GetUserById(Existing).Returns(UserNamed("newname", Existing)); // the victim, renamed away
-        users.GetUserByName("oldname").Returns(UserNamed("oldname", Other)); // a different account now holds the name
-        users.GetUserById(Other).Returns(UserNamed("oldname", Other));
+        users.GetUserById(Existing).Returns(TestUsers.Named("newname", Existing)); // the victim, renamed away
+        users.GetUserByName("oldname").Returns(TestUsers.Named("oldname", Other)); // a different account now holds the name
+        users.GetUserById(Other).Returns(TestUsers.Named("oldname", Other));
 
         var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "attacker-sub", "oldname", allowExistingAccountLink: true);
 
@@ -444,7 +443,7 @@ public class CanonicalLinkServiceTests
             Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["opaque-sub-123"] = Existing },
         });
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
 
         var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "opaque-sub-123", "opaque-sub-123", allowExistingAccountLink: false);
 
@@ -479,8 +478,8 @@ public class CanonicalLinkServiceTests
         var cfg = new PluginConfiguration();
         cfg.OidConfigs["kc"] = new OidConfig { Enabled = true, CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing } };
         var users = Substitute.For<IUserManager>();
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
-        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
+        users.GetUserByName("alice").Returns(TestUsers.Named("alice", Existing));
 
         // The first store access is the candidate-resolving Read; the second is the migrate Mutate.
         // Removing the provider on the second access reproduces an admin delete racing the login.
@@ -519,7 +518,7 @@ public class CanonicalLinkServiceTests
         var cfg = new PluginConfiguration();
         cfg.OidConfigs["kc"] = new OidConfig { Enabled = true, CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing } };
         var users = Substitute.For<IUserManager>();
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
         var persists = 0;
         var store = new ProviderConfigStore(() => cfg, _ => persists++, new CapturingLogger());
         var service = new CanonicalLinkService(users, new FakeCryptoProvider(), store, new CapturingLogger());
@@ -539,8 +538,8 @@ public class CanonicalLinkServiceTests
         var cfg = new PluginConfiguration();
         cfg.OidConfigs["kc"] = new OidConfig { Enabled = true, CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing } };
         var users = Substitute.For<IUserManager>();
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
-        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
+        users.GetUserByName("alice").Returns(TestUsers.Named("alice", Existing));
         var persists = 0;
         var store = new ProviderConfigStore(() => cfg, _ => persists++, new CapturingLogger());
         var service = new CanonicalLinkService(users, new FakeCryptoProvider(), store, new CapturingLogger());
@@ -565,8 +564,8 @@ public class CanonicalLinkServiceTests
         var cfg = new PluginConfiguration();
         cfg.OidConfigs["kc"] = new OidConfig { Enabled = true, CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing } };
         var users = Substitute.For<IUserManager>();
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
-        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
+        users.GetUserByName("alice").Returns(TestUsers.Named("alice", Existing));
 
         // Access 1 is the candidate-resolving Read; access 2 is the migrate Mutate. Interposing the
         // concurrent winner's committed migration right before the second access reproduces the race
@@ -941,7 +940,7 @@ public class CanonicalLinkServiceTests
             Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
         });
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
 
         Assert.True(service.IsIdentityStillLinked(ProviderMode.Oid, "kc", "sub-1", Existing));
     }
@@ -955,7 +954,7 @@ public class CanonicalLinkServiceTests
             Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
         });
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
 
         Assert.True(service.IsIdentityStillLinked(ProviderMode.Saml, "adfs", "alice", Existing));
     }
@@ -970,7 +969,7 @@ public class CanonicalLinkServiceTests
             Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
         });
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
 
         service.RemoveUserEverywhere(Existing);
 
@@ -987,7 +986,7 @@ public class CanonicalLinkServiceTests
             Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
         });
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
         cfg.OidConfigs["kc"].Enabled = false;
 
         Assert.False(service.IsIdentityStillLinked(ProviderMode.Oid, "kc", "sub-1", Existing));
@@ -1023,7 +1022,7 @@ public class CanonicalLinkServiceTests
             Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Other },
         });
-        users.GetUserById(Other).Returns(UserNamed("bob", Other));
+        users.GetUserById(Other).Returns(TestUsers.Named("bob", Other));
 
         Assert.False(service.IsIdentityStillLinked(ProviderMode.Oid, "kc", "sub-1", Existing));
     }
@@ -1064,7 +1063,7 @@ public class CanonicalLinkServiceTests
             Enabled = false,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
         });
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
             service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: true));
@@ -1084,7 +1083,7 @@ public class CanonicalLinkServiceTests
         users.GetUserByName("alice").Returns(_ =>
         {
             cfg.OidConfigs["kc"].Enabled = false;
-            return UserNamed("alice", Existing);
+            return TestUsers.Named("alice", Existing);
         });
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
@@ -1111,9 +1110,9 @@ public class CanonicalLinkServiceTests
         users.GetUserById(Existing).Returns(_ =>
         {
             cfg.OidConfigs["kc"].Enabled = false;
-            return UserNamed("alice", Existing);
+            return TestUsers.Named("alice", Existing);
         });
-        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
+        users.GetUserByName("alice").Returns(TestUsers.Named("alice", Existing));
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
             service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: true));
@@ -1190,8 +1189,8 @@ public class CanonicalLinkServiceTests
         // #218: with the verified-email gate on, a non-admin login carrying email_verified == true clears
         // it and adopts, keying the link on the stable subject as usual.
         var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
-        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserByName("alice").Returns(TestUsers.Named("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
 
         var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: true, new AdoptionGate(RequireVerifiedEmail: true, EmailVerified: true));
 
@@ -1207,7 +1206,7 @@ public class CanonicalLinkServiceTests
         // #218: with the gate on, an absent or false email_verified claim fails closed — no link, no
         // account, and the takeover-blocking 403 (AccountLinkForbiddenException) is thrown.
         var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
-        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
+        users.GetUserByName("alice").Returns(TestUsers.Named("alice", Existing));
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
             service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: true, new AdoptionGate(RequireVerifiedEmail: true, EmailVerified: emailVerified)));
@@ -1258,7 +1257,7 @@ public class CanonicalLinkServiceTests
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["1"] = Existing },
             CanonicalLinkIssuers = new SerializableDictionary<string, string> { ["1"] = OldIssuer },
         });
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
             service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "1", "mallory", allowExistingAccountLink: false, issuer: NewIssuer));
@@ -1285,7 +1284,7 @@ public class CanonicalLinkServiceTests
             CanonicalLinkIssuers = new SerializableDictionary<string, string> { ["sub-1"] = OldIssuer },
         };
         var users = Substitute.For<IUserManager>();
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
         var persists = 0;
         var store = new ProviderConfigStore(() => cfg, _ => persists++, new CapturingLogger());
         var service = new CanonicalLinkService(users, new FakeCryptoProvider(), store, new CapturingLogger());
@@ -1309,7 +1308,7 @@ public class CanonicalLinkServiceTests
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
         };
         var users = Substitute.For<IUserManager>();
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
         var persists = 0;
         var store = new ProviderConfigStore(() => cfg, _ => persists++, new CapturingLogger());
         var service = new CanonicalLinkService(users, new FakeCryptoProvider(), store, new CapturingLogger());
@@ -1331,7 +1330,7 @@ public class CanonicalLinkServiceTests
             Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
         });
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
 
         // First login stamps the current issuer.
         await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: false, issuer: OldIssuer);
@@ -1354,7 +1353,7 @@ public class CanonicalLinkServiceTests
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
             CanonicalLinkIssuers = new SerializableDictionary<string, string> { ["sub-1"] = OldIssuer },
         });
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
             service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: false, issuer: null));
@@ -1366,7 +1365,7 @@ public class CanonicalLinkServiceTests
         // A newly created account's link is issuer-bound at creation (#186), so it is protected from the
         // first login onward, not only after a later trust-on-first-use pass.
         var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
-        var created = UserNamed("alice", Other);
+        var created = TestUsers.Named("alice", Other);
         users.GetUserByName("alice").Returns((User?)null);
         users.CreateUserAsync("alice").Returns(created);
         users.GetUserById(Other).Returns(created);
@@ -1381,8 +1380,8 @@ public class CanonicalLinkServiceTests
     public async Task ResolveOrCreateAsync_AdoptExistingAccount_StampsTheLoginIssuer()
     {
         var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
-        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserByName("alice").Returns(TestUsers.Named("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
 
         var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: true, issuer: NewIssuer);
 
@@ -1400,8 +1399,8 @@ public class CanonicalLinkServiceTests
             Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
         });
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
-        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
+        users.GetUserByName("alice").Returns(TestUsers.Named("alice", Existing));
 
         var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: true, issuer: NewIssuer);
 
@@ -1421,7 +1420,7 @@ public class CanonicalLinkServiceTests
             Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
         });
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
 
         var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: false, issuer: null);
 
@@ -1439,7 +1438,7 @@ public class CanonicalLinkServiceTests
             Enabled = true,
             CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
         });
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
 
         var resolved = await service.ResolveOrCreateAsync(ProviderMode.Saml, "adfs", "alice", "alice", allowExistingAccountLink: false, issuer: NewIssuer);
 
@@ -1503,8 +1502,8 @@ public class CanonicalLinkServiceTests
         // email_verified claim, so a conformant deployment already using AllowExistingAccountLink is not
         // silently locked out on upgrade.
         var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
-        users.GetUserByName("alice").Returns(UserNamed("alice", Existing));
-        users.GetUserById(Existing).Returns(UserNamed("alice", Existing));
+        users.GetUserByName("alice").Returns(TestUsers.Named("alice", Existing));
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
 
         var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: true, new AdoptionGate(RequireVerifiedEmail: false, EmailVerified: null));
 

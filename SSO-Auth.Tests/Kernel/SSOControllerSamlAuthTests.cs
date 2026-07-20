@@ -55,7 +55,7 @@ public class SSOControllerSamlAuthTests
             AllowExistingAccountLink = false,
             ValidateInResponseTo = validateInResponseTo,
         });
-        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        var user = TestUsers.Named("alice", UserId);
         harness.UserManager.CreateUserAsync("alice").Returns(user);
         harness.UserManager.GetUserById(UserId).Returns(user);
         return harness;
