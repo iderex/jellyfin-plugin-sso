@@ -493,6 +493,42 @@ public class OidConfig : ProviderConfigBase
     public bool RequireVerifiedEmailForLogin { get; set; }
 
     /// <summary>
+    /// Gets or sets the space-separated <c>acr_values</c> sent on the authorization request (#757, OIDC
+    /// Core §3.1.2.1) — the requested authentication-context class references, most-preferred first (e.g. an
+    /// MFA reference such as <c>urn:...:mfa</c>, or a provider's <c>silver</c>/<c>gold</c> level). Empty by
+    /// default: the parameter is then omitted and the request is byte-identical to before. Doubles as the
+    /// allow-list <see cref="RequireAcr"/> checks the returned <c>acr</c> claim against. Settable in the
+    /// admin provider form as well as the config XML.
+    /// </summary>
+    public string AcrValues { get; set; }
+
+    /// <summary>
+    /// Gets or sets the OIDC <c>prompt</c> parameter sent on the authorization request (#757, OIDC Core
+    /// §3.1.2.1) — e.g. <c>login</c> to force re-authentication, or <c>consent</c>. Empty by default: the
+    /// parameter is then omitted. Settable in the admin provider form as well as the config XML.
+    /// </summary>
+    public string Prompt { get; set; }
+
+    /// <summary>
+    /// Gets or sets the OIDC <c>max_age</c> parameter (seconds) sent on the authorization request (#757,
+    /// OIDC Core §3.1.2.1) — the maximum allowable time since the user's last active authentication;
+    /// <c>0</c> forces re-authentication. Null by default: the parameter is then omitted. A negative value
+    /// is treated as unset. Settable in the admin provider form as well as the config XML.
+    /// </summary>
+    public int? MaxAge { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether every OpenID login for this provider must return an <c>acr</c>
+    /// claim within <see cref="AcrValues"/> (#757) — a fail-closed step-up / forced-MFA enforcement. Off by
+    /// default (for availability): a deployment that does not set it is unaffected. When on, a login whose
+    /// signature-verified id_token carries no <c>acr</c>, or an <c>acr</c> outside the configured list, is
+    /// refused. Requires <see cref="AcrValues"/> to be set — the save is rejected otherwise, so a mis-set
+    /// cannot silently lock out a userbase or silently no-op. The break-glass password admin is unaffected.
+    /// Settable in the admin provider form as well as the config XML.
+    /// </summary>
+    public bool RequireAcr { get; set; }
+
+    /// <summary>
     /// Gets or sets the claim to check roles against. Separated by "."s.
     /// </summary>
     public string RoleClaim { get; set; }

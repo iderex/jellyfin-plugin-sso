@@ -714,6 +714,22 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void OidcStepUpGate_ReadsAcrFromTheSignatureVerifiedIdToken_NotTheUserInfoMergedPrincipal()
+    {
+        // Locked in by #757. With LoadProfile on (the default), OidcClient merges the UNSIGNED UserInfo
+        // response into result.User, so the step-up / MFA gate MUST read the acr from the raw, signature-
+        // verified id_token (result.IdentityToken via OidcIdTokenAcr), never from result.User — otherwise a
+        // UserInfo-supplied acr could satisfy a step-up requirement the session never actually met. This is a
+        // call-site property invisible to a unit test (the gate would still pass its behavioural tests reading
+        // from either source when they happen to agree), so it is pinned as a source scan: a refactor that
+        // sources the acr from the merged principal reopens the gap and fails here.
+        var source = File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Api", "Flows", "OidcLoginService.cs"));
+
+        Assert.Contains("OidcIdTokenAcr.Read(result.IdentityToken)", source, StringComparison.Ordinal);
+        Assert.DoesNotMatch(new Regex("result\\.User\\.Claims[^;]*\"acr\"", RegexOptions.Singleline), source);
+    }
+
+    [Fact]
     public void OidcAuthorizeState_IsKeyedOnUtc_NotMachineLocalTime()
     {
         // Locked in by #676: the in-flight OpenID authorize-state store keys its lifetime/expiry on the
@@ -1319,6 +1335,7 @@ public class ArchitectureConformanceTests
             "DoNotValidateEndpoints", "DoNotValidateIssuerName", "DoNotValidateResponseIssuer",
             "DoNotLoadProfile", "RequirePkce", "AllowExistingAccountLink",
             "RequireVerifiedEmailForAdoption", "RequireVerifiedEmailForLogin",
+            "RequireAcr", "AcrValues",
         };
         var unsaved = securityCritical.Where(p => !matchedIds.Contains(p)).ToList();
         Assert.True(
@@ -1375,10 +1392,11 @@ public class ArchitectureConformanceTests
             "EnableLiveTvRoles", "LiveTvRoles", "LiveTvManagementRoles", "EnableLiveTv", "EnableLiveTvManagement",
             "DoNotLoadProfile", "SchemeOverride", "PortOverride", "BaseUrlOverride",
             "RequirePkce", "AllowExistingAccountLink", "ProvisionNewUsersDisabled", "RequireVerifiedEmailForAdoption", "RequireVerifiedEmailForLogin",
+            "AcrValues", "Prompt", "MaxAge", "RequireAcr",
             "DisableHttps", "DisablePushedAuthorization", "DoNotValidateEndpoints", "DoNotValidateIssuerName", "DoNotValidateResponseIssuer",
         };
 
-        Assert.Equal(35, expected.Length);
+        Assert.Equal(39, expected.Length);
         var missing = expected.Where(id => !markedIds.Contains(id)).ToList();
         Assert.True(
             missing.Count == 0,
@@ -1486,7 +1504,7 @@ public class ArchitectureConformanceTests
 
         foreach (var hardening in new[]
         {
-            "RequireVerifiedEmailForAdoption", "RequireVerifiedEmailForLogin", "RequirePkce",
+            "RequireVerifiedEmailForAdoption", "RequireVerifiedEmailForLogin", "RequirePkce", "RequireAcr",
         })
         {
             Assert.DoesNotContain(hardening, trigger, StringComparison.Ordinal);

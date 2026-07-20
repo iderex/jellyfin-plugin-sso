@@ -31,6 +31,7 @@ public class LoginStatusMapperTests
             (PublicReason.PkceNotSupported, 400, "The identity provider does not advertise the required PKCE (S256) support."),
             (PublicReason.EmailNotVerified, 403, "A verified email is required to log in."),
             (PublicReason.AwaitingApproval, 403, "Your account is not active. It is awaiting administrator approval."),
+            (PublicReason.AcrNotSatisfied, 403, "A stronger authentication level (for example MFA) is required to log in."),
         };
 
         // The table itself must stay total: a new member without a row fails here.

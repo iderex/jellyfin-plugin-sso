@@ -15,6 +15,27 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 /// </summary>
 public class ProviderConfigValidatorTests
 {
+    // --- ValidateAcrRequirement (#757): reject RequireAcr with no acr_values (a silent-lockout footgun) ---
+
+    [Fact]
+    public void ValidateAcrRequirement_RequireAcrWithoutAcrValues_Throws()
+    {
+        var ex = Assert.Throws<ArgumentException>(() =>
+            ProviderConfigValidator.ValidateAcrRequirement("kc", new OidConfig { RequireAcr = true, AcrValues = "   " }));
+
+        Assert.Equal("config", ex.ParamName);
+        Assert.Contains("kc", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("RequireAcr", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(true, "mfa")] // require-with-values is fine
+    [InlineData(false, "")] // not requiring is fine with or without values
+    [InlineData(false, "mfa")]
+    public void ValidateAcrRequirement_ValidCombinations_DoNotThrow(bool requireAcr, string acrValues)
+        => Assert.Null(Record.Exception(() =>
+            ProviderConfigValidator.ValidateAcrRequirement("kc", new OidConfig { RequireAcr = requireAcr, AcrValues = acrValues })));
+
     // --- ValidateProviderName (#336, #360): reject a NEW round-trip-breaking name; exempt existing names ---
 
     [Theory]

@@ -108,22 +108,130 @@ public class OidcRoundTripTests
         await harness.UserManager.DidNotReceive().CreateUserAsync(Arg.Any<string>());
     }
 
+    [Fact]
+    public async Task Challenge_StepUpConfigured_SendsAcrValuesPromptAndMaxAgeOnTheAuthorizeRequest()
+    {
+        // #757 part A: the configured acr_values / prompt / max_age appear on the authorization redirect.
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        var harness = BuildHarness(fixture, request => ServeIdp(fixture, request, fixture.IdToken("sub-1", "alice")), cfg =>
+        {
+            cfg.AcrValues = "phr mfa";
+            cfg.Prompt = "login";
+            cfg.MaxAge = 0;
+        });
+
+        harness.Controller.HttpContext.Request.Path = "/sso/OID/start/kc";
+        var challenge = Assert.IsType<RedirectResult>(await harness.Controller.OidChallenge("kc"));
+
+        Assert.Equal("phr mfa", QueryValue(challenge.Url, "acr_values"));
+        Assert.Equal("login", QueryValue(challenge.Url, "prompt"));
+        Assert.Equal("0", QueryValue(challenge.Url, "max_age"));
+    }
+
+    [Fact]
+    public async Task Challenge_NoStepUpConfigured_OmitsTheStepUpParameters()
+    {
+        // Upgrade-safe: an unconfigured provider's authorize request carries none of the step-up parameters.
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        var harness = BuildHarness(fixture, request => ServeIdp(fixture, request, fixture.IdToken("sub-1", "alice")));
+
+        harness.Controller.HttpContext.Request.Path = "/sso/OID/start/kc";
+        var challenge = Assert.IsType<RedirectResult>(await harness.Controller.OidChallenge("kc"));
+
+        Assert.Equal(string.Empty, QueryValue(challenge.Url, "acr_values"));
+        Assert.Equal(string.Empty, QueryValue(challenge.Url, "prompt"));
+        Assert.Equal(string.Empty, QueryValue(challenge.Url, "max_age"));
+    }
+
+    [Fact]
+    public async Task RequireAcr_MatchingAcrClaim_YieldsLoggedInOutcome()
+    {
+        // #757 part B, happy path: RequireAcr on + the id_token returns an acr within the allow-list ⇒ login.
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        var idToken = fixture.IdToken(subject: "sub-1", username: "alice", acr: "mfa");
+        var harness = BuildHarness(fixture, request => ServeIdp(fixture, request, idToken), cfg =>
+        {
+            cfg.AcrValues = "phr mfa";
+            cfg.RequireAcr = true;
+        });
+        var user = new User("alice", "SSO-Auth", "Default") { Id = Guid.Parse("19999999-1111-1111-1111-111111111112") };
+        harness.UserManager.CreateUserAsync("alice").Returns(user);
+        harness.UserManager.GetUserById(user.Id).Returns(user);
+
+        var (state, binding) = await DriveChallenge(harness);
+        RepointToCallback(harness, state, binding, query: $"?code=test-code&state={state}");
+        var callback = Assert.IsType<ContentResult>(await harness.Controller.OidCallback("kc", state));
+        Assert.Equal("text/html", callback.ContentType);
+
+        var authed = await harness.Controller.OidAuth("kc", Redeem(state));
+        Assert.IsType<OkObjectResult>(authed);
+        await harness.UserManager.Received(1).CreateUserAsync("alice");
+    }
+
+    [Theory]
+    [InlineData("basic")] // an acr outside the allow-list
+    [InlineData(null)] // no acr claim at all
+    public async Task RequireAcr_MissingOrWrongAcr_RejectsAtCallback_MintsNothing(string? acr)
+    {
+        // #757 part B, fail-closed: RequireAcr on but the returned acr is absent or not in the allow-list ⇒
+        // the callback denies before promoting a Ready, so the redeem finds no state and mints nothing.
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        var idToken = fixture.IdToken(subject: "sub-1", username: "alice", acr: acr);
+        var harness = BuildHarness(fixture, request => ServeIdp(fixture, request, idToken), cfg =>
+        {
+            cfg.AcrValues = "mfa";
+            cfg.RequireAcr = true;
+        });
+
+        var (state, binding) = await DriveChallenge(harness);
+        RepointToCallback(harness, state, binding, query: $"?code=test-code&state={state}");
+        var callback = Assert.IsType<ContentResult>(await harness.Controller.OidCallback("kc", state));
+        Assert.Equal(403, callback.StatusCode);
+
+        var authed = await harness.Controller.OidAuth("kc", Redeem(state));
+        var content = Assert.IsType<ContentResult>(authed);
+        Assert.Equal(400, content.StatusCode);
+        Assert.Equal("Invalid or expired state", content.Content);
+        await harness.UserManager.DidNotReceive().CreateUserAsync(Arg.Any<string>());
+    }
+
+    [Fact]
+    public async Task RequireAcrOff_NoAcrClaim_YieldsLoggedInOutcome()
+    {
+        // Default: with RequireAcr off, an id_token that carries no acr logs in unchanged (no new gate).
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        var harness = BuildHarness(fixture, request => ServeIdp(fixture, request, fixture.IdToken("sub-1", "alice")));
+        var user = new User("alice", "SSO-Auth", "Default") { Id = Guid.Parse("19999999-1111-1111-1111-111111111113") };
+        harness.UserManager.CreateUserAsync("alice").Returns(user);
+        harness.UserManager.GetUserById(user.Id).Returns(user);
+
+        var (state, binding) = await DriveChallenge(harness);
+        RepointToCallback(harness, state, binding, query: $"?code=test-code&state={state}");
+        Assert.Equal("text/html", Assert.IsType<ContentResult>(await harness.Controller.OidCallback("kc", state)).ContentType);
+        Assert.IsType<OkObjectResult>(await harness.Controller.OidAuth("kc", Redeem(state)));
+    }
+
     // Builds a harness with a single enabled provider "kc" pointed at the fixture's authority, served by the
     // supplied responder. DisablePushedAuthorization keeps the challenge to a plain redirect; DoNotLoadProfile
     // makes the id_token claims the whole identity (no userinfo fetch); EnableAuthorization/AllowExistingAccountLink
     // are off to keep the redeem on the first-time-provision path these round-trips assert.
-    private static SsoControllerHarness BuildHarness(OidcTokenFixture fixture, Func<HttpRequestMessage, HttpResponseMessage> responder) =>
+    private static SsoControllerHarness BuildHarness(OidcTokenFixture fixture, Func<HttpRequestMessage, HttpResponseMessage> responder, Action<OidConfig>? configure = null) =>
         new SsoControllerHarness(
-            c => c.OidConfigs["kc"] = new OidConfig
+            c =>
             {
-                Enabled = true,
-                OidEndpoint = fixture.Issuer,
-                OidClientId = fixture.ClientId,
-                OidScopes = Array.Empty<string>(),
-                DisablePushedAuthorization = true,
-                DoNotLoadProfile = true,
-                EnableAuthorization = false,
-                AllowExistingAccountLink = false,
+                var cfg = new OidConfig
+                {
+                    Enabled = true,
+                    OidEndpoint = fixture.Issuer,
+                    OidClientId = fixture.ClientId,
+                    OidScopes = Array.Empty<string>(),
+                    DisablePushedAuthorization = true,
+                    DoNotLoadProfile = true,
+                    EnableAuthorization = false,
+                    AllowExistingAccountLink = false,
+                };
+                configure?.Invoke(cfg);
+                c.OidConfigs["kc"] = cfg;
             },
             httpResponder: responder);
 
