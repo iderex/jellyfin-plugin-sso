@@ -30,6 +30,9 @@ persistence, or the release pipeline.
       why, not what) and matches the target architecture (#318).
 - [ ] Architecture-conformance tests pass, and any new structural property this
       change establishes is locked in as a rule in `ArchitectureConformanceTests`.
+- [ ] Docs impact considered: this change needs no README/wiki update, OR the
+      update is included here, OR it is filed as a `documentation` issue on the
+      current-release milestone (link it in Notes).
 
 ## Verification
 
