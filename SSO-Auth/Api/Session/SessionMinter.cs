@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Threading.Tasks;
 using Jellyfin.Data;
@@ -42,7 +44,7 @@ internal sealed class SessionMinter
     /// <returns>The authenticated session result.</returns>
     internal async Task<AuthenticationResult> MintAsync(SessionParameters parameters, Func<string> remoteEndPointResolver, Func<bool> identityStillLinked)
     {
-        User user = _userManager.GetUserById(parameters.UserId);
+        User? user = _userManager.GetUserById(parameters.UserId);
         if (user is null)
         {
             // Fail closed: the account resolved for this SSO login no longer exists (e.g. it was

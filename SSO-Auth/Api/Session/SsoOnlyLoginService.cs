@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -20,7 +22,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Session;
 /// <param name="Verdict">The guard verdict.</param>
 /// <param name="RepointedCount">Accounts repointed to the SSO (non-password) provider on a successful activation.</param>
 /// <param name="BreakGlassAdmin">The account's own canonical username on success (for the audit line); null on refusal.</param>
-internal readonly record struct SsoOnlyEnableOutcome(SsoOnlyGuardVerdict Verdict, int RepointedCount, string BreakGlassAdmin);
+internal readonly record struct SsoOnlyEnableOutcome(SsoOnlyGuardVerdict Verdict, int RepointedCount, string? BreakGlassAdmin);
 
 /// <summary>
 /// The login-path re-assertion outcome for a resolved account (#165, Findings A/B/H1): the
@@ -31,7 +33,7 @@ internal readonly record struct SsoOnlyEnableOutcome(SsoOnlyGuardVerdict Verdict
 /// </summary>
 /// <param name="DefaultProvider">The provider id to persist as the account's default login provider (or the configured default when the mode is off).</param>
 /// <param name="IsBreakGlassAdmin">True only when the account is the break-glass admin AND the mode is on, so the mint must leave its admin/enabled recovery state intact.</param>
-internal readonly record struct SsoOnlyLoginDecision(string DefaultProvider, bool IsBreakGlassAdmin);
+internal readonly record struct SsoOnlyLoginDecision(string? DefaultProvider, bool IsBreakGlassAdmin);
 
 /// <summary>
 /// The plugin-driven per-user enforcement of SSO-only login (#165). Jellyfin has no server-wide "disable
@@ -109,7 +111,7 @@ internal sealed class SsoOnlyLoginService
     /// <param name="userId">The Jellyfin user id the login resolved to.</param>
     /// <param name="configuredDefaultProvider">The provider config's own <c>DefaultProvider</c> (already trimmed), used unchanged while the mode is off.</param>
     /// <returns>The provider id to persist and whether this is the break-glass admin under an active mode.</returns>
-    internal SsoOnlyLoginDecision ResolveLoginEnforcement(Guid userId, string configuredDefaultProvider)
+    internal SsoOnlyLoginDecision ResolveLoginEnforcement(Guid userId, string? configuredDefaultProvider)
     {
         // Decide under one locked read for the common paths (mode off, break-glass, already-SSO or
         // already-tracked) so a login does NOT pay a config persist; only a first-time repoint of a
