@@ -250,5 +250,28 @@ internal static class OidcAuthorizeStateBuilder
         List<string> Folders,
         string? AvatarUrl,
         IReadOnlyList<PermissionGrant>? PermissionGrants = null,
-        int? MaxParentalRatingScore = null);
+        int? MaxParentalRatingScore = null)
+    {
+        /// <summary>
+        /// Gets the raw OpenID <c>id_token</c>, captured at the callback for a later RP-initiated logout
+        /// <c>id_token_hint</c> (#727, SLO-1b). Set via <c>with</c> after the role gate; null unless Single
+        /// Logout is on. A bearer secret — it rides the one-time in-memory Ready and is encrypted once
+        /// persisted at capture.
+        /// </summary>
+        internal string? IdToken { get; init; }
+
+        /// <summary>
+        /// Gets the OpenID <c>sid</c> claim (the identity-provider session identifier), captured for logout
+        /// matching (#727); null when the token carried none.
+        /// </summary>
+        internal string? SessionIndex { get; init; }
+
+        /// <summary>
+        /// Redacts the bearer <see cref="IdToken"/> from the record's synthesized string form (#727), so a
+        /// stray <c>$"{state}"</c> or a logged state can never spill the id_token.
+        /// </summary>
+        /// <returns>A diagnostic string with the id_token redacted.</returns>
+        public override string ToString()
+            => $"OidcAuthorizeState {{ Username = {Username}, Subject = {Subject}, Valid = {Valid}, Admin = {Admin}, SessionIndex = {SessionIndex}, IdToken = {(IdToken is null ? "null" : "<redacted>")} }}";
+    }
 }

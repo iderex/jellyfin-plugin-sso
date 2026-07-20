@@ -2,6 +2,7 @@ using System;
 using Duende.IdentityModel.OidcClient;
 using Jellyfin.Plugin.SSO_Auth.Api.Authz;
 using Jellyfin.Plugin.SSO_Auth.Api.Identity;
+using Jellyfin.Plugin.SSO_Auth.Api.Logout;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 
@@ -131,6 +132,11 @@ internal abstract class AuthorizeSession
                 PermissionGrants = derived.PermissionGrants ?? Array.Empty<PermissionGrant>(),
                 MaxParentalRatingScore = derived.MaxParentalRatingScore,
             });
+
+            // Carry the OpenID logout material (#727, SLO-1b) alongside the keystone rather than inside it:
+            // the id_token and sid are needed only by the (opt-in) logout capture at the mint, so keeping them
+            // off VerifiedIdentity leaves the keystone's minimal contract intact.
+            LogoutContext = new LogoutContext(derived.SessionIndex, derived.IdToken);
         }
 
         /// <summary>
@@ -139,5 +145,11 @@ internal abstract class AuthorizeSession
         /// gate, and it is what <see cref="OidcStateStore.TryRedeem"/> feeds into the shared mint path.
         /// </summary>
         internal VerifiedIdentity Identity { get; }
+
+        /// <summary>
+        /// Gets the OpenID logout material captured at the callback (#727) — the id_token and sid the mint
+        /// persists for Single Logout when it is enabled.
+        /// </summary>
+        internal LogoutContext LogoutContext { get; }
     }
 }

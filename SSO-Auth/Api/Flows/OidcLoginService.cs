@@ -333,6 +333,16 @@ internal sealed class OidcLoginService : ILoginService
         // `iss` — the same reason the RFC 9207 check above re-reads it from result.IdentityToken.
         var derived = OidcAuthorizeStateBuilder.Build(result.User.Claims, config, OidcResponseIssuer.IdTokenIssuer(result.IdentityToken));
 
+        // Capture the logout material (#727, SLO-1b) onto the in-flight state so it rides the one-time Ready
+        // to the mint: the raw id_token (the later RP-initiated logout's id_token_hint) and the OpenID sid
+        // (the IdP session id used for logout matching). Held only in memory here; it is persisted — and
+        // encrypted — only at the mint, and only when Single Logout is enabled. The sid is read from the
+        // signature-verified id_token (OidcIdTokenSid), NOT result.User: with LoadProfile on the principal
+        // carries the unsigned UserInfo merge, so — as with acr (OidcIdTokenAcr) and iss (OidcResponseIssuer)
+        // — only the id_token's own sid is trustworthy for a value that later keys a logout.
+        var sid = OidcIdTokenSid.Read(result.IdentityToken);
+        derived = derived with { IdToken = result.IdentityToken, SessionIndex = sid };
+
         // Fail closed (#155): a valid OpenID login must resolve a stable subject to key the account
         // link on. sub is an OIDC Core MUST and (post-#134) the id_token validator has verified the
         // token, so a missing sub means a non-conformant provider — reject rather than fall back to
@@ -461,7 +471,8 @@ internal sealed class OidcLoginService : ILoginService
             response,
             config,
             new AdoptionGate(config.RequireVerifiedEmailForAdoption, redeemed.Identity.EmailVerified),
-            remoteEndPointResolver).ConfigureAwait(false);
+            remoteEndPointResolver,
+            redeemed.LogoutContext).ConfigureAwait(false);
     }
 
     /// <summary>

@@ -159,7 +159,7 @@ public class SamlLoginServiceTests
         var avatarService = new AvatarService(harness.UserManager, Substitute.For<IProviderManager>(), Substitute.For<IServerConfigurationManager>(), logger, SsoHttp.UserAgent);
         var sessionMinter = new SessionMinter(harness.UserManager, avatarService, Substitute.For<ISessionManager>(), logger);
         var ssoOnly = new SsoOnlyLoginService(harness.UserManager, SSOPlugin.Instance.ConfigStore, logger);
-        var loginCompletion = new LoginCompletionService(canonicalLinks, sessionMinter, ssoOnly, logger);
+        var loginCompletion = new LoginCompletionService(canonicalLinks, sessionMinter, ssoOnly, SSOPlugin.Instance.ConfigStore, logger);
         var service = new SamlLoginService(loginCompletion, canonicalLinks, logger);
 
         var context = new DefaultHttpContext();

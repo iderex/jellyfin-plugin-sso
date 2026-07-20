@@ -11,12 +11,14 @@ using Jellyfin.Plugin.SSO_Auth.Api.Saml;
 using Jellyfin.Plugin.SSO_Auth.Api.Linking;
 using Jellyfin.Plugin.SSO_Auth.Api.Avatar;
 using Jellyfin.Plugin.SSO_Auth.Api.Flows;
+using Jellyfin.Plugin.SSO_Auth.Api.Logout;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using MediaBrowser.Controller.Authentication;
 using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Providers;
 using MediaBrowser.Controller.Session;
+using MediaBrowser.Model.Dto;
 using Microsoft.AspNetCore.Mvc;
 using NSubstitute;
 using Xunit;
@@ -51,7 +53,7 @@ public class LoginCompletionServiceTests
         var avatar = new AvatarService(users, Substitute.For<IProviderManager>(), Substitute.For<IServerConfigurationManager>(), new CapturingLogger(), "test-agent");
         var minter = new SessionMinter(users, avatar, sessions, new CapturingLogger());
         var ssoOnly = new SsoOnlyLoginService(users, store, new CapturingLogger());
-        return (new LoginCompletionService(canonicalLinks, minter, ssoOnly, new CapturingLogger()), cfg, users, sessions);
+        return (new LoginCompletionService(canonicalLinks, minter, ssoOnly, store, new CapturingLogger()), cfg, users, sessions);
     }
 
     private static AuthResponse Response() =>
@@ -98,6 +100,83 @@ public class LoginCompletionServiceTests
         Assert.NotNull(captured);
         Assert.Equal(Created, captured!.UserId);
         Assert.Equal("203.0.113.9", captured.RemoteEndPoint);
+    }
+
+    [Fact]
+    public async Task CompleteAsync_SingleLogoutOff_DoesNotCaptureEvenWithALogoutContext()
+    {
+        // The capture is gated on EnableSingleLogout (#727): off (the default), a login stores nothing, even
+        // when the OpenID path supplies the id_token/sid.
+        var config = new OidConfig { Enabled = true };
+        var (service, cfg, users, sessions) = Build(c => c.OidConfigs["kc"] = config); // EnableSingleLogout defaults off
+        var created = UserNamed("alice", Created);
+        users.GetUserByName("alice").Returns((User?)null);
+        users.CreateUserAsync("alice").Returns(created);
+        users.GetUserById(Created).Returns(created);
+        sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
+
+        await service.CompleteAsync(
+            OidcIdentity("kc", "sub-1", "alice"), Response(), config, AdoptionGate.None, () => "203.0.113.9",
+            new LogoutContext("sid-1", "raw.id.token"));
+
+        Assert.Empty(cfg.LogoutSessions);
+    }
+
+    [Fact]
+    public async Task CompleteAsync_SingleLogoutOn_NoSessionId_SkipsCaptureWithoutFailingTheLogin()
+    {
+        // Fail-safe: with the feature on but the mint returning no session id, the capture is skipped and the
+        // login still succeeds — a capture problem must never turn a good login into a failure.
+        var config = new OidConfig { Enabled = true };
+        var (service, cfg, users, sessions) = Build(c =>
+        {
+            c.EnableSingleLogout = true;
+            c.OidConfigs["kc"] = config;
+        });
+        var created = UserNamed("alice", Created);
+        users.GetUserByName("alice").Returns((User?)null);
+        users.CreateUserAsync("alice").Returns(created);
+        users.GetUserById(Created).Returns(created);
+        sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult()); // SessionInfo == null
+
+        var result = await service.CompleteAsync(
+            OidcIdentity("kc", "sub-1", "alice"), Response(), config, AdoptionGate.None, () => "203.0.113.9",
+            new LogoutContext("sid-1", "raw.id.token"));
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Empty(cfg.LogoutSessions);
+    }
+
+    [Fact]
+    public async Task CompleteAsync_SingleLogoutOn_CapturesTheSessionStateKeyedByTheMintedSession()
+    {
+        // The end-to-end capture: with the feature on and a real minted session, the login persists the
+        // logout state — the id_token, subject, session index, and user — keyed by the minted session id.
+        var config = new OidConfig { Enabled = true };
+        var (service, cfg, users, sessions) = Build(c =>
+        {
+            c.EnableSingleLogout = true;
+            c.OidConfigs["kc"] = config;
+        });
+        var created = UserNamed("alice", Created);
+        users.GetUserByName("alice").Returns((User?)null);
+        users.CreateUserAsync("alice").Returns(created);
+        users.GetUserById(Created).Returns(created);
+        var session = new SessionInfoDto { Id = "session-key-1" };
+        sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>())
+            .Returns(new AuthenticationResult { SessionInfo = session });
+
+        await service.CompleteAsync(
+            OidcIdentity("kc", "sub-1", "alice"), Response(), config, AdoptionGate.None, () => "203.0.113.9",
+            new LogoutContext("sid-1", "raw.id.token"));
+
+        Assert.True(cfg.LogoutSessions.ContainsKey("session-key-1"));
+        var entry = cfg.LogoutSessions["session-key-1"];
+        Assert.Equal("raw.id.token", entry.IdToken);
+        Assert.Equal("sub-1", entry.Subject);
+        Assert.Equal("sid-1", entry.SessionIndex);
+        Assert.Equal("kc", entry.Provider);
+        Assert.Equal(Created, entry.UserId);
     }
 
     [Fact]
