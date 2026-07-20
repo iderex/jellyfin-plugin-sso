@@ -267,6 +267,12 @@ internal static class OidcAuthorizeStateBuilder
         internal string? SessionIndex { get; init; }
 
         /// <summary>
+        /// Gets the OpenID <c>end_session_endpoint</c> from discovery (#727, SLO-2), captured so an
+        /// RP-initiated logout needs no runtime rediscovery; null when the OP advertises none.
+        /// </summary>
+        internal string? EndSessionEndpoint { get; init; }
+
+        /// <summary>
         /// Redacts the bearer <see cref="IdToken"/> from the record's synthesized string form (#727), so a
         /// stray <c>$"{state}"</c> or a logged state can never spill the id_token.
         /// </summary>

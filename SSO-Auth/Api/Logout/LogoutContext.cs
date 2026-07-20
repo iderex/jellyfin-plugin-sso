@@ -10,7 +10,8 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Logout;
 /// </summary>
 /// <param name="SessionIndex">The OpenID <c>sid</c> claim or the SAML <c>SessionIndex</c>, or null when absent.</param>
 /// <param name="IdToken">The raw OpenID <c>id_token</c> (a bearer secret), or null for SAML.</param>
-internal readonly record struct LogoutContext(string? SessionIndex, string? IdToken)
+/// <param name="EndSessionEndpoint">The OpenID <c>end_session_endpoint</c> from discovery, stored so an RP-initiated logout needs no runtime rediscovery (#727, SLO-2); null for SAML or when the OP advertises none.</param>
+internal readonly record struct LogoutContext(string? SessionIndex, string? IdToken, string? EndSessionEndpoint = null)
 {
     /// <summary>
     /// Redacts the bearer <see cref="IdToken"/> from the record's synthesized string form, so a stray

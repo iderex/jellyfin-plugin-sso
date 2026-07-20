@@ -96,6 +96,38 @@ public class SessionLogoutStoreTests
     }
 
     [Fact]
+    public void FindByUser_ReturnsOnlyThatUsersSessions_NewestFirst()
+    {
+        var alice = System.Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var bob = System.Guid.Parse("22222222-2222-2222-2222-222222222222");
+        var config = new PluginConfiguration();
+
+        var older = State("keycloak", "alice");
+        older.UserId = alice;
+        older.CapturedUtcTicks = Now.Ticks;
+        config.LogoutSessions["a-old"] = older;
+
+        var newer = State("authelia", "alice");
+        newer.UserId = alice;
+        newer.CapturedUtcTicks = Now.Ticks + 1000;
+        config.LogoutSessions["a-new"] = newer;
+
+        var other = State("keycloak", "bob");
+        other.UserId = bob;
+        config.LogoutSessions["b"] = other;
+
+        var found = SessionLogoutStore.FindByUser(config, alice);
+
+        Assert.Equal(2, found.Count);
+        Assert.Equal("a-new", found[0].Key); // newest first
+        Assert.Equal("a-old", found[1].Key);
+        Assert.All(found, p => Assert.Equal(alice, p.Value.UserId));
+
+        // A blank user matches nothing (never sweeps unrelated sessions).
+        Assert.Empty(SessionLogoutStore.FindByUser(config, System.Guid.Empty));
+    }
+
+    [Fact]
     public void FindByProviderSubject_MatchesProviderAndSubject_AndSessionIndexWhenGiven()
     {
         var config = new PluginConfiguration();

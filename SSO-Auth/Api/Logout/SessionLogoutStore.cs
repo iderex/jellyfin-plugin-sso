@@ -106,6 +106,28 @@ internal static class SessionLogoutStore
             .ToList();
     }
 
+    /// <summary>
+    /// Returns the sessions captured for a given Jellyfin user, newest first (#727, SLO-2). The OIDC
+    /// RP-initiated logout uses this to pick the caller's most recent session for a provider, whose id_token
+    /// is the id_token_hint. A blank/empty user id matches nothing, so it can never sweep unrelated sessions.
+    /// </summary>
+    /// <param name="configuration">The live configuration.</param>
+    /// <param name="userId">The Jellyfin user id to match.</param>
+    /// <returns>The user's captured sessions, ordered newest first.</returns>
+    internal static IReadOnlyList<KeyValuePair<string, LogoutSession>> FindByUser(PluginConfiguration configuration, Guid userId)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        if (userId == Guid.Empty)
+        {
+            return System.Array.Empty<KeyValuePair<string, LogoutSession>>();
+        }
+
+        return configuration.LogoutSessions
+            .Where(pair => pair.Value.UserId == userId)
+            .OrderByDescending(pair => pair.Value.CapturedUtcTicks)
+            .ToList();
+    }
+
     private static void Prune(PluginConfiguration configuration, DateTime nowUtc)
     {
         var sessions = configuration.LogoutSessions;

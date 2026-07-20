@@ -168,7 +168,7 @@ public class LoginCompletionServiceTests
 
         await service.CompleteAsync(
             OidcIdentity("kc", "sub-1", "alice"), Response(), config, AdoptionGate.None, () => "203.0.113.9",
-            new LogoutContext("sid-1", "raw.id.token"));
+            new LogoutContext("sid-1", "raw.id.token", "https://idp.example/logout"));
 
         Assert.True(cfg.LogoutSessions.ContainsKey("session-key-1"));
         var entry = cfg.LogoutSessions["session-key-1"];
@@ -176,6 +176,7 @@ public class LoginCompletionServiceTests
         Assert.Equal("sub-1", entry.Subject);
         Assert.Equal("sid-1", entry.SessionIndex);
         Assert.Equal("kc", entry.Provider);
+        Assert.Equal("https://idp.example/logout", entry.EndSessionEndpoint);
         Assert.Equal(Created, entry.UserId);
     }
 

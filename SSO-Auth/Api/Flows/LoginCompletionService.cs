@@ -178,6 +178,7 @@ internal sealed class LoginCompletionService
                 SessionIndex = context.SessionIndex,
                 Issuer = identity.Issuer,
                 IdToken = context.IdToken,
+                EndSessionEndpoint = context.EndSessionEndpoint,
                 UserId = userId,
             };
 

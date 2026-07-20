@@ -341,7 +341,14 @@ internal sealed class OidcLoginService : ILoginService
         // carries the unsigned UserInfo merge, so — as with acr (OidcIdTokenAcr) and iss (OidcResponseIssuer)
         // — only the id_token's own sid is trustworthy for a value that later keys a logout.
         var sid = OidcIdTokenSid.Read(result.IdentityToken);
-        derived = derived with { IdToken = result.IdentityToken, SessionIndex = sid };
+        derived = derived with
+        {
+            IdToken = result.IdentityToken,
+            SessionIndex = sid,
+            // The end_session_endpoint from the SAME discovery that fed this login (#727, SLO-2), stored so a
+            // later RP-initiated logout needs no rediscovery; null when the OP advertises none.
+            EndSessionEndpoint = pending.ProviderInformation?.EndSessionEndpoint,
+        };
 
         // Fail closed (#155): a valid OpenID login must resolve a stable subject to key the account
         // link on. sub is an OIDC Core MUST and (post-#134) the id_token validator has verified the

@@ -187,6 +187,16 @@ public abstract class ProviderConfigBase
     public bool Enabled { get; set; }
 
     /// <summary>
+    /// Gets or sets the URL the identity provider should return the browser to after an RP-initiated logout
+    /// (#727, SLO-2), sent as <c>post_logout_redirect_uri</c>. It is honoured only when it sits at or under
+    /// this server's canonical base URL (an open-redirect defense enforced by <c>OidcLogout</c>); an off-base
+    /// or malformed value is silently ignored (the logout still completes, without a redirect back). Blank
+    /// means no post-logout redirect. No effect while <see cref="PluginConfiguration.EnableSingleLogout"/> is
+    /// off.
+    /// </summary>
+    public string PostLogoutRedirectUri { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether this provider is HIDDEN from the managed login-page buttons
     /// (#722), when <see cref="PluginConfiguration.ManageLoginPageButtons"/> is on. Off by default: an enabled
     /// provider gets a button. Set it to keep a provider usable via its direct start URL without advertising a
