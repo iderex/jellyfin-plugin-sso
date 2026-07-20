@@ -57,7 +57,7 @@ public class LoginCompletionServiceTests
     private static AuthResponse Response() =>
         new AuthResponse { AppName = "app", AppVersion = "1", DeviceID = "d", DeviceName = "dev" };
 
-    private static VerifiedIdentity OidcIdentity(string provider, string subject, string username) =>
+    private static VerifiedIdentity OidcIdentity(string provider, string subject, string username, int? maxParentalRatingScore = null) =>
         TestIdentities.Oidc(provider, new OidcAuthorizeStateBuilder.OidcAuthorizeState(
             Username: username,
             Subject: subject,
@@ -68,7 +68,8 @@ public class LoginCompletionServiceTests
             EnableLiveTv: false,
             EnableLiveTvManagement: false,
             Folders: new List<string>(),
-            AvatarUrl: null));
+            AvatarUrl: null,
+            MaxParentalRatingScore: maxParentalRatingScore));
 
     private static VerifiedIdentity SamlIdentity(string provider, string nameId) =>
         TestIdentities.Saml(provider, nameId, new SamlAuthorizeStateBuilder.SamlAuthorizeState(
@@ -97,6 +98,29 @@ public class LoginCompletionServiceTests
         Assert.NotNull(captured);
         Assert.Equal(Created, captured!.UserId);
         Assert.Equal("203.0.113.9", captured.RemoteEndPoint);
+    }
+
+    [Fact]
+    public async Task CompleteAsync_ThreadsTheParentalRatingCeilingFromTheIdentityOntoTheMintedUser()
+    {
+        // #736 end-to-end through the whole keystone thread (VerifiedIdentity -> SessionParameters ->
+        // SessionMinter): a resolved ceiling on the identity lands on the user's MaxParentalRatingScore. Guards
+        // the middle of the threading — every hop is optional/defaulted, so a dropped copy line would compile
+        // and pass the per-unit tests while silently failing to reach the mint; this fails if it does.
+        var config = new OidConfig { Enabled = true, EnableAuthorization = true };
+        var (service, _, users, sessions) = Build(c => c.OidConfigs["kc"] = config);
+        var created = UserNamed("alice", Created);
+        created.MaxParentalRatingScore = 100; // a looser existing value the resolved ceiling must overwrite
+        users.GetUserByName("alice").Returns((User?)null);
+        users.CreateUserAsync("alice").Returns(created);
+        users.GetUserById(Created).Returns(created);
+        sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
+
+        var result = await service.CompleteAsync(
+            OidcIdentity("kc", "sub-1", "alice", maxParentalRatingScore: 3), Response(), config, AdoptionGate.None, () => "203.0.113.9");
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Equal(3, created.MaxParentalRatingScore);
     }
 
     [Fact]

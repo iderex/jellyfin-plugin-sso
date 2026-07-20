@@ -30,6 +30,7 @@ internal static class TestIdentities
             EnableLiveTvManagement = derived.EnableLiveTvManagement,
             AvatarUrl = derived.AvatarUrl,
             PermissionGrants = derived.PermissionGrants ?? Array.Empty<PermissionGrant>(),
+            MaxParentalRatingScore = derived.MaxParentalRatingScore,
         });
 
     internal static VerifiedIdentity Saml(string provider, string nameId, SamlAuthorizeStateBuilder.SamlAuthorizeState privileges) =>
@@ -46,5 +47,6 @@ internal static class TestIdentities
             EnableLiveTvManagement = privileges.EnableLiveTvManagement,
             AvatarUrl = null,
             PermissionGrants = privileges.PermissionGrants ?? Array.Empty<PermissionGrant>(),
+            MaxParentalRatingScore = privileges.MaxParentalRatingScore,
         });
 }

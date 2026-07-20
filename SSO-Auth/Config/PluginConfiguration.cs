@@ -265,8 +265,10 @@ public abstract class ProviderConfigBase
     /// score and the roles it applies to (e.g. a <c>kids</c> group → a content-rating ceiling). When a login
     /// matches several entries the MOST RESTRICTIVE (minimum) ceiling wins, never the loosest. A login that
     /// matches no entry leaves the account's existing ceiling untouched — an unmapped or malformed claim
-    /// never raises the ceiling. Validated fail-closed on save (a negative score, or an entry with no roles,
-    /// is rejected before it is persisted).
+    /// never raises the ceiling. A login that DOES match is authoritative, exactly like the admin/folder/Live
+    /// TV grants: the matched (minimum) ceiling is written even if it is looser than a value an administrator
+    /// set by hand, so keep the mappings in sync with the intended policy. Validated fail-closed on save (a
+    /// negative score, or an entry with no roles, is rejected before it is persisted).
     /// </summary>
     [XmlArray("ParentalRatingRoleMappings")]
     [XmlArrayItem(typeof(ParentalRatingRoleMap), ElementName = "ParentalRatingRoleMappings")]

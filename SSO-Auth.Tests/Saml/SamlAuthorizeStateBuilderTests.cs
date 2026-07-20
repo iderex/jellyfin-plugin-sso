@@ -92,6 +92,43 @@ public class SamlAuthorizeStateBuilderTests
     }
 
     [Fact]
+    public void ParentalRating_MatchedRole_CarriesTheMinimumCeilingOnTheState()
+    {
+        // #736 wiring on the SAML side: the role→parental-rating ceiling is carried on the derived state; the
+        // minimum (most restrictive) matched score wins.
+        var config = Config(c =>
+        {
+            c.EnableParentalRatingRoles = true;
+            c.ParentalRatingRoleMappings = new List<ParentalRatingRoleMap>
+            {
+                new ParentalRatingRoleMap { Score = 10, Roles = new[] { "teens" } },
+                new ParentalRatingRoleMap { Score = 3, Roles = new[] { "kids" } },
+            };
+        });
+
+        var result = SamlAuthorizeStateBuilder.Build(new List<string> { "teens", "kids" }, config);
+
+        Assert.Equal(3, result.MaxParentalRatingScore);
+    }
+
+    [Fact]
+    public void ParentalRating_FeatureOff_LeavesTheCeilingNull()
+    {
+        var config = Config(c =>
+        {
+            c.EnableParentalRatingRoles = false;
+            c.ParentalRatingRoleMappings = new List<ParentalRatingRoleMap>
+            {
+                new ParentalRatingRoleMap { Score = 3, Roles = new[] { "kids" } },
+            };
+        });
+
+        var result = SamlAuthorizeStateBuilder.Build(new List<string> { "kids" }, config);
+
+        Assert.Null(result.MaxParentalRatingScore);
+    }
+
+    [Fact]
     public void NonMatchingRole_GrantsNothing()
     {
         var config = Config(c =>
