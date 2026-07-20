@@ -701,10 +701,21 @@ const ssoConfigurationPage = {
   // appends the route-decoded name without re-encoding so the string equals the login's byte-for-byte.
   computeRedirectUri: (page, providerName) => {
     const override = page.querySelector("#BaseUrlOverride").value.trim();
-    const base = (override || ApiClient.serverAddress() || "").replace(
-      /\/+$/,
-      "",
-    );
+    const raw = override || ApiClient.serverAddress() || "";
+    let base;
+    try {
+      // Mirror the server's CanonicalBaseUrl (System.Uri.GetLeftPart(UriPartial.Path)) so the shown value
+      // equals what the login sends: `origin` lowercases scheme + host AND elides the default port
+      // (443/80) — exactly as System.Uri does — while pathname keeps any sub-path; query/fragment are
+      // dropped and the trailing slash trimmed. A raw string strip alone would show a non-canonical override
+      // (e.g. `https://X.COM:443`) that the login then normalizes away, causing a redirect_uri mismatch.
+      const u = new URL(raw);
+      base = u.origin + u.pathname.replace(/\/+$/, "");
+    } catch (e) {
+      // Not a parseable absolute URL yet (admin mid-typing, or a bare host): best-effort fall back to the
+      // raw value with only trailing slashes stripped so the field still shows something.
+      base = raw.replace(/\/+$/, "");
+    }
     return base + "/sso/OID/redirect/" + providerName;
   },
   // Live-updates the read-only redirect-URI field; empty (placeholder) until a provider name is entered. Sets

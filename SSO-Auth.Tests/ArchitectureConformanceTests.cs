@@ -739,7 +739,13 @@ public class ArchitectureConformanceTests
 
         // config.js derives from the base-URL override + the fixed server path, and writes via .value.
         Assert.Contains("/sso/OID/redirect/", js, StringComparison.Ordinal);
-        Assert.Matches(new Regex("computeRedirectUri[\\s\\S]{0,400}BaseUrlOverride", RegexOptions.Singleline), js);
+        Assert.Matches(new Regex("computeRedirectUri[\\s\\S]{0,500}BaseUrlOverride", RegexOptions.Singleline), js);
+        // It normalizes the base through the URL parser so the shown value matches the server's System.Uri
+        // canonicalization (lowercased scheme/host, default port elided) — deriving from the raw override
+        // string would display a URI the login does not send (a redirect_uri mismatch). Pinned on the exact
+        // origin+pathname derivation, which is unique to computeRedirectUri.
+        Assert.Contains("new URL(raw)", js, StringComparison.Ordinal);
+        Assert.Matches(new Regex("\\.origin\\s*\\+\\s*[A-Za-z_$][\\w$]*\\.pathname", RegexOptions.Singleline), js);
         Assert.Matches(new Regex("#OidRedirectUri\"\\)[\\s\\S]{0,200}\\.value\\s*=", RegexOptions.Singleline), js);
         Assert.DoesNotMatch(new Regex("OidRedirectUri[\\s\\S]{0,200}innerHTML", RegexOptions.Singleline), js);
     }
