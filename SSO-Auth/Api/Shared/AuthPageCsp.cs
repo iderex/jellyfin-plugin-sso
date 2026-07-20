@@ -1,4 +1,4 @@
-namespace Jellyfin.Plugin.SSO_Auth.Api;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Shared;
 
 /// <summary>
 /// Builds the Content-Security-Policy for the rendered auth-completion page. The page runs a single
