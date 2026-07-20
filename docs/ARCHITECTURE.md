@@ -34,24 +34,24 @@ case declaring its allowed edges; an import to any other Api module fails the
 test. Importing non-`Api` namespaces (e.g. `Config`) is permitted; there is no
 longer a flat `Api` core to import (see _The kernel is dissolved_ below).
 
-| Module      | Purpose                                                                             | May depend on                                                                     |
-| ----------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `Net`       | Networking / SSRF / URL primitives                                                  | — (leaf)                                                                          |
-| `Secrets`   | Secrets at rest (envelope, store, config wrapping)                                  | — (leaf)                                                                          |
-| `Audit`     | Append-only SSO audit logging                                                       | — (leaf)                                                                          |
-| `Authz`     | Role → permission mapping                                                           | — (leaf)                                                                          |
-| `Routing`   | Route-shape contract (suffix reader, path classifier)                               | — (leaf)                                                                          |
-| `Avatar`    | Avatar fetch + SSRF-gated validation                                                | `Net`, `RateLimit`                                                                |
-| `RateLimit` | Login throttling (buckets, gates, keys)                                             | `Net`                                                                             |
-| `Provider`  | Provider config / naming / test-result                                              | `Net`, `RateLimit`                                                                |
-| `Linking`   | Account link resolution / adoption / revocation                                     | `Audit`, `Provider`, `RateLimit`                                                  |
-| `Identity`  | The protocol-validated identity keystone                                            | `Authz`, `Provider`                                                               |
-| `Session`   | Session mint + login outcomes + SSO-only                                            | `Authz`, `Avatar`, `Linking`                                                      |
-| `Saml`      | SAML core, validators, caches, metadata                                             | `Authz`, `Identity`, `RateLimit`, `Session`                                       |
-| `Oidc`      | OIDC flow, discovery, id_token, state                                               | `Authz`, `Avatar`, `Identity`, `Net`, `Provider`, `RateLimit`, `Routing`          |
-| `Flows`     | Per-protocol login orchestration services                                           | (orchestration — depends downward)                                                |
-| `Shared`    | Shared served-page / flow-response helpers                                          | (shared — depends downward)                                                       |
-| `Http`      | The web boundary: `SSOController`, request helpers, the admin test-connection probe | the composition top — fronts every flow (wide by design); nothing imports it back |
+| Module      | Purpose                                                                             | May depend on                                                                                       |
+| ----------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `Net`       | Networking / SSRF / URL primitives                                                  | — (leaf)                                                                                            |
+| `Secrets`   | Secrets at rest (envelope, store, config wrapping)                                  | — (leaf)                                                                                            |
+| `Audit`     | Append-only SSO audit logging                                                       | — (leaf)                                                                                            |
+| `Authz`     | Role → permission mapping                                                           | — (leaf)                                                                                            |
+| `Routing`   | Route-shape contract (suffix reader, path classifier)                               | — (leaf)                                                                                            |
+| `Avatar`    | Avatar fetch + SSRF-gated validation                                                | `Net`, `RateLimit`                                                                                  |
+| `RateLimit` | Login throttling (buckets, gates, keys)                                             | `Net`                                                                                               |
+| `Provider`  | Provider config / naming / test-result                                              | `Net`, `RateLimit`                                                                                  |
+| `Linking`   | Account link resolution / adoption / revocation                                     | `Audit`, `Provider`, `RateLimit`                                                                    |
+| `Identity`  | The protocol-validated identity keystone                                            | `Authz`, `Provider`                                                                                 |
+| `Session`   | Session mint + login outcomes + SSO-only                                            | `Authz`, `Avatar`, `Linking`                                                                        |
+| `Saml`      | SAML core, validators, caches, metadata                                             | `Authz`, `Identity`, `RateLimit`, `Session`                                                         |
+| `Oidc`      | OIDC flow, discovery, id_token, state                                               | `Authz`, `Avatar`, `Identity`, `Net`, `Provider`, `RateLimit`, `Routing`                            |
+| `Flows`     | Per-protocol login orchestration services                                           | `Audit`, `Identity`, `Linking`, `Net`, `Oidc`, `Provider`, `RateLimit`, `Saml`, `Session`, `Shared` |
+| `Shared`    | Shared served-page / flow-response helpers                                          | `Avatar`, `Linking`, `RateLimit`, `Routing`, `Session`                                              |
+| `Http`      | The web boundary: `SSOController`, request helpers, the admin test-connection probe | the composition top — fronts every flow (wide by design); nothing imports it back                   |
 
 `Saml` and `Oidc` are **sibling protocol modules**: neither imports the other.
 Dependencies point _into_ the low-level leaves (`Net`, `Secrets`, `Audit`,
