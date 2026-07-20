@@ -2,7 +2,7 @@
 using System;
 using System.Xml;
 
-namespace Jellyfin.Plugin.SSO_Auth;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Saml;
 
 /// <summary>
 /// Pure, fail-closed validation of a SAML assertion's time bounds.

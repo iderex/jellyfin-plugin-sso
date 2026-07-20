@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Jellyfin.Plugin.SSO_Auth;
+using Jellyfin.Plugin.SSO_Auth.Api.Flows;
 using Xunit;
 
 namespace Jellyfin.Plugin.SSO_Auth.Tests;

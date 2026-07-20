@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 
-namespace Jellyfin.Plugin.SSO_Auth;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Flows;
 
 /// <summary>
 /// A helper class to return HTML for the client's auth flow.
