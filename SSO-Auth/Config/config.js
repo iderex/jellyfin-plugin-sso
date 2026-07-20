@@ -23,11 +23,22 @@ const ssoConfigurationPage = {
     ApiClient.getPluginConfiguration(ssoConfigurationPage.pluginUniqueId).then(
       (config) => {
         ssoConfigurationPage.populateProviders(page, config.OidConfigs);
+        // Refresh the SAML workspace from the same configuration load (#725), so a SAML save/delete/import
+        // reloads its provider list exactly as the OpenID one does.
+        ssoConfigurationPage.populateSamlProviders(
+          page,
+          config.SamlConfigs || {},
+        );
       },
     );
 
     const folder_container = page.querySelector("#EnabledFolders");
     ssoConfigurationPage.populateFolders(folder_container);
+    // The SAML editor has its own available-folders checklist; populate it too (#725).
+    const saml_folder_container = page.querySelector("#saml-EnabledFolders");
+    if (saml_folder_container) {
+      ssoConfigurationPage.populateFolders(saml_folder_container);
+    }
   },
   populateProviders: (page, providers) => {
     const select = page.querySelector("#selectProvider");
@@ -1043,6 +1054,766 @@ const ssoConfigurationPage = {
       ApiClient.getUrl("web/configurationpage") + "?name=SSO-Auth.css";
     view.appendChild(style);
   },
+
+  // ============================================================================
+  // SAML provider workspace (#725)
+  // ----------------------------------------------------------------------------
+  // A lifecycle parallel to the OpenID one above, kept entirely separate so the OpenID workspace and its
+  // JS are untouched (there is no JS runtime test harness — the adversarial review is the primary
+  // verification, so isolation is the cheapest correctness guarantee). Every SAML persisting field id is
+  // its SamlConfig property spelled with a "saml-" PREFIX (ids must be unique across the whole document,
+  // and the OpenID fields already own the unprefixed spellings); the property is the id minus that prefix,
+  // computed by samlPropOf. ProviderFormFieldIds_MatchSamlConfigProperties fails the build if any
+  // saml-*-marked field id (after stripping the prefix) is not a real SamlConfig property, so a field that
+  // would silently never save cannot land. The generic element-argument helpers above (setFieldError,
+  // populateFolders / populateEnabledFolders / serializeEnabledFolders, populateRoleMappings /
+  // serializeRoleMappings, fillTextList / parseTextList, setCollapseExpanded, setDependent,
+  // setSectionExpanded, renderTestMessage / renderTestResult) are protocol-agnostic and reused as-is.
+  // ============================================================================
+
+  // Toggles/settings whose ENABLED state is a security downgrade the admin must not miss (mirrors
+  // insecureFieldIds/sensitiveFieldIds for OpenID). DoNotValidateAudience disables the AudienceRestriction
+  // check; AllowExistingAccountLink widens account adoption. Property names (no prefix): the flag is read
+  // from the saved config (provider[prop]) and, when checking the live checkbox, queried as "#saml-"+prop.
+  // ProvisionNewUsersDisabled is deliberately NOT flagged — it is a fail-closed hardening toggle (ON is
+  // MORE secure), so surfacing it would be backwards and cause alert fatigue, exactly as for OpenID.
+  samlInsecureFieldIds: ["DoNotValidateAudience"],
+  samlSensitiveFieldIds: ["AllowExistingAccountLink"],
+  samlPropOf: (id) => id.slice("saml-".length),
+  populateSamlProviders: (page, providers) => {
+    const select = page.querySelector("#saml-selectProvider");
+    select.querySelectorAll("option").forEach((option) => option.remove());
+    Object.keys(providers).forEach((provider_name) => {
+      select.appendChild(new Option(provider_name, provider_name));
+    });
+    ssoConfigurationPage.renderSamlProviderCards(page, providers);
+  },
+  // SAML provider cards — same inert createElement/textContent construction as renderProviderCards (#221):
+  // a provider name is never interpolated as markup, so a hostile name stays inert on the page.
+  renderSamlProviderCards: (page, providers) => {
+    const list = page.querySelector("#saml-provider-list");
+    const empty = page.querySelector("#saml-provider-empty");
+    list.replaceChildren();
+
+    const names = Object.keys(providers);
+    empty.hidden = names.length !== 0;
+
+    names.forEach((provider_name) => {
+      const provider = providers[provider_name] || {};
+
+      const card = document.createElement("button");
+      card.type = "button";
+      card.classList.add("sso-provider-card");
+      card.dataset.provider = provider_name;
+      card.setAttribute("role", "listitem");
+
+      const name = document.createElement("span");
+      name.classList.add("sso-provider-card-name");
+      name.textContent = provider_name;
+
+      const badge = document.createElement("span");
+      badge.classList.add("sso-badge", "sso-badge-type");
+      badge.textContent = "SAML";
+
+      const enabled = Boolean(provider.Enabled);
+      const pill = document.createElement("span");
+      pill.classList.add(
+        "sso-pill",
+        enabled ? "sso-pill-enabled" : "sso-pill-disabled",
+      );
+      pill.textContent = enabled ? "Enabled" : "Disabled";
+
+      card.append(name, badge, pill);
+
+      const flagged = ssoConfigurationPage.samlInsecureFieldIds
+        .concat(ssoConfigurationPage.samlSensitiveFieldIds)
+        .some((id) => Boolean(provider[id]));
+      if (flagged) {
+        card.classList.add("sso-provider-card-flagged");
+        const warn = document.createElement("span");
+        warn.classList.add("sso-badge", "sso-badge-warn");
+        warn.textContent = "Review";
+        warn.title =
+          "This provider has an active insecure or sensitive setting.";
+        card.append(warn);
+      }
+
+      list.appendChild(card);
+    });
+  },
+  showSamlEditor: (page) => {
+    page.querySelector("#saml-editor").hidden = false;
+  },
+  hideSamlEditor: (page) => {
+    page.querySelector("#saml-editor").hidden = true;
+  },
+  setSamlEditorTitle: (page, title) => {
+    page.querySelector("#saml-editor-title").textContent = title;
+  },
+  // Load a SAML card into the editor. resetSamlEditor gives a clean slate FIRST (same discipline as
+  // openProvider) so no field, toggle, or collapse state from the previously loaded provider bleeds into
+  // this one and gets silently re-saved.
+  openSamlProvider: (page, provider_name) => {
+    page.querySelector("#saml-selectProvider").value = provider_name;
+    ssoConfigurationPage.resetSamlEditor(page);
+    ssoConfigurationPage.clearSamlValidationErrors(page);
+    ssoConfigurationPage.renderSamlSaveStatus(page, "");
+    ssoConfigurationPage.setSamlEditorTitle(page, provider_name);
+    ssoConfigurationPage.showSamlEditor(page);
+    ssoConfigurationPage.loadSamlProvider(page, provider_name);
+    page.querySelector("#saml-editor").scrollIntoView({ block: "start" });
+  },
+  addSamlProvider: (page) => {
+    page.querySelector("#saml-selectProvider").value = "";
+    ssoConfigurationPage.resetSamlEditor(page);
+    ssoConfigurationPage.clearSamlValidationErrors(page);
+    ssoConfigurationPage.renderSamlSaveStatus(page, "");
+    ssoConfigurationPage.setSamlEditorTitle(page, "New provider");
+    ssoConfigurationPage.syncSamlDependentFields(page);
+    ssoConfigurationPage.showSamlEditor(page);
+    page.querySelector("#saml-editor").scrollIntoView({ block: "start" });
+    page.querySelector("#saml-provider-name").focus();
+  },
+  resetSamlEditor: (page) => {
+    const form_elements = ssoConfigurationPage.listSamlArgumentsByType(page);
+
+    page.querySelector("#saml-provider-name").value = "";
+
+    form_elements.text_fields.forEach((id) => {
+      page.querySelector("#" + id).value = "";
+    });
+    form_elements.text_list_fields.forEach((id) => {
+      page.querySelector("#" + id).value = "";
+    });
+    form_elements.check_fields.forEach((id) => {
+      page.querySelector("#" + id).checked = false;
+    });
+    form_elements.folder_list_fields.forEach((id) => {
+      ssoConfigurationPage.populateEnabledFolders(
+        [],
+        page.querySelector("#" + id),
+      );
+    });
+    form_elements.role_map_fields.forEach((id) => {
+      ssoConfigurationPage.populateRoleMappings(
+        [],
+        page.querySelector("#" + id),
+      );
+    });
+
+    ssoConfigurationPage.setSamlInsecureOptionsExpanded(page, false);
+    ssoConfigurationPage.resetSamlEditorSections(page);
+    ssoConfigurationPage.syncSamlDependentFields(page);
+    ssoConfigurationPage.updateSamlUrls(page);
+  },
+  // Return every accordion INSIDE the SAML editor to its authored default; scoped to #saml-editor so the
+  // OpenID editor and the page-level collapses are untouched.
+  resetSamlEditorSections: (page) => {
+    const editor = page.querySelector("#saml-editor");
+    if (!editor) {
+      return;
+    }
+    editor.querySelectorAll('[is="emby-collapse"]').forEach((section) => {
+      ssoConfigurationPage.setCollapseExpanded(
+        section,
+        section.getAttribute("data-expanded") === "true",
+      );
+    });
+  },
+  syncSamlDependentFields: (page) => {
+    ssoConfigurationPage.setDependent(
+      page,
+      "saml-EnableAllFolders",
+      "saml-EnabledFolders-group",
+      false,
+    );
+    ssoConfigurationPage.setDependent(
+      page,
+      "saml-EnableFolderRoles",
+      "saml-FolderRoleMapping-group",
+      true,
+    );
+    ssoConfigurationPage.setDependent(
+      page,
+      "saml-EnableLiveTvRoles",
+      "saml-LiveTvRoles-group",
+      true,
+    );
+
+    // Surface active insecure / sensitive settings behind the collapsed "Security & hardening" accordion
+    // (and, for the insecure subset, its inner list) — expand-only, exactly like syncDependentFields.
+    const isChecked = (id) => {
+      const el = page.querySelector("#saml-" + id);
+      return Boolean(el && el.checked);
+    };
+    const anyInsecure =
+      ssoConfigurationPage.samlInsecureFieldIds.some(isChecked);
+    const anySensitive =
+      anyInsecure || ssoConfigurationPage.samlSensitiveFieldIds.some(isChecked);
+    if (anyInsecure) {
+      ssoConfigurationPage.setSamlInsecureOptionsExpanded(page, true);
+    }
+    if (anySensitive) {
+      ssoConfigurationPage.setSectionExpanded(
+        page,
+        "saml-security-section",
+        true,
+      );
+    }
+  },
+  setSamlInsecureOptionsExpanded: (page, expanded) => {
+    const button = page.querySelector("#saml-ShowInsecureOptions");
+    const options = page.querySelector("#saml-insecure-options");
+    if (!button || !options) {
+      return;
+    }
+    options.hidden = !expanded;
+    button.setAttribute("aria-expanded", String(expanded));
+    button.querySelector("span").textContent = expanded
+      ? "Hide insecure options"
+      : "Show insecure options";
+  },
+  // The SAML save contract, made explicit (mirrors listArgumentsByType): every input in
+  // #sso-new-saml-provider that persists carries an sso-* marker class AND a "saml-"+property id. The
+  // folder-list and role-map ids are the two that are not plain inputs, listed explicitly like the OpenID
+  // side. saveSamlProvider/loadSamlProvider map id->property with samlPropOf.
+  listSamlArgumentsByType: (page) => {
+    const folder_list_fields = ["saml-EnabledFolders"];
+    const role_map_fields = ["saml-FolderRoleMapping"];
+
+    const form = page.querySelector("#sso-new-saml-provider");
+
+    const text_fields = [...form.querySelectorAll(".sso-text")].map(
+      (e) => e.id,
+    );
+    const text_list_fields = [...form.querySelectorAll(".sso-line-list")].map(
+      (e) => e.id,
+    );
+    const check_fields = [...form.querySelectorAll(".sso-toggle")].map(
+      (e) => e.id,
+    );
+
+    return {
+      text_list_fields,
+      text_fields,
+      check_fields,
+      folder_list_fields,
+      role_map_fields,
+    };
+  },
+  loadSamlProvider: (page, provider_name) => {
+    ApiClient.getPluginConfiguration(ssoConfigurationPage.pluginUniqueId).then(
+      (config) => {
+        const provider = (config.SamlConfigs || {})[provider_name] || {};
+
+        const form_elements =
+          ssoConfigurationPage.listSamlArgumentsByType(page);
+
+        page.querySelector("#saml-provider-name").value = provider_name;
+
+        form_elements.text_fields.forEach((id) => {
+          const prop = ssoConfigurationPage.samlPropOf(id);
+          // The write-only signing keys (SamlSigningKeyPfx / SamlRolloverSigningKeyPfx) are serialized back
+          // as null by the server (WriteOnlySecretConverter), so provider[prop] is falsy and the field stays
+          // blank — its "leave blank to keep" placeholder governs, exactly like the OpenID OidSecret.
+          if (provider[prop]) {
+            page.querySelector("#" + id).value = provider[prop];
+          }
+        });
+
+        form_elements.text_list_fields.forEach((id) => {
+          const prop = ssoConfigurationPage.samlPropOf(id);
+          if (provider[prop]) {
+            ssoConfigurationPage.fillTextList(
+              provider[prop],
+              page.querySelector("#" + id),
+            );
+          }
+        });
+
+        form_elements.folder_list_fields.forEach((id) => {
+          const prop = ssoConfigurationPage.samlPropOf(id);
+          if (provider[prop]) {
+            ssoConfigurationPage.populateEnabledFolders(
+              provider[prop],
+              page.querySelector("#" + id),
+            );
+          }
+        });
+
+        form_elements.check_fields.forEach((id) => {
+          // Always set from the loaded provider (not only when truthy) so a stale insecure toggle from a
+          // previously loaded provider is never left checked to be silently re-saved — the exact reason the
+          // OpenID loadProvider sets Boolean(provider[id]) unconditionally.
+          const prop = ssoConfigurationPage.samlPropOf(id);
+          page.querySelector("#" + id).checked = Boolean(provider[prop]);
+        });
+
+        form_elements.role_map_fields.forEach((id) => {
+          const prop = ssoConfigurationPage.samlPropOf(id);
+          const elem = page.querySelector("#" + id);
+          if (provider[prop]) {
+            ssoConfigurationPage.populateRoleMappings(provider[prop], elem);
+          }
+        });
+
+        ssoConfigurationPage.syncSamlDependentFields(page);
+        ssoConfigurationPage.updateSamlUrls(page);
+      },
+    );
+  },
+  // Canonical external base for the computed SAML URLs (mirrors the inline logic in computeRedirectUri,
+  // #724): the Base URL Override when set, else this server's address, normalized the way the server's
+  // CanonicalBaseUrl (System.Uri.GetLeftPart) is — origin lowercases scheme+host and elides the default
+  // port, pathname keeps any sub-path, and the trailing slash is trimmed. When the override is blank the
+  // shown URL reflects the browser's server address; the scheme/port overrides are a legacy mechanism the
+  // Base URL Override supersedes (its callout steers the admin there).
+  samlCanonicalBase: (page) => {
+    const override = page.querySelector("#saml-BaseUrlOverride").value.trim();
+    const raw = override || ApiClient.serverAddress() || "";
+    try {
+      const u = new URL(raw);
+      return u.origin + u.pathname.replace(/\/+$/, "");
+    } catch (e) {
+      return raw.replace(/\/+$/, "");
+    }
+  },
+  // Live-update the read-only ACS + SP-metadata URLs (#725/#569). The IdP POSTs to the new-path ACS
+  // spelling the SP metadata advertises at index 0 (SamlAcsUrlBuilder.AcsUrl newPath=true => "post"); the
+  // metadata document is served at /sso/SAML/metadata/<provider>. The provider name is appended raw, as the
+  // server does (names exclude URI-reserved characters, #336). Sets .value only, never innerHTML (#221).
+  updateSamlUrls: (page) => {
+    const acs = page.querySelector("#saml-AcsUrl");
+    const metadata = page.querySelector("#saml-MetadataUrl");
+    const name = page.querySelector("#saml-provider-name").value.trim();
+    const base = ssoConfigurationPage.samlCanonicalBase(page);
+
+    if (acs) {
+      acs.value = name ? base + "/sso/SAML/post/" + name : "";
+      acs.placeholder = name
+        ? ""
+        : "Enter a provider name above to see the ACS URL";
+    }
+    if (metadata) {
+      metadata.value = name ? base + "/sso/SAML/metadata/" + name : "";
+      metadata.placeholder = name
+        ? ""
+        : "Enter a provider name above to see the metadata URL";
+    }
+    const status = page.querySelector("#saml-url-copied");
+    if (status) {
+      status.textContent = "";
+    }
+  },
+  // Copy a read-only computed SAML URL to the clipboard, with the same secure-context/execCommand fallback
+  // and inert status announcement as copyRedirectUri (#724). fieldId/label identify which URL was copied.
+  copySamlUrl: (page, fieldId, label) => {
+    const field = page.querySelector("#" + fieldId);
+    const status = page.querySelector("#saml-url-copied");
+    const value = field && field.value;
+    if (!value) {
+      return;
+    }
+    const announce = (message) => {
+      if (status) {
+        status.textContent = message;
+      }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(value).then(
+        () => announce(label + " copied to the clipboard."),
+        () => announce("Copy failed — select the field and copy it manually."),
+      );
+      return;
+    }
+    field.removeAttribute("readonly");
+    field.select();
+    let ok = false;
+    try {
+      ok = document.execCommand("copy");
+    } catch (e) {
+      ok = false;
+    }
+    field.setAttribute("readonly", "");
+    announce(
+      ok
+        ? label + " copied to the clipboard."
+        : "Copy failed — select the field and copy it manually.",
+    );
+  },
+  // Import IdP metadata (#735) from a URL (fetched server-side through the SSRF-hardened outbound client) or
+  // pasted XML, and pre-fill the endpoint + signing certificate(s) for the admin to review and save. The
+  // server returns the parsed values; NOTHING is applied server-side by this call. The IdP EntityId is
+  // shown for reference only — it is NOT the SP SamlClientId, which the admin chooses.
+  importSamlMetadata: (page, source) => {
+    const status = page.querySelector("#saml-metadata-status");
+    const url =
+      source === "url"
+        ? page.querySelector("#saml-metadata-url").value.trim()
+        : "";
+    const xml =
+      source === "xml"
+        ? page.querySelector("#saml-metadata-xml").value.trim()
+        : "";
+    if (!url && !xml) {
+      ssoConfigurationPage.renderTransferMessage(
+        status,
+        source === "url"
+          ? "Enter a metadata URL first."
+          : "Paste the metadata XML first.",
+      );
+      return Promise.resolve();
+    }
+
+    ssoConfigurationPage.renderTransferMessage(status, "Importing metadata…");
+    return ApiClient.fetch({
+      type: "POST",
+      url: ApiClient.getUrl("sso/SAML/ImportMetadata"),
+      data: JSON.stringify({ Url: url || null, Xml: xml || null }),
+      contentType: "application/json",
+      dataType: "json",
+    }).then(
+      (result) => {
+        if (result && result.Endpoint) {
+          page.querySelector("#saml-SamlEndpoint").value = result.Endpoint;
+        }
+        if (result && result.PrimaryCertificate) {
+          page.querySelector("#saml-SamlCertificate").value =
+            result.PrimaryCertificate;
+        }
+        if (result && result.SecondaryCertificate) {
+          page.querySelector("#saml-SamlSecondaryCertificate").value =
+            result.SecondaryCertificate;
+        }
+        // The endpoint/certificate are now filled; re-run their on-blur validation so a bad imported value
+        // surfaces immediately rather than only on the next focus change.
+        ssoConfigurationPage.validateSamlEndpoint(page);
+        ssoConfigurationPage.validateSamlCertificate(
+          page,
+          "saml-SamlCertificate",
+          "IdP Signing Certificate",
+        );
+        // EntityId is reference-only: shown as inert text, never written into a field.
+        const entity = result && result.EntityId ? result.EntityId : "";
+        ssoConfigurationPage.renderTransferMessage(
+          status,
+          entity
+            ? "Imported the endpoint and certificate. The provider's entity id is " +
+                entity +
+                " (reference only — set the SAML Client ID yourself). Review the fields and Save."
+            : "Imported the endpoint and certificate. Review the fields and Save.",
+        );
+      },
+      () =>
+        ssoConfigurationPage.renderTransferMessage(
+          status,
+          "Could not import the metadata. Check the URL or XML, make sure you are signed in as an administrator, and that the address is reachable and not a private/loopback host.",
+        ),
+    );
+  },
+  clearSamlValidationErrors: (page) => {
+    [
+      "saml-provider-name",
+      "saml-SamlEndpoint",
+      "saml-SamlClientId",
+      "saml-SamlCertificate",
+      "saml-SamlSecondaryCertificate",
+      "saml-BaseUrlOverride",
+    ].forEach((id) => ssoConfigurationPage.setFieldError(page, id, ""));
+  },
+  renderSamlSaveStatus: (page, message, ok) => {
+    const box = page.querySelector("#saml-save-status");
+    if (!box) {
+      return;
+    }
+    box.textContent = message || "";
+    box.classList.remove("sso-status-ok", "sso-status-fail");
+    if (message) {
+      box.classList.add(ok ? "sso-status-ok" : "sso-status-fail");
+    }
+  },
+  // Mirror the server's fail-closed provider-name checks (#336/#360) before the round-trip, keeping the
+  // source ASCII-only (control chars detected by code point, not a regex escape) as validateProviderName does.
+  validateSamlProviderName: (page) => {
+    const value = page.querySelector("#saml-provider-name").value;
+    if (!value.trim()) {
+      ssoConfigurationPage.setFieldError(
+        page,
+        "saml-provider-name",
+        "A provider name is required.",
+      );
+      return;
+    }
+    const hasControlChar = [...value].some((ch) => {
+      const code = ch.charCodeAt(0);
+      return code < 0x20 || code === 0x7f;
+    });
+    if (hasControlChar) {
+      ssoConfigurationPage.setFieldError(
+        page,
+        "saml-provider-name",
+        "Remove control characters (such as a tab or newline, often introduced by copy-paste) from the name.",
+      );
+      return;
+    }
+    const reserved = ["\\", "/", "?", "#", "%"];
+    if (reserved.some((c) => value.includes(c))) {
+      ssoConfigurationPage.setFieldError(
+        page,
+        "saml-provider-name",
+        "Remove backslash and URI-reserved characters (\\ / ? # %) from the name.",
+      );
+      return;
+    }
+    ssoConfigurationPage.setFieldError(page, "saml-provider-name", "");
+  },
+  validateSamlRequired: (page, id, label) => {
+    const value = page.querySelector("#" + id).value.trim();
+    ssoConfigurationPage.setFieldError(
+      page,
+      id,
+      value ? "" : label + " is required.",
+    );
+  },
+  validateSamlEndpoint: (page) => {
+    const value = page.querySelector("#saml-SamlEndpoint").value.trim();
+    if (!value) {
+      ssoConfigurationPage.setFieldError(
+        page,
+        "saml-SamlEndpoint",
+        "SAML SSO Endpoint is required.",
+      );
+      return;
+    }
+    let url;
+    try {
+      url = new URL(value);
+    } catch (e) {
+      ssoConfigurationPage.setFieldError(
+        page,
+        "saml-SamlEndpoint",
+        "Enter an absolute URL, e.g. https://idp.example.com/sso",
+      );
+      return;
+    }
+    if (url.protocol === "http:") {
+      ssoConfigurationPage.setFieldError(
+        page,
+        "saml-SamlEndpoint",
+        "Uses http:// — the redirect would be unencrypted. Prefer an https:// endpoint.",
+      );
+      return;
+    }
+    if (url.protocol !== "https:") {
+      ssoConfigurationPage.setFieldError(
+        page,
+        "saml-SamlEndpoint",
+        "Use an https:// URL for the SAML endpoint.",
+      );
+      return;
+    }
+    ssoConfigurationPage.setFieldError(page, "saml-SamlEndpoint", "");
+  },
+  validateSamlBaseUrl: (page) => {
+    const value = page.querySelector("#saml-BaseUrlOverride").value.trim();
+    if (!value) {
+      ssoConfigurationPage.setFieldError(page, "saml-BaseUrlOverride", "");
+      return;
+    }
+    let url;
+    try {
+      url = new URL(value);
+    } catch (e) {
+      ssoConfigurationPage.setFieldError(
+        page,
+        "saml-BaseUrlOverride",
+        "Enter a full origin such as https://jellyfin.example.com (scheme + host only).",
+      );
+      return;
+    }
+    if (url.protocol !== "https:" && url.protocol !== "http:") {
+      ssoConfigurationPage.setFieldError(
+        page,
+        "saml-BaseUrlOverride",
+        "Enter a full origin such as https://jellyfin.example.com",
+      );
+      return;
+    }
+    if ((url.pathname && url.pathname !== "/") || url.search || url.hash) {
+      ssoConfigurationPage.setFieldError(
+        page,
+        "saml-BaseUrlOverride",
+        "Enter the base URL only (no path) — e.g. https://jellyfin.example.com, not the /sso/... ACS URL.",
+      );
+      return;
+    }
+    ssoConfigurationPage.setFieldError(page, "saml-BaseUrlOverride", "");
+  },
+  // Pre-emptive certificate shape check (WARNING only, never blocks the save — the server stays the
+  // authority, so a false positive cannot lock an admin out). Accepts an empty optional field, a PEM block,
+  // or a bare Base64 body; only an obviously malformed value (non-Base64 characters once PEM armor and
+  // whitespace are stripped) is flagged. label/id let it serve both the primary and secondary certificate.
+  validateSamlCertificate: (page, id, label) => {
+    const raw = page.querySelector("#" + id).value.trim();
+    if (!raw) {
+      // Optional (the secondary) or required-checked elsewhere (the primary) — an empty value is not a
+      // SHAPE error here; requiredness for the primary is enforced by the server on save.
+      ssoConfigurationPage.setFieldError(page, id, "");
+      return;
+    }
+    const body = raw
+      .replace(/-----BEGIN CERTIFICATE-----/g, "")
+      .replace(/-----END CERTIFICATE-----/g, "")
+      .replace(/\s+/g, "");
+    if (!body || !/^[A-Za-z0-9+/]+={0,2}$/.test(body)) {
+      ssoConfigurationPage.setFieldError(
+        page,
+        id,
+        label +
+          " is not valid Base64 — paste the certificate body (the text between the PEM BEGIN/END lines) or the whole PEM block.",
+      );
+      return;
+    }
+    ssoConfigurationPage.setFieldError(page, id, "");
+  },
+  deleteSamlProvider: (page, provider_name) => {
+    if (
+      !window.confirm(
+        `Are you sure you want to delete the provider ${provider_name}?`,
+      )
+    ) {
+      return;
+    }
+    ApiClient.getPluginConfiguration(ssoConfigurationPage.pluginUniqueId).then(
+      (config) => {
+        if (
+          !config.SamlConfigs ||
+          !config.SamlConfigs.hasOwnProperty(provider_name)
+        ) {
+          return;
+        }
+
+        delete config.SamlConfigs[provider_name];
+        ApiClient.updatePluginConfiguration(
+          ssoConfigurationPage.pluginUniqueId,
+          config,
+        ).then(
+          function (result) {
+            Dashboard.processPluginConfigurationUpdateResult(result);
+            ssoConfigurationPage.loadConfiguration(page);
+            ssoConfigurationPage.hideSamlEditor(page);
+            Dashboard.alert("Provider removed");
+          },
+          function () {
+            Dashboard.alert({
+              title: "Delete failed",
+              message:
+                "Could not remove the provider. The saved configuration was rejected by the server; reload the page and try again.",
+            });
+          },
+        );
+      },
+    );
+  },
+  saveSamlProvider: (page, provider_name) => {
+    return new Promise((resolve, reject) => {
+      const form_elements = ssoConfigurationPage.listSamlArgumentsByType(page);
+
+      ApiClient.getPluginConfiguration(
+        ssoConfigurationPage.pluginUniqueId,
+      ).then((config) => {
+        if (!config.SamlConfigs) {
+          config.SamlConfigs = {};
+        }
+        let current_config = {};
+        if (config.SamlConfigs.hasOwnProperty(provider_name)) {
+          current_config = config.SamlConfigs[provider_name];
+        }
+
+        form_elements.text_fields.forEach((id) => {
+          const prop = ssoConfigurationPage.samlPropOf(id);
+          current_config[prop] = page.querySelector("#" + id).value || null;
+        });
+
+        form_elements.check_fields.forEach((id) => {
+          const prop = ssoConfigurationPage.samlPropOf(id);
+          current_config[prop] = page.querySelector("#" + id).checked;
+        });
+
+        form_elements.text_list_fields.forEach((id) => {
+          const prop = ssoConfigurationPage.samlPropOf(id);
+          current_config[prop] = ssoConfigurationPage.parseTextList(
+            page.querySelector("#" + id),
+          );
+        });
+
+        form_elements.folder_list_fields.forEach((id) => {
+          const prop = ssoConfigurationPage.samlPropOf(id);
+          const elem = page.querySelector("#" + id);
+          current_config[prop] =
+            ssoConfigurationPage.serializeEnabledFolders(elem);
+        });
+
+        form_elements.role_map_fields.forEach((id) => {
+          const prop = ssoConfigurationPage.samlPropOf(id);
+          const elem = page.querySelector("#" + id);
+          current_config[prop] =
+            ssoConfigurationPage.serializeRoleMappings(elem);
+        });
+
+        config.SamlConfigs[provider_name] = current_config;
+
+        ApiClient.updatePluginConfiguration(
+          ssoConfigurationPage.pluginUniqueId,
+          config,
+        ).then(
+          function (result) {
+            Dashboard.processPluginConfigurationUpdateResult(result);
+            ssoConfigurationPage.loadConfiguration(page);
+            ssoConfigurationPage.loadSamlProvider(page, provider_name);
+
+            page.querySelector("#saml-selectProvider").value = provider_name;
+            Dashboard.alert("Settings saved.");
+            resolve();
+          },
+          function () {
+            Dashboard.alert({
+              title: "Save failed",
+              message:
+                "Could not save the provider. Check that the provider name has no control characters (such as a tab or newline, often introduced by copy-paste), no backslash, and none of the URI-reserved characters such as / ? # %, and that the Base URL Override is a full URL such as https://jellyfin.example.com (or blank).",
+            });
+            reject(new Error("Provider save failed"));
+          },
+        );
+      });
+    });
+  },
+  // Test-connection for a SAVED SAML provider (#163). Calls the elevation-gated SAML/Test endpoint, which
+  // parses the stored IdP signing certificate server-side and returns only its non-secret facts (never the
+  // SP signing key). Reuses the OpenID renderTestResult/renderTestMessage (same Ok/Message/Details shape).
+  testSamlProvider: (page, provider_name) => {
+    const container = page.querySelector("#saml-TestResult");
+    if (!provider_name) {
+      ssoConfigurationPage.renderTestMessage(
+        container,
+        "Enter a provider name and save it first, then test.",
+      );
+      return Promise.resolve();
+    }
+
+    ssoConfigurationPage.renderTestMessage(container, "Testing…");
+
+    return ApiClient.getJSON(
+      ApiClient.getUrl("sso/SAML/Test/" + encodeURIComponent(provider_name)),
+    ).then(
+      (result) => ssoConfigurationPage.renderTestResult(container, result),
+      () =>
+        ssoConfigurationPage.renderTestMessage(
+          container,
+          "Could not run the test. Make sure the provider is saved and that you are signed in as an administrator, then try again.",
+        ),
+    );
+  },
 };
 
 export default function initSsoConfigurationPage(view) {
@@ -1228,4 +1999,181 @@ export default function initSsoConfigurationPage(view) {
 
   view.querySelector("#sso-self-service-link").href =
     ApiClient.getUrl("/SSOViews/linking");
+
+  // ---- SAML workspace bindings (#725) — the exact parallel of the OpenID bindings above ----
+  view.querySelector("#saml-SaveProvider").addEventListener("click", (e) => {
+    const target_provider = view.querySelector("#saml-provider-name").value;
+
+    ssoConfigurationPage.saveSamlProvider(view, target_provider).then(
+      () => {
+        ssoConfigurationPage.renderSamlSaveStatus(
+          view,
+          "Settings saved.",
+          true,
+        );
+        ssoConfigurationPage.setSamlEditorTitle(view, target_provider);
+      },
+      () =>
+        ssoConfigurationPage.renderSamlSaveStatus(
+          view,
+          "Save failed — see the details in the alert.",
+          false,
+        ),
+    );
+
+    e.preventDefault();
+    return false;
+  });
+
+  view.querySelector("#saml-TestProvider").addEventListener("click", (e) => {
+    const target_provider = view.querySelector("#saml-provider-name").value;
+    ssoConfigurationPage.testSamlProvider(view, target_provider);
+    e.preventDefault();
+    return false;
+  });
+
+  view.querySelector("#saml-provider-list").addEventListener("click", (e) => {
+    const card = e.target.closest(".sso-provider-card");
+    if (!card) {
+      return;
+    }
+    ssoConfigurationPage.openSamlProvider(view, card.dataset.provider);
+  });
+
+  view.querySelector("#saml-AddProvider").addEventListener("click", (e) => {
+    ssoConfigurationPage.addSamlProvider(view);
+    e.preventDefault();
+    return false;
+  });
+
+  view
+    .querySelector("#saml-AddProviderEmpty")
+    .addEventListener("click", (e) => {
+      ssoConfigurationPage.addSamlProvider(view);
+      e.preventDefault();
+      return false;
+    });
+
+  view.querySelector("#saml-DeleteProvider").addEventListener("click", (e) => {
+    const target_provider = view.querySelector("#saml-provider-name").value;
+    if (target_provider) {
+      ssoConfigurationPage.deleteSamlProvider(view, target_provider);
+    } else {
+      ssoConfigurationPage.hideSamlEditor(view);
+    }
+    e.preventDefault();
+    return false;
+  });
+
+  view.querySelector("#saml-AddRoleMapping").addEventListener("click", (e) => {
+    const container = view.querySelector("#saml-FolderRoleMapping");
+    const current_mappings =
+      ssoConfigurationPage.serializeRoleMappings(container);
+    current_mappings.push({ Role: "", Folders: [] });
+    ssoConfigurationPage.populateRoleMappings(current_mappings, container);
+    e.preventDefault();
+    return false;
+  });
+
+  view
+    .querySelector("#saml-ShowInsecureOptions")
+    .addEventListener("click", (e) => {
+      const collapsed = view.querySelector("#saml-insecure-options").hidden;
+      ssoConfigurationPage.setSamlInsecureOptionsExpanded(view, collapsed);
+      e.preventDefault();
+      return false;
+    });
+
+  [
+    "saml-EnableAllFolders",
+    "saml-EnableFolderRoles",
+    "saml-EnableLiveTvRoles",
+  ].forEach((id) => {
+    view
+      .querySelector("#" + id)
+      .addEventListener("change", () =>
+        ssoConfigurationPage.syncSamlDependentFields(view),
+      );
+  });
+
+  view
+    .querySelector("#saml-provider-name")
+    .addEventListener("blur", () =>
+      ssoConfigurationPage.validateSamlProviderName(view),
+    );
+  view
+    .querySelector("#saml-SamlEndpoint")
+    .addEventListener("blur", () =>
+      ssoConfigurationPage.validateSamlEndpoint(view),
+    );
+  view
+    .querySelector("#saml-SamlClientId")
+    .addEventListener("blur", () =>
+      ssoConfigurationPage.validateSamlRequired(
+        view,
+        "saml-SamlClientId",
+        "SAML Client ID",
+      ),
+    );
+  view
+    .querySelector("#saml-SamlCertificate")
+    .addEventListener("blur", () =>
+      ssoConfigurationPage.validateSamlCertificate(
+        view,
+        "saml-SamlCertificate",
+        "IdP Signing Certificate",
+      ),
+    );
+  view
+    .querySelector("#saml-SamlSecondaryCertificate")
+    .addEventListener("blur", () =>
+      ssoConfigurationPage.validateSamlCertificate(
+        view,
+        "saml-SamlSecondaryCertificate",
+        "Secondary IdP Signing Certificate",
+      ),
+    );
+  view
+    .querySelector("#saml-BaseUrlOverride")
+    .addEventListener("blur", () =>
+      ssoConfigurationPage.validateSamlBaseUrl(view),
+    );
+
+  // Live-update the computed ACS + SP-metadata URLs as the provider name or base-URL override changes.
+  ["saml-provider-name", "saml-BaseUrlOverride"].forEach((id) => {
+    view
+      .querySelector("#" + id)
+      .addEventListener("input", () =>
+        ssoConfigurationPage.updateSamlUrls(view),
+      );
+  });
+
+  view.querySelector("#saml-CopyAcsUrl").addEventListener("click", (e) => {
+    ssoConfigurationPage.copySamlUrl(view, "saml-AcsUrl", "ACS URL");
+    e.preventDefault();
+    return false;
+  });
+  view.querySelector("#saml-CopyMetadataUrl").addEventListener("click", (e) => {
+    ssoConfigurationPage.copySamlUrl(view, "saml-MetadataUrl", "Metadata URL");
+    e.preventDefault();
+    return false;
+  });
+
+  view
+    .querySelector("#saml-ImportMetadataUrl")
+    .addEventListener("click", (e) => {
+      ssoConfigurationPage.importSamlMetadata(view, "url");
+      e.preventDefault();
+      return false;
+    });
+  view
+    .querySelector("#saml-ImportMetadataXml")
+    .addEventListener("click", (e) => {
+      ssoConfigurationPage.importSamlMetadata(view, "xml");
+      e.preventDefault();
+      return false;
+    });
+
+  // Populate the computed URLs once at init (blank editor shows the placeholders until a name is typed).
+  ssoConfigurationPage.updateSamlUrls(view);
 }
