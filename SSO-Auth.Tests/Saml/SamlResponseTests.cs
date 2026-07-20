@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Xml;
 using Jellyfin.Plugin.SSO_Auth;
+using Jellyfin.Plugin.SSO_Auth.Api.Saml;
 using Xunit;
 
 namespace Jellyfin.Plugin.SSO_Auth.Tests;
