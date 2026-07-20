@@ -199,6 +199,10 @@ public class SSOController : ControllerBase
 
         // The caller's most recent captured OpenID session for this provider (an id_token distinguishes an
         // OpenID capture from a SAML one). Scoped to the caller's own user id, read under the config lock.
+        // Best-effort with multiple concurrent sessions: "most recent" may differ from the exact session the
+        // local Logout below ends, but both belong to the caller and the id_token_hint is a valid token for
+        // the same subject at the same issuer, so RP-initiated logout is still correct — a within-user,
+        // best-effort SLO, never a cross-user effect (FindByUser is user-id-scoped and empty for Guid.Empty).
         var match = SSOPlugin.Instance.ReadConfiguration(configuration =>
             SessionLogoutStore.FindByUser(configuration, auth.UserId)
                 .FirstOrDefault(pair =>
@@ -228,14 +232,24 @@ public class SSOController : ControllerBase
         string endSessionUrl = null;
         if (match.Value is { } captured)
         {
-            // Reveal the encrypted id_token only now, at the moment it is sent as the id_token_hint.
-            endSessionUrl = OidcLogout.BuildEndSessionUrl(
-                captured.EndSessionEndpoint,
-                captured.Issuer,
-                SSOPlugin.Instance.Secrets.Reveal(captured.IdToken),
-                config?.OidClientId,
-                config?.PostLogoutRedirectUri,
-                canonicalBase);
+            try
+            {
+                // Reveal the encrypted id_token only now, at the moment it is sent as the id_token_hint.
+                endSessionUrl = OidcLogout.BuildEndSessionUrl(
+                    captured.EndSessionEndpoint,
+                    captured.Issuer,
+                    SSOPlugin.Instance.Secrets.Reveal(captured.IdToken),
+                    config?.OidClientId,
+                    config?.PostLogoutRedirectUri,
+                    canonicalBase);
+            }
+            catch (Exception ex)
+            {
+                // Fail-safe: the local logout already completed above. A reveal fault (a missing/corrupt
+                // at-rest key, as TryReveal guards on the login path) or a build fault must degrade to a
+                // local-only logout, never surface a 500 — honouring the endpoint's stated contract.
+                _logger.LogError(ex, "Building the OpenID end-session redirect failed; the local logout stands and the browser returns to this server.");
+            }
         }
 
         // Redirect to the IdP end-session URL (an absolute URL host-bound to the discovered issuer by
