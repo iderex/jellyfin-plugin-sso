@@ -43,13 +43,20 @@ internal sealed class OidcTokenFixture : IDisposable
     /// issuer) so a test can model a provider whose id_token issuer differs from its discovery issuer
     /// (templated / <c>DoNotValidateIssuerName</c> setups, #210).
     /// </summary>
-    internal string IdToken(string? subject, string username, string? issuer = null)
+    internal string IdToken(string? subject, string username, string? issuer = null, string? acr = null)
     {
         var now = DateTime.UtcNow;
         var claims = new Dictionary<string, object> { ["preferred_username"] = username };
         if (!string.IsNullOrEmpty(subject))
         {
             claims["sub"] = subject;
+        }
+
+        // The authentication-context class the step-up gate (#757) checks; omitted when null (the common
+        // provider case and the missing-acr rejection path).
+        if (!string.IsNullOrEmpty(acr))
+        {
+            claims["acr"] = acr;
         }
 
         var descriptor = new SecurityTokenDescriptor

@@ -45,6 +45,7 @@ internal static class ProviderConfigValidator
                 ValidateProviderName("OpenID", kvp.Key, isNew: live?.OidConfigs?.ContainsKey(kvp.Key) != true);
                 ValidateBaseUrlOverride("OpenID", kvp.Key, kvp.Value?.BaseUrlOverride);
                 ValidatePermissionRoleMappings("OpenID", kvp.Key, kvp.Value?.PermissionRoleMappings);
+                ValidateAcrRequirement(kvp.Key, kvp.Value);
             }
         }
 
@@ -84,6 +85,20 @@ internal static class ProviderConfigValidator
             throw new ArgumentException(
                 $"{protocol} provider '{echoName}' has a name with control characters, URI-reserved characters, or a backslash; the name becomes part of the callback URL registered with the identity provider, so a new name must not contain control characters, a backslash, or any of % : / ? # [ ] @ ! $ & ' ( ) * + , ; =.",
                 nameof(provider));
+        }
+    }
+
+    // RequireAcr with no acr_values would be persisted and then refuse EVERY login for the provider (the
+    // allow-list is empty, so no returned acr can satisfy it) — a silent lockout (#757). Reject it at save so
+    // the mis-set is caught before it takes effect, rather than failing open (a no-op) or locking out. The
+    // provider name is line-ending-stripped inline in case it reaches a log through the thrown exception.
+    internal static void ValidateAcrRequirement(string provider, OidConfig config)
+    {
+        if (config?.RequireAcr == true && string.IsNullOrWhiteSpace(config.AcrValues))
+        {
+            throw new ArgumentException(
+                $"OpenID provider '{provider?.ReplaceLineEndings(string.Empty)}' sets RequireAcr but no Acr Values; set the required acr_values (space-separated) the returned acr must match, or turn RequireAcr off.",
+                nameof(config));
         }
     }
 

@@ -1319,6 +1319,7 @@ public class ArchitectureConformanceTests
             "DoNotValidateEndpoints", "DoNotValidateIssuerName", "DoNotValidateResponseIssuer",
             "DoNotLoadProfile", "RequirePkce", "AllowExistingAccountLink",
             "RequireVerifiedEmailForAdoption", "RequireVerifiedEmailForLogin",
+            "RequireAcr", "AcrValues",
         };
         var unsaved = securityCritical.Where(p => !matchedIds.Contains(p)).ToList();
         Assert.True(
@@ -1375,10 +1376,11 @@ public class ArchitectureConformanceTests
             "EnableLiveTvRoles", "LiveTvRoles", "LiveTvManagementRoles", "EnableLiveTv", "EnableLiveTvManagement",
             "DoNotLoadProfile", "SchemeOverride", "PortOverride", "BaseUrlOverride",
             "RequirePkce", "AllowExistingAccountLink", "ProvisionNewUsersDisabled", "RequireVerifiedEmailForAdoption", "RequireVerifiedEmailForLogin",
+            "AcrValues", "Prompt", "MaxAge", "RequireAcr",
             "DisableHttps", "DisablePushedAuthorization", "DoNotValidateEndpoints", "DoNotValidateIssuerName", "DoNotValidateResponseIssuer",
         };
 
-        Assert.Equal(35, expected.Length);
+        Assert.Equal(39, expected.Length);
         var missing = expected.Where(id => !markedIds.Contains(id)).ToList();
         Assert.True(
             missing.Count == 0,
@@ -1486,7 +1488,7 @@ public class ArchitectureConformanceTests
 
         foreach (var hardening in new[]
         {
-            "RequireVerifiedEmailForAdoption", "RequireVerifiedEmailForLogin", "RequirePkce",
+            "RequireVerifiedEmailForAdoption", "RequireVerifiedEmailForLogin", "RequirePkce", "RequireAcr",
         })
         {
             Assert.DoesNotContain(hardening, trigger, StringComparison.Ordinal);

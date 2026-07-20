@@ -33,4 +33,7 @@ internal enum PublicReason
 
     /// <summary>The resolved account is disabled — a new user provisioned pending approval (ProvisionNewUsersDisabled), or an account an admin disabled — so no session is minted (#737). User-facing by design.</summary>
     AwaitingApproval,
+
+    /// <summary>RequireAcr is set but the id_token's acr claim was absent or outside the configured acr_values (#757, step-up/MFA). Operator-facing by design.</summary>
+    AcrNotSatisfied,
 }

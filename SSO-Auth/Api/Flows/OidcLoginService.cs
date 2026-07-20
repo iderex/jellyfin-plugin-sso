@@ -185,7 +185,11 @@ internal sealed class OidcLoginService : ILoginService
         // reused again at the callback (#247), so the challenge, the facts, and the callback all agree.
         options.ProviderInformation = discovery.ProviderInformation;
         var oidcClient = new OidcClient(options);
-        var state = await oidcClient.PrepareLoginAsync().ConfigureAwait(false);
+
+        // Step-up / MFA passthrough (#757): add the provider's acr_values / prompt / max_age as front-channel
+        // parameters on the authorization request, each only when set. An unconfigured provider gets null, so
+        // the request is byte-identical to before — upgrade-safe.
+        var state = await oidcClient.PrepareLoginAsync(OidcFrontChannelParameters.FromConfig(config)).ConfigureAwait(false);
 
         if (state.IsError)
         {
@@ -358,6 +362,27 @@ internal sealed class OidcLoginService : ILoginService
             }
 
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
+        }
+
+        // Step-up / MFA enforcement (#757): when the provider requires an authentication-context class, the
+        // signature-verified id_token's acr claim must be one of the configured acr_values. Read from the
+        // validated principal (result.User.Claims — the same source the role and subject gates above use, so
+        // an unverified value can never satisfy it), and checked here before Promote so a login lacking the
+        // required context never becomes a redeemable Ready — which also covers the manual-link redeem. Off
+        // by default; fail closed when on (an absent or non-listed acr is refused). A save with RequireAcr on
+        // but no acr_values is rejected by the config validator, so this never lands on an empty allow-list.
+        if (config.RequireAcr)
+        {
+            var acr = result.User.Claims.LastOrDefault(c => string.Equals(c.Type, "acr", StringComparison.Ordinal))?.Value;
+            if (!AcrPolicy.IsSatisfied(acr, config.AcrValues))
+            {
+                if (_logger.IsEnabled(LogLevel.Warning))
+                {
+                    _logger.LogWarning("OpenID login denied for provider {Provider}: RequireAcr is set but the id_token's acr claim was absent or outside the configured acr_values allow-list.", provider?.ReplaceLineEndings(string.Empty));
+                }
+
+                return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.AcrNotSatisfied));
+            }
         }
 
         // Atomically swap the peeked Pending for a redeemable Ready (#341). A false return means a

@@ -1091,6 +1091,86 @@
                     </div>
                   </div>
 
+                  <div class="sso-security-block">
+                    <p class="sso-subgroup-title">Step-up / MFA</p>
+                    <div class="inputContainer">
+                      <label
+                        class="inputLabel inputLabelUnfocused"
+                        for="AcrValues"
+                        >Acr Values:</label
+                      >
+                      <input
+                        is="emby-input"
+                        id="AcrValues"
+                        type="text"
+                        class="sso-text"
+                      />
+                      <div class="fieldDescription">
+                        Space-separated acr_values sent on the authorization
+                        request (OIDC Core §3.1.2.1), most-preferred first — the
+                        requested authentication-context references (e.g. an MFA
+                        reference your IdP advertises). Leave blank to send
+                        nothing (unchanged request). Also the allow-list Require
+                        Acr checks the returned acr against.
+                      </div>
+                    </div>
+                    <div class="inputContainer">
+                      <label class="inputLabel inputLabelUnfocused" for="Prompt"
+                        >Prompt:</label
+                      >
+                      <input
+                        is="emby-input"
+                        id="Prompt"
+                        type="text"
+                        class="sso-text"
+                      />
+                      <div class="fieldDescription">
+                        OIDC prompt parameter, e.g. <code>login</code> to force
+                        re-authentication or <code>consent</code>. Leave blank
+                        to omit it.
+                      </div>
+                    </div>
+                    <div class="inputContainer">
+                      <label class="inputLabel inputLabelUnfocused" for="MaxAge"
+                        >Max Age (seconds):</label
+                      >
+                      <input
+                        is="emby-input"
+                        id="MaxAge"
+                        type="number"
+                        min="0"
+                        class="sso-text"
+                      />
+                      <div class="fieldDescription">
+                        OIDC max_age — the maximum time (seconds) since the
+                        user's last active authentication; <code>0</code> forces
+                        re-authentication. Leave blank to omit it.
+                      </div>
+                    </div>
+                    <div
+                      class="checkboxContainer checkboxContainer-withDescription"
+                    >
+                      <label>
+                        <input
+                          is="emby-checkbox"
+                          id="RequireAcr"
+                          name="RequireAcr"
+                          type="checkbox"
+                          class="sso-toggle"
+                        />
+                        <span>Require Acr (enforce step-up / MFA)</span>
+                      </label>
+                      <div class="fieldDescription checkboxFieldDescription">
+                        Refuse any login whose verified id_token does not return
+                        an acr within Acr Values above — a fail-closed step-up /
+                        forced-MFA gate. Off by default. Requires Acr Values to
+                        be set (the save is rejected otherwise, so a mis-set
+                        cannot lock out a userbase). The break-glass password
+                        admin is unaffected.
+                      </div>
+                    </div>
+                  </div>
+
                   <div class="sso-security-block sso-sensitive-region">
                     <p class="sso-subgroup-title">
                       Account adoption (sensitive)
