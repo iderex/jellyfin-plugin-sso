@@ -129,6 +129,7 @@ internal abstract class AuthorizeSession
                 EnableLiveTvManagement = derived.EnableLiveTvManagement,
                 AvatarUrl = derived.AvatarUrl,
                 PermissionGrants = derived.PermissionGrants ?? Array.Empty<PermissionGrant>(),
+                MaxParentalRatingScore = derived.MaxParentalRatingScore,
             });
         }
 

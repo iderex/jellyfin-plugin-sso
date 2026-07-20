@@ -36,6 +36,47 @@ public class ProviderConfigValidatorTests
         => Assert.Null(Record.Exception(() =>
             ProviderConfigValidator.ValidateAcrRequirement("kc", new OidConfig { RequireAcr = requireAcr, AcrValues = acrValues })));
 
+    // --- ValidateParentalRatingMappings (#736): reject a negative score or an entry with no roles ---
+
+    [Fact]
+    public void ValidateParentalRatingMappings_NegativeScore_Throws()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ProviderConfigValidator.ValidateParentalRatingMappings(
+            "OpenID", "kc", new[] { new ParentalRatingRoleMap { Score = -1, Roles = new[] { "kids" } } }));
+
+        Assert.Equal("mappings", ex.ParamName);
+        Assert.Contains("kc", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("score", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ValidateParentalRatingMappings_NullRoles_Throws()
+        => AssertNoRolesRejected(null);
+
+    [Fact]
+    public void ValidateParentalRatingMappings_EmptyRoles_Throws()
+        => AssertNoRolesRejected(Array.Empty<string>());
+
+    private static void AssertNoRolesRejected(string[]? roles)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ProviderConfigValidator.ValidateParentalRatingMappings(
+            "SAML", "idp", new[] { new ParentalRatingRoleMap { Score = 5, Roles = roles! } }));
+
+        Assert.Equal("mappings", ex.ParamName);
+        Assert.Contains("no roles", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ValidateParentalRatingMappings_ValidOrNullOrEmpty_DoesNotThrow()
+    {
+        Assert.Null(Record.Exception(() =>
+        {
+            ProviderConfigValidator.ValidateParentalRatingMappings("OpenID", "kc", new[] { new ParentalRatingRoleMap { Score = 0, Roles = new[] { "kids" } } });
+            ProviderConfigValidator.ValidateParentalRatingMappings("OpenID", "kc", new ParentalRatingRoleMap[] { null! }); // a null entry is tolerated
+            ProviderConfigValidator.ValidateParentalRatingMappings("OpenID", "kc", null); // no mappings at all
+        }));
+    }
+
     // --- ValidateProviderName (#336, #360): reject a NEW round-trip-breaking name; exempt existing names ---
 
     [Theory]

@@ -251,6 +251,28 @@ public abstract class ProviderConfigBase
     public List<PermissionRoleMap> PermissionRoleMappings { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the role-to-parental-rating mapping
+    /// (<see cref="ParentalRatingRoleMappings"/>) is applied at login (#736). Off by default (fail closed):
+    /// a deployment that does not set it sees no change on upgrade. Gated additionally by
+    /// <see cref="EnableAuthorization"/> at the mint, exactly like the other role-derived grants, so turning
+    /// RBAC off leaves the ceiling untouched.
+    /// </summary>
+    public bool EnableParentalRatingRoles { get; set; }
+
+    /// <summary>
+    /// Gets or sets the role-to-parental-rating-ceiling mappings applied at login when
+    /// <see cref="EnableParentalRatingRoles"/> is on (#736): each entry names a maximum parental-rating
+    /// score and the roles it applies to (e.g. a <c>kids</c> group → a content-rating ceiling). When a login
+    /// matches several entries the MOST RESTRICTIVE (minimum) ceiling wins, never the loosest. A login that
+    /// matches no entry leaves the account's existing ceiling untouched — an unmapped or malformed claim
+    /// never raises the ceiling. Validated fail-closed on save (a negative score, or an entry with no roles,
+    /// is rejected before it is persisted).
+    /// </summary>
+    [XmlArray("ParentalRatingRoleMappings")]
+    [XmlArrayItem(typeof(ParentalRatingRoleMap), ElementName = "ParentalRatingRoleMappings")]
+    public List<ParentalRatingRoleMap> ParentalRatingRoleMappings { get; set; }
+
+    /// <summary>
     /// Gets or sets the authentication provider id written to the user's Jellyfin account
     /// (<c>User.AuthenticationProviderId</c>) after a successful SSO login. This is a Jellyfin-native
     /// user attribute; SSO logins themselves always resolve through the per-provider canonical-link maps,
@@ -636,6 +658,27 @@ public class PermissionRoleMap
     /// <summary>
     /// Gets or sets the roles that grant the permission. A login holding any of these roles is granted
     /// the permission; a login holding none has it explicitly revoked.
+    /// </summary>
+    public string[] Roles { get; set; }
+}
+
+/// <summary>
+/// Maps a set of provider roles to a maximum parental-rating score ceiling (#736): a login holding any of
+/// the listed roles has its Jellyfin <c>MaxParentalRatingScore</c> capped at <see cref="Score"/>. When a
+/// login matches several entries the minimum (most restrictive) score wins. The score is validated
+/// fail-closed on save (non-negative; the role list must be non-empty).
+/// </summary>
+public class ParentalRatingRoleMap
+{
+    /// <summary>
+    /// Gets or sets the maximum parental-rating score granted to the listed roles. A smaller value is more
+    /// restrictive; when several mappings match a login the smallest wins.
+    /// </summary>
+    public int Score { get; set; }
+
+    /// <summary>
+    /// Gets or sets the roles the ceiling applies to. A login holding any of these roles is capped at
+    /// <see cref="Score"/>; a login holding none is left untouched.
     /// </summary>
     public string[] Roles { get; set; }
 }

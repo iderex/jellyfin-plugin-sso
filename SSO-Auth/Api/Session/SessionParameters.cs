@@ -67,6 +67,13 @@ internal sealed class SessionParameters
     public required IReadOnlyList<PermissionGrant> PermissionGrants { get; init; }
 
     /// <summary>
+    /// Gets the parental-rating-score ceiling to apply at the mint (#736), or null to leave the account's
+    /// existing ceiling untouched. Applied only when <see cref="EnableAuthorization"/> is on, exactly like the
+    /// other role-derived grants. Optional (defaults null) so an unconfigured provider changes nothing.
+    /// </summary>
+    public int? MaxParentalRatingScore { get; init; }
+
+    /// <summary>
     /// Gets the client identity (app, version, device) the session is bound to.
     /// </summary>
     public required AuthResponse AuthResponse { get; init; }
