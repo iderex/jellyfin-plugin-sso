@@ -306,6 +306,29 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void InternalDocumentationGate_StaysEnforced()
+    {
+        // #864/#873 — guard for the guard. The internal-surface XML-doc completeness gate rests on two
+        // switches that a single quiet edit could disable: SA1600 must stay at warning-or-error in
+        // .editorconfig (CI's warnaserror turns it into a build failure), and stylecop.json must keep
+        // documentInternalElements=true (without it SA1600 checks only the public surface). Neither is
+        // exercised by any other test, so pin both here — a revert to none, suggestion, silent, or
+        // documentInternalElements=false fails this test rather than silently reopening the internal API to
+        // undocumented members.
+        var editorConfig = File.ReadAllText(Path.Combine(RepoRoot(), ".editorconfig"));
+        var severity = editorConfig
+            .Split('\n')
+            .Select(line => line.Trim())
+            .FirstOrDefault(line => line.StartsWith("dotnet_diagnostic.SA1600.severity", StringComparison.Ordinal));
+        Assert.True(
+            severity is not null && (severity.EndsWith("= warning", StringComparison.Ordinal) || severity.EndsWith("= error", StringComparison.Ordinal)),
+            $"SA1600 must stay enforced (warning or error) so the #864 internal-doc gate cannot be silently switched off — found: '{severity ?? "(missing)"}'.");
+
+        var styleCop = File.ReadAllText(Path.Combine(RepoRoot(), "stylecop.json"));
+        Assert.Contains("\"documentInternalElements\": true", styleCop, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void MutableKeyedState_LivesOnlyInsideStoreLikeTypes()
     {
         // Locked in by the OidcStateStore consolidation (#318): a raw dictionary holding runtime state
