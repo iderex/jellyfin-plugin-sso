@@ -90,6 +90,39 @@ jobs:
               );
             }
 
+            // --- Check 1b: every commit message references an issue (#817) -------
+            // Maintainer rule: traceability must survive down to the single commit —
+            // blame/bisect/log show commits without their PR, so the PR-body link
+            // (check 1) is not enough. Same lenient matching as check 1. Bots and
+            // merge commits (subject starts with "Merge ") are exempt; merge commits
+            // are machine-generated and inherit the merged PR's own linkage.
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+            const referencesIssue = (message) =>
+              /(^|[^\w])#\d+\b/.test(message) ||
+              /github\.com\/[^\/\s]+\/[^\/\s]+\/issues\/\d+/i.test(message);
+            const unlinked = commits.filter((c) => {
+              const authorIsBot =
+                (c.author && c.author.type === "Bot") ||
+                /\[bot\]/.test((c.commit.author && c.commit.author.name) || "");
+              const isMerge =
+                c.parents.length > 1 || c.commit.message.startsWith("Merge ");
+              return !authorIsBot && !isMerge && !referencesIssue(c.commit.message);
+            });
+            if (!isBot && unlinked.length > 0) {
+              const list = unlinked
+                .map((c) => `${c.sha.slice(0, 7)} ("${c.commit.message.split("\n")[0]}")`)
+                .join(", ");
+              failures.push(
+                `Commit(s) without an issue reference: ${list}. Every commit ` +
+                  "message must reference its issue (`Closes #N` / `Refs #N`).",
+              );
+            }
+
             // --- Check 2: a build.yaml version bump must touch CHANGELOG.md -----
             // The version field only changes in a release PR, which must also record
             // the release in CHANGELOG.md. Near-zero false-positive: a non-release PR

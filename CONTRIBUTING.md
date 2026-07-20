@@ -167,7 +167,7 @@ We are always open to better docs! The main place documentation could be improve
 
 ### Commit Messages
 
-Short, imperative subject line (`Add SAML replay cache`, not `feat: add ...`); explain the _why_ in the body and reference the issue it closes.
+Short, imperative subject line (`Add SAML replay cache`, not `feat: add ...`); explain the _why_ in the body. **Every commit message must reference its issue** (`Closes #N` / `Refs #N`) — not just the PR body, so the link survives `git blame`/`bisect`/`log`. The PR-hygiene gate enforces this per commit (bots and merge commits exempt).
 
 ### C#
 
