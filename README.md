@@ -93,6 +93,8 @@ Honest positioning against the alternatives — pick what fits your setup:
 
 The LDAP plugin and this one solve different problems and can even coexist; if you already run Authelia/authentik/Keycloak, this plugin is the direct path. Coming from the archived 9p4 plugin, migration is an in-place upgrade.
 
+Jellyfin upstream is building [native OIDC](https://github.com/jellyfin/jellyfin/pull/17271) (13.0 at the earliest). This plugin **complements** it rather than competing: it remains the option for **SAML 2.0, folder/Live-TV role mapping, account linking, avatar sync and SSO-only mode** — and for every current server release. Full stance: [Native OIDC Coexistence](https://github.com/iderex/jellyfin-plugin-sso/wiki/Native-OIDC-Coexistence).
+
 ## Installing
 
 > **This is an independent plugin repository.** Jellyfin's built-in catalog only lists plugins that live in the [`jellyfin`](https://github.com/jellyfin) GitHub org, and there is currently no official SSO plugin there (the LDAP plugin is the only official auth plugin). You install this plugin by adding **its** repository (below) under **Plugins → Repositories**; it then appears in your in-app catalog. The project is independent for now.
