@@ -19,9 +19,10 @@ internal static class ServerManagedFields
     /// <paramref name="incoming"/> are touched (a deleted provider stays deleted; a newly added one
     /// keeps its own empty map). Two kinds of field are preserved: the per-provider canonical links
     /// (always server-owned, #157), and the write-only secrets (the OpenID client secret #189, the SAML
-    /// signing key #167) — the latter only when the incoming value is blank, since a secret is withheld
-    /// from JSON responses so a save that did not set a new one arrives empty and must keep the stored
-    /// value (a non-blank incoming value is an intentional rotation and is left as-is).
+    /// signing key #167 and its optional rollover key #491) — the latter only when the incoming value is
+    /// blank, since a secret is withheld from JSON responses so a save that did not set a new one arrives
+    /// empty and must keep the stored value (a non-blank incoming value is an intentional rotation and is
+    /// left as-is).
     /// </summary>
     /// <param name="incoming">The configuration about to be persisted.</param>
     /// <param name="live">The current live configuration to read server-managed values from.</param>
@@ -102,9 +103,10 @@ internal static class ServerManagedFields
         incoming.OidSecret = ResolveUpdatedSecret(incoming, live);
     }
 
-    // Links + the write-only signing key: a SAML provider carries the server-managed link map (#157) and,
-    // since #167, an optional service-provider signing key that is withheld from JSON like the OpenID
-    // secret, so a save that did not rotate it arrives blank and must keep the stored value.
+    // Links + the write-only signing keys: a SAML provider carries the server-managed link map (#157) and,
+    // since #167, an optional service-provider signing key plus its optional rollover key (#491), each
+    // withheld from JSON like the OpenID secret, so a save that did not rotate one arrives blank and must
+    // keep the stored value.
     internal static void Preserve(SamlConfig incoming, SamlConfig live)
     {
         if (incoming is null || live is null)
