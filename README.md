@@ -141,9 +141,9 @@ Broader documentation lives in the **[Wiki](https://github.com/iderex/jellyfin-p
 
 - [Installation](https://github.com/iderex/jellyfin-plugin-sso/wiki/Installation) · [Login Flow](https://github.com/iderex/jellyfin-plugin-sso/wiki/Login-Flow) · [Security Model](https://github.com/iderex/jellyfin-plugin-sso/wiki/Security-Model) · [Troubleshooting](https://github.com/iderex/jellyfin-plugin-sso/wiki/Troubleshooting)
 - Per-identity-provider setup: [Provider Setup](https://github.com/iderex/jellyfin-plugin-sso/wiki/Provider-Setup)
-- In-tree contributor map of the login flow and code layout: [Architecture Internals](https://github.com/iderex/jellyfin-plugin-sso/wiki/Architecture-Internals)
+- Contributor map of the login flow and module layout: [Architecture](https://github.com/iderex/jellyfin-plugin-sso/wiki/Architecture)
 - Project policies: [Governance](GOVERNANCE.md) · [Privacy & data handling](docs/PRIVACY.md) · [Support & security updates](SECURITY.md#supported-versions--security-updates) · [Remediation & secrets policy](docs/SECURITY-REMEDIATION-POLICY.md)
-- Honest maturity self-assessment (Silver/Gold + OSPS, incl. what a solo project structurally cannot meet): [Maturity Map](https://github.com/iderex/jellyfin-plugin-sso/wiki/Maturity-Map)
+- Honest maturity self-assessment (Silver/Gold + OSPS, incl. what a solo project structurally cannot meet): [Security & Maturity Self-Assessment](https://github.com/iderex/jellyfin-plugin-sso/wiki/Security-and-Maturity-Self-Assessment)
 
 ## Security
 

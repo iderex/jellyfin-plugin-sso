@@ -142,7 +142,7 @@ Any code editor or IDE with .NET support will work out of the box with this prog
 - [VSCode](https://code.visualstudio.com/docs/languages/dotnet)
 - [N/Vim](https://github.com/OmniSharp/Omnisharp-vim)
 
-**Getting oriented.** Before diving into `SSOController.cs` and the SAML/OpenID helpers, read the [Login Flow](https://github.com/iderex/jellyfin-plugin-sso/wiki/Login-Flow) wiki page and the in-tree [Architecture Internals](https://github.com/iderex/jellyfin-plugin-sso/wiki/Architecture-Internals) — together they walk an OpenID and a SAML sign-in from challenge to session and map the code layout, so you can place a change onto the flow instead of reverse-engineering it. The Architecture Internals page also separates that current shape from the [#318](https://github.com/iderex/jellyfin-plugin-sso/issues/318) target architecture the codebase is migrating toward.
+**Getting oriented.** Before diving into the `SSOController` and the SAML/OpenID helpers, read the [Login Flow](https://github.com/iderex/jellyfin-plugin-sso/wiki/Login-Flow) and [Architecture](https://github.com/iderex/jellyfin-plugin-sso/wiki/Architecture) wiki pages — together they walk an OpenID and a SAML sign-in from challenge to session and map the module layout, so you can place a change onto the flow instead of reverse-engineering it.
 
 **Building and testing.** CI runs these on every pull request and they must pass:
 
@@ -175,15 +175,17 @@ Short, imperative subject line (`Add SAML replay cache`, not `feat: add ...`); e
 
 We format all C# code according to the .NET formatter. Build with `dotnet build --no-restore --warnaserror` (the same command CI runs, so warnings fail the build) and fix anything it reports, and keep `dotnet test` green.
 
+The architecture, comment/documentation, and object-oriented rules a change is held to live in one canonical place — the [Coding Standards](https://github.com/iderex/jellyfin-plugin-sso/wiki/Coding-Standards) wiki page. This guide does not restate them; read that page before a non-trivial change. They are enforced by the conformance fitness functions in `SSO-Auth.Tests/ArchitectureConformanceTests.cs` and the adversarial review gate.
+
 ### HTML/CSS/JS/Markdown
 
 We use [Prettier](https://prettier.io) to format these files. Run `npx prettier --write "**/*.{js,html,md,css,scss}"` before committing, and `npx prettier --check "**/*.{js,html,md,css,scss}"` to confirm — CI enforces the check (only `*.min.js` is exempt).
 
-Not every file under `SSO-Auth/Views` is project code. Check the provenance header before editing: `emby-restyle.css` and the minified `jellyfin-apiClient.esm.min.js` are **vendored** from jellyfin-web — update them by re-copying from upstream, not by editing in place — whereas `ApiClient.js` is **project-maintained** code (loosely based on the linked upstream) that carries our own security logic and is edited here directly.
+Not every file under `SSO-Auth/Web` is project code. Check the provenance header before editing: `emby-restyle.css` and the minified `jellyfin-apiClient.esm.min.js` are **vendored** from jellyfin-web — update them by re-copying from upstream, not by editing in place — whereas `ApiClient.js` is **project-maintained** code (loosely based on the linked upstream) that carries our own security logic and is edited here directly.
 
 ### Keeping the docs in step
 
-When a code change makes any **README section or wiki page** wrong or incomplete — a changed behaviour, a moved file the [Architecture Internals](https://github.com/iderex/jellyfin-plugin-sso/wiki/Architecture-Internals) page names, a new or renamed config option, an altered login flow — the documentation follow-up must not be lost. Either **update the docs in the same pull request**, or **open a `documentation`-labelled issue on the current-release milestone** so it ships before the next release. The PR checklist has a box for this. (The wiki has no pull-request flow — wiki edits are pushed directly to its repository — but the _tracking_ still lives as an issue in the main repository.)
+When a code change makes any **README section or wiki page** wrong or incomplete — a changed behaviour, a moved type the [Architecture](https://github.com/iderex/jellyfin-plugin-sso/wiki/Architecture) page names, a new or renamed config option, an altered login flow — the documentation follow-up must not be lost. Either **update the docs in the same pull request**, or **open a `documentation`-labelled issue on the current-release milestone** so it ships before the next release. The PR checklist has a box for this. (The wiki has no pull-request flow — wiki edits are pushed directly to its repository — but the _tracking_ still lives as an issue in the main repository.)
 
 <!-- omit in toc -->
 

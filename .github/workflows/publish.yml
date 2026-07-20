@@ -1,8 +1,8 @@
 name: Publish Release
 
 # A three-part stable tag push (e.g. 4.1.1-stable) is the ONLY publish trigger,
-# per the Release-Policy wiki page
-# (https://github.com/iderex/jellyfin-plugin-sso/wiki/Release-Policy) — the beta
+# per the Releasing wiki page
+# (https://github.com/iderex/jellyfin-plugin-sso/wiki/Releasing) — the beta
 # soak / promotion gate a stable tag clears. The
 # channel/generation is the tag SUFFIX — this is
 # the JF10.11 line, so `X.Y.Z-stable`; the JF12 line publishes from `X.Y.Z-JF12-stable`

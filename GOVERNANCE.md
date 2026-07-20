@@ -30,7 +30,7 @@ wiki page).
 - **Scope and releases** I decide, guided by the public
   [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap) and its
   maturity ladder; releases follow the
-  [Release Policy](https://github.com/iderex/jellyfin-plugin-sso/wiki/Release-Policy)
+  [Releasing](https://github.com/iderex/jellyfin-plugin-sso/wiki/Releasing)
   (channel/soak promotion).
 - **Security decisions outrank feature decisions.** Anything touching the login
   path passes the adversarial review gate before merge.
