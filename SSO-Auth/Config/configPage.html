@@ -1534,6 +1534,1047 @@
               </div>
             </div>
           </form>
+
+          <!--
+            SAML provider workspace (#725) — a second, independent workspace parallel to the OpenID one above.
+            To keep every element id unique in the document (an HTML requirement) while still driving the save
+            contract off the id, every SAML persisting field carries a "saml-" PREFIXED id AND the marker class:
+            config.js's SAML save path writes current_config[id.slice("saml-".length)] = value, so the property
+            name is the id minus the prefix (e.g. id="saml-SamlEndpoint" -> SamlConfig.SamlEndpoint). This leaves
+            the OpenID workspace and its JS completely untouched. Pinned by
+            ArchitectureConformanceTests.ProviderFormFieldIds_MatchSamlConfigProperties.
+          -->
+          <form id="sso-load-saml-config" class="esqConfigurationForm">
+            <div class="verticalSection">
+              <div class="sso-workspace-header">
+                <h3 class="sso-workspace-title">SAML providers</h3>
+                <button
+                  id="saml-AddProvider"
+                  is="emby-button"
+                  type="button"
+                  class="raised button-submit sso-add-provider emby-button"
+                >
+                  <span class="material-icons add" aria-hidden="true"></span>
+                  <span>Add SAML provider</span>
+                </button>
+              </div>
+
+              <div id="saml-provider-empty" class="sso-empty-state" hidden>
+                <p class="sso-empty-state-title">No SAML providers yet</p>
+                <p class="fieldDescription">
+                  Add a SAML 2.0 provider to let users sign in through your
+                  identity provider. You can import the endpoint and signing
+                  certificate straight from your IdP's metadata below.
+                </p>
+                <button
+                  id="saml-AddProviderEmpty"
+                  is="emby-button"
+                  type="button"
+                  class="raised button-submit sso-add-provider emby-button"
+                >
+                  <span class="material-icons add" aria-hidden="true"></span>
+                  <span>Add SAML provider</span>
+                </button>
+              </div>
+
+              <div
+                id="saml-provider-list"
+                class="sso-provider-list"
+                role="list"
+              ></div>
+
+              <label for="saml-selectProvider" class="sso-visually-hidden"
+                >Loaded SAML provider</label
+              >
+              <select
+                is="emby-select"
+                id="saml-selectProvider"
+                name="saml-selectProvider"
+                class="emby-select-withcolor emby-select sso-visually-hidden"
+              ></select>
+            </div>
+          </form>
+
+          <form id="sso-new-saml-provider" class="esqConfigurationForm">
+            <div class="sso-editor" id="saml-editor" hidden>
+              <div class="sso-editor-header">
+                <h3 class="sso-editor-title" id="saml-editor-title">
+                  New provider
+                </h3>
+                <div class="sso-editor-header-actions">
+                  <div
+                    id="saml-save-status"
+                    class="sso-save-status"
+                    role="status"
+                    aria-live="polite"
+                  ></div>
+                  <button
+                    id="saml-DeleteProvider"
+                    is="emby-button"
+                    type="button"
+                    class="raised button-delete sso-btn-deemphasized emby-button"
+                  >
+                    <span>Delete</span>
+                  </button>
+                </div>
+              </div>
+
+              <p class="fieldDescription sso-required-legend">
+                Fields marked
+                <span class="sso-required" aria-hidden="true">*</span>
+                are required.
+              </p>
+
+              <!-- SAML Section 1: Connection -->
+              <div
+                is="emby-collapse"
+                data-expanded="true"
+                title="Connection"
+                class="verticalSection verticalSection-extrabottompadding"
+              >
+                <div class="collapseContent">
+                  <div class="inputContainer">
+                    <label
+                      class="inputLabel inputLabelUnfocused"
+                      for="saml-provider-name"
+                      >Name of SAML Provider:
+                      <span class="sso-required" aria-hidden="true"
+                        >*</span
+                      ></label
+                    >
+                    <!-- No marker class: this input's value is the SamlConfigs dictionary KEY, not a property. -->
+                    <input
+                      is="emby-input"
+                      id="saml-provider-name"
+                      required=""
+                      type="text"
+                      aria-describedby="saml-provider-name-error"
+                    />
+                    <div
+                      class="sso-inline-error"
+                      id="saml-provider-name-error"
+                      role="alert"
+                      hidden
+                    ></div>
+                    <div class="fieldDescription">
+                      The name Jellyfin uses to identify this SAML provider. A
+                      new provider is created if the name is new; an existing
+                      one is updated.
+                    </div>
+                  </div>
+
+                  <!--
+                    Import from IdP metadata (#735): fetch a metadata URL server-side (SSRF-hardened) or paste
+                    the XML, and pre-fill the endpoint + signing certificate below. Read-only result via
+                    textContent (#221). These inputs/buttons are NOT persisting fields (no marker class).
+                  -->
+                  <div class="inputContainer sso-metadata-import">
+                    <label
+                      class="inputLabel inputLabelUnfocused"
+                      for="saml-metadata-url"
+                      >Import from IdP metadata
+                      <span class="sso-optional">(optional)</span></label
+                    >
+                    <div class="sso-redirect-uri-row">
+                      <input
+                        is="emby-input"
+                        id="saml-metadata-url"
+                        type="text"
+                        placeholder="https://idp.example.com/metadata"
+                      />
+                      <button
+                        is="emby-button"
+                        type="button"
+                        id="saml-ImportMetadataUrl"
+                        class="raised button-alt"
+                      >
+                        <span>Import URL</span>
+                      </button>
+                    </div>
+                    <textarea
+                      is="emby-textarea"
+                      id="saml-metadata-xml"
+                      class="emby-textarea"
+                      placeholder="…or paste the metadata XML here"
+                    ></textarea>
+                    <button
+                      is="emby-button"
+                      type="button"
+                      id="saml-ImportMetadataXml"
+                      class="raised button-alt"
+                    >
+                      <span>Import pasted XML</span>
+                    </button>
+                    <div
+                      id="saml-metadata-status"
+                      class="sso-copied-status"
+                      role="status"
+                      aria-live="polite"
+                    ></div>
+                    <div class="fieldDescription">
+                      Fetches the SSO endpoint and signing certificate(s) from
+                      your identity provider's SAML metadata and fills them in
+                      below for review. It never fills the SAML Client ID (that
+                      is this service provider's own entity id, which you
+                      choose).
+                    </div>
+                  </div>
+
+                  <div class="inputContainer">
+                    <label
+                      class="inputLabel inputLabelUnfocused"
+                      for="saml-SamlEndpoint"
+                      >SAML SSO Endpoint:
+                      <span class="sso-required" aria-hidden="true"
+                        >*</span
+                      ></label
+                    >
+                    <input
+                      is="emby-input"
+                      id="saml-SamlEndpoint"
+                      required=""
+                      type="text"
+                      class="sso-text"
+                      aria-describedby="saml-SamlEndpoint-error"
+                    />
+                    <div
+                      class="sso-inline-error"
+                      id="saml-SamlEndpoint-error"
+                      role="alert"
+                      hidden
+                    ></div>
+                    <div class="fieldDescription">
+                      The identity provider's Single Sign-On URL — where the
+                      browser is redirected to authenticate.
+                    </div>
+                  </div>
+
+                  <div class="inputContainer">
+                    <label
+                      class="inputLabel inputLabelUnfocused"
+                      for="saml-SamlClientId"
+                      >SAML Client ID (SP entity id):
+                      <span class="sso-required" aria-hidden="true"
+                        >*</span
+                      ></label
+                    >
+                    <input
+                      is="emby-input"
+                      id="saml-SamlClientId"
+                      required=""
+                      type="text"
+                      class="sso-text"
+                      aria-describedby="saml-SamlClientId-error"
+                    />
+                    <div
+                      class="sso-inline-error"
+                      id="saml-SamlClientId-error"
+                      role="alert"
+                      hidden
+                    ></div>
+                    <div class="fieldDescription">
+                      This service provider's entity id — the value the plugin
+                      sends as the AuthnRequest issuer and expects as the
+                      audience. You choose it and register it at the IdP; it is
+                      also the SP entityID shown below.
+                    </div>
+                  </div>
+
+                  <div class="inputContainer">
+                    <label
+                      class="inputLabel inputLabelUnfocused"
+                      for="saml-SamlCertificate"
+                      >IdP Signing Certificate:
+                      <span class="sso-required" aria-hidden="true"
+                        >*</span
+                      ></label
+                    >
+                    <textarea
+                      is="emby-textarea"
+                      id="saml-SamlCertificate"
+                      class="sso-text emby-textarea"
+                      aria-describedby="saml-SamlCertificate-error"
+                    ></textarea>
+                    <div
+                      class="sso-inline-error"
+                      id="saml-SamlCertificate-error"
+                      role="alert"
+                      hidden
+                    ></div>
+                    <div class="fieldDescription">
+                      The identity provider's PUBLIC signing certificate as
+                      Base64 (DER) — the value between the PEM
+                      <code>BEGIN/END CERTIFICATE</code> lines, or the whole
+                      PEM. Used to verify the SAML response signature.
+                    </div>
+                  </div>
+
+                  <!--
+                    Read-only computed SP URLs (#569/#725): the ACS and metadata URLs the IdP must be told
+                    about, plus the SP entityID. Derived client-side from the Base URL Override (else the
+                    server address) exactly like the login builds them; set via .value/textContent, never
+                    innerHTML (#221). Not persisting fields (no marker class, read-only).
+                  -->
+                  <div class="inputContainer">
+                    <label
+                      class="inputLabel inputLabelUnfocused"
+                      for="saml-AcsUrl"
+                      >ACS URL (register this at your IdP):</label
+                    >
+                    <div class="sso-redirect-uri-row">
+                      <input
+                        is="emby-input"
+                        id="saml-AcsUrl"
+                        type="text"
+                        readonly
+                      />
+                      <button
+                        is="emby-button"
+                        type="button"
+                        id="saml-CopyAcsUrl"
+                        class="raised button-alt"
+                      >
+                        <span>Copy</span>
+                      </button>
+                    </div>
+                    <div class="fieldDescription">
+                      The Assertion Consumer Service URL the IdP POSTs the SAML
+                      response to. Updates as you type the provider name.
+                      Derived from the Base URL Override (Advanced section) when
+                      set, else this server's address. The legacy spelling
+                      <code>/sso/SAML/p/&lt;name&gt;</code> also works.
+                    </div>
+                  </div>
+
+                  <div class="inputContainer">
+                    <label
+                      class="inputLabel inputLabelUnfocused"
+                      for="saml-MetadataUrl"
+                      >SP metadata URL (hand this to your IdP):</label
+                    >
+                    <div class="sso-redirect-uri-row">
+                      <input
+                        is="emby-input"
+                        id="saml-MetadataUrl"
+                        type="text"
+                        readonly
+                      />
+                      <button
+                        is="emby-button"
+                        type="button"
+                        id="saml-CopyMetadataUrl"
+                        class="raised button-alt"
+                      >
+                        <span>Copy</span>
+                      </button>
+                    </div>
+                    <div
+                      id="saml-url-copied"
+                      class="sso-copied-status"
+                      role="status"
+                      aria-live="polite"
+                    ></div>
+                    <div class="fieldDescription">
+                      This service provider's metadata document — many IdPs can
+                      import it by URL instead of hand-configuring the ACS and
+                      entityID. The SP entityID it advertises is the SAML Client
+                      ID above.
+                    </div>
+                  </div>
+
+                  <div
+                    class="checkboxContainer checkboxContainer-withDescription"
+                  >
+                    <label>
+                      <input
+                        is="emby-checkbox"
+                        id="saml-Enabled"
+                        name="saml-Enabled"
+                        type="checkbox"
+                        class="sso-toggle"
+                      />
+                      <span>Enabled</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <!-- SAML Section 2: User provisioning -->
+              <div
+                is="emby-collapse"
+                data-expanded="true"
+                title="User provisioning"
+                class="verticalSection verticalSection-extrabottompadding"
+              >
+                <div class="collapseContent">
+                  <div
+                    class="checkboxContainer checkboxContainer-withDescription"
+                  >
+                    <label>
+                      <input
+                        is="emby-checkbox"
+                        id="saml-EnableAuthorization"
+                        name="saml-EnableAuthorization"
+                        type="checkbox"
+                        class="sso-toggle"
+                      />
+                      <span>Enable Authorization by Plugin</span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">
+                      Determines if the plugin sets permissions for the user. If
+                      off, the user starts with no permissions and an
+                      administrator adds them. Existing users' permissions are
+                      not rewritten on later logins.
+                    </div>
+                  </div>
+
+                  <div class="inputContainer">
+                    <label
+                      class="inputLabel inputLabelUnfocused"
+                      for="saml-DefaultProvider"
+                      >Set default Provider:
+                      <span class="sso-optional">(optional)</span></label
+                    >
+                    <input
+                      is="emby-input"
+                      id="saml-DefaultProvider"
+                      type="text"
+                      class="sso-text"
+                    />
+                    <div class="fieldDescription">
+                      Assigned to the user after they log in. If unset, nothing
+                      changes and the user can still log in via other providers.
+                    </div>
+                  </div>
+
+                  <div
+                    class="checkboxContainer checkboxContainer-withDescription"
+                  >
+                    <label>
+                      <input
+                        is="emby-checkbox"
+                        id="saml-AllowExistingAccountLink"
+                        name="saml-AllowExistingAccountLink"
+                        type="checkbox"
+                        class="sso-toggle"
+                      />
+                      <span>Allow Adopting Existing Accounts (Sensitive)</span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">
+                      ⚠ Sensitive: lets a first SAML login adopt a pre-existing,
+                      unlinked Jellyfin account whose username matches the SAML
+                      NameID, instead of rejecting it. Off by default. A
+                      name-matched administrator account is never adopted.
+                    </div>
+                  </div>
+
+                  <div
+                    class="checkboxContainer checkboxContainer-withDescription"
+                  >
+                    <label>
+                      <input
+                        is="emby-checkbox"
+                        id="saml-ProvisionNewUsersDisabled"
+                        name="saml-ProvisionNewUsersDisabled"
+                        type="checkbox"
+                        class="sso-toggle"
+                      />
+                      <span
+                        >Provision New Users Disabled (Pending Approval)</span
+                      >
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">
+                      An unknown identity's first login creates its account
+                      disabled, with no permissions, and is refused with an
+                      "awaiting administrator approval" message until an admin
+                      enables it. Off by default. Never disables an existing or
+                      adopted account, and each deferral is audited.
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- SAML Section 3: Roles & access -->
+              <div
+                is="emby-collapse"
+                data-expanded="true"
+                title="Roles &amp; access"
+                class="verticalSection verticalSection-extrabottompadding"
+              >
+                <div class="collapseContent">
+                  <div class="inputContainer">
+                    <label
+                      class="inputLabel inputLabelUnfocused"
+                      for="saml-Roles"
+                      >Roles:
+                      <span class="sso-optional">(optional)</span></label
+                    >
+                    <textarea
+                      is="emby-textarea"
+                      id="saml-Roles"
+                      type="text"
+                      class="sso-line-list emby-textarea"
+                    ></textarea>
+                    <div class="fieldDescription">
+                      One role per line. A login must carry at least one of
+                      these roles (in the assertion's Role attribute) to be
+                      allowed in. Leave blank to allow any authenticated user.
+                    </div>
+                  </div>
+
+                  <div class="inputContainer">
+                    <label
+                      class="inputLabel inputLabelUnfocused"
+                      for="saml-AdminRoles"
+                      >Admin Roles:
+                      <span class="sso-optional">(optional)</span></label
+                    >
+                    <textarea
+                      is="emby-textarea"
+                      id="saml-AdminRoles"
+                      type="text"
+                      class="sso-line-list emby-textarea"
+                    ></textarea>
+                    <div class="fieldDescription">
+                      One role per line. A login carrying any of these roles is
+                      granted administrator rights.
+                    </div>
+                  </div>
+
+                  <div class="sso-subgroup">
+                    <p class="sso-subgroup-title">Library access</p>
+
+                    <div
+                      class="checkboxContainer checkboxContainer-withDescription"
+                    >
+                      <label>
+                        <input
+                          is="emby-checkbox"
+                          id="saml-EnableAllFolders"
+                          name="saml-EnableAllFolders"
+                          type="checkbox"
+                          class="sso-toggle"
+                          aria-controls="saml-EnabledFolders-group"
+                        />
+                        <span>Enable All Folders</span>
+                      </label>
+                      <div class="fieldDescription checkboxFieldDescription">
+                        If enabled, all libraries are accessible to any user
+                        that logs in through this provider.
+                      </div>
+                    </div>
+
+                    <div
+                      class="inputContainer sso-dependent"
+                      id="saml-EnabledFolders-group"
+                    >
+                      <label
+                        class="inputLabel inputLabelUnfocused"
+                        for="saml-EnabledFolders"
+                        >Enabled Folders:</label
+                      >
+                      <div
+                        id="saml-EnabledFolders"
+                        class="checkboxList paperList checkboxList-paperList sso-folder-list sso-bordered-list"
+                      ></div>
+                      <div class="fieldDescription">
+                        Which libraries are accessible to a user that logs in
+                        through this provider. No effect when "Enable All
+                        Folders" is checked.
+                      </div>
+                    </div>
+
+                    <div
+                      class="checkboxContainer checkboxContainer-withDescription"
+                    >
+                      <label>
+                        <input
+                          is="emby-checkbox"
+                          id="saml-EnableFolderRoles"
+                          name="saml-EnableFolderRoles"
+                          type="checkbox"
+                          class="sso-toggle"
+                          aria-controls="saml-FolderRoleMapping-group"
+                        />
+                        <span>Enable Role-Based Folder Access:</span>
+                      </label>
+                      <div class="fieldDescription checkboxFieldDescription">
+                        Determines if user roles should control library access.
+                      </div>
+                    </div>
+
+                    <div
+                      class="inputContainer sso-dependent"
+                      id="saml-FolderRoleMapping-group"
+                    >
+                      <label
+                        class="inputLabel inputLabelUnfocused"
+                        for="saml-FolderRoleMapping"
+                        >Folder Role Mapping:</label
+                      >
+                      <button
+                        is="emby-button"
+                        id="saml-AddRoleMapping"
+                        type="button"
+                        class="fab btnAddFolder submit"
+                        title="${Add}"
+                        aria-label="Add role mapping"
+                      >
+                        <span
+                          class="material-icons add"
+                          aria-hidden="true"
+                        ></span>
+                      </button>
+                      <div
+                        id="saml-FolderRoleMapping"
+                        class="sso-role-map"
+                      ></div>
+                      <div class="fieldDescription">
+                        Map roles to lists of libraries. A user holding a given
+                        role gets access to its mapped libraries.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- SAML Section 4: Live TV -->
+              <div
+                is="emby-collapse"
+                title="Live TV"
+                class="verticalSection verticalSection-extrabottompadding"
+              >
+                <div class="collapseContent">
+                  <div
+                    class="checkboxContainer checkboxContainer-withDescription"
+                  >
+                    <label>
+                      <input
+                        is="emby-checkbox"
+                        id="saml-EnableLiveTvRoles"
+                        name="saml-EnableLiveTvRoles"
+                        type="checkbox"
+                        class="sso-toggle"
+                        aria-controls="saml-LiveTvRoles-group"
+                      />
+                      <span>Enable Role-Based Live TV Access</span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">
+                      Determines if user roles should control Live TV access.
+                    </div>
+                  </div>
+
+                  <div
+                    class="inputContainer sso-dependent"
+                    id="saml-LiveTvRoles-group"
+                  >
+                    <label
+                      class="inputLabel inputLabelUnfocused"
+                      for="saml-LiveTvRoles"
+                      >Live TV Roles:</label
+                    >
+                    <textarea
+                      is="emby-textarea"
+                      id="saml-LiveTvRoles"
+                      type="text"
+                      class="sso-line-list emby-textarea"
+                    ></textarea>
+                    <label
+                      class="inputLabel inputLabelUnfocused"
+                      for="saml-LiveTvManagementRoles"
+                      >Live TV Management Roles:</label
+                    >
+                    <textarea
+                      is="emby-textarea"
+                      id="saml-LiveTvManagementRoles"
+                      type="text"
+                      class="sso-line-list emby-textarea"
+                    ></textarea>
+                    <div class="fieldDescription">
+                      One role per line. Grants Live TV access / management to
+                      logins carrying a listed role.
+                    </div>
+                  </div>
+
+                  <div
+                    class="checkboxContainer checkboxContainer-withDescription"
+                  >
+                    <label>
+                      <input
+                        is="emby-checkbox"
+                        id="saml-EnableLiveTv"
+                        name="saml-EnableLiveTv"
+                        type="checkbox"
+                        class="sso-toggle"
+                      />
+                      <span>Enable Live TV Access (all users)</span>
+                    </label>
+                  </div>
+
+                  <div
+                    class="checkboxContainer checkboxContainer-withDescription"
+                  >
+                    <label>
+                      <input
+                        is="emby-checkbox"
+                        id="saml-EnableLiveTvManagement"
+                        name="saml-EnableLiveTvManagement"
+                        type="checkbox"
+                        class="sso-toggle"
+                      />
+                      <span>Enable Live TV Management (all users)</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <!-- SAML Section 5: Compatibility & overrides -->
+              <div
+                is="emby-collapse"
+                title="Compatibility &amp; overrides"
+                class="verticalSection verticalSection-extrabottompadding"
+              >
+                <div class="collapseContent">
+                  <div class="inputContainer">
+                    <label
+                      class="inputLabel inputLabelUnfocused"
+                      for="saml-SchemeOverride"
+                      >Scheme Override:
+                      <span class="sso-optional">(optional)</span></label
+                    >
+                    <input
+                      is="emby-input"
+                      id="saml-SchemeOverride"
+                      type="text"
+                      class="sso-text"
+                    />
+                    <div class="fieldDescription">
+                      Force the scheme (http/https) used when building the ACS
+                      and metadata URLs. Prefer the Base URL Override below.
+                    </div>
+                  </div>
+
+                  <div class="inputContainer">
+                    <label
+                      class="inputLabel inputLabelUnfocused"
+                      for="saml-PortOverride"
+                      >Port Override:
+                      <span class="sso-optional">(optional)</span></label
+                    >
+                    <input
+                      is="emby-input"
+                      id="saml-PortOverride"
+                      type="text"
+                      class="sso-text"
+                    />
+                    <div class="fieldDescription">
+                      Force the port used when building the ACS and metadata
+                      URLs. Prefer the Base URL Override below.
+                    </div>
+                  </div>
+
+                  <div class="inputContainer">
+                    <label
+                      class="inputLabel inputLabelUnfocused"
+                      for="saml-BaseUrlOverride"
+                      >Base URL Override:
+                      <span class="sso-optional">(optional)</span></label
+                    >
+                    <input
+                      is="emby-input"
+                      id="saml-BaseUrlOverride"
+                      type="text"
+                      class="sso-text"
+                      aria-describedby="saml-BaseUrlOverride-error"
+                    />
+                    <div
+                      class="sso-inline-error"
+                      id="saml-BaseUrlOverride-error"
+                      role="alert"
+                      hidden
+                    ></div>
+                    <div class="sso-callout sso-callout-warning" role="note">
+                      ⚠ Recommended. The canonical external base URL of this
+                      server, e.g. <code>https://jellyfin.example.com</code>.
+                      When set, the ACS and SP metadata URLs are built from it
+                      instead of the request host, so a spoofed or
+                      proxy-forwarded host cannot redirect the login elsewhere.
+                      Overrides the scheme and port overrides above.
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- SAML Section 6: Security & hardening -->
+              <div
+                is="emby-collapse"
+                id="saml-security-section"
+                title="Security &amp; hardening"
+                class="verticalSection verticalSection-extrabottompadding"
+              >
+                <div class="collapseContent">
+                  <div class="sso-security-block">
+                    <p class="sso-subgroup-title">Assertion validation</p>
+
+                    <div
+                      class="checkboxContainer checkboxContainer-withDescription"
+                    >
+                      <label>
+                        <input
+                          is="emby-checkbox"
+                          id="saml-ValidateRecipient"
+                          name="saml-ValidateRecipient"
+                          type="checkbox"
+                          class="sso-toggle"
+                        />
+                        <span>Validate Recipient</span>
+                      </label>
+                      <div class="fieldDescription checkboxFieldDescription">
+                        Additionally require the assertion's
+                        <code>Recipient</code> to equal this SP's ACS URL (a
+                        token-redirection defense). Off by default so an
+                        existing deployment is not locked out; enable once your
+                        IdP sets the recipient correctly.
+                      </div>
+                    </div>
+
+                    <div
+                      class="checkboxContainer checkboxContainer-withDescription"
+                    >
+                      <label>
+                        <input
+                          is="emby-checkbox"
+                          id="saml-ValidateInResponseTo"
+                          name="saml-ValidateInResponseTo"
+                          type="checkbox"
+                          class="sso-toggle"
+                        />
+                        <span>Validate InResponseTo</span>
+                      </label>
+                      <div class="fieldDescription checkboxFieldDescription">
+                        Require the response's <code>InResponseTo</code> to
+                        match an AuthnRequest this SP issued (rejects
+                        unsolicited assertions). Off by default; enable for
+                        solicited-only SSO.
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="sso-security-block">
+                    <p class="sso-subgroup-title">Audience</p>
+
+                    <div class="inputContainer">
+                      <label
+                        class="inputLabel inputLabelUnfocused"
+                        for="saml-SamlAudience"
+                        >SAML Audience:
+                        <span class="sso-optional">(optional)</span></label
+                      >
+                      <input
+                        is="emby-input"
+                        id="saml-SamlAudience"
+                        type="text"
+                        class="sso-text"
+                      />
+                      <div class="fieldDescription">
+                        The expected <code>AudienceRestriction</code> in the
+                        assertion. When blank, the SAML Client ID is used.
+                        Ignored when "Do Not Validate Audience" is set.
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="sso-security-block">
+                    <p class="sso-subgroup-title">Request signing</p>
+
+                    <div
+                      class="checkboxContainer checkboxContainer-withDescription"
+                    >
+                      <label>
+                        <input
+                          is="emby-checkbox"
+                          id="saml-SignAuthnRequests"
+                          name="saml-SignAuthnRequests"
+                          type="checkbox"
+                          class="sso-toggle"
+                        />
+                        <span>Sign AuthnRequests</span>
+                      </label>
+                      <div class="fieldDescription checkboxFieldDescription">
+                        Sign outgoing SAML AuthnRequests with the SP signing key
+                        below. Off by default; when on, a valid Signing Key must
+                        be configured.
+                      </div>
+                    </div>
+
+                    <div class="inputContainer">
+                      <label
+                        class="inputLabel inputLabelUnfocused"
+                        for="saml-SamlSigningKeyPfx"
+                        >SP Signing Key (PFX/PKCS#12, Base64):
+                        <span class="sso-optional">(optional)</span></label
+                      >
+                      <input
+                        is="emby-input"
+                        id="saml-SamlSigningKeyPfx"
+                        type="password"
+                        autocomplete="off"
+                        placeholder="Leave blank to keep the current key"
+                        class="sso-text"
+                      />
+                      <div class="fieldDescription">
+                        This service provider's PRIVATE signing key, as a Base64
+                        PKCS#12 (PFX) blob. For security it is never sent back
+                        to this page: leave blank to keep the stored key, or
+                        enter a new one to replace it.
+                      </div>
+                    </div>
+
+                    <div class="inputContainer">
+                      <label
+                        class="inputLabel inputLabelUnfocused"
+                        for="saml-SamlRolloverSigningKeyPfx"
+                        >SP Rollover Signing Key (PFX/PKCS#12, Base64):
+                        <span class="sso-optional">(optional)</span></label
+                      >
+                      <input
+                        is="emby-input"
+                        id="saml-SamlRolloverSigningKeyPfx"
+                        type="password"
+                        autocomplete="off"
+                        placeholder="Leave blank to keep the current key"
+                        class="sso-text"
+                      />
+                      <div class="fieldDescription">
+                        An OPTIONAL second SP signing key for a rollover
+                        overlap: the SP metadata advertises both public
+                        certificates so the IdP trusts either. AuthnRequests are
+                        always signed with the primary key. Write-only, like the
+                        primary key.
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="sso-security-block sso-sensitive-region">
+                    <p class="sso-subgroup-title">
+                      Inbound certificate rotation
+                    </p>
+
+                    <div class="inputContainer">
+                      <label
+                        class="inputLabel inputLabelUnfocused"
+                        for="saml-SamlSecondaryCertificate"
+                        >Secondary IdP Signing Certificate:
+                        <span class="sso-optional">(optional)</span></label
+                      >
+                      <textarea
+                        is="emby-textarea"
+                        id="saml-SamlSecondaryCertificate"
+                        class="sso-text emby-textarea"
+                        aria-describedby="saml-SamlSecondaryCertificate-error"
+                      ></textarea>
+                      <div
+                        class="sso-inline-error"
+                        id="saml-SamlSecondaryCertificate-error"
+                        role="alert"
+                        hidden
+                      ></div>
+                      <div class="fieldDescription">
+                        An OPTIONAL second IdP PUBLIC signing certificate
+                        accepted during an inbound signing-key rotation: a
+                        response verifying against EITHER this or the primary
+                        certificate is accepted. Base64 (DER) or PEM, like the
+                        primary.
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="sso-security-block sso-danger-zone">
+                    <p class="sso-subgroup-title sso-danger-title">
+                      Insecure options
+                    </p>
+                    <div class="fieldDescription">
+                      These options disable SAML security defenses. Enable one
+                      only if your provider genuinely requires it; each is
+                      recorded as an audit warning.
+                    </div>
+                    <button
+                      is="emby-button"
+                      type="button"
+                      id="saml-ShowInsecureOptions"
+                      class="raised button-alt sso-insecure-toggle emby-button"
+                      aria-expanded="false"
+                      aria-controls="saml-insecure-options"
+                    >
+                      <span>Show insecure options</span>
+                    </button>
+
+                    <div
+                      id="saml-insecure-options"
+                      class="sso-insecure-options"
+                      hidden
+                    >
+                      <div
+                        class="checkboxContainer checkboxContainer-withDescription"
+                      >
+                        <label>
+                          <input
+                            is="emby-checkbox"
+                            id="saml-DoNotValidateAudience"
+                            name="saml-DoNotValidateAudience"
+                            type="checkbox"
+                            class="sso-toggle"
+                          />
+                          <span>Do Not Validate Audience (Insecure)</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">
+                          ⚠ Insecure: disables the
+                          <code>AudienceRestriction</code> check, so an
+                          assertion minted for a different service provider
+                          could be replayed here. Only if your IdP cannot set
+                          the audience correctly. Enabling it is recorded as an
+                          audit warning.
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="sso-test-block">
+                <button
+                  id="saml-TestProvider"
+                  is="emby-button"
+                  type="button"
+                  class="raised button-alt block emby-button"
+                >
+                  <span>Test Connection</span>
+                </button>
+                <div class="fieldDescription">
+                  Validates the <strong>saved</strong> provider: parses the
+                  stored IdP signing certificate and reports its non-secret
+                  facts (subject, issuer, validity, thumbprint). Save the
+                  provider first. Requires administrator privileges; no signing
+                  key is shown.
+                </div>
+                <div id="saml-TestResult"></div>
+              </div>
+
+              <div class="sso-save-footer">
+                <div class="fieldDescription sso-restart-reminder">
+                  Saving requires a restart of Jellyfin to take effect.
+                </div>
+                <button
+                  id="saml-SaveProvider"
+                  is="emby-button"
+                  type="button"
+                  class="raised button-submit block emby-button sso-save-button"
+                >
+                  <span>Save</span>
+                </button>
+              </div>
+            </div>
+          </form>
         </div>
       </div>
     </div>

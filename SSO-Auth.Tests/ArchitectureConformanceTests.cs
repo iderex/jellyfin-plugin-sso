@@ -1444,6 +1444,179 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void ProviderFormFieldIds_MatchSamlConfigProperties()
+    {
+        // The SAML provider form's save contract (#725), locked in as the SamlConfig-side twin of
+        // ProviderFormFieldIds_MatchOidConfigProperties. config.js saveSamlProvider persists each marked
+        // input as current_config[samlPropOf(element.id)] = value, where samlPropOf strips the mandatory
+        // "saml-" id prefix (the prefix keeps every SAML field id unique in a document the OpenID form already
+        // populated). So every input bearing a persisting marker class MUST (a) have a "saml-"-prefixed id and
+        // (b) once stripped, equal a real SamlConfig property — otherwise it renders but silently never saves,
+        // because the server drops JSON members that are not SamlConfig properties. The scan is scoped to
+        // #sso-new-saml-provider so it is checked against SamlConfig, never OidConfig. Paired below with a
+        // reverse security-critical pin so neither a mistyped id nor a dropped marker class can silently break
+        // a SAML security setting's save.
+        var markerClasses = new[] { "sso-text", "sso-line-list", "sso-toggle", "sso-folder-list", "sso-role-map" };
+
+        var form = SamlProviderFormMarkup(
+            File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "configPage.html")));
+
+        var samlConfigProperties = typeof(SamlConfig)
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Select(p => p.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+        // matchedProps holds the STRIPPED property names (samlPropOf) so the sentinel/security pins below read
+        // as plain SamlConfig property names, mirroring the OpenID test.
+        var matchedProps = new HashSet<string>(StringComparer.Ordinal);
+        var offenders = new List<string>();
+        foreach (Match tag in Regex.Matches(form, "<[a-zA-Z][^>]*>", RegexOptions.Singleline))
+        {
+            var classAttr = Regex.Match(tag.Value, "class=\"([^\"]*)\"", RegexOptions.Singleline);
+            if (!classAttr.Success)
+            {
+                continue;
+            }
+
+            var classes = classAttr.Groups[1].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (!classes.Any(c => markerClasses.Contains(c, StringComparer.Ordinal)))
+            {
+                continue;
+            }
+
+            var idMatch = Regex.Match(tag.Value, "(?<![-\\w])id=\"([^\"]*)\"", RegexOptions.Singleline);
+            var id = idMatch.Success ? idMatch.Groups[1].Value : "(no id)";
+
+            // The prefix itself is part of the contract: a marked SAML field without it would collide with the
+            // OpenID field of the same name AND be mis-saved, so flag it rather than silently stripping nothing.
+            if (!id.StartsWith("saml-", StringComparison.Ordinal))
+            {
+                offenders.Add($"{id} (missing the required saml- id prefix; classes: {classAttr.Groups[1].Value.Trim()})");
+                continue;
+            }
+
+            var prop = id.Substring("saml-".Length);
+            matchedProps.Add(prop);
+            if (!samlConfigProperties.Contains(prop))
+            {
+                offenders.Add($"{id} -> {prop} (classes: {classAttr.Groups[1].Value.Trim()})");
+            }
+        }
+
+        // Guard against a vacuous pass: one sentinel per marker class must have been scanned.
+        var sentinels = new[] { "SamlEndpoint", "Roles", "Enabled", "EnabledFolders", "FolderRoleMapping" };
+        var missingSentinels = sentinels.Where(s => !matchedProps.Contains(s)).ToList();
+        Assert.True(
+            missingSentinels.Count == 0,
+            "The SAML provider-form scan did not reach expected fields (broken parse or renamed marker class?); missing sentinels: " + string.Join(", ", missingSentinels));
+
+        // Reverse direction: pin the SAML security-critical settings — each MUST remain a marked, correctly
+        // "saml-"-prefixed persisting field, so dropping its marker class (fail-open: the server keeps the
+        // stored value and the admin can no longer change it in the form) fails here. DoNotValidateAudience is
+        // the SAML insecure toggle; ValidateRecipient/ValidateInResponseTo/SignAuthnRequests are the opt-in
+        // hardening toggles; the signing keys are the write-only secrets; AllowExistingAccountLink and
+        // ProvisionNewUsersDisabled govern account adoption/provisioning. Extend in the same PR that surfaces a
+        // new SAML security setting.
+        var securityCritical = new[]
+        {
+            "EnableAuthorization", "DoNotValidateAudience", "ValidateRecipient", "ValidateInResponseTo",
+            "SignAuthnRequests", "SamlSigningKeyPfx", "SamlRolloverSigningKeyPfx",
+            "AllowExistingAccountLink", "ProvisionNewUsersDisabled",
+        };
+        var unsaved = securityCritical.Where(p => !matchedProps.Contains(p)).ToList();
+        Assert.True(
+            unsaved.Count == 0,
+            "These SAML security-critical settings must remain persisting provider-form fields (a marked input whose id is \"saml-\" + the SamlConfig property); missing or unmarked: " + string.Join(", ", unsaved));
+
+        Assert.True(
+            offenders.Count == 0,
+            "Every persisting SAML provider-form field (sso-text/sso-line-list/sso-toggle/sso-folder-list/sso-role-map) must have an id equal to \"saml-\" + a SamlConfig property; these do not: " + string.Join(" | ", offenders));
+    }
+
+    [Fact]
+    public void SamlProviderForm_RendersEveryPersistingFieldId()
+    {
+        // The exhaustive reverse pin for the SAML save contract (#725), the twin of
+        // ProviderForm_RendersEveryPersistingFieldId: every one of the 30 persisting SAML fields must render
+        // as a marked input with its exact "saml-"-prefixed id, so a field silently dropped or unmarked during
+        // a future re-layout — which would stop it persisting — fails here rather than shipping as silent data
+        // loss. The provider-name KEY input (saml-provider-name) is deliberately unmarked (it supplies the
+        // SamlConfigs dictionary key, not a SamlConfig property) and is asserted present separately.
+        var markerClasses = new[] { "sso-text", "sso-line-list", "sso-toggle", "sso-folder-list", "sso-role-map" };
+        var form = SamlProviderFormMarkup(
+            File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "configPage.html")));
+
+        var markedProps = new HashSet<string>(StringComparer.Ordinal);
+        foreach (Match tag in Regex.Matches(form, "<[a-zA-Z][^>]*>", RegexOptions.Singleline))
+        {
+            var classAttr = Regex.Match(tag.Value, "class=\"([^\"]*)\"", RegexOptions.Singleline);
+            if (!classAttr.Success)
+            {
+                continue;
+            }
+
+            var classes = classAttr.Groups[1].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (!classes.Any(c => markerClasses.Contains(c, StringComparer.Ordinal)))
+            {
+                continue;
+            }
+
+            var idMatch = Regex.Match(tag.Value, "(?<![-\\w])id=\"([^\"]*)\"", RegexOptions.Singleline);
+            if (idMatch.Success && idMatch.Groups[1].Value.StartsWith("saml-", StringComparison.Ordinal))
+            {
+                markedProps.Add(idMatch.Groups[1].Value.Substring("saml-".Length));
+            }
+        }
+
+        var expected = new[]
+        {
+            "SamlEndpoint", "SamlClientId", "SamlCertificate", "SamlSecondaryCertificate", "SamlAudience",
+            "DoNotValidateAudience", "ValidateRecipient", "ValidateInResponseTo", "SignAuthnRequests",
+            "SamlSigningKeyPfx", "SamlRolloverSigningKeyPfx",
+            "Enabled", "EnableAuthorization", "DefaultProvider", "AllowExistingAccountLink", "ProvisionNewUsersDisabled",
+            "Roles", "AdminRoles", "EnableAllFolders", "EnabledFolders", "EnableFolderRoles", "FolderRoleMapping",
+            "EnableLiveTvRoles", "LiveTvRoles", "LiveTvManagementRoles", "EnableLiveTv", "EnableLiveTvManagement",
+            "SchemeOverride", "PortOverride", "BaseUrlOverride",
+        };
+
+        Assert.Equal(30, expected.Length);
+        var missing = expected.Where(p => !markedProps.Contains(p)).ToList();
+        Assert.True(
+            missing.Count == 0,
+            "These persisting SAML provider-form fields are missing their marked \"saml-\"-prefixed input in configPage.html (a re-layout dropped or unmarked them, so they would stop persisting): " + string.Join(", ", missing));
+
+        // The provider-name KEY input must still be present (unmarked by design).
+        Assert.Contains("id=\"saml-provider-name\"", form, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OpenSamlProvider_ResetsEditorBeforeLoadingTheProvider()
+    {
+        // #689/#725 (provider-switch state bleed) for the SAML editor: the SAML editor is a single reused
+        // form, so opening a provider must start from a clean slate or a field the target provider does not
+        // set keeps the PREVIOUS provider's value and a later save silently persists it. No JS runtime harness
+        // exists, so this pins the ordering statically: within openSamlProvider, resetSamlEditor(page) must run
+        // BEFORE loadSamlProvider(page, provider_name), the same clean-slate-first order OpenProvider enforces.
+        var js = File.ReadAllText(
+            Path.Combine(RepoRoot(), "SSO-Auth", "Config", "config.js"));
+
+        var open = js.IndexOf("openSamlProvider:", StringComparison.Ordinal);
+        Assert.True(open >= 0, "openSamlProvider was not found in config.js.");
+
+        var nextMethod = js.IndexOf("addSamlProvider:", open, StringComparison.Ordinal);
+        Assert.True(nextMethod > open, "addSamlProvider (the method after openSamlProvider) was not found in config.js.");
+        var body = js[open..nextMethod];
+
+        var reset = body.IndexOf("resetSamlEditor(page)", StringComparison.Ordinal);
+        var load = body.IndexOf("loadSamlProvider(page, provider_name)", StringComparison.Ordinal);
+        Assert.True(reset >= 0, "openSamlProvider must call resetSamlEditor(page) to clear the previous provider's state before loading.");
+        Assert.True(load >= 0, "openSamlProvider must call loadSamlProvider(page, provider_name).");
+        Assert.True(
+            reset < load,
+            "openSamlProvider must call resetSamlEditor(page) BEFORE loadSamlProvider(page, provider_name); otherwise the previous provider's unset fields bleed into the loaded provider and can be silently saved (#689/#725).");
+    }
+
+    [Fact]
     public void OpenProvider_ResetsEditorBeforeLoadingTheProvider()
     {
         // #689 (provider-switch state bleed): the editor is a single reused form, so opening a provider must
@@ -1847,6 +2020,16 @@ public class ArchitectureConformanceTests
         Assert.True(start >= 0, "The #sso-new-oidc-provider form was not found in configPage.html.");
         var end = html.IndexOf("</form>", start, StringComparison.Ordinal);
         Assert.True(end > start, "The #sso-new-oidc-provider form has no closing </form> tag.");
+        return html[start..end];
+    }
+
+    private static string SamlProviderFormMarkup(string html)
+    {
+        const string marker = "id=\"sso-new-saml-provider\"";
+        var start = html.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(start >= 0, "The #sso-new-saml-provider form was not found in configPage.html.");
+        var end = html.IndexOf("</form>", start, StringComparison.Ordinal);
+        Assert.True(end > start, "The #sso-new-saml-provider form has no closing </form> tag.");
         return html[start..end];
     }
 

@@ -302,6 +302,20 @@
   margin: 0.25em 0 0.5em;
 }
 
+/* SAML metadata-import affordance (#725/#735): groups the URL/XML import controls above the endpoint and
+   certificate fields they pre-fill. */
+.sso-metadata-import {
+  margin-bottom: 1em;
+  padding: 0.75em 1em;
+  border: 1px solid rgba(255, 255, 255, 0.135);
+  border-radius: 0.25em;
+}
+
+.sso-metadata-import textarea {
+  margin-top: 0.5em;
+  min-height: 4em;
+}
+
 /* Callout (promotes the former inline-red BaseUrlOverride warning) */
 .sso-callout {
   margin-top: 0.5em;
