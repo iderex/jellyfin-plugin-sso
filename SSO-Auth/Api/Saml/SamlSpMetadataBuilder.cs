@@ -153,6 +153,7 @@ internal static class SamlSpMetadataBuilder
     // default StringWriter reports UTF-16, which would mislabel the served UTF-8 document).
     private sealed class Utf8StringWriter : StringWriter
     {
+        /// <inheritdoc/>
         public override Encoding Encoding => Encoding.UTF8;
     }
 }
