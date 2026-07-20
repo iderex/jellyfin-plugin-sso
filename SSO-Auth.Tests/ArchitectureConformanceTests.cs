@@ -684,6 +684,36 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void IsDisabledIsWrittenOnlyOnTheNewAccountProvisioningArm()
+    {
+        // Locked in by #737. IsDisabled is a lockout vector: the plugin deliberately never disabled an
+        // account until the pending-approval provisioning feature, and it is barred from SSO role mapping
+        // (PermissionRolePolicy) so no login can disable an EXISTING account. The one sanctioned write —
+        // provisioning a BRAND-NEW account inert for admin approval — must stay confined to
+        // CanonicalLinkService (the single create seam). A source scan pins that: any future
+        // SetPermission(PermissionKind.IsDisabled, ...) elsewhere (a mint path, a role mapper, a controller)
+        // would reopen the "an SSO login disabled my account" surface and fails here instead of shipping.
+        var apiRoot = Path.Combine(RepoRoot(), "SSO-Auth", "Api");
+        var offenders = new List<string>();
+        foreach (var src in Directory.EnumerateFiles(apiRoot, "*.cs", SearchOption.AllDirectories))
+        {
+            var lines = File.ReadAllLines(src);
+            for (var i = 0; i < lines.Length; i++)
+            {
+                if (lines[i].Contains("SetPermission(PermissionKind.IsDisabled", StringComparison.Ordinal)
+                    && !src.EndsWith(Path.Combine("Linking", "CanonicalLinkService.cs"), StringComparison.Ordinal))
+                {
+                    offenders.Add($"{Path.GetFileName(src)}:{i + 1}");
+                }
+            }
+        }
+
+        Assert.True(
+            offenders.Count == 0,
+            "IsDisabled may be written only on CanonicalLinkService's new-account provisioning arm (#737). Writing it elsewhere can disable an existing account via SSO — a lockout vector. Offending sites: " + string.Join(", ", offenders));
+    }
+
+    [Fact]
     public void OidcAuthorizeState_IsKeyedOnUtc_NotMachineLocalTime()
     {
         // Locked in by #676: the in-flight OpenID authorize-state store keys its lifetime/expiry on the
@@ -1344,11 +1374,11 @@ public class ArchitectureConformanceTests
             "Roles", "AdminRoles", "EnableAllFolders", "EnabledFolders", "EnableFolderRoles", "FolderRoleMapping",
             "EnableLiveTvRoles", "LiveTvRoles", "LiveTvManagementRoles", "EnableLiveTv", "EnableLiveTvManagement",
             "DoNotLoadProfile", "SchemeOverride", "PortOverride", "BaseUrlOverride",
-            "RequirePkce", "AllowExistingAccountLink", "RequireVerifiedEmailForAdoption", "RequireVerifiedEmailForLogin",
+            "RequirePkce", "AllowExistingAccountLink", "ProvisionNewUsersDisabled", "RequireVerifiedEmailForAdoption", "RequireVerifiedEmailForLogin",
             "DisableHttps", "DisablePushedAuthorization", "DoNotValidateEndpoints", "DoNotValidateIssuerName", "DoNotValidateResponseIssuer",
         };
 
-        Assert.Equal(34, expected.Length);
+        Assert.Equal(35, expected.Length);
         var missing = expected.Where(id => !markedIds.Contains(id)).ToList();
         Assert.True(
             missing.Count == 0,

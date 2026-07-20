@@ -158,6 +158,17 @@ public abstract class ProviderConfigBase
     public bool AllowExistingAccountLink { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether an unknown identity's first successful SSO login provisions
+    /// its new Jellyfin account as disabled, pending administrator approval (#737). Off by default (current
+    /// behavior): a new account is created enabled and a session is minted. When on, the new account is
+    /// created with <c>IsDisabled = true</c> and no permissions, no session is minted, and the login is
+    /// refused with an "awaiting administrator approval" message until an administrator enables the account
+    /// in the Jellyfin dashboard. This never disables an existing or adopted account — only a brand-new one.
+    /// Settable in the admin OpenID provider form as well as the config XML.
+    /// </summary>
+    public bool ProvisionNewUsersDisabled { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether all folders are allowed by default.
     /// </summary>
     public bool EnableAllFolders { get; set; }

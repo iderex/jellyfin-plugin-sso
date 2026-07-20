@@ -85,6 +85,61 @@ public class CanonicalLinkServiceTests
     }
 
     [Fact]
+    public async Task ResolveOrCreateAsync_ProvisionDisabled_NewAccount_CreatesItDisabledAndPersists()
+    {
+        // #737: with the policy on, a brand-new account is created disabled and PERSISTED here (the deferred
+        // path short-circuits before the minter, so it must persist the inert account itself), and it is then
+        // reported as awaiting approval so the completion path refuses the login.
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
+        var created = UserNamed("alice", Other);
+        users.GetUserByName("alice").Returns((User?)null);
+        users.CreateUserAsync("alice").Returns(created);
+        users.GetUserById(Other).Returns(created);
+
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: false, provisionDisabled: true);
+
+        Assert.Equal(Other, resolved);
+        Assert.True(created.HasPermission(PermissionKind.IsDisabled)); // created inert
+        await users.Received(1).UpdateUserAsync(created); // and persisted (the normal path leaves this to the minter)
+        Assert.True(service.IsAccountAwaitingApproval(Other)); // so the login is refused downstream
+        Assert.Equal(Other, cfg.OidConfigs["kc"].CanonicalLinks["sub-1"]); // still linked, so a re-login resolves it
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_NewAccount_PolicyOff_IsCreatedEnabledAndNotPersistedHere()
+    {
+        // Default (policy off): the new account is NOT disabled and is NOT persisted by the linking layer —
+        // the session minter persists it, exactly as before #737. No behavior change for existing deployments.
+        var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
+        var created = UserNamed("alice", Other);
+        users.GetUserByName("alice").Returns((User?)null);
+        users.CreateUserAsync("alice").Returns(created);
+        users.GetUserById(Other).Returns(created);
+
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: false);
+
+        Assert.Equal(Other, resolved);
+        Assert.False(created.HasPermission(PermissionKind.IsDisabled));
+        await users.DidNotReceive().UpdateUserAsync(Arg.Any<User>());
+        Assert.False(service.IsAccountAwaitingApproval(Other));
+    }
+
+    [Fact]
+    public void IsAccountAwaitingApproval_DisabledUser_True_EnabledUser_False_MissingUser_False()
+    {
+        var (service, _, users, _) = Build();
+        var disabled = UserNamed("alice", Existing);
+        disabled.SetPermission(PermissionKind.IsDisabled, true);
+        users.GetUserById(Existing).Returns(disabled);
+        users.GetUserById(Other).Returns(UserNamed("bob", Other)); // enabled
+        users.GetUserById(Arg.Is<Guid>(g => g != Existing && g != Other)).Returns((User?)null); // missing
+
+        Assert.True(service.IsAccountAwaitingApproval(Existing));
+        Assert.False(service.IsAccountAwaitingApproval(Other));
+        Assert.False(service.IsAccountAwaitingApproval(Guid.NewGuid())); // a vanished user is left to the minter's null guard
+    }
+
+    [Fact]
     public async Task ResolveOrCreateAsync_ExistingAccountAndAdoptionAllowed_AdoptsAndLinks()
     {
         var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });

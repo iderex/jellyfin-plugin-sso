@@ -30,6 +30,7 @@ public class LoginStatusMapperTests
             (PublicReason.SamlResponseInvalid, 400, "SAML response validation failed"),
             (PublicReason.PkceNotSupported, 400, "The identity provider does not advertise the required PKCE (S256) support."),
             (PublicReason.EmailNotVerified, 403, "A verified email is required to log in."),
+            (PublicReason.AwaitingApproval, 403, "Your account is not active. It is awaiting administrator approval."),
         };
 
         // The table itself must stay total: a new member without a row fails here.
