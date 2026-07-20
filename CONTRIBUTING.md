@@ -157,7 +157,7 @@ CI restores in a separate step, so its build/test use `--no-restore`/`--no-build
 
 **Branching and pull requests.** `main` is the released line and is PR-only. Branch every change — even a one-liner — off `main` for fixes and security work, or off the feature branch for features, using a short kebab-case name with a `fix/`, `harden/`, `feature/`, `chore/`, or `refactor/` prefix. Reference the issue your change addresses (`Closes #N`) and fill in the [pull request template](.github/pull_request_template.md).
 
-This is a security-sensitive login path: before opening a pull request, understand and own every line you propose, and be ready to explain what it does and why. The merge gate is internal-only (CI, the adversarial review, and the maintainer); [Review Gate](https://github.com/iderex/jellyfin-plugin-sso/wiki/Review-Gate) maps how those controls cover each class of issue an automated PR reviewer would catch.
+This is a security-sensitive login path: before opening a pull request, understand and own every line you propose, and be ready to explain what it does and why. The merge gate is internal-only (CI, the adversarial review, and my own sign-off); [Review Gate](https://github.com/iderex/jellyfin-plugin-sso/wiki/Review-Gate) maps how those controls cover each class of issue an automated PR reviewer would catch.
 
 ### Improving The Documentation
 
@@ -178,6 +178,10 @@ We format all C# code according to the .NET formatter. Build with `dotnet build 
 We use [Prettier](https://prettier.io) to format these files. Run `npx prettier --write "**/*.{js,html,md,css,scss}"` before committing, and `npx prettier --check "**/*.{js,html,md,css,scss}"` to confirm — CI enforces the check (only `*.min.js` is exempt).
 
 Not every file under `SSO-Auth/Views` is project code. Check the provenance header before editing: `emby-restyle.css` and the minified `jellyfin-apiClient.esm.min.js` are **vendored** from jellyfin-web — update them by re-copying from upstream, not by editing in place — whereas `ApiClient.js` is **project-maintained** code (loosely based on the linked upstream) that carries our own security logic and is edited here directly.
+
+### Keeping the docs in step
+
+When a code change makes any **README section or wiki page** wrong or incomplete — a changed behaviour, a moved file the [Architecture Internals](https://github.com/iderex/jellyfin-plugin-sso/wiki/Architecture-Internals) page names, a new or renamed config option, an altered login flow — the documentation follow-up must not be lost. Either **update the docs in the same pull request**, or **open a `documentation`-labelled issue on the current-release milestone** so it ships before the next release. The PR checklist has a box for this. (The wiki has no pull-request flow — wiki edits are pushed directly to its repository — but the _tracking_ still lives as an issue in the main repository.)
 
 <!-- omit in toc -->
 
