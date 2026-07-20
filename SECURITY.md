@@ -68,6 +68,26 @@ gh attestation verify <plugin>.zip --repo iderex/jellyfin-plugin-sso
 The provenance attestation complements the checksum sidecars — it does not
 replace the manifest MD5.
 
+### Reproducible compile
+
+The build is **deterministic**: `Directory.Build.props` sets `Deterministic` and
+(in CI) `ContinuousIntegrationBuild`, and the dependency graph is pinned by
+committed `packages.lock.json` files restored in locked mode. Together with the
+pinned .NET SDK, an independent party can rebuild the plugin assembly from the
+tagged source and compare it against the shipped, SLSA-attested binary:
+
+```sh
+# from a clean checkout of the release tag, in the pinned SDK:
+GITHUB_ACTIONS=true dotnet build SSO-Auth/SSO-Auth.csproj -c Release
+# then compare the produced SSO-Auth.dll against the one in the release zip
+```
+
+Honest caveat: **the compiled `SSO-Auth.dll` is reproducible; the release `.zip`
+is not byte-identical** — the JPRM packaging step embeds build timestamps and
+ordering into the archive. Reproducibility is therefore verified at the
+**assembly** level (the code that runs), not the archive wrapper; the archive's
+integrity is covered by the SLSA attestation and the checksum sidecars above.
+
 ## Repository security controls
 
 - **Secret scanning** and **push protection** are enabled, so a leaked credential — an identity-provider client secret, a CI token — is blocked before it can be pushed.
