@@ -144,15 +144,15 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
     // pair is the name a caller (the admin config page, the linking page, SSOViewsController) requests
     // an asset by, matched case-sensitively (SSOViewsController.GetView); the second is the embedded
     // resource path suffix, which must match the source file's actual on-disk name and casing under
-    // this project's default (path-derived) embedded-resource naming. The two never have to agree with
-    // each other, but changing either one changes what breaks: renaming the registered name breaks
-    // every caller of that URL (config.js, linking.html, config page markup); renaming/moving the
-    // source file without updating the resource suffix here breaks the embedded-resource lookup at
-    // runtime (a 404, since GetManifestResourceStream is also case-sensitive). Config.style.css is
-    // deliberately published under two different registered names below — "SSO-Auth.css" (GetPages, the
-    // admin config page's own stylesheet load) and "style.css" (GetViews, the public linking page) —
-    // the same resource, two unrelated consumers with independently-chosen URL conventions, not a
-    // casing inconsistency.
+    // this project's default (path-derived) embedded-resource naming. Every served asset lives under the
+    // one flat Web/ folder, so the suffix is Web.<file>. The two elements never have to agree with each
+    // other, but changing either one changes what breaks: renaming the registered name breaks every
+    // caller of that URL (config.js, linking.html, config page markup); renaming/moving the source file
+    // without updating the resource suffix here breaks the embedded-resource lookup at runtime (a 404,
+    // since GetManifestResourceStream is also case-sensitive). Web.style.css is deliberately published
+    // under two different registered names below — "SSO-Auth.css" (GetPages, the admin config page's own
+    // stylesheet load) and "style.css" (GetViews, the public linking page) — the same resource, two
+    // unrelated consumers with independently-chosen URL conventions, not a casing inconsistency.
 
     /// <summary>
     /// Returns the available internal web pages of this plugin.
@@ -161,11 +161,11 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
     public IEnumerable<PluginPageInfo> GetPages() =>
         new[]
         {
-            Page(Name, "Config.configPage.html"),
-            Page(Name + ".js", "Config.config.js"),
-            Page(Name + ".css", "Config.style.css"),
-            Page(Name + "-linking", "Config.linking.html"),
-            Page(Name + "-linking.js", "Config.linking.js"),
+            Page(Name, "Web.configPage.html"),
+            Page(Name + ".js", "Web.config.js"),
+            Page(Name + ".css", "Web.style.css"),
+            Page(Name + "-linking", "Web.linking.html"),
+            Page(Name + "-linking.js", "Web.linking.js"),
         };
 
     /// <summary>
@@ -175,12 +175,12 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
     public IEnumerable<PluginPageInfo> GetViews() =>
         new[]
         {
-            Page("style.css", "Config.style.css"),
-            Page("linking", "Config.linking.html"),
-            Page("linking.js", "Config.linking.js"),
-            Page("ApiClient.js", "Views.ApiClient.js"),
-            Page("emby-restyle.css", "Views.emby-restyle.css"),
-            Page("jellyfin-apiClient.esm.min.js", "Views.jellyfin-apiClient.esm.min.js"),
+            Page("style.css", "Web.style.css"),
+            Page("linking", "Web.linking.html"),
+            Page("linking.js", "Web.linking.js"),
+            Page("ApiClient.js", "Web.ApiClient.js"),
+            Page("emby-restyle.css", "Web.emby-restyle.css"),
+            Page("jellyfin-apiClient.esm.min.js", "Web.jellyfin-apiClient.esm.min.js"),
         };
 
     // Every GetPages/GetViews entry is a (registered name, embedded resource) pair under this

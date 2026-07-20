@@ -704,8 +704,8 @@ public class ArchitectureConformanceTests
         //    uses) plus the fixed /sso/OID/redirect/ path — deriving from anything else would display a URI the
         //    login does not actually send;
         //  - the copy confirmation is announced through an aria-live region (not colour-only).
-        var html = File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "configPage.html"));
-        var js = File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "config.js"));
+        var html = File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Web", "configPage.html"));
+        var js = File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Web", "config.js"));
 
         var field = Regex.Match(html, "<input\\b[^>]*id=\"OidRedirectUri\"[^>]*>", RegexOptions.Singleline);
         Assert.True(field.Success, "The read-only #OidRedirectUri field must exist in configPage.html (#724).");
@@ -1262,7 +1262,7 @@ public class ArchitectureConformanceTests
         // was the live case, #666). Scan the raw-served page for such placeholders, ignoring inline
         // <script> blocks where ${...} is a legitimate JS template-literal interpolation, not a
         // dashboard token.
-        var html = File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "linking.html"));
+        var html = File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Web", "linking.html"));
         var withoutScripts = Regex.Replace(html, "<script.*?</script>", string.Empty, RegexOptions.Singleline | RegexOptions.IgnoreCase);
 
         var placeholders = Regex.Matches(withoutScripts, "\\$\\{[^}]*\\}", RegexOptions.Singleline)
@@ -1293,7 +1293,7 @@ public class ArchitectureConformanceTests
         var markerClasses = new[] { "sso-text", "sso-line-list", "sso-toggle", "sso-folder-list", "sso-role-map" };
 
         var form = OidcProviderFormMarkup(
-            File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "configPage.html")));
+            File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Web", "configPage.html")));
 
         var oidConfigProperties = typeof(OidConfig)
             .GetProperties(BindingFlags.Public | BindingFlags.Instance)
@@ -1375,7 +1375,7 @@ public class ArchitectureConformanceTests
         // OidConfigs dictionary key, not an OidConfig property) and is asserted present separately.
         var markerClasses = new[] { "sso-text", "sso-line-list", "sso-toggle", "sso-folder-list", "sso-role-map" };
         var form = OidcProviderFormMarkup(
-            File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "configPage.html")));
+            File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Web", "configPage.html")));
 
         var markedIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (Match tag in Regex.Matches(form, "<[a-zA-Z][^>]*>", RegexOptions.Singleline))
@@ -1437,7 +1437,7 @@ public class ArchitectureConformanceTests
         var markerClasses = new[] { "sso-text", "sso-line-list", "sso-toggle", "sso-folder-list", "sso-role-map" };
 
         var form = SamlProviderFormMarkup(
-            File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "configPage.html")));
+            File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Web", "configPage.html")));
 
         var samlConfigProperties = typeof(SamlConfig)
             .GetProperties(BindingFlags.Public | BindingFlags.Instance)
@@ -1522,7 +1522,7 @@ public class ArchitectureConformanceTests
         // SamlConfigs dictionary key, not a SamlConfig property) and is asserted present separately.
         var markerClasses = new[] { "sso-text", "sso-line-list", "sso-toggle", "sso-folder-list", "sso-role-map" };
         var form = SamlProviderFormMarkup(
-            File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "configPage.html")));
+            File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Web", "configPage.html")));
 
         var markedProps = new HashSet<string>(StringComparer.Ordinal);
         foreach (Match tag in Regex.Matches(form, "<[a-zA-Z][^>]*>", RegexOptions.Singleline))
@@ -1576,7 +1576,7 @@ public class ArchitectureConformanceTests
         // exists, so this pins the ordering statically: within openSamlProvider, resetSamlEditor(page) must run
         // BEFORE loadSamlProvider(page, provider_name), the same clean-slate-first order OpenProvider enforces.
         var js = File.ReadAllText(
-            Path.Combine(RepoRoot(), "SSO-Auth", "Config", "config.js"));
+            Path.Combine(RepoRoot(), "SSO-Auth", "Web", "config.js"));
 
         var open = js.IndexOf("openSamlProvider:", StringComparison.Ordinal);
         Assert.True(open >= 0, "openSamlProvider was not found in config.js.");
@@ -1603,12 +1603,12 @@ public class ArchitectureConformanceTests
         // separate save-contract test already guarantees every marked field id is a real OidConfig property,
         // so this pins the composition: every OIDC preset field/toggle targets a real persisting field, so
         // applying a preset always respects the save contract.
-        var js = File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "config.js"));
+        var js = File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Web", "config.js"));
         var (fieldKeys, toggles) = ParsePresetCatalog(js, "OIDC_PRESETS");
         Assert.True(fieldKeys.Count > 0, "OIDC_PRESETS parsed to zero field keys — broken parse or empty catalog.");
 
         var markedIds = MarkedFieldIds(OidcProviderFormMarkup(
-            File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "configPage.html"))));
+            File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Web", "configPage.html"))));
 
         var missing = fieldKeys.Concat(toggles).Where(k => !markedIds.Contains(k)).ToList();
         Assert.True(
@@ -1621,12 +1621,12 @@ public class ArchitectureConformanceTests
     {
         // The SAML counterpart: a SAML preset's field/toggle key K targets the id "saml-"+K, so each must
         // exist as a marked field in #sso-new-saml-provider.
-        var js = File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "config.js"));
+        var js = File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Web", "config.js"));
         var (fieldKeys, toggles) = ParsePresetCatalog(js, "SAML_PRESETS");
         Assert.True(fieldKeys.Count > 0, "SAML_PRESETS parsed to zero field keys — broken parse or empty catalog.");
 
         var markedIds = MarkedFieldIds(SamlProviderFormMarkup(
-            File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "configPage.html"))));
+            File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Web", "configPage.html"))));
 
         var missing = fieldKeys.Concat(toggles).Where(k => !markedIds.Contains("saml-" + k)).ToList();
         Assert.True(
@@ -1640,7 +1640,7 @@ public class ArchitectureConformanceTests
         // A preset pre-fills only NON-secret fields (#726 acceptance). Pin it: no preset's `fields` may carry
         // a write-only secret property, so a template can never place a secret value in the form (or, worse,
         // a plausible-looking wrong one the admin trusts).
-        var js = File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "config.js"));
+        var js = File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Web", "config.js"));
         var secrets = new[] { "OidSecret", "SamlSigningKeyPfx", "SamlRolloverSigningKeyPfx" };
 
         foreach (var catalog in new[] { "OIDC_PRESETS", "SAML_PRESETS" })
@@ -1661,7 +1661,7 @@ public class ArchitectureConformanceTests
         // enabling an unrelated toggle is a downgrade the admin did not choose. Pin both directions: every
         // preset toggle is in the protocol's managed-toggle allow-list, and every allow-list entry is a real
         // config property that is NOT one of the hardening toggles.
-        var js = File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "config.js"));
+        var js = File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Web", "config.js"));
 
         var oidcProps = typeof(OidConfig).GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Select(p => p.Name).ToHashSet(StringComparer.Ordinal);
@@ -1708,7 +1708,7 @@ public class ArchitectureConformanceTests
         // dropped RoleClaim would keep the previous provider's claim path. Every OIDC preset must therefore
         // set EXACTLY the same four fields; this locks that in so a future preset cannot silently reintroduce
         // the state-bleed (a review follow-up on #726).
-        var js = File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "config.js"));
+        var js = File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Web", "config.js"));
         var start = js.IndexOf("const OIDC_PRESETS = {", StringComparison.Ordinal);
         Assert.True(start >= 0, "OIDC_PRESETS was not found in config.js.");
         var end = js.IndexOf("};", start, StringComparison.Ordinal);
@@ -1750,7 +1750,7 @@ public class ArchitectureConformanceTests
         // must run BEFORE loadProvider(page, provider_name) — the same clean-slate-first order addProvider
         // already uses. loadProvider then fills the target's real values on top of the reset baseline.
         var js = File.ReadAllText(
-            Path.Combine(RepoRoot(), "SSO-Auth", "Config", "config.js"));
+            Path.Combine(RepoRoot(), "SSO-Auth", "Web", "config.js"));
 
         var open = js.IndexOf("openProvider:", StringComparison.Ordinal);
         Assert.True(open >= 0, "openProvider was not found in config.js.");
@@ -1782,9 +1782,9 @@ public class ArchitectureConformanceTests
         // condition shape: the expand is driven by the OR of the two sets, so a `||`->`&&` mutant — which
         // would stop a sensitive-only (AllowExistingAccountLink) provider from expanding — fails here.
         var html = File.ReadAllText(
-            Path.Combine(RepoRoot(), "SSO-Auth", "Config", "configPage.html"));
+            Path.Combine(RepoRoot(), "SSO-Auth", "Web", "configPage.html"));
         var js = File.ReadAllText(
-            Path.Combine(RepoRoot(), "SSO-Auth", "Config", "config.js"));
+            Path.Combine(RepoRoot(), "SSO-Auth", "Web", "config.js"));
 
         // The enclosing accordion is the emby-collapse carrying the stable id, and it is the security section.
         Assert.Matches(
@@ -1855,7 +1855,7 @@ public class ArchitectureConformanceTests
         // mutant deleting any one category's reset (which would let that category bleed) fails here. Scoped
         // to the resetEditor body so a clear living in some other method cannot satisfy the check.
         var js = File.ReadAllText(
-            Path.Combine(RepoRoot(), "SSO-Auth", "Config", "config.js"));
+            Path.Combine(RepoRoot(), "SSO-Auth", "Web", "config.js"));
 
         var start = js.IndexOf("resetEditor:", StringComparison.Ordinal);
         Assert.True(start >= 0, "resetEditor was not found in config.js.");

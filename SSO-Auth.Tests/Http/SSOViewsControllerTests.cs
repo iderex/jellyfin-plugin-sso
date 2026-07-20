@@ -61,7 +61,7 @@ public class SSOViewsControllerTests
     {
         var controller = CreateController();
 
-        // "linking" is registered without a ".html" suffix, but its embedded resource is Config.linking.html;
+        // "linking" is registered without a ".html" suffix, but its embedded resource is Web.linking.html;
         // asserting text/html therefore also pins that the content type is derived from the resource PATH,
         // not the (extensionless) requested name.
         var result = controller.GetView("linking");

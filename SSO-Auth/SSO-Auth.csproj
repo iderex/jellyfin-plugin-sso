@@ -34,21 +34,22 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <None Remove="Config\configPage.html" />
-    <None Remove="Config\config.js" />
-    <None Remove="Config\style.css" />
-    <None Remove="Config\linking.html" />
-    <None Remove="Views\ApiClient.js" />
-    <None Remove="Views\jellyfin-apiClient.esm.min.js" />
-    <None Remove="Views\emby-restyle.css" />
-    <EmbeddedResource Include="Config\configPage.html" />
-    <EmbeddedResource Include="Config\config.js" />
-    <EmbeddedResource Include="Config\style.css" />
-    <EmbeddedResource Include="Config\linking.html" />
-    <EmbeddedResource Include="Config\linking.js" />
-    <EmbeddedResource Include="Views\ApiClient.js" />
-    <EmbeddedResource Include="Views\jellyfin-apiClient.esm.min.js" />
-    <EmbeddedResource Include="Views\emby-restyle.css" />
+    <None Remove="Web\configPage.html" />
+    <None Remove="Web\config.js" />
+    <None Remove="Web\style.css" />
+    <None Remove="Web\linking.html" />
+    <None Remove="Web\linking.js" />
+    <None Remove="Web\ApiClient.js" />
+    <None Remove="Web\jellyfin-apiClient.esm.min.js" />
+    <None Remove="Web\emby-restyle.css" />
+    <EmbeddedResource Include="Web\configPage.html" />
+    <EmbeddedResource Include="Web\config.js" />
+    <EmbeddedResource Include="Web\style.css" />
+    <EmbeddedResource Include="Web\linking.html" />
+    <EmbeddedResource Include="Web\linking.js" />
+    <EmbeddedResource Include="Web\ApiClient.js" />
+    <EmbeddedResource Include="Web\jellyfin-apiClient.esm.min.js" />
+    <EmbeddedResource Include="Web\emby-restyle.css" />
   </ItemGroup>
 
   <ItemGroup>
