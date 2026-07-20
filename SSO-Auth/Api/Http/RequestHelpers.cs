@@ -14,7 +14,7 @@ using Jellyfin.Database.Implementations.Enums;
 using MediaBrowser.Controller.Net;
 using Microsoft.AspNetCore.Http;
 
-namespace Jellyfin.Plugin.SSO_Auth.Helpers;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Http;
 
 /// <summary>
 /// Request Extensions. Internal like the rest of the helper surface — its only member is internal, so

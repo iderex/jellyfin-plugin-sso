@@ -1,5 +1,5 @@
 using System.IO;
-using Jellyfin.Plugin.SSO_Auth.Views;
+using Jellyfin.Plugin.SSO_Auth.Api.Http;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Model.Serialization;
 using Microsoft.AspNetCore.Mvc;

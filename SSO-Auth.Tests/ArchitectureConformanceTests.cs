@@ -256,9 +256,10 @@ public class ArchitectureConformanceTests
         // #791: a test that covers a type in Api/<Module>/ lives under SSO-Auth.Tests/<Module>/, so a test is
         // as easy to place and find as the code it covers, and the test tree cannot drift back into a flat
         // pile. Governs the per-source-module tests (found by the <Type> -> <Type>Tests.cs naming); the
-        // kernel/controller, Config, SAML-core, and shared-infrastructure tests are organised in their own
-        // folders (Kernel, Config, _Support, …) and are not module-scoped, so they are out of scope here. A
-        // type with no matching test file is simply skipped.
+        // SSOController split tests (SSOController*Tests, which sit under Http/ next to the controller source),
+        // the Config, and the shared-infrastructure tests are organised in their own folders (Config, _Support,
+        // …) and have no exact <Type>Tests.cs source match, so they are out of scope here. A type with no
+        // matching test file is simply skipped.
         var apiRoot = Path.Combine(RepoRoot(), "SSO-Auth", "Api");
         var testsRoot = Path.Combine(RepoRoot(), "SSO-Auth.Tests");
         var testFiles = Directory.EnumerateFiles(testsRoot, "*Tests.cs", SearchOption.AllDirectories)

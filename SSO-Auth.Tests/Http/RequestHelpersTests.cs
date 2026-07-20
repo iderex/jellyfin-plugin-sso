@@ -3,7 +3,7 @@ using System.Threading.Tasks;
 using Jellyfin.Data;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
-using Jellyfin.Plugin.SSO_Auth.Helpers;
+using Jellyfin.Plugin.SSO_Auth.Api.Http;
 using MediaBrowser.Controller.Net;
 using Microsoft.AspNetCore.Http;
 using NSubstitute;
