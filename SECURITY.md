@@ -74,7 +74,7 @@ replace the manifest MD5.
 - **Dependabot** opens dependency-update pull requests; a dependency-review check blocks a pull request that introduces or upgrades to a known-vulnerable dependency; and the build fails on any known-vulnerable dependency, transitive ones included.
 - Pull requests to `main` run CodeQL, a Trojan-Source/Unicode check, and a build with warnings treated as errors; a GitHub Actions workflow audit (zizmor) and repository-specific security-invariant checks (Opengrep) run on every pull request. A scheduled OpenSSF Scorecard scan audits the repository's supply-chain posture and publishes its results to code scanning. Changes to the login path additionally go through an adversarial security review before they merge.
 
-For how these controls together cover what an automated PR reviewer would catch — and the one accepted residual — see [Review Gate](https://github.com/iderex/jellyfin-plugin-sso/wiki/Review-Gate). For how they map onto the OpenSSF Best Practices passing-level criteria, see [OpenSSF Best Practices](https://github.com/iderex/jellyfin-plugin-sso/wiki/OpenSSF-Best-Practices).
+For how these controls together cover what an automated PR reviewer would catch — and the one accepted residual — see [Review Gate](https://github.com/iderex/jellyfin-plugin-sso/wiki/Review-Gate). For how they map onto the OpenSSF Best Practices passing-level criteria, see [OpenSSF Best Practices](https://github.com/iderex/jellyfin-plugin-sso/wiki/OpenSSF-Best-Practices); for an honest Silver/Gold + OSPS-Baseline map — including the criteria a solo, AI-assisted project structurally cannot meet — see the [Maturity Map](https://github.com/iderex/jellyfin-plugin-sso/wiki/Maturity-Map).
 
 ## EU Cyber Resilience Act (CRA) position
 
