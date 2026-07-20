@@ -23,7 +23,7 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.SSO_Auth.Api.Flows;
 
 /// <summary>
-/// The OpenID login flow, extracted whole off <see cref="SSOController"/> (#160, #318 step 12): the
+/// The OpenID login flow, extracted whole off <c>SSOController</c> (#160, #318 step 12): the
 /// challenge (redirect the browser to the authorization server), the redirect callback (exchange the code,
 /// validate the id_token, render the intermediate auth page), the session-minting authenticate leg, and the
 /// manual link redeem. The controller's OpenID endpoints are now thin adapters — they apply the shared

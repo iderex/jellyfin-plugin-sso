@@ -1,4 +1,5 @@
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Api.Http;
 using Jellyfin.Plugin.SSO_Auth.Api.Net;
 using Xunit;
 

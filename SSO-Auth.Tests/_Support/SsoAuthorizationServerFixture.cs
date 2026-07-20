@@ -9,6 +9,7 @@ using Jellyfin.Data;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.SSO_Auth;
+using Jellyfin.Plugin.SSO_Auth.Api.Http;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Common.Configuration;

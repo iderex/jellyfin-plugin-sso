@@ -16,8 +16,8 @@ must not be renamed). Inside it:
 - **`Api/`** — the behaviour, split into **module folders**, each a namespace
   `Jellyfin.Plugin.SSO_Auth.Api.<Module>`. A module is the unit of the dependency
   graph below.
-- The web binding (the `SSOController`) and the composition root live in the Api
-  layer's kernel (see _Shared kernel_).
+- The web binding (the `SSOController`) and the composition root live in the
+  `Api/Http` module (see _The kernel is dissolved_).
 
 The design favours the codebase's existing grain: **sealed types, immutable
 record/variant state, typed values over raw strings, sum types that make illegal
@@ -31,54 +31,52 @@ Modules form a **directed acyclic graph**: a module may import only the modules
 listed as its allowed dependencies, and a cycle is rejected. This is enforced by
 `ApiModule_ImportsOnlyItsAllowedApiModules` — each module is one `InlineData`
 case declaring its allowed edges; an import to any other Api module fails the
-test. Importing the flat `Api` core (the shared kernel) and non-`Api` namespaces
-(e.g. `Config`) is permitted.
+test. Importing non-`Api` namespaces (e.g. `Config`) is permitted; there is no
+longer a flat `Api` core to import (see _The kernel is dissolved_ below).
 
-| Module      | Purpose                                            | May depend on                                     |
-| ----------- | -------------------------------------------------- | ------------------------------------------------- |
-| `Net`       | Networking / SSRF / URL primitives                 | — (leaf)                                          |
-| `Secrets`   | Secrets at rest (envelope, store, config wrapping) | — (leaf)                                          |
-| `Audit`     | Append-only SSO audit logging                      | — (leaf)                                          |
-| `Authz`     | Role → permission mapping                          | — (leaf)                                          |
-| `Avatar`    | Avatar fetch + SSRF-gated validation               | `Net`                                             |
-| `RateLimit` | Login throttling (buckets, gates, keys)            | `Net`                                             |
-| `Provider`  | Provider config / naming / test-result             | `Net`, `RateLimit`                                |
-| `Linking`   | Account link resolution / adoption / revocation    | `Audit`, `Provider`, `RateLimit`                  |
-| `Saml`      | SAML core, validators, caches, metadata            | `Authz`, `RateLimit`                              |
-| `Oidc`      | OIDC flow, discovery, id_token, state              | `Authz`, `Avatar`, `Net`, `Provider`, `RateLimit` |
-| `Flows`     | Per-protocol login orchestration services          | (orchestration — depends downward)                |
-| `Shared`    | Shared served-page / flow-response helpers         | (shared — depends downward)                       |
+| Module      | Purpose                                                                             | May depend on                                                                     |
+| ----------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `Net`       | Networking / SSRF / URL primitives                                                  | — (leaf)                                                                          |
+| `Secrets`   | Secrets at rest (envelope, store, config wrapping)                                  | — (leaf)                                                                          |
+| `Audit`     | Append-only SSO audit logging                                                       | — (leaf)                                                                          |
+| `Authz`     | Role → permission mapping                                                           | — (leaf)                                                                          |
+| `Routing`   | Route-shape contract (suffix reader, path classifier)                               | — (leaf)                                                                          |
+| `Avatar`    | Avatar fetch + SSRF-gated validation                                                | `Net`, `RateLimit`                                                                |
+| `RateLimit` | Login throttling (buckets, gates, keys)                                             | `Net`                                                                             |
+| `Provider`  | Provider config / naming / test-result                                              | `Net`, `RateLimit`                                                                |
+| `Linking`   | Account link resolution / adoption / revocation                                     | `Audit`, `Provider`, `RateLimit`                                                  |
+| `Identity`  | The protocol-validated identity keystone                                            | `Authz`, `Provider`                                                               |
+| `Session`   | Session mint + login outcomes + SSO-only                                            | `Authz`, `Avatar`, `Linking`                                                      |
+| `Saml`      | SAML core, validators, caches, metadata                                             | `Authz`, `Identity`, `RateLimit`, `Session`                                       |
+| `Oidc`      | OIDC flow, discovery, id_token, state                                               | `Authz`, `Avatar`, `Identity`, `Net`, `Provider`, `RateLimit`, `Routing`          |
+| `Flows`     | Per-protocol login orchestration services                                           | (orchestration — depends downward)                                                |
+| `Shared`    | Shared served-page / flow-response helpers                                          | (shared — depends downward)                                                       |
+| `Http`      | The web boundary: `SSOController`, request helpers, the admin test-connection probe | the composition top — fronts every flow (wide by design); nothing imports it back |
 
 `Saml` and `Oidc` are **sibling protocol modules**: neither imports the other.
 Dependencies point _into_ the low-level leaves (`Net`, `Secrets`, `Audit`,
-`Authz`), never out of them.
+`Authz`, `Routing`), never out of them. `Http` is the single composition boundary
+at the top of the DAG.
 
-## The shared kernel (flat `Api`)
+## The kernel is dissolved (flat `Api` is empty)
 
-Not everything is a module yet. The types still in the flat `Api` namespace are a
-deliberate **shared kernel + composition root**, kept flat _on purpose_ because
-they are genuinely entangled with more than one module and cannot be moved into a
-single module without creating a dependency cycle:
+There is **no flat `Api` kernel**. Every type lives in a named module subfolder,
+and a conformance test — `FlatApi_HoldsNoSourceFiles_EveryApiTypeLivesInAModule`
+— fails if any `.cs` file appears directly in `SSO-Auth/Api/`.
 
-- **`VerifiedIdentity`** — the protocol-validated identity. It is _constructed by_
-  the `Oidc` and `Saml` validators and _references_ their types, so it sits in a
-  bidirectional relationship with both protocol modules.
-- **`SessionMinter`** ⇄ **`Avatar`**, **`SsoUrlBuilder`** ⇄ **`Oidc`** — the same
-  shape of mutual coupling.
-- The session/login-result types (`SessionParameters`, `LoginOutcome`,
-  `AuthResponse`, `SsoOnlyLoginService`, `SsoOnlyReconciliationService`,
-  `SsoAuthenticationProviders`, `LoginStatusMapper`), the web/delivery layer
-  (`SSOController`, `RequestHelpers`, `RouteSuffix`, `ChallengePath`,
-  `PublicReason`, `AuthPageCsp`, `ProviderConnectionTester`), and the generic
-  `KeyedLockStore`.
-
-Cleanly modularising these requires **dependency inversion** — extracting shared
-contracts (e.g. a common `ILoginService`, a protocol-agnostic identity assembly)
-so the arrows point one way — which is a design change, not a mechanical move.
-That work is tracked in **#790**. Until it lands, the flat `Api` kernel is the
-intentional home for these types. The goal of an **empty flat `Api`** (every file
-in a module) becomes enforceable — as a conformance test — only _after_ #790
-inverts those dependencies.
+Getting here (the #777 module split and its #807 finale) required real
+**dependency inversion**, not a mechanical move: the former kernel's
+entanglements were broken by extracting shared contracts so the arrows point one
+way. In particular the protocol-validated
+identity became the neutral `Identity` keystone (constructed by the `Oidc`/`Saml`
+validators through a factory, not referencing their types); the session/login
+result types became the `Session` module; the served-page and rate-limit-gate
+helpers became `Shared`; the route-shape primitives became the `Routing` leaf; the
+per-protocol login services became `Flows`; and the web boundary — the controller,
+its request helpers, and the admin test-connection probe — became the `Http`
+module. The SSO-managed `AuthenticationProviderId` the controller once owned is now
+a pinned literal (`SsoManagedProviderId`, #837), decoupled from the controller's
+type location so `Http` could move without touching persisted accounts.
 
 ## How it is enforced (fitness functions)
 
@@ -109,9 +107,9 @@ none merely "good enough":
    sum-types, fail-closed, thin controller, no ambient time, keyed state only in
    stores). New behaviour does not bolt on against the grain.
 2. **Folder structure** — new code lands in the **right module folder +
-   namespace**; nothing is dumped back into the flat kernel. A genuinely new
-   concern gets a **new module** (folder + namespace + a DAG `InlineData` case),
-   not a smear across the tree.
+   namespace**; the flat `Api` root stays empty (a conformance test enforces it).
+   A genuinely new concern gets a **new module** (folder + namespace + a DAG
+   `InlineData` case), not a smear across the tree.
 3. **Object-oriented structure** — shared behaviour lives behind a **shared
    abstraction** with protocols/variants as specializations, realised
    **composition- and interface-first, with shallow inheritance only where it is
@@ -133,6 +131,7 @@ property, add a conformance fitness function for it in the same PR. The review
 phase checks architecture + folder placement + OO fit explicitly, alongside
 correctness and security.
 
-_See #777 (the module migration this describes), #790 (the shared protocol
-abstraction / kernel decomposition), and #791 (applying this structure to the
-test project and the whole repo)._
+_See #777 (the module migration this describes) and its #807 finale (the flat
+`Api` kernel dissolved and locked empty), #790 (the ongoing OIDC/SAML shared-
+protocol-abstraction evaluation), and #791 (applying this structure to the test
+project and the whole repo)._

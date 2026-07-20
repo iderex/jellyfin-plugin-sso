@@ -15,7 +15,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Provider;
 /// match, '?' and '#' cut the name off at the query/fragment boundary, and the remaining RFC 3986
 /// delimiters are structure to proxies and identity providers. Control characters break it the same way
 /// and are rejected too (#360). Every registration surface shares this one predicate; the throw sites
-/// (<see cref="SSOController"/>, <see cref="Config.ProviderConfigValidator"/>) gate only NEWLY registered
+/// (<c>SSOController</c>, <see cref="Config.ProviderConfigValidator"/>) gate only NEWLY registered
 /// names, because the bytes built from an existing name are exactly what its identity provider already
 /// has registered (pinned by the raw-provider tests in OidcRedirectUriBuilderTests/SamlAcsUrlBuilderTests).
 /// </summary>

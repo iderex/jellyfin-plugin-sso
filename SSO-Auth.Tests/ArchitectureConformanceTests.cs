@@ -207,6 +207,7 @@ public class ArchitectureConformanceTests
     [InlineData("Oidc", "Authz", "Avatar", "Identity", "Net", "Provider", "RateLimit", "Routing")] // OIDC flow — mints the keystone (Identity), orchestrates roles, avatar, net, provider, throttle; reads its callback path through the Routing suffix reader
     [InlineData("Identity", "Authz", "Provider")] // the identity keystone — grants (Authz) + link mode (Provider); decoupled from the protocols by #790
     [InlineData("Session", "Authz", "Avatar", "Linking")] // session mint + login outcomes — applies grants (Authz), sets avatars (Avatar), reconciles links (Linking)
+    [InlineData("Http", "Audit", "Avatar", "Flows", "Linking", "Net", "Oidc", "Provider", "Saml", "Session", "Shared")] // the web boundary (SSOController + request helpers + the admin test-connection probe): the composition top of the DAG — it fronts every flow, so its import list is deliberately wide; nothing imports it back (#790/#807)
     public void ApiModule_ImportsOnlyItsAllowedApiModules(string module, params string[] allowed)
     {
         var moduleDir = Path.Combine(RepoRoot(), "SSO-Auth", "Api", module);
@@ -221,6 +222,25 @@ public class ArchitectureConformanceTests
         Assert.True(
             offenders.Count == 0,
             $"The {module} module may import only [{string.Join(", ", allowed)}] among Api modules; these imports break that: " + string.Join(" | ", offenders));
+    }
+
+    [Fact]
+    public void FlatApi_HoldsNoSourceFiles_EveryApiTypeLivesInAModule()
+    {
+        // The kernel dissolution is complete and locked (#790/#807): there is NO code directly in
+        // SSO-Auth/Api/ — every type lives in a named module subfolder (Net, Secrets, …, Http). The former
+        // flat "kernel" that once held the controller, the URL builders, the keystone and the served-page
+        // types was a deliberate, transitional bucket; it is now empty and must stay empty, so a new type is
+        // forced into a module (or a new one) at creation and can never re-accumulate a flat pile.
+        var apiRoot = Path.Combine(RepoRoot(), "SSO-Auth", "Api");
+        var flatFiles = Directory.EnumerateFiles(apiRoot, "*.cs", SearchOption.TopDirectoryOnly)
+            .Select(Path.GetFileName)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.True(
+            flatFiles.Count == 0,
+            "SSO-Auth/Api/ must hold no source files directly — every Api type belongs in a module subfolder (#790/#807). Found in the flat Api root: " + string.Join(", ", flatFiles));
     }
 
     [Fact]
