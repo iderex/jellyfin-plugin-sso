@@ -97,7 +97,7 @@ public class SessionMinterTests
         // The extraction's one behavior change: the controller resolves the client IP from HttpContext and
         // passes it in, so it must land on the AuthenticationRequest unchanged (#177) alongside the user.
         var (minter, users, sessions) = Build();
-        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        var user = TestUsers.Named("alice", UserId);
         users.GetUserById(UserId).Returns(user);
         AuthenticationRequest? captured = null;
         sessions.AuthenticateDirect(Arg.Do<AuthenticationRequest>(r => captured = r)).Returns(new AuthenticationResult());
@@ -117,7 +117,7 @@ public class SessionMinterTests
         // Live TV grants — and folder access is restricted (!EnableAllFolders), which also writes the
         // enabled-folder list as a preference.
         var (minter, users, sessions) = Build();
-        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        var user = TestUsers.Named("alice", UserId);
         // Seed the OPPOSITE state so the assertions prove the grant flipped, not just that a fresh user
         // happens to match: start with all-folders granted and no admin.
         user.SetPermission(PermissionKind.EnableAllFolders, true);
@@ -142,7 +142,7 @@ public class SessionMinterTests
         // The other side of the EnableAllFolders branch: all folders granted, so the enabled-folder
         // preference write is skipped (that path is only for the restricted case above).
         var (minter, users, sessions) = Build();
-        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        var user = TestUsers.Named("alice", UserId);
         user.SetPermission(PermissionKind.EnableAllFolders, false); // seed a restriction, so the grant must flip to true
         users.GetUserById(UserId).Returns(user);
         sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
@@ -160,7 +160,7 @@ public class SessionMinterTests
         // to false; a correct skip leaves the seeded admin intact. This pins that EnableAuthorization
         // gates the block AND that it never touches pre-existing permissions when off.
         var (minter, users, sessions) = Build();
-        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        var user = TestUsers.Named("alice", UserId);
         user.SetPermission(PermissionKind.IsAdministrator, true);
         users.GetUserById(UserId).Returns(user);
         sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
@@ -177,7 +177,7 @@ public class SessionMinterTests
         // a granted permission is set true and a revoked one set false. Seed the OPPOSITE of each so the
         // assertions prove the mint flipped them, not that a fresh user happened to match.
         var (minter, users, sessions) = Build();
-        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        var user = TestUsers.Named("alice", UserId);
         user.SetPermission(PermissionKind.EnableContentDownloading, false); // grant must flip to true
         user.SetPermission(PermissionKind.EnableContentDeletion, true); // revoke must flip to false
         users.GetUserById(UserId).Returns(user);
@@ -205,7 +205,7 @@ public class SessionMinterTests
         // (#215): with it off, a mapped permission is NOT applied. Seed the opposite of the grant and pass
         // the master switch off — a correct skip leaves the seed intact.
         var (minter, users, sessions) = Build();
-        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        var user = TestUsers.Named("alice", UserId);
         user.SetPermission(PermissionKind.EnableContentDownloading, false);
         users.GetUserById(UserId).Returns(user);
         sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
@@ -229,7 +229,7 @@ public class SessionMinterTests
         // recovery admin becomes useless once the IdP is down. Seed admin=true so the assertion proves the
         // demotion was SUPPRESSED, not that a fresh user happened to be non-admin.
         var (minter, users, sessions) = Build();
-        var user = new User("root", "SSO-Auth", "Default") { Id = UserId };
+        var user = TestUsers.Named("root", UserId);
         user.SetPermission(PermissionKind.IsAdministrator, true);
         users.GetUserById(UserId).Returns(user);
         sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
@@ -249,7 +249,7 @@ public class SessionMinterTests
         // its login carries no admin claim (default-deny). The exemption is narrow — it must never leak to
         // ordinary accounts. Seed admin=true; a correct write flips it to false.
         var (minter, users, sessions) = Build();
-        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        var user = TestUsers.Named("alice", UserId);
         user.SetPermission(PermissionKind.IsAdministrator, true);
         users.GetUserById(UserId).Returns(user);
         sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
@@ -269,7 +269,7 @@ public class SessionMinterTests
         // one UpdateUserAsync, so it persists in a single write (#391) — the pre-extraction Authenticate
         // wrote the user a second time just for this field.
         var (minter, users, sessions) = Build();
-        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        var user = TestUsers.Named("alice", UserId);
         users.GetUserById(UserId).Returns(user);
         sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
 
@@ -292,7 +292,7 @@ public class SessionMinterTests
         // The first gate refuses BEFORE any user side effect, so no grants are persisted and no session is
         // minted — fail closed exactly like the deleted-user guard.
         var (minter, users, sessions) = Build();
-        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        var user = TestUsers.Named("alice", UserId);
         users.GetUserById(UserId).Returns(user);
 
         await Assert.ThrowsAsync<AuthenticationException>(() => minter.MintAsync(Params(), () => "203.0.113.7", () => false));
@@ -309,7 +309,7 @@ public class SessionMinterTests
         // immediately before AuthenticateDirect (so a revocation landing mid-mint still yields no session).
         // A recording predicate captures the state at each firing.
         var (minter, users, sessions) = Build();
-        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        var user = TestUsers.Named("alice", UserId);
         users.GetUserById(UserId).Returns(user);
 
         var userWritten = false;

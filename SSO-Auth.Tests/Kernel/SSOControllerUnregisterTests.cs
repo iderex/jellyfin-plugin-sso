@@ -192,7 +192,7 @@ public class SSOControllerUnregisterTests
     // Registers a user with the harness's mocked IUserManager so GetUserByName resolves it.
     private static User SeedUser(SsoControllerHarness harness)
     {
-        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        var user = TestUsers.Named("alice", UserId);
         harness.UserManager.GetUserByName("alice").Returns(user);
         return user;
     }

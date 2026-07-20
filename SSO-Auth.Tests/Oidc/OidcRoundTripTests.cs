@@ -51,7 +51,7 @@ public class OidcRoundTripTests
         var harness = BuildHarness(fixture, request => ServeIdp(fixture, request, idToken));
 
         // Provision hooks the completion tail drives for a first-time login of "alice".
-        var user = new User("alice", "SSO-Auth", "Default") { Id = Guid.Parse("19999999-1111-1111-1111-111111111111") };
+        var user = TestUsers.Named("alice", Guid.Parse("19999999-1111-1111-1111-111111111111"));
         harness.UserManager.CreateUserAsync("alice").Returns(user);
         harness.UserManager.GetUserById(user.Id).Returns(user);
 
@@ -154,7 +154,7 @@ public class OidcRoundTripTests
             cfg.AcrValues = "phr mfa";
             cfg.RequireAcr = true;
         });
-        var user = new User("alice", "SSO-Auth", "Default") { Id = Guid.Parse("19999999-1111-1111-1111-111111111112") };
+        var user = TestUsers.Named("alice", Guid.Parse("19999999-1111-1111-1111-111111111112"));
         harness.UserManager.CreateUserAsync("alice").Returns(user);
         harness.UserManager.GetUserById(user.Id).Returns(user);
 
@@ -201,7 +201,7 @@ public class OidcRoundTripTests
         // Default: with RequireAcr off, an id_token that carries no acr logs in unchanged (no new gate).
         using var fixture = new OidcTokenFixture(Authority, "jf");
         var harness = BuildHarness(fixture, request => ServeIdp(fixture, request, fixture.IdToken("sub-1", "alice")));
-        var user = new User("alice", "SSO-Auth", "Default") { Id = Guid.Parse("19999999-1111-1111-1111-111111111113") };
+        var user = TestUsers.Named("alice", Guid.Parse("19999999-1111-1111-1111-111111111113"));
         harness.UserManager.CreateUserAsync("alice").Returns(user);
         harness.UserManager.GetUserById(user.Id).Returns(user);
 

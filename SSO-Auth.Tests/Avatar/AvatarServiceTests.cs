@@ -135,14 +135,13 @@ public class AvatarServiceTests
     private static string ProfilePath(string username, string extension)
         => Path.Combine(UserDataRoot, username, "profile" + extension);
 
-    private static User UserNamed(string name) => new User(name, "SSO-Auth", "Default");
 
     [Fact]
     public async Task TrySetAsync_NullUrl_DoesNothing()
     {
         var (service, providers, users, _) = Build();
 
-        await service.TrySetAsync(UserNamed("alice"), null);
+        await service.TrySetAsync(TestUsers.Named("alice"), null);
 
         await providers.DidNotReceive().SaveImage(Arg.Any<Stream>(), Arg.Any<string>(), Arg.Any<string>());
         await users.DidNotReceive().ClearProfileImageAsync(Arg.Any<User>());
@@ -158,7 +157,7 @@ public class AvatarServiceTests
     {
         var (service, providers, users, log) = Build();
 
-        await service.TrySetAsync(UserNamed("alice"), url);
+        await service.TrySetAsync(TestUsers.Named("alice"), url);
 
         await providers.DidNotReceive().SaveImage(Arg.Any<Stream>(), Arg.Any<string>(), Arg.Any<string>());
         await users.DidNotReceive().ClearProfileImageAsync(Arg.Any<User>());
@@ -171,7 +170,7 @@ public class AvatarServiceTests
         // The #377 regression: a transient save failure must not downgrade the user from a working
         // avatar to a cleared record plus a dangling path — the write comes first, the user last.
         var (service, providers, users, _) = Build();
-        var user = UserNamed("alice");
+        var user = TestUsers.Named("alice");
         var previous = new ImageInfo(ProfilePath("alice", ".jpg"));
         user.ProfileImage = previous;
         providers.SaveImage(Arg.Any<Stream>(), Arg.Any<string>(), Arg.Any<string>())
@@ -192,7 +191,7 @@ public class AvatarServiceTests
         // it would drop and re-insert the record for nothing. The timestamp refresh is what makes
         // clients re-fetch the changed image.
         var (service, providers, users, _) = Build();
-        var user = UserNamed("alice");
+        var user = TestUsers.Named("alice");
         var previous = new ImageInfo(ProfilePath("alice", ".png")) { LastModified = DateTime.UtcNow.AddDays(-1) };
         user.ProfileImage = previous;
 
@@ -210,7 +209,7 @@ public class AvatarServiceTests
         // A changed content type moves the stored path: the old record+file are dropped only once
         // the new bytes are safely on disk (write -> clear order is the rollback-safety property).
         var (service, providers, users, _) = Build();
-        var user = UserNamed("alice");
+        var user = TestUsers.Named("alice");
         user.ProfileImage = new ImageInfo(ProfilePath("alice", ".jpg"));
 
         await service.StoreAsync(user, new MemoryStream(new byte[] { 1 }), "image/png", ".png");
@@ -233,7 +232,7 @@ public class AvatarServiceTests
         // to a single consistent record. (Unrelated users never block each other — KeyedLockStoreTests.)
         var locks = new KeyedLockStore(StringComparer.Ordinal);
         var (service, providers, users, _) = Build(locks);
-        var user = UserNamed("racer");
+        var user = TestUsers.Named("racer");
 
         Task store;
         using (await locks.AcquireAsync(user.Username, TestContext.Current.CancellationToken))
@@ -264,7 +263,7 @@ public class AvatarServiceTests
         // exception into the best-effort login path.
         var locks = new KeyedLockStore(StringComparer.Ordinal);
         var (service, providers, users, log) = Build(locks, TimeSpan.FromMilliseconds(50));
-        var user = UserNamed("racer");
+        var user = TestUsers.Named("racer");
         var previous = new ImageInfo(ProfilePath("racer", ".jpg"));
         user.ProfileImage = previous;
 
@@ -289,7 +288,7 @@ public class AvatarServiceTests
         // wait, it does not shrink the normal-load window.
         var locks = new KeyedLockStore(StringComparer.Ordinal);
         var (service, providers, _, log) = Build(locks, TimeSpan.FromSeconds(3));
-        var user = UserNamed("alice");
+        var user = TestUsers.Named("alice");
 
         await service.StoreAsync(user, new MemoryStream(new byte[] { 1 }), "image/png", ".png");
 
@@ -309,7 +308,7 @@ public class AvatarServiceTests
         // lock) until we release it, so the second store provably cannot enter until then.
         var locks = new KeyedLockStore(StringComparer.Ordinal);
         var (service, providers, users, _) = Build(locks);
-        var user = UserNamed("racer");
+        var user = TestUsers.Named("racer");
         var ct = TestContext.Current.CancellationToken;
 
         var pngPath = ProfilePath("racer", ".png"); // the first store's target
@@ -360,7 +359,7 @@ public class AvatarServiceTests
     public async Task StoreAsync_NoPreviousImage_AssignsWithoutClearing()
     {
         var (service, providers, users, _) = Build();
-        var user = UserNamed("alice");
+        var user = TestUsers.Named("alice");
 
         await service.StoreAsync(user, new MemoryStream(new byte[] { 1 }), "image/png", ".png");
 
@@ -383,7 +382,7 @@ public class AvatarServiceTests
         // fail closed: no out-of-directory write (SaveImage is never called with any path), no throw (login
         // is best-effort and must still complete), and no profile-image record.
         var (service, providers, users, log) = Build();
-        var user = UserNamed(username);
+        var user = TestUsers.Named(username);
 
         await service.StoreAsync(user, new MemoryStream(new byte[] { 1 }), "image/png", ".png");
 
@@ -399,7 +398,7 @@ public class AvatarServiceTests
         // Fail-closed must not be destructive either: a rejected ".." username skips the write AND leaves
         // any previously set profile-image record exactly as it was (no clear, no re-point).
         var (service, providers, users, _) = Build();
-        var user = UserNamed("..");
+        var user = TestUsers.Named("..");
         var previous = new ImageInfo(ProfilePath("alice", ".jpg"));
         user.ProfileImage = previous;
 
@@ -420,7 +419,7 @@ public class AvatarServiceTests
         // stripped, so "victim." is a distinct literal directory and the avatar stores there normally.
         // Either way there is no cross-user write and no escape.
         var (service, providers, users, log) = Build();
-        var user = UserNamed("victim.");
+        var user = TestUsers.Named("victim.");
 
         await service.StoreAsync(user, new MemoryStream(new byte[] { 1 }), "image/png", ".png");
 
@@ -444,7 +443,7 @@ public class AvatarServiceTests
         // Behavior preserved for legitimate usernames the host allows (dots and '@' are valid — e.g. an
         // email-style preferred_username): the store path is unchanged and the write happens as before.
         var (service, providers, _, _) = Build();
-        var user = UserNamed("first.last@example.com");
+        var user = TestUsers.Named("first.last@example.com");
 
         await service.StoreAsync(user, new MemoryStream(new byte[] { 1 }), "image/png", ".png");
 
@@ -484,7 +483,7 @@ public class AvatarServiceTests
         using var response = ImageResponse("text/html", Encoding.UTF8.GetBytes("<html></html>"));
         var (service, providers, users, log) = Build(response);
 
-        await service.TrySetAsync(UserNamed("alice"), AllowedUrl);
+        await service.TrySetAsync(TestUsers.Named("alice"), AllowedUrl);
 
         await providers.DidNotReceive().SaveImage(Arg.Any<Stream>(), Arg.Any<string>(), Arg.Any<string>());
         await users.DidNotReceive().ClearProfileImageAsync(Arg.Any<User>());
@@ -498,7 +497,7 @@ public class AvatarServiceTests
         using var response = ImageResponse("image/png", new byte[1], contentLength: AvatarService.MaxAvatarBytes + 1);
         var (service, providers, _, _) = Build(response);
 
-        await service.TrySetAsync(UserNamed("alice"), AllowedUrl);
+        await service.TrySetAsync(TestUsers.Named("alice"), AllowedUrl);
 
         await providers.DidNotReceive().SaveImage(Arg.Any<Stream>(), Arg.Any<string>(), Arg.Any<string>());
     }
@@ -511,7 +510,7 @@ public class AvatarServiceTests
         using var response = ImageResponse("image/png", new byte[] { 1, 2, 3 });
         var (service, providers, _, _) = Build(response);
 
-        await service.TrySetAsync(UserNamed("alice"), AllowedUrl);
+        await service.TrySetAsync(TestUsers.Named("alice"), AllowedUrl);
 
         await providers.Received(1).SaveImage(Arg.Any<Stream>(), "image/png", ProfilePath("alice", ".png"));
     }
@@ -541,7 +540,7 @@ public class AvatarServiceTests
         // download/store nothing. 304 must be handled BEFORE EnsureSuccessStatusCode (which throws on it).
         using var response = NotModifiedResponse();
         var (service, providers, users, handler, log) = BuildWithHandler(response);
-        var user = UserNamed("alice");
+        var user = TestUsers.Named("alice");
         var previous = new ImageInfo(ProfilePath("alice", ".png")) { LastModified = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc) };
         user.ProfileImage = previous;
 
@@ -566,7 +565,7 @@ public class AvatarServiceTests
         // the new bytes are fetched and re-stored over the same path — the conditional header was still sent.
         using var response = ImageResponse("image/png", new byte[] { 9 });
         var (service, providers, _, handler, _) = BuildWithHandler(response);
-        var user = UserNamed("alice");
+        var user = TestUsers.Named("alice");
         user.ProfileImage = new ImageInfo(ProfilePath("alice", ".png")) { LastModified = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc) };
 
         await service.TrySetAsync(user, AllowedUrl);
@@ -583,7 +582,7 @@ public class AvatarServiceTests
         using var response = ImageResponse("image/png", new byte[] { 1, 2, 3 });
         var (service, providers, _, handler, _) = BuildWithHandler(response);
 
-        await service.TrySetAsync(UserNamed("alice"), AllowedUrl);
+        await service.TrySetAsync(TestUsers.Named("alice"), AllowedUrl);
 
         Assert.Null(handler.LastIfModifiedSince);
         await providers.Received(1).SaveImage(Arg.Any<Stream>(), "image/png", ProfilePath("alice", ".png"));
@@ -599,7 +598,7 @@ public class AvatarServiceTests
         // the self-heal that the always-download behaviour had before #248, back for the missing-file case only.
         using var response = ImageResponse("image/png", new byte[] { 1, 2, 3 });
         var (service, providers, _, handler, _) = BuildWithHandler(response, fileExists: _ => false);
-        var user = UserNamed("alice");
+        var user = TestUsers.Named("alice");
         user.ProfileImage = new ImageInfo(ProfilePath("alice", ".png")) { LastModified = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc) };
 
         await service.TrySetAsync(user, AllowedUrl);
@@ -619,7 +618,7 @@ public class AvatarServiceTests
         // Pins that the header is suppressed and that the 304 short-circuit stays safe when the file is missing.
         using var response = NotModifiedResponse();
         var (service, providers, users, handler, log) = BuildWithHandler(response, fileExists: _ => false);
-        var user = UserNamed("alice");
+        var user = TestUsers.Named("alice");
         var previous = new ImageInfo(ProfilePath("alice", ".png")) { LastModified = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc) };
         user.ProfileImage = previous;
 
@@ -642,7 +641,7 @@ public class AvatarServiceTests
         // `>`->`>=` slip would send the sentinel as the conditional header, which this asserts against.
         using var response = ImageResponse("image/png", new byte[] { 1, 2, 3 });
         var (service, providers, _, handler, _) = BuildWithHandler(response); // file present (default _ => true)
-        var user = UserNamed("alice");
+        var user = TestUsers.Named("alice");
         user.ProfileImage = new ImageInfo(ProfilePath("alice", ".png")) { LastModified = DateTime.MinValue };
 
         await service.TrySetAsync(user, AllowedUrl);
@@ -682,8 +681,8 @@ public class AvatarServiceTests
         using var response = ImageResponse("image/png", new byte[] { 1 });
         var (service, _, _, handler, _) = BuildWithHandler(response);
 
-        await service.TrySetAsync(UserNamed("alice"), AllowedUrl);
-        await service.TrySetAsync(UserNamed("bob"), AllowedUrl);
+        await service.TrySetAsync(TestUsers.Named("alice"), AllowedUrl);
+        await service.TrySetAsync(TestUsers.Named("bob"), AllowedUrl);
 
         Assert.Equal(2, handler.Invocations);
     }

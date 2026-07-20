@@ -48,7 +48,7 @@ public class SSOControllerSamlTokenTests
             EnableAuthorization = false,
             AllowExistingAccountLink = false,
         });
-        var provisioned = new User("alice", "SSO-Auth", "Default") { Id = UserId };
+        var provisioned = TestUsers.Named("alice", UserId);
         harness.UserManager.CreateUserAsync("alice").Returns(provisioned);
         harness.UserManager.GetUserById(UserId).Returns(provisioned);
         user = provisioned;
