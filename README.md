@@ -143,6 +143,7 @@ Broader documentation lives in the **[Wiki](https://github.com/iderex/jellyfin-p
 - Per-identity-provider setup: [Provider Setup](https://github.com/iderex/jellyfin-plugin-sso/wiki/Provider-Setup)
 - In-tree contributor map of the login flow and code layout: [Architecture Internals](https://github.com/iderex/jellyfin-plugin-sso/wiki/Architecture-Internals)
 - Project policies: [Governance](GOVERNANCE.md) · [Privacy & data handling](docs/PRIVACY.md) · [Support & security updates](SECURITY.md#supported-versions--security-updates) · [Remediation & secrets policy](docs/SECURITY-REMEDIATION-POLICY.md)
+- Honest maturity self-assessment (Silver/Gold + OSPS, incl. what a solo project structurally cannot meet): [Maturity Map](https://github.com/iderex/jellyfin-plugin-sso/wiki/Maturity-Map)
 
 ## Security
 
