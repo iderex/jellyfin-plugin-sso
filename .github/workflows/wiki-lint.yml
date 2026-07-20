@@ -1,0 +1,42 @@
+name: Wiki Lint
+
+# The wiki is a separate repository with no pull-request gate, so it can drift
+# from the code silently (#873). This is the executable guard for that drift: it
+# clones the live wiki and fails on broken internal anchors, file:line citations
+# (the rule is to cite modules/types, not paths that move), and dead source links.
+#
+# Triggers: a weekly sweep, a manual run, and every push to main (so a merge that
+# moves a file the wiki links to is caught right away). Deliberately NOT on
+# pull_request: a pre-existing wiki typo must not red-X every unrelated code PR.
+on:
+  schedule:
+    - cron: "0 5 * * 1" # Mondays 05:00 UTC
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "SSO-Auth/**"
+      - "scripts/wiki-lint.py"
+      - ".github/workflows/wiki-lint.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wiki-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Clone the wiki
+        # The wiki is public; a read-only anonymous clone needs no credentials.
+        run: git clone --depth 1 "https://github.com/${GITHUB_REPOSITORY}.wiki.git" "${RUNNER_TEMP}/wiki"
+      - name: Lint the wiki against the code tree
+        run: python3 scripts/wiki-lint.py "${RUNNER_TEMP}/wiki" "${GITHUB_WORKSPACE}"
