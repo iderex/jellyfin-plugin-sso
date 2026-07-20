@@ -61,6 +61,38 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 
 > The feature set from the sibling project is being ported here one reviewed change at a time; this list reflects what is implemented today.
 
+## Supported providers
+
+Any OIDC-conformant or SAML 2.0 identity provider should work. These have verified, step-by-step guides on the [Provider Setup](https://github.com/iderex/jellyfin-plugin-sso/wiki/Provider-Setup) wiki page:
+
+| Provider                                                                                                                                                                                    | OIDC | SAML | Role mapping (RBAC) |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--: | :--: | :-----------------: |
+| [Authelia](https://github.com/iderex/jellyfin-plugin-sso/wiki/Provider-Setup#authelia)                                                                                                      |  ✔   |  —   |          ✔          |
+| [authentik](https://github.com/iderex/jellyfin-plugin-sso/wiki/Provider-Setup#authentik)                                                                                                    |  ✔   |  —   |          ✔          |
+| Keycloak ([OIDC](https://github.com/iderex/jellyfin-plugin-sso/wiki/Provider-Setup#keycloak-oidc), [SAML](https://github.com/iderex/jellyfin-plugin-sso/wiki/Provider-Setup#keycloak-saml)) |  ✔   |  ✔   |          ✔          |
+| [Pocket ID](https://github.com/iderex/jellyfin-plugin-sso/wiki/Provider-Setup#pocket-id)                                                                                                    |  ✔   |  —   |          ✔          |
+| [Kanidm](https://github.com/iderex/jellyfin-plugin-sso/wiki/Provider-Setup#kanidm)                                                                                                          |  ✔   |  —   |          ✔          |
+| Google                                                                                                                                                                                      |  ✔   |  —   |          —          |
+
+"—" under SAML means no verified guide yet, not that it cannot work. Google works without role mapping and with caveats (numeric usernames; endpoint validation must be relaxed) — see the wiki. A guide for a provider you use is a welcome contribution.
+
+## How it compares
+
+Honest positioning against the alternatives — pick what fits your setup:
+
+|                                  | This plugin                                                                                                              | Jellyfin built-in auth | Official [LDAP plugin](https://github.com/jellyfin/jellyfin-plugin-ldapauth) | Archived [9p4 plugin](https://github.com/9p4/jellyfin-plugin-sso)                               |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ---------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Sign-in model                    | Delegated to your IdP (OIDC / SAML)                                                                                      | Local passwords        | Directory bind (LDAP/AD)                                                     | Delegated to your IdP (OIDC / SAML)                                                             |
+| Passwords touch Jellyfin         | No (optional SSO-only mode)                                                                                              | Yes                    | Yes (bind credentials)                                                       | No                                                                                              |
+| Role / permission mapping        | ✔ from IdP claims (admin, folders, Live TV)                                                                              | Manual per user        | ✔ from LDAP attributes                                                       | ✔ from IdP claims                                                                               |
+| Account linking (existing users) | ✔ self-service                                                                                                           | n/a                    | ✔ (by username)                                                              | ✔                                                                                               |
+| Maintenance status               | Active (Beta)                                                                                                            | Active (core)          | Active (official)                                                            | Archived, unmaintained                                                                          |
+| Security process                 | Adversarial review + CI gates per change ([Review Gate](https://github.com/iderex/jellyfin-plugin-sso/wiki/Review-Gate)) | Jellyfin core process  | Jellyfin org process                                                         | —                                                                                               |
+| Native clients                   | Via Quick Connect                                                                                                        | ✔ everywhere           | ✔ everywhere                                                                 | Via Quick Connect                                                                               |
+| Best when                        | You run an IdP (or want one) and want passwords out of Jellyfin                                                          | Small setups, no IdP   | You have AD/LDAP but no web IdP                                              | (migrate here — [guide](https://github.com/iderex/jellyfin-plugin-sso/wiki/Migrating-from-9p4)) |
+
+The LDAP plugin and this one solve different problems and can even coexist; if you already run Authelia/authentik/Keycloak, this plugin is the direct path. Coming from the archived 9p4 plugin, migration is an in-place upgrade.
+
 ## Installing
 
 > **This is an independent plugin repository.** Jellyfin's built-in catalog only lists plugins that live in the [`jellyfin`](https://github.com/jellyfin) GitHub org, and there is currently no official SSO plugin there (the LDAP plugin is the only official auth plugin). You install this plugin by adding **its** repository (below) under **Plugins → Repositories**; it then appears in your in-app catalog. The project is independent for now.
