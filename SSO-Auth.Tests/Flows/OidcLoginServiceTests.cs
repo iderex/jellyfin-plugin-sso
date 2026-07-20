@@ -137,7 +137,7 @@ public class OidcLoginServiceTests
         var avatarService = new AvatarService(harness.UserManager, Substitute.For<IProviderManager>(), Substitute.For<IServerConfigurationManager>(), logger, SsoHttp.UserAgent);
         var sessionMinter = new SessionMinter(harness.UserManager, avatarService, Substitute.For<ISessionManager>(), logger);
         var ssoOnly = new SsoOnlyLoginService(harness.UserManager, SSOPlugin.Instance.ConfigStore, logger);
-        var loginCompletion = new LoginCompletionService(canonicalLinks, sessionMinter, ssoOnly, logger);
+        var loginCompletion = new LoginCompletionService(canonicalLinks, sessionMinter, ssoOnly, SSOPlugin.Instance.ConfigStore, logger);
         var service = new OidcLoginService(loginCompletion, canonicalLinks, Substitute.For<IHttpClientFactory>(), Substitute.For<ILoggerFactory>(), logger);
 
         var context = new DefaultHttpContext();

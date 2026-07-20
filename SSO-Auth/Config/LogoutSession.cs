@@ -18,8 +18,9 @@ namespace Jellyfin.Plugin.SSO_Auth.Config;
 public class LogoutSession
 {
     /// <summary>
-    /// Gets or sets the protocol that minted the session — <c>"OID"</c> or <c>"SAML"</c> (the audit-protocol
-    /// spelling), selecting which logout mechanism applies.
+    /// Gets or sets the protocol that minted the session — <c>"OpenID"</c> or <c>"SAML"</c> (the
+    /// audit-protocol spelling written by the login path, <c>VerifiedIdentity.AuditProtocol</c>), selecting
+    /// which logout mechanism applies.
     /// </summary>
     public string Protocol { get; set; }
 

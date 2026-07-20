@@ -127,7 +127,7 @@ public class SSOController : ControllerBase
         _ssoOnly = new SsoOnlyLoginService(userManager, SSOPlugin.Instance.ConfigStore, logger);
         var avatarService = new AvatarService(userManager, providerManager, serverConfigurationManager, logger, SsoHttp.UserAgent);
         var sessionMinter = new SessionMinter(userManager, avatarService, sessionManager, logger);
-        _loginCompletion = new LoginCompletionService(_canonicalLinks, sessionMinter, _ssoOnly, logger);
+        _loginCompletion = new LoginCompletionService(_canonicalLinks, sessionMinter, _ssoOnly, SSOPlugin.Instance.ConfigStore, logger);
         _oidc = new Flows.OidcLoginService(_loginCompletion, _canonicalLinks, httpClientFactory, loggerFactory, logger);
         _saml = new Flows.SamlLoginService(_loginCompletion, _canonicalLinks, logger);
         _logger.LogInformation("SSO Controller initialized");

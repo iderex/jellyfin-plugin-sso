@@ -5,8 +5,10 @@ using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Api.Audit;
 using Jellyfin.Plugin.SSO_Auth.Api.Identity;
 using Jellyfin.Plugin.SSO_Auth.Api.Linking;
+using Jellyfin.Plugin.SSO_Auth.Api.Logout;
 using Jellyfin.Plugin.SSO_Auth.Api.Session;
 using Jellyfin.Plugin.SSO_Auth.Config;
+using MediaBrowser.Controller.Authentication;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 
@@ -32,13 +34,15 @@ internal sealed class LoginCompletionService
     private readonly CanonicalLinkService _canonicalLinks;
     private readonly SessionMinter _sessionMinter;
     private readonly SsoOnlyLoginService _ssoOnly;
+    private readonly ProviderConfigStore _configStore;
     private readonly ILogger _logger;
 
-    internal LoginCompletionService(CanonicalLinkService canonicalLinks, SessionMinter sessionMinter, SsoOnlyLoginService ssoOnly, ILogger logger)
+    internal LoginCompletionService(CanonicalLinkService canonicalLinks, SessionMinter sessionMinter, SsoOnlyLoginService ssoOnly, ProviderConfigStore configStore, ILogger logger)
     {
         _canonicalLinks = canonicalLinks ?? throw new ArgumentNullException(nameof(canonicalLinks));
         _sessionMinter = sessionMinter ?? throw new ArgumentNullException(nameof(sessionMinter));
         _ssoOnly = ssoOnly ?? throw new ArgumentNullException(nameof(ssoOnly));
+        _configStore = configStore ?? throw new ArgumentNullException(nameof(configStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -57,13 +61,15 @@ internal sealed class LoginCompletionService
     /// <param name="config">The provider configuration governing authorization/folder/default-provider grants.</param>
     /// <param name="adoptionGate">The extra proof a same-named adoption must clear (#218).</param>
     /// <param name="remoteEndPointResolver">Resolves the normalized client IP for the activity log (#177); the controller reads it from <c>HttpContext</c> and passes it in so this tier stays HttpContext-free. Evaluated at the original point inside the minter — after avatar/persistence, and not at all on the fail-closed path.</param>
+    /// <param name="logoutContext">The optional Single Logout material captured at the callback (the id_token/sid, #727); persisted after the mint only when <c>EnableSingleLogout</c> is on. Null (the default, and the SAML path today) skips the capture.</param>
     /// <returns>The HTTP result for the completed (or refused) login.</returns>
     internal async Task<ActionResult> CompleteAsync(
         VerifiedIdentity identity,
         AuthResponse response,
         ProviderConfigBase config,
         AdoptionGate adoptionGate,
-        Func<string> remoteEndPointResolver)
+        Func<string> remoteEndPointResolver,
+        LogoutContext? logoutContext = null)
     {
         Guid userId;
         try
@@ -134,6 +140,52 @@ internal sealed class LoginCompletionService
             remoteEndPointResolver,
             () => _canonicalLinks.IsIdentityStillLinked(identity.LinkMode, identity.Provider, identity.Subject, userId)).ConfigureAwait(false);
         SsoAudit.LoginSucceeded(_logger, identity.AuditProtocol, identity.Provider, identity.Username, identity.Admin);
+
+        CaptureLogoutState(identity, userId, logoutContext, authenticationResult);
+
         return LoginStatusMapper.ToActionResult(new LoginOutcome.Success(authenticationResult));
+    }
+
+    // Persist the per-session Single Logout state (#727, SLO-1b), only when the feature is on. Runs AFTER a
+    // successful mint and is fully fail-safe: the session is already live, so a capture problem must never
+    // turn a good login into a failure — any error is logged and swallowed. Keyed by the minted session id
+    // (never a secret); a missing session id or logout context simply skips capture.
+    private void CaptureLogoutState(VerifiedIdentity identity, Guid userId, LogoutContext? logoutContext, AuthenticationResult authenticationResult)
+    {
+        if (logoutContext is not { } context)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!_configStore.Read(configuration => configuration.EnableSingleLogout))
+            {
+                return;
+            }
+
+            var sessionKey = authenticationResult.SessionInfo?.Id;
+            if (string.IsNullOrEmpty(sessionKey))
+            {
+                return;
+            }
+
+            var state = new LogoutSession
+            {
+                Protocol = identity.AuditProtocol,
+                Provider = identity.Provider,
+                Subject = identity.Subject,
+                SessionIndex = context.SessionIndex,
+                Issuer = identity.Issuer,
+                IdToken = context.IdToken,
+                UserId = userId,
+            };
+
+            _configStore.Mutate(configuration => SessionLogoutStore.Capture(configuration, sessionKey, state, DateTime.UtcNow));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to capture the Single Logout session state after a successful login; logout propagation will be unavailable for this session.");
+        }
     }
 }
