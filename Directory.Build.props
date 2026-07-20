@@ -17,6 +17,24 @@
          the restore if a committed lock file would change (drift or tampering). Left off locally so
          a package update does not need the force-evaluate switch. -->
     <RestoreLockedMode Condition="'$(GITHUB_ACTIONS)' == 'true'">true</RestoreLockedMode>
+
+    <!-- Build determinism (#764): with the pinned toolchain (rust-toolchain-equivalent: the SDK is
+         pinned) and the locked dependency graph above, a deterministic compile lets an independent
+         party rebuild from source + lock files and compare against the shipped, SLSA-attested binary.
+         Deterministic removes compile-time nondeterminism (e.g. randomized assembly-internal ordering);
+         it does NOT change runtime behaviour. -->
+    <Deterministic>true</Deterministic>
+
+    <!-- The final determinism switch — normalizes embedded source paths so the build machine's
+         checkout directory does not leak into (or vary) the output. Scoped to CI (the shipped artifact
+         is built there) AND to the shipped project only: it must NOT apply to SSO-Auth.Tests, because
+         ContinuousIntegrationBuild rewrites [CallerFilePath] to a normalized "/_/…" path, and the
+         architecture fitness-function tests resolve the repo root from their own [CallerFilePath] to
+         read source files at test time — path normalization there makes every source-scanning
+         conformance test fail to locate the tree. Reproducibility is a property of the shipped
+         SSO-Auth.dll, not the test assembly, so scoping it to SSO-Auth loses nothing. Left off locally
+         so a debugger keeps real source paths. -->
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true' And '$(MSBuildProjectName)' == 'SSO-Auth'">true</ContinuousIntegrationBuild>
   </PropertyGroup>
 
 </Project>
