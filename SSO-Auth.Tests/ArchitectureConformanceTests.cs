@@ -715,6 +715,32 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void SsoManagedProviderId_IsPinnedAndUsedByBothStampAndDetector()
+    {
+        // SECURITY / PERSISTENCE pin (#837). This exact string is written to User.AuthenticationProviderId
+        // and persisted in Jellyfin's user database: every SSO-managed account provisioned by any version
+        // carries it, the stamp (CanonicalLinkService) writes it, and the SSO-only detector
+        // (SsoAuthenticationProviders.IsSsoProvider) compares against it. It MUST NEVER change — a different
+        // value silently stops recognizing every existing SSO account — and it MUST stay decoupled from
+        // typeof(SSOController).FullName so a future move of that type (e.g. into an Api.Http module, #807)
+        // cannot orphan those accounts. The value equals the controller's historical full type name; that is
+        // a coincidence of history, not a live coupling.
+        Assert.Equal("Jellyfin.Plugin.SSO_Auth.Api.SSOController", SsoManagedProviderId.Value);
+
+        // The detector resolves to the same pinned value, so the stamp and the detector can never disagree.
+        Assert.Equal(SsoManagedProviderId.Value, SsoAuthenticationProviders.SsoProviderId);
+
+        // The stamp uses the pin, and neither the stamp nor the detector recomputes the id from the
+        // controller type. Source scans, so a regression to type-coupling fails here even if today's value
+        // still happens to match.
+        var stampSource = string.Join("\n", SourceFilesDeclaring(new[] { typeof(CanonicalLinkService) }).Select(File.ReadAllText));
+        var detectorSource = string.Join("\n", SourceFilesDeclaring(new[] { typeof(SsoAuthenticationProviders) }).Select(File.ReadAllText));
+        Assert.Contains("SsoManagedProviderId.Value", stampSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("typeof(SSOController)", stampSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("typeof(SSOController)", detectorSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Controller_DelegatesLoginCompletionToTheFlowService()
     {
         // Locked in by the login-completion extraction (#160, #318 step 11): the one shared completion tail —
