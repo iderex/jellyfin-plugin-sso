@@ -95,6 +95,15 @@ internal static class SamlMetadataParser
     // DTD/DOCTYPE (XXE + billion-laughs), no external-entity resolution, and a bound on the materialized DOM.
     private static XmlDocument ParseHardened(string xml)
     {
+        // Strip a leading UTF-8 byte-order-mark: a BOM that survived into the string (a pasted document, or a
+        // fetch decoded without BOM handling) is a U+FEFF character before the XML declaration, which the
+        // reader rejects as "data at the root level is invalid" — so an otherwise-valid document (ADFS serves
+        // its FederationMetadata.xml UTF-8-with-BOM) would fail. The fetch path decodes with BOM detection too.
+        if (xml.Length > 0 && xml[0] == 0xFEFF)
+        {
+            xml = xml.Substring(1);
+        }
+
         var doc = new XmlDocument { XmlResolver = null };
         var settings = new XmlReaderSettings
         {
@@ -125,9 +134,16 @@ internal static class SamlMetadataParser
     {
         var services = idp.SelectNodes("md:SingleSignOnService", ns)?.Cast<XmlElement>().ToList() ?? new List<XmlElement>();
 
-        string? ByBinding(string binding) => services
-            .FirstOrDefault(s => string.Equals(s.GetAttribute("Binding"), binding, StringComparison.Ordinal))
-            ?.GetAttribute("Location");
+        // XmlElement.GetAttribute returns "" (not null) for a missing/empty Location, so normalize a blank to
+        // null — otherwise a matching-binding service with no Location would short-circuit the ?? fallback and
+        // skip a usable endpoint under another binding.
+        string? ByBinding(string binding)
+        {
+            var candidate = services
+                .FirstOrDefault(s => string.Equals(s.GetAttribute("Binding"), binding, StringComparison.Ordinal))
+                ?.GetAttribute("Location");
+            return string.IsNullOrWhiteSpace(candidate) ? null : candidate;
+        }
 
         var location = ByBinding(RedirectBinding)
             ?? ByBinding(PostBinding)

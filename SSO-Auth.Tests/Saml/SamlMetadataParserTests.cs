@@ -128,6 +128,32 @@ public class SamlMetadataParserTests
         Assert.Equal(cert, result.PrimaryCertificate);
     }
 
+    [Fact]
+    public void Parse_LeadingByteOrderMark_IsStripped_AndParses()
+    {
+        // ADFS serves FederationMetadata.xml UTF-8-with-BOM; a surviving U+FEFF before the XML declaration
+        // must be stripped, not rejected as malformed.
+        var cert = Cert();
+        var withBom = ((char)0xFEFF).ToString() + Metadata(KeyDescriptor(cert), Sso(Redirect, RedirectSso));
+
+        var result = SamlMetadataParser.Parse(withBom);
+
+        Assert.Equal(EntityId, result.EntityId);
+        Assert.Equal(cert, result.PrimaryCertificate);
+    }
+
+    [Fact]
+    public void Parse_PreferredBindingWithEmptyLocation_FallsBackToTheNextUsableBinding()
+    {
+        // A Redirect SingleSignOnService with a blank Location must not short-circuit the fallback — a usable
+        // POST endpoint present in the same document is used.
+        var result = SamlMetadataParser.Parse(Metadata(
+            KeyDescriptor(Cert()),
+            Sso(Redirect, string.Empty) + Sso(Post, PostSso)));
+
+        Assert.Equal(PostSso, result.Endpoint);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("   ")]

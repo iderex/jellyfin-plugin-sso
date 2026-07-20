@@ -65,11 +65,17 @@ internal static class SamlMetadataImporter
         using var client = SsoHttp.CreateClient(factory);
         client.Timeout = FetchTimeout;
 
+        // An overall deadline linked to the caller's token: client.Timeout with ResponseHeadersRead covers
+        // only the header fetch, so this also bounds the streamed body read — a slow-drip server cannot hold
+        // the fetch open past FetchTimeout.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(FetchTimeout);
+
         try
         {
-            using var response = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            using var response = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
-            return await ReadCappedAsync(response, cancellationToken).ConfigureAwait(false);
+            return await ReadCappedAsync(response, deadline.Token).ConfigureAwait(false);
         }
         catch (HttpRequestException ex)
         {
@@ -77,8 +83,14 @@ internal static class SamlMetadataImporter
             // non-success status — all fail closed with an admin-facing message; no library detail is echoed.
             throw new SamlMetadataException("The metadata URL could not be fetched (unreachable, blocked, or an error response).", ex);
         }
-        catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        catch (IOException ex)
         {
+            // A mid-stream connection reset while reading the body — fail closed as a clean 400, not a 500.
+            throw new SamlMetadataException("The metadata could not be read from the URL.", ex);
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            // The linked deadline (or the client timeout) fired, not the caller's own cancellation.
             throw new SamlMetadataException("The metadata URL fetch timed out.", ex);
         }
     }
@@ -102,6 +114,12 @@ internal static class SamlMetadataImporter
             buffered.Write(chunk, 0, read);
         }
 
-        return Encoding.UTF8.GetString(buffered.ToArray());
+        // Decode honouring the byte-order mark: ADFS (a very common IdP) serves FederationMetadata.xml as
+        // UTF-8-with-BOM, and a raw Encoding.UTF8.GetString would leave a U+FEFF before the XML declaration
+        // that the reader rejects. StreamReader with BOM detection strips a UTF-8 BOM and correctly decodes a
+        // UTF-16 (BOM'd) document; a plain UTF-8 body is unaffected.
+        buffered.Position = 0;
+        using var textReader = new StreamReader(buffered, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return await textReader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
     }
 }

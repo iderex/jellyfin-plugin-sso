@@ -64,6 +64,25 @@ public class SamlImportMetadataEndpointTests
     }
 
     [Fact]
+    public async Task SamlImportMetadata_FetchedUtf8BomMetadata_Parses()
+    {
+        // ADFS serves FederationMetadata.xml UTF-8-with-BOM; the fetch must decode it (BOM stripped) rather
+        // than fail the marquee URL-import path.
+        var bom = System.Text.Encoding.UTF8.GetPreamble();
+        var body = System.Text.Encoding.UTF8.GetBytes(Metadata());
+        var withBom = new byte[bom.Length + body.Length];
+        Array.Copy(bom, withBom, bom.Length);
+        Array.Copy(body, 0, withBom, bom.Length, body.Length);
+        var harness = new SsoControllerHarness(httpResponder: _ =>
+            new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(withBom) });
+
+        var result = await harness.Controller.SamlImportMetadata(new SamlMetadataImportRequest { Url = "https://idp.example.com/FederationMetadata.xml" });
+
+        var import = Assert.IsType<SamlMetadataImport>(Assert.IsType<OkObjectResult>(result).Value);
+        Assert.Equal(EntityId, import.EntityId);
+    }
+
+    [Fact]
     public async Task SamlImportMetadata_MalformedXml_Returns400()
     {
         var harness = new SsoControllerHarness();

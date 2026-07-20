@@ -66,4 +66,18 @@ public class SamlMetadataImporterTests
         await Assert.ThrowsAsync<SamlMetadataException>(() =>
             SamlMetadataImporter.ImportAsync(factory, null, "<not-metadata/>", CancellationToken.None));
     }
+
+    [Theory]
+    [InlineData("ftp://idp.example.com/metadata")]
+    [InlineData("file:///etc/passwd")]
+    [InlineData("not-a-url")]
+    public async Task ImportAsync_NonHttpUrl_FailsClosedBeforeFetching(string url)
+    {
+        // The scheme allow-list rejects a non-http(s) URL before any outbound client is created.
+        var factory = Substitute.For<IHttpClientFactory>();
+
+        await Assert.ThrowsAsync<SamlMetadataException>(() => SamlMetadataImporter.ImportAsync(factory, url, null, CancellationToken.None));
+
+        factory.DidNotReceive().CreateClient(Arg.Any<string>());
+    }
 }
