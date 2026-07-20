@@ -175,6 +175,8 @@ const ssoConfigurationPage = {
     ssoConfigurationPage.setInsecureOptionsExpanded(page, false);
     ssoConfigurationPage.resetEditorSections(page);
     ssoConfigurationPage.syncDependentFields(page);
+    // Clear the computed redirect URI back to its placeholder for the fresh/blank editor (#724).
+    ssoConfigurationPage.updateRedirectUri(page);
   },
   // Return every accordion section INSIDE the editor to its authored default collapse state (the sections
   // with data-expanded="true" open, the rest — including "Security & hardening" — collapsed). Scoped to
@@ -687,7 +689,88 @@ const ssoConfigurationPage = {
         // active insecure option. Runs after the check_fields above are set from the loaded provider, so a
         // hidden-but-checked box is never left behind for the next save.
         ssoConfigurationPage.syncDependentFields(page);
+        // Reflect the loaded provider's name + base-URL override in the computed redirect URI (#724).
+        ssoConfigurationPage.updateRedirectUri(page);
       },
+    );
+  },
+  // Computes the exact redirect_uri the login uses, so the admin can register it verbatim at the IdP (#724).
+  // Mirrors the server-side build (OidcRedirectUriBuilder): the canonical base — the Base URL Override when
+  // set, else this server's address — plus the fixed /sso/OID/redirect/<provider> path. The provider name is
+  // appended raw (names are validated to exclude URI-reserved characters, #336), matching the server, which
+  // appends the route-decoded name without re-encoding so the string equals the login's byte-for-byte.
+  computeRedirectUri: (page, providerName) => {
+    const override = page.querySelector("#BaseUrlOverride").value.trim();
+    const raw = override || ApiClient.serverAddress() || "";
+    let base;
+    try {
+      // Mirror the server's CanonicalBaseUrl (System.Uri.GetLeftPart(UriPartial.Path)) so the shown value
+      // equals what the login sends: `origin` lowercases scheme + host AND elides the default port
+      // (443/80) — exactly as System.Uri does — while pathname keeps any sub-path; query/fragment are
+      // dropped and the trailing slash trimmed. A raw string strip alone would show a non-canonical override
+      // (e.g. `https://X.COM:443`) that the login then normalizes away, causing a redirect_uri mismatch.
+      const u = new URL(raw);
+      base = u.origin + u.pathname.replace(/\/+$/, "");
+    } catch (e) {
+      // Not a parseable absolute URL yet (admin mid-typing, or a bare host): best-effort fall back to the
+      // raw value with only trailing slashes stripped so the field still shows something.
+      base = raw.replace(/\/+$/, "");
+    }
+    return base + "/sso/OID/redirect/" + providerName;
+  },
+  // Live-updates the read-only redirect-URI field; empty (placeholder) until a provider name is entered. Sets
+  // .value only (never innerHTML, #221). Called on name/override input, on load, on reset, and at init.
+  updateRedirectUri: (page) => {
+    const field = page.querySelector("#OidRedirectUri");
+    if (!field) {
+      return;
+    }
+    const name = page.querySelector("#OidProviderName").value.trim();
+    field.value = name
+      ? ssoConfigurationPage.computeRedirectUri(page, name)
+      : "";
+    field.placeholder = name
+      ? ""
+      : "Enter a provider name above to see the redirect URI";
+    // A name/override change invalidates any previous "copied" confirmation.
+    const status = page.querySelector("#OidRedirectUri-copied");
+    if (status) {
+      status.textContent = "";
+    }
+  },
+  copyRedirectUri: (page) => {
+    const field = page.querySelector("#OidRedirectUri");
+    const status = page.querySelector("#OidRedirectUri-copied");
+    const value = field && field.value;
+    if (!value) {
+      return;
+    }
+    const announce = (message) => {
+      if (status) {
+        status.textContent = message;
+      }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(value).then(
+        () => announce("Redirect URI copied to the clipboard."),
+        () => announce("Copy failed — select the field and copy it manually."),
+      );
+      return;
+    }
+    // Fallback for a non-secure context without the async Clipboard API.
+    field.removeAttribute("readonly");
+    field.select();
+    let ok = false;
+    try {
+      ok = document.execCommand("copy");
+    } catch (e) {
+      ok = false;
+    }
+    field.setAttribute("readonly", "");
+    announce(
+      ok
+        ? "Redirect URI copied to the clipboard."
+        : "Copy failed — select the field and copy it manually.",
     );
   },
   deleteProvider: (page, provider_name) => {
@@ -1102,6 +1185,26 @@ export default function initSsoConfigurationPage(view) {
   view
     .querySelector("#BaseUrlOverride")
     .addEventListener("blur", () => ssoConfigurationPage.validateBaseUrl(view));
+
+  // Live-update the computed redirect URI (#724) as the provider name or the base-URL override changes, so
+  // the value shown always matches what the login will send. `input` (per-keystroke) not `blur`, since the
+  // field is purely informational — reflecting immediately is the point.
+  ["OidProviderName", "BaseUrlOverride"].forEach((id) => {
+    view
+      .querySelector("#" + id)
+      .addEventListener("input", () =>
+        ssoConfigurationPage.updateRedirectUri(view),
+      );
+  });
+
+  view.querySelector("#CopyRedirectUri").addEventListener("click", (e) => {
+    ssoConfigurationPage.copyRedirectUri(view);
+    e.preventDefault();
+    return false;
+  });
+
+  // Populate the redirect URI once at init (the blank editor shows its placeholder until a name is typed).
+  ssoConfigurationPage.updateRedirectUri(view);
 
   view.querySelector("#ExportConfig").addEventListener("click", (e) => {
     ssoConfigurationPage.exportConfig(view);

@@ -714,6 +714,43 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void OidcRedirectUriField_IsReadOnlyAndUnmarked_AndDerivesFromTheSameBaseTheLoginUses()
+    {
+        // #724: the config page shows the exact redirect_uri the login uses so an admin registers it verbatim
+        // (a mismatch is the most common OIDC setup failure). Structural properties a JS runtime test cannot
+        // pin (no JS harness exists), locked as a source scan:
+        //  - the field is READ-ONLY and carries NO sso-* marker class, so it never becomes a persisting field
+        //    (it is not an OidConfig property; ProviderFormFieldIds_MatchOidConfigProperties stays green);
+        //  - its value is set via .value, never innerHTML (#221);
+        //  - it derives from the Base URL Override (the same canonical base the server's OidcRedirectUriBuilder
+        //    uses) plus the fixed /sso/OID/redirect/ path — deriving from anything else would display a URI the
+        //    login does not actually send;
+        //  - the copy confirmation is announced through an aria-live region (not colour-only).
+        var html = File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "configPage.html"));
+        var js = File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Config", "config.js"));
+
+        var field = Regex.Match(html, "<input\\b[^>]*id=\"OidRedirectUri\"[^>]*>", RegexOptions.Singleline);
+        Assert.True(field.Success, "The read-only #OidRedirectUri field must exist in configPage.html (#724).");
+        Assert.Contains("readonly", field.Value, StringComparison.Ordinal);
+        Assert.DoesNotMatch(new Regex("class=\"[^\"]*sso-(text|line-list|toggle|folder-list|role-map)"), field.Value);
+
+        // The copy confirmation is a live region, not a colour-only signal.
+        Assert.Matches(new Regex("id=\"OidRedirectUri-copied\"[^>]*aria-live", RegexOptions.Singleline), html);
+
+        // config.js derives from the base-URL override + the fixed server path, and writes via .value.
+        Assert.Contains("/sso/OID/redirect/", js, StringComparison.Ordinal);
+        Assert.Matches(new Regex("computeRedirectUri[\\s\\S]{0,500}BaseUrlOverride", RegexOptions.Singleline), js);
+        // It normalizes the base through the URL parser so the shown value matches the server's System.Uri
+        // canonicalization (lowercased scheme/host, default port elided) — deriving from the raw override
+        // string would display a URI the login does not send (a redirect_uri mismatch). Pinned on the exact
+        // origin+pathname derivation, which is unique to computeRedirectUri.
+        Assert.Contains("new URL(raw)", js, StringComparison.Ordinal);
+        Assert.Matches(new Regex("\\.origin\\s*\\+\\s*[A-Za-z_$][\\w$]*\\.pathname", RegexOptions.Singleline), js);
+        Assert.Matches(new Regex("#OidRedirectUri\"\\)[\\s\\S]{0,200}\\.value\\s*=", RegexOptions.Singleline), js);
+        Assert.DoesNotMatch(new Regex("OidRedirectUri[\\s\\S]{0,200}innerHTML", RegexOptions.Singleline), js);
+    }
+
+    [Fact]
     public void OidcStepUpGate_ReadsAcrFromTheSignatureVerifiedIdToken_NotTheUserInfoMergedPrincipal()
     {
         // Locked in by #757. With LoadProfile on (the default), OidcClient merges the UNSIGNED UserInfo
