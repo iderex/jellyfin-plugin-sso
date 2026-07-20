@@ -107,7 +107,7 @@ Jellyfin upstream is building [native OIDC](https://github.com/jellyfin/jellyfin
    | ---------- | --------------------------------------------------------------------------------------------- |
    | **stable** | `https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-release/manifest.json` |
    | **beta**   | `https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json`    |
-   - **stable** ships tagged releases only. **beta** publishes on every merge, so betas move fast and may break — use them for testing, not production.
+   - **stable** ships tagged releases only. **beta** publishes on a daily schedule (04:00 UTC) whenever `main` has advanced since the last beta, so betas move fast and may break — use them for testing, not production.
    - Each manifest lists builds for **both Jellyfin 10.11** (.NET 9) and **Jellyfin 12.0** (.NET 10). Jellyfin filters by the plugin's target ABI, so your server is only ever offered the build that runs on it — you don't pick the generation, it does. Jellyfin 12.0 support is currently **beta only** (the stable 12.0 build lands at a 12.0 stable release).
 
 2. Go to **Dashboard → Plugins → Catalog**, find **SSO Authentication**, and install it.
@@ -141,9 +141,9 @@ Broader documentation lives in the **[Wiki](https://github.com/iderex/jellyfin-p
 
 - [Installation](https://github.com/iderex/jellyfin-plugin-sso/wiki/Installation) · [Login Flow](https://github.com/iderex/jellyfin-plugin-sso/wiki/Login-Flow) · [Security Model](https://github.com/iderex/jellyfin-plugin-sso/wiki/Security-Model) · [Troubleshooting](https://github.com/iderex/jellyfin-plugin-sso/wiki/Troubleshooting)
 - Per-identity-provider setup: [Provider Setup](https://github.com/iderex/jellyfin-plugin-sso/wiki/Provider-Setup)
-- In-tree contributor map of the login flow and code layout: [Architecture Internals](https://github.com/iderex/jellyfin-plugin-sso/wiki/Architecture-Internals)
+- Contributor map of the login flow and module layout: [Architecture](https://github.com/iderex/jellyfin-plugin-sso/wiki/Architecture)
 - Project policies: [Governance](GOVERNANCE.md) · [Privacy & data handling](docs/PRIVACY.md) · [Support & security updates](SECURITY.md#supported-versions--security-updates) · [Remediation & secrets policy](docs/SECURITY-REMEDIATION-POLICY.md)
-- Honest maturity self-assessment (Silver/Gold + OSPS, incl. what a solo project structurally cannot meet): [Maturity Map](https://github.com/iderex/jellyfin-plugin-sso/wiki/Maturity-Map)
+- Honest maturity self-assessment (Silver/Gold + OSPS, incl. what a solo project structurally cannot meet): [Security & Maturity Self-Assessment](https://github.com/iderex/jellyfin-plugin-sso/wiki/Security-and-Maturity-Self-Assessment)
 
 ## Security
 
