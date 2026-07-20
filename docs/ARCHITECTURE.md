@@ -113,13 +113,19 @@ none merely "good enough":
    namespace**; the flat `Api` root stays empty (a conformance test enforces it).
    A genuinely new concern gets a **new module** (folder + namespace + a DAG
    `InlineData` case), not a smear across the tree.
-3. **Object-oriented structure** — shared behaviour lives behind a **shared
-   abstraction** with protocols/variants as specializations, realised
-   **composition- and interface-first, with shallow inheritance only where it is
-   genuinely `is-a`** (not a deep inheritance tower). `ProviderConfigBase`
-   (shared by `OidConfig`/`SamlConfig`) is the model to follow; the broader
-   OIDC/SAML shared-contract work is #790. A third IdP type must slot into the
-   shared abstraction, not fork a third parallel path.
+3. **Object-oriented structure** — shared behaviour lives in a **single concrete
+   home reached by composition**, not duplicated across protocols. An **interface
+   or abstract contract earns its place only when ≥2 real consumers dispatch
+   through it polymorphically**; until then a concrete type is clearer and an
+   interface is speculative (composition- and interface-first, shallow
+   inheritance only where it is genuinely `is-a`, never a deep inheritance
+   tower). `ProviderConfigBase` (the genuine `is-a` shared by
+   `OidConfig`/`SamlConfig`) and the `ValidatedLogin` → `VerifiedIdentity`
+   keystone both protocol validators feed are the models; a third IdP type slots
+   into those shared homes, not a third parallel path. The full object-oriented
+   rule is the canonical
+   [Coding Standards](https://github.com/iderex/jellyfin-plugin-sso/wiki/Coding-Standards);
+   the OIDC/SAML seam evaluation that settled it is #790.
 
 **This applies to the whole repository, not only `Api/`.** In particular the
 **test project mirrors the source module structure** — a module's tests live in
