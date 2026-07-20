@@ -263,6 +263,33 @@
   font-weight: 700;
 }
 
+/* Computed redirect URI (#724): the read-only field and its copy button on one row */
+.sso-redirect-uri-row {
+  display: flex;
+  gap: 0.5em;
+  align-items: center;
+}
+
+.sso-redirect-uri-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sso-redirect-uri-row button {
+  flex: 0 0 auto;
+}
+
+.sso-copied-status {
+  margin-top: 0.35em;
+  min-height: 1.2em;
+  color: inherit;
+}
+
+.sso-copied-status:not(:empty)::before {
+  content: "✓ ";
+  font-weight: 700;
+}
+
 /* Sub-groups inside a section */
 .sso-subgroup {
   margin-top: 0.75em;

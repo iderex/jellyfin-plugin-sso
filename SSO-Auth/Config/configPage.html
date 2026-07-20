@@ -377,6 +377,56 @@
                     </div>
                   </div>
 
+                  <!--
+                    Read-only computed redirect URI (#724): shows the exact redirect_uri the login uses, so an
+                    admin can register it verbatim at the identity provider (a wrong value is the most common
+                    OIDC setup failure). NO sso-* marker class and read-only, so it is not a persisting field
+                    (listArgumentsByType must not pick it up, and it stays out of the
+                    ProviderFormFieldIds_MatchOidConfigProperties contract, like OidProviderName). Its value is
+                    set via .value in config.js (never innerHTML, #221). It mirrors the server-side build:
+                    Base URL Override when set, else this server's address, + /sso/OID/redirect/<name>.
+                  -->
+                  <div class="inputContainer">
+                    <label
+                      class="inputLabel inputLabelUnfocused"
+                      for="OidRedirectUri"
+                      >Redirect URI (register this at your provider):</label
+                    >
+                    <div class="sso-redirect-uri-row">
+                      <input
+                        is="emby-input"
+                        id="OidRedirectUri"
+                        type="text"
+                        readonly
+                        aria-describedby="OidRedirectUri-help"
+                      />
+                      <button
+                        is="emby-button"
+                        type="button"
+                        id="CopyRedirectUri"
+                        class="raised button-alt"
+                      >
+                        <span>Copy</span>
+                      </button>
+                    </div>
+                    <div
+                      id="OidRedirectUri-copied"
+                      class="sso-copied-status"
+                      role="status"
+                      aria-live="polite"
+                    ></div>
+                    <div class="fieldDescription" id="OidRedirectUri-help">
+                      The exact redirect URI the login uses — register it
+                      verbatim at your identity provider. It updates as you type
+                      the provider name above. Derived from the
+                      <strong>Base URL Override</strong> (in the Advanced
+                      section) when set, otherwise this server's address; if you
+                      sit behind a reverse proxy, set that override so this
+                      matches what the login actually sends. The legacy spelling
+                      <code>/sso/OID/r/&lt;name&gt;</code> also works.
+                    </div>
+                  </div>
+
                   <div class="inputContainer">
                     <label
                       class="inputLabel inputLabelUnfocused"
