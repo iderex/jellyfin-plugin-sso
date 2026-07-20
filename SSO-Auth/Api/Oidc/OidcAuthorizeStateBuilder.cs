@@ -79,6 +79,10 @@ internal static class OidcAuthorizeStateBuilder
         // Default-deny and empty when the feature is off, so it changes nothing for existing deployments.
         var permissionGrants = PermissionRolePolicy.Map(roles, config);
 
+        // Reduce the roles to a parental-rating-score ceiling (#736): null when the feature is off or no
+        // mapping matched, so the mint leaves the account's existing ceiling untouched.
+        var maxParentalRatingScore = ParentalRatingPolicy.Resolve(roles, config);
+
         // If nothing has validated the login yet, fall back to the stable "sub" as the username. The
         // subject was already resolved above (last "sub" wins), so this reuses it instead of scanning
         // the claims a second time. Faithful to the original: unlike the preferred-username branch, this
@@ -99,7 +103,7 @@ internal static class OidcAuthorizeStateBuilder
         // validation rejects it anyway, so no legitimate login can carry one.
         valid = valid && !string.IsNullOrWhiteSpace(username);
 
-        return new OidcAuthorizeState(username, subject, issuer, emailVerified, valid, admin, enableLiveTv, enableLiveTvManagement, folders, avatarUrl, permissionGrants);
+        return new OidcAuthorizeState(username, subject, issuer, emailVerified, valid, admin, enableLiveTv, enableLiveTvManagement, folders, avatarUrl, permissionGrants, maxParentalRatingScore);
     }
 
     // The last "sub" claim value, or null when none is present. Kept separate from the username
@@ -233,6 +237,7 @@ internal static class OidcAuthorizeStateBuilder
     /// <param name="Folders">The enabled folders (statically enabled plus role-granted).</param>
     /// <param name="AvatarUrl">The resolved avatar candidate URL: the configured AvatarUrlFormat template with @{claim} tokens substituted, or — when no template is configured (null/empty) — the standard OIDC "picture" claim (#723); null when neither yields a value. Only a candidate: the fetch is still gated by AvatarUrlValidator.</param>
     /// <param name="PermissionGrants">The generic role→permission grants (#164); null (treated as empty) when the feature is off.</param>
+    /// <param name="MaxParentalRatingScore">The parental-rating-score ceiling (#736); null when the feature is off or no mapping matched (leave the existing ceiling untouched).</param>
     internal readonly record struct OidcAuthorizeState(
         string? Username,
         string? Subject,
@@ -244,5 +249,6 @@ internal static class OidcAuthorizeStateBuilder
         bool EnableLiveTvManagement,
         List<string> Folders,
         string? AvatarUrl,
-        IReadOnlyList<PermissionGrant>? PermissionGrants = null);
+        IReadOnlyList<PermissionGrant>? PermissionGrants = null,
+        int? MaxParentalRatingScore = null);
 }

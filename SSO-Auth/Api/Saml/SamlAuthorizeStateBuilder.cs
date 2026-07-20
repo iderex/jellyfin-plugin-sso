@@ -34,7 +34,11 @@ internal static class SamlAuthorizeStateBuilder
         // Default-deny and empty when the feature is off, so it changes nothing for existing deployments.
         var permissionGrants = PermissionRolePolicy.Map(roles, config);
 
-        return new SamlAuthorizeState(privileges.Admin, privileges.EnableLiveTv, privileges.EnableLiveTvManagement, privileges.Folders, permissionGrants);
+        // Reduce the roles to a parental-rating-score ceiling (#736): null when the feature is off or no
+        // mapping matched, so the mint leaves the account's existing ceiling untouched.
+        var maxParentalRatingScore = ParentalRatingPolicy.Resolve(roles, config);
+
+        return new SamlAuthorizeState(privileges.Admin, privileges.EnableLiveTv, privileges.EnableLiveTvManagement, privileges.Folders, permissionGrants, maxParentalRatingScore);
     }
 
     /// <summary>
@@ -45,10 +49,12 @@ internal static class SamlAuthorizeStateBuilder
     /// <param name="EnableLiveTvManagement">Whether the login grants Live TV management.</param>
     /// <param name="Folders">The enabled folders (statically enabled plus role-granted).</param>
     /// <param name="PermissionGrants">The generic role→permission grants (#164); null (treated as empty) when the feature is off.</param>
+    /// <param name="MaxParentalRatingScore">The parental-rating-score ceiling (#736); null when the feature is off or no mapping matched (leave the existing ceiling untouched).</param>
     internal readonly record struct SamlAuthorizeState(
         bool Admin,
         bool EnableLiveTv,
         bool EnableLiveTvManagement,
         List<string> Folders,
-        IReadOnlyList<PermissionGrant>? PermissionGrants = null);
+        IReadOnlyList<PermissionGrant>? PermissionGrants = null,
+        int? MaxParentalRatingScore = null);
 }

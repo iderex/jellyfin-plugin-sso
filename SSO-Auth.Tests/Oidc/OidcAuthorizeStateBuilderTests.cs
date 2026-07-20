@@ -232,6 +232,50 @@ public class OidcAuthorizeStateBuilderTests
     }
 
     [Fact]
+    public void ParentalRating_MatchedRole_CarriesTheMinimumCeilingOnTheState()
+    {
+        // #736 wiring: the role→parental-rating ceiling derived from the login's roles is carried on the
+        // derived state (and thence to the mint). The login matches two mappings; the minimum (most
+        // restrictive) wins.
+        var config = Config(c =>
+        {
+            c.RoleClaim = "role";
+            c.EnableParentalRatingRoles = true;
+            c.ParentalRatingRoleMappings = new System.Collections.Generic.List<ParentalRatingRoleMap>
+            {
+                new ParentalRatingRoleMap { Score = 10, Roles = new[] { "teens" } },
+                new ParentalRatingRoleMap { Score = 3, Roles = new[] { "kids" } },
+            };
+        });
+
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(("preferred_username", "alice"), ("role", "teens"), ("role", "kids")),
+            config);
+
+        Assert.Equal(3, result.MaxParentalRatingScore);
+    }
+
+    [Fact]
+    public void ParentalRating_FeatureOff_LeavesTheCeilingNull()
+    {
+        var config = Config(c =>
+        {
+            c.RoleClaim = "role";
+            c.EnableParentalRatingRoles = false;
+            c.ParentalRatingRoleMappings = new System.Collections.Generic.List<ParentalRatingRoleMap>
+            {
+                new ParentalRatingRoleMap { Score = 3, Roles = new[] { "kids" } },
+            };
+        });
+
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(("preferred_username", "alice"), ("role", "kids")),
+            config);
+
+        Assert.Null(result.MaxParentalRatingScore);
+    }
+
+    [Fact]
     public void AdminRole_GrantsAdmin_ViaNestedJsonRoleClaim()
     {
         var config = Config(c =>

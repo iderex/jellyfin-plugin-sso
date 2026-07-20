@@ -45,6 +45,7 @@ internal static class ProviderConfigValidator
                 ValidateProviderName("OpenID", kvp.Key, isNew: live?.OidConfigs?.ContainsKey(kvp.Key) != true);
                 ValidateBaseUrlOverride("OpenID", kvp.Key, kvp.Value?.BaseUrlOverride);
                 ValidatePermissionRoleMappings("OpenID", kvp.Key, kvp.Value?.PermissionRoleMappings);
+                ValidateParentalRatingMappings("OpenID", kvp.Key, kvp.Value?.ParentalRatingRoleMappings);
                 ValidateAcrRequirement(kvp.Key, kvp.Value);
             }
         }
@@ -63,6 +64,7 @@ internal static class ProviderConfigValidator
                 ValidateSamlSigningKey(kvp.Key, kvp.Value?.SamlSigningKeyPfx);
                 ValidateSamlSigningKey(kvp.Key, kvp.Value?.SamlRolloverSigningKeyPfx);
                 ValidatePermissionRoleMappings("SAML", kvp.Key, kvp.Value?.PermissionRoleMappings);
+                ValidateParentalRatingMappings("SAML", kvp.Key, kvp.Value?.ParentalRatingRoleMappings);
             }
         }
     }
@@ -182,6 +184,42 @@ internal static class ProviderConfigValidator
             throw new ArgumentException(
                 $"{protocol} provider '{echoName}' has an invalid permission-role mapping: it {reason}. Each mapping's Permission must be the exact name of a Jellyfin PermissionKind (for example EnableContentDownloading) other than IsAdministrator, EnableAllFolders, EnableLiveTvAccess, EnableLiveTvManagement, or IsDisabled.",
                 nameof(mappings));
+        }
+    }
+
+    // A parental-rating mapping (#736) with a negative score or no roles would be persisted and then either
+    // never apply (no roles) or be a nonsensical ceiling — reject both fail-closed at save so a mis-set is
+    // caught before it takes effect. A null entry maps nothing and is tolerated (it contributes nothing at
+    // runtime). Both the config-page save and the Add endpoints run this. The provider name is control-
+    // stripped in case it reaches a log through the thrown exception.
+    internal static void ValidateParentalRatingMappings(string protocol, string provider, System.Collections.Generic.IEnumerable<ParentalRatingRoleMap> mappings)
+    {
+        if (mappings == null)
+        {
+            return;
+        }
+
+        foreach (var mapping in mappings)
+        {
+            if (mapping == null)
+            {
+                continue;
+            }
+
+            var echoName = (provider ?? string.Empty).ReplaceLineEndings(string.Empty);
+            if (mapping.Score < 0)
+            {
+                throw new ArgumentException(
+                    $"{protocol} provider '{echoName}' has an invalid parental-rating mapping: the score must be zero or greater (a smaller value is more restrictive; null/unmapped leaves the ceiling untouched).",
+                    nameof(mappings));
+            }
+
+            if (mapping.Roles == null || mapping.Roles.Length == 0)
+            {
+                throw new ArgumentException(
+                    $"{protocol} provider '{echoName}' has a parental-rating mapping with no roles: each mapping must list at least one role the ceiling applies to.",
+                    nameof(mappings));
+            }
         }
     }
 

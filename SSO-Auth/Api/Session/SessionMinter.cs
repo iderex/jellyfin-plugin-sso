@@ -101,6 +101,15 @@ internal sealed class SessionMinter
             {
                 user.SetPermission(grant.Kind, grant.Granted);
             }
+
+            // Parental-rating-score ceiling (#736): applied only when the login resolved one (a role matched a
+            // configured mapping); a null leaves the account's existing MaxParentalRatingScore untouched, so an
+            // unmapped or malformed claim never raises the ceiling. Under the same EnableAuthorization master
+            // switch as the grants above, so turning RBAC off leaves the ceiling untouched too.
+            if (parameters.MaxParentalRatingScore.HasValue)
+            {
+                user.MaxParentalRatingScore = parameters.MaxParentalRatingScore;
+            }
         }
 
         await _avatarService.TrySetAsync(user, parameters.AvatarUrl).ConfigureAwait(false);

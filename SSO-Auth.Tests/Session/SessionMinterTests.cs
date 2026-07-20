@@ -49,21 +49,23 @@ public class SessionMinterTests
         bool enableLiveTvManagement = false,
         string? avatarUrl = null,
         string? defaultProvider = null,
-        IReadOnlyList<PermissionGrant>? permissionGrants = null) => new SessionParameters
-    {
-        UserId = UserId,
-        IsAdmin = isAdmin,
-        IsBreakGlassAdmin = isBreakGlassAdmin,
-        EnableAuthorization = enableAuthorization,
-        EnableAllFolders = enableAllFolders,
-        EnabledFolders = enabledFolders ?? Array.Empty<string>(),
-        EnableLiveTv = enableLiveTv,
-        EnableLiveTvManagement = enableLiveTvManagement,
-        PermissionGrants = permissionGrants ?? Array.Empty<PermissionGrant>(),
-        AvatarUrl = avatarUrl,
-        DefaultProvider = defaultProvider,
-        AuthResponse = new AuthResponse { AppName = "app", AppVersion = "1", DeviceID = "d", DeviceName = "dev" },
-    };
+        IReadOnlyList<PermissionGrant>? permissionGrants = null,
+        int? maxParentalRatingScore = null) => new SessionParameters
+        {
+            UserId = UserId,
+            IsAdmin = isAdmin,
+            IsBreakGlassAdmin = isBreakGlassAdmin,
+            EnableAuthorization = enableAuthorization,
+            EnableAllFolders = enableAllFolders,
+            EnabledFolders = enabledFolders ?? Array.Empty<string>(),
+            EnableLiveTv = enableLiveTv,
+            EnableLiveTvManagement = enableLiveTvManagement,
+            PermissionGrants = permissionGrants ?? Array.Empty<PermissionGrant>(),
+            MaxParentalRatingScore = maxParentalRatingScore,
+            AvatarUrl = avatarUrl,
+            DefaultProvider = defaultProvider,
+            AuthResponse = new AuthResponse { AppName = "app", AppVersion = "1", DeviceID = "d", DeviceName = "dev" },
+        };
 
     [Fact]
     public async Task MintAsync_ResolvedAccountDeleted_ThrowsAndMintsNoSession()
@@ -330,5 +332,49 @@ public class SessionMinterTests
         Assert.True(states[^1].Written); // the final gate ran after the user write
         Assert.False(states[^1].Minted); // and before the mint
         Assert.True(mintCalled); // with both gates true, the mint proceeded
+    }
+
+    [Fact]
+    public async Task MintAsync_EnableAuthorization_AppliesTheParentalRatingCeiling()
+    {
+        // #736: with the master switch on, the resolved parental-rating-score ceiling is written to the user.
+        var (minter, users, sessions) = Build();
+        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId, MaxParentalRatingScore = 100 };
+        users.GetUserById(UserId).Returns(user);
+        sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
+
+        await minter.MintAsync(Params(enableAuthorization: true, maxParentalRatingScore: 7), () => "203.0.113.7", () => true);
+
+        Assert.Equal(7, user.MaxParentalRatingScore);
+    }
+
+    [Fact]
+    public async Task MintAsync_NoAuthorization_LeavesTheParentalRatingCeilingUntouched()
+    {
+        // The ceiling respects the same EnableAuthorization master switch (#215/#736): with it off, a resolved
+        // ceiling is NOT applied — the account's existing value survives.
+        var (minter, users, sessions) = Build();
+        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId, MaxParentalRatingScore = 3 };
+        users.GetUserById(UserId).Returns(user);
+        sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
+
+        await minter.MintAsync(Params(enableAuthorization: false, maxParentalRatingScore: 7), () => "203.0.113.7", () => true);
+
+        Assert.Equal(3, user.MaxParentalRatingScore); // seed left untouched
+    }
+
+    [Fact]
+    public async Task MintAsync_NullCeiling_LeavesTheExistingValueUntouched()
+    {
+        // #736 fail-safe: a null ceiling (no mapping matched) never raises or clears the existing value — an
+        // unmapped or malformed claim leaves MaxParentalRatingScore exactly as it was, even with RBAC on.
+        var (minter, users, sessions) = Build();
+        var user = new User("alice", "SSO-Auth", "Default") { Id = UserId, MaxParentalRatingScore = 3 };
+        users.GetUserById(UserId).Returns(user);
+        sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
+
+        await minter.MintAsync(Params(enableAuthorization: true, maxParentalRatingScore: null), () => "203.0.113.7", () => true);
+
+        Assert.Equal(3, user.MaxParentalRatingScore); // existing ceiling untouched
     }
 }

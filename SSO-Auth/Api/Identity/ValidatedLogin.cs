@@ -51,4 +51,7 @@ internal sealed record ValidatedLogin
 
     /// <summary>Gets the generic role→permission grants the login resolves (#164), or empty when the feature is off.</summary>
     internal required IReadOnlyList<PermissionGrant> PermissionGrants { get; init; }
+
+    /// <summary>Gets the parental-rating-score ceiling the login resolves (#736), or null when the feature is off or no mapping matched (leave the existing ceiling untouched).</summary>
+    internal int? MaxParentalRatingScore { get; init; }
 }

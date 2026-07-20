@@ -53,7 +53,7 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 ## Features
 
 - **OpenID Connect and SAML 2.0** — either or both, multiple providers side by side. See the [Provider Setup](https://github.com/iderex/jellyfin-plugin-sso/wiki/Provider-Setup).
-- **Role-based access control** — map identity-provider groups/roles to login, administrator, library folders, and Live TV.
+- **Role-based access control** — map identity-provider groups/roles to login, administrator, library folders, Live TV, generic permissions, and a per-group parental-rating (content) ceiling.
 - **Hardened, fail-closed login path** — identities bound to the stable `sub` / `NameID`, fail-closed SAML and `id_token` validation, and SSRF-guarded avatar fetches. Details on the [Security Model](https://github.com/iderex/jellyfin-plugin-sso/wiki/Security-Model) page.
 - **Optional SSO-only login** — disable password login for every account except a designated break-glass admin, behind a fail-closed last-admin guard so no configuration can strand a server without a working admin login. Runbook on the [Provider Setup](https://github.com/iderex/jellyfin-plugin-sso/wiki/Provider-Setup#sso-only-login-disable-password-login) page.
 - **Avatar sync, Quick Connect, and self-service account linking**.

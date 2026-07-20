@@ -216,6 +216,7 @@ internal sealed class SamlAssertionValidator
             EnableLiveTvManagement = derived.EnableLiveTvManagement,
             AvatarUrl = null,
             PermissionGrants = derived.PermissionGrants ?? Array.Empty<PermissionGrant>(),
+            MaxParentalRatingScore = derived.MaxParentalRatingScore,
         });
         return true;
     }

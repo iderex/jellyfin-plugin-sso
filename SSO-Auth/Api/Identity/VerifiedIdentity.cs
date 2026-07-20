@@ -53,7 +53,8 @@ internal sealed record VerifiedIdentity
         bool enableLiveTv,
         bool enableLiveTvManagement,
         string? avatarUrl,
-        IReadOnlyList<PermissionGrant> permissionGrants)
+        IReadOnlyList<PermissionGrant> permissionGrants,
+        int? maxParentalRatingScore)
     {
         LinkMode = linkMode;
         AuditProtocol = auditProtocol;
@@ -68,6 +69,7 @@ internal sealed record VerifiedIdentity
         EnableLiveTvManagement = enableLiveTvManagement;
         AvatarUrl = avatarUrl;
         PermissionGrants = permissionGrants;
+        MaxParentalRatingScore = maxParentalRatingScore;
     }
 
     /// <summary>Gets the protocol the canonical-link store keys this identity under (#369).</summary>
@@ -118,6 +120,13 @@ internal sealed record VerifiedIdentity
     internal IReadOnlyList<PermissionGrant> PermissionGrants { get; }
 
     /// <summary>
+    /// Gets the parental-rating-score ceiling the login resolves (#736): the minimum (most restrictive) of
+    /// the matched role→ceiling mappings, applied at the mint under EnableAuthorization. Null when the feature
+    /// is off or no mapping matched, so the account's existing ceiling is left untouched.
+    /// </summary>
+    internal int? MaxParentalRatingScore { get; }
+
+    /// <summary>
     /// Mints the verified identity of an OpenID login. Called only from the OpenID redeem path
     /// (<c>AuthorizeSession.Ready</c>), which the store hands out only through its one-time atomic redeem of a
     /// promoted (role-gate-passed) state — so a raw or unvalidated login can never reach it.
@@ -153,5 +162,6 @@ internal sealed record VerifiedIdentity
             login.EnableLiveTv,
             login.EnableLiveTvManagement,
             login.AvatarUrl,
-            login.PermissionGrants);
+            login.PermissionGrants,
+            login.MaxParentalRatingScore);
 }
