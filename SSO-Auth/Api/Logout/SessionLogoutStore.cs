@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -63,7 +65,7 @@ internal static class SessionLogoutStore
     /// <param name="configuration">The live configuration.</param>
     /// <param name="sessionKey">The session key.</param>
     /// <returns>The state, or <c>null</c> when absent.</returns>
-    internal static LogoutSession Find(PluginConfiguration configuration, string sessionKey)
+    internal static LogoutSession? Find(PluginConfiguration configuration, string sessionKey)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         if (string.IsNullOrEmpty(sessionKey))
