@@ -481,7 +481,29 @@ internal sealed class CanonicalLinkService
             // permissions are applied — the account carries Jellyfin's default new-user policy until an
             // administrator enables it. The caller reads the disabled state and refuses the login.
             user.SetPermission(PermissionKind.IsDisabled, true);
-            await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
+            var persisted = false;
+            try
+            {
+                await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
+                persisted = true;
+            }
+            finally
+            {
+                if (!persisted)
+                {
+                    // If persisting the disabled flag failed, the just-created account would otherwise survive
+                    // ENABLED and link-less, and a later login could adopt it (with AllowExistingAccountLink on)
+                    // and mint a session — defeating the hold. Roll it back so the login fails closed with no
+                    // orphan. The original failure still propagates out of this finally.
+                    await _userManager.DeleteUserAsync(user.Id).ConfigureAwait(false);
+                }
+            }
+
+            // Audited here, at the actual provisioning event, so the line fires exactly once (not on every
+            // later refused login of the now-pending account) and is always accurate — the completion-path
+            // gate that refuses the login covers any disabled account, including one an admin disabled, so
+            // auditing there would mislabel a deliberate ban as a fresh provisioning.
+            SsoAudit.ProvisionedPendingApproval(_logger, mode == ProviderMode.Oid ? "OpenID" : "SAML", provider, username);
         }
 
         // Atomic check-then-link (#133): if a concurrent first-login for the same identity

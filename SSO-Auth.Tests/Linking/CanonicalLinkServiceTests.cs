@@ -88,9 +88,10 @@ public class CanonicalLinkServiceTests
     public async Task ResolveOrCreateAsync_ProvisionDisabled_NewAccount_CreatesItDisabledAndPersists()
     {
         // #737: with the policy on, a brand-new account is created disabled and PERSISTED here (the deferred
-        // path short-circuits before the minter, so it must persist the inert account itself), and it is then
-        // reported as awaiting approval so the completion path refuses the login.
-        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
+        // path short-circuits before the minter, so it must persist the inert account itself), it is audited
+        // once at the provisioning event, and it is then reported as awaiting approval so the completion path
+        // refuses the login.
+        var (service, cfg, users, log) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
         var created = UserNamed("alice", Other);
         users.GetUserByName("alice").Returns((User?)null);
         users.CreateUserAsync("alice").Returns(created);
@@ -103,6 +104,49 @@ public class CanonicalLinkServiceTests
         await users.Received(1).UpdateUserAsync(created); // and persisted (the normal path leaves this to the minter)
         Assert.True(service.IsAccountAwaitingApproval(Other)); // so the login is refused downstream
         Assert.Equal(Other, cfg.OidConfigs["kc"].CanonicalLinks["sub-1"]); // still linked, so a re-login resolves it
+        Assert.Single(log.Entries, e => e.Message.Contains("provisioned pending approval", StringComparison.OrdinalIgnoreCase)); // audited once
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_ProvisionDisabled_PersistFails_RollsBackTheAccountAndFailsClosed()
+    {
+        // #737 fail-closed: if persisting the disabled flag throws, the just-created account must not survive
+        // ENABLED and link-less (a later login could adopt it and mint a session). It is deleted, the login
+        // fails closed (the failure propagates), and no canonical link is written.
+        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
+        var created = UserNamed("alice", Other);
+        users.GetUserByName("alice").Returns((User?)null);
+        users.CreateUserAsync("alice").Returns(created);
+        users.GetUserById(Other).Returns(created);
+        users.When(u => u.UpdateUserAsync(created)).Do(_ => throw new InvalidOperationException("db down"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: false, provisionDisabled: true));
+
+        await users.Received(1).DeleteUserAsync(Other); // rolled back — no enabled orphan survives
+        Assert.False(cfg.OidConfigs["kc"].CanonicalLinks.ContainsKey("sub-1")); // and never linked
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_LiveLinkToDisabledAccount_ResolvesWithoutReAuditingProvisioning()
+    {
+        // The provisioning audit fires only at the create event, never on a later login of the now-pending
+        // account: resolving a live link to an already-disabled user emits no "provisioned pending" line.
+        var (service, _, users, log) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+        var pending = UserNamed("alice", Existing);
+        pending.SetPermission(PermissionKind.IsDisabled, true);
+        users.GetUserById(Existing).Returns(pending);
+
+        var resolved = await service.ResolveOrCreateAsync(ProviderMode.Oid, "kc", "sub-1", "alice", allowExistingAccountLink: false, provisionDisabled: true);
+
+        Assert.Equal(Existing, resolved);
+        Assert.True(service.IsAccountAwaitingApproval(Existing)); // still refused downstream
+        Assert.DoesNotContain(log.Entries, e => e.Message.Contains("provisioned pending approval", StringComparison.OrdinalIgnoreCase));
+        await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
     }
 
     [Fact]

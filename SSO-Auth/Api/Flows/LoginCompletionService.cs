@@ -88,10 +88,11 @@ internal sealed class LoginCompletionService
         // not be issued a session. This single read-only check fails closed for both the first login (the
         // account was just created disabled above) and every later login of a still-pending account, and it
         // fires BEFORE any SSO-only repoint or mint side effect. It never disables an account; it only refuses
-        // to mint for one already disabled.
+        // to mint for one already disabled. The provisioning event itself is audited at its source
+        // (CanonicalLinkService), so this uniform gate refuses silently rather than mislabelling an
+        // admin-disabled account's refused login as a fresh provisioning.
         if (_canonicalLinks.IsAccountAwaitingApproval(userId))
         {
-            SsoAudit.ProvisionedPendingApproval(_logger, identity.AuditProtocol, identity.Provider, identity.Username);
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.AwaitingApproval));
         }
 
