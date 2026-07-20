@@ -45,7 +45,7 @@ public class SessionLogoutStoreTests
         SessionLogoutStore.Capture(config, "session-1", State("keycloak", "sub-1", idToken: "new"), Now);
 
         Assert.Single(config.LogoutSessions);
-        Assert.Equal("new", SessionLogoutStore.Find(config, "session-1").IdToken);
+        Assert.Equal("new", SessionLogoutStore.Find(config, "session-1")!.IdToken);
     }
 
     [Fact]
