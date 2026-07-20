@@ -137,7 +137,7 @@ public sealed class SsoAuthorizationServerFixture : IAsyncDisposable
 
     /// <summary>
     /// Resolves the caller to a real host user so the bare-<c>[Authorize]</c> canonical-link endpoints, which
-    /// run an in-body owner check (<see cref="Jellyfin.Plugin.SSO_Auth.Helpers.RequestHelpers.AssertCanUpdateUser"/>),
+    /// run an in-body owner check (<see cref="Jellyfin.Plugin.SSO_Auth.Api.Http.RequestHelpers.AssertCanUpdateUser"/>),
     /// pass that check and reach their action bodies. That check is orthogonal to the MIDDLEWARE authorization
     /// stage these tests target: it is covered directly by <c>RequestHelpersTests</c>. Leaving the caller
     /// unresolved would make the helper deny (a clean 403) and make an in-body denial indistinguishable from a

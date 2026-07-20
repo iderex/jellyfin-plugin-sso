@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using Microsoft.Net.Http.Headers;
 
-namespace Jellyfin.Plugin.SSO_Auth.Views;
+namespace Jellyfin.Plugin.SSO_Auth.Api.Http;
 
 /// <summary>
 /// The sso views controller.
