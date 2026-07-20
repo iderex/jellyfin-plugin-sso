@@ -635,6 +635,50 @@ public class SSOController : ControllerBase
     }
 
     /// <summary>
+    /// Parses SAML identity-provider metadata into the provider-configuration values an administrator would
+    /// otherwise hand-copy — the SSO endpoint and the signing certificate(s) — from EITHER a server-fetched
+    /// URL or pasted XML (#735). Requires administrator privileges and is deliberately elevation-gated: the
+    /// server fetches an admin-supplied URL, so — like <see cref="OidTest"/> — an unauthenticated caller must
+    /// not be able to drive it as an SSRF probe (the fetch also routes through the SSRF-hardened outbound
+    /// client, which refuses a private/loopback address). The metadata XML is parsed with fail-closed
+    /// hardening (no DTD/XXE, size-bounded). It RETURNS the parsed values for the admin to review and save; it
+    /// applies nothing itself, and returns the IdP entityID for reference only (it is NOT the SP SamlClientId).
+    /// The request body is size-capped and the endpoint is throttled after the elevation guard.
+    /// </summary>
+    /// <param name="request">Exactly one of a metadata URL or pasted metadata XML.</param>
+    /// <returns>The parsed import values, or 400 when the input or metadata is invalid.</returns>
+    [Authorize(Policy = Policies.RequiresElevation)]
+    [HttpPost("SAML/ImportMetadata")]
+    [RequestSizeLimit(ConfigImportMaxBytes)]
+    [Consumes(MediaTypeNames.Application.Json)]
+    public async Task<ActionResult> SamlImportMetadata([FromBody] SamlMetadataImportRequest request)
+    {
+        // Throttle after the elevation guard, before the outbound fetch (mirrors OidTest): the [Authorize]
+        // filter rejects a non-elevated caller before the body runs, so an unauthorized request never reaches
+        // the limiter or the fetch — no SSRF probe, no rate-limit oracle.
+        if (RateLimitCheck(SsoRateLimitClass.Test) is { } throttled)
+        {
+            return throttled;
+        }
+
+        if (request is null)
+        {
+            return BadRequest("The metadata-import request is missing or is not valid JSON.");
+        }
+
+        try
+        {
+            var import = await SamlMetadataImporter.ImportAsync(_httpClientFactory, request.Url, request.Xml, HttpContext.RequestAborted).ConfigureAwait(false);
+            return Ok(import);
+        }
+        catch (SamlMetadataException ex)
+        {
+            // The message is an admin-facing fixed string (no IdP/library detail); nothing was applied.
+            return BadRequest(ex.Message);
+        }
+    }
+
+    /// <summary>
     /// Exports the whole plugin configuration as a redacted, importable document (#161). Requires
     /// administrator privileges, like the other config endpoints — the document lists every provider's
     /// settings. The redaction is the config's OWN JSON-boundary withholding, reused: the provider secrets

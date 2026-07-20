@@ -36,7 +36,7 @@ public sealed class SSOControllerAuthorizationTests : IClassFixture<SsoAuthoriza
     private static readonly string[] ExpectedElevationActions =
     {
         "OidAdd", "OidDel", "OidProviders", "OidTest", "OidStates",
-        "SamlAdd", "SamlDel", "SamlProviders", "SamlTest",
+        "SamlAdd", "SamlDel", "SamlProviders", "SamlTest", "SamlImportMetadata",
         "ExportConfig", "ImportConfig", "Unregister",
         // The SSO-only login admin surface (#165): the mode toggle, the break-glass designation, and status.
         "EnableSsoOnly", "DisableSsoOnly", "DesignateBreakGlassAdmin", "SsoOnlyStatus",
