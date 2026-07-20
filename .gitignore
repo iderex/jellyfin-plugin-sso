@@ -470,3 +470,4 @@ docs/*
 !docs/README.md
 !docs/ARCHITECTURE.md
 !docs/PRIVACY.md
+!docs/SECURITY-REMEDIATION-POLICY.md
