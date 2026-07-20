@@ -1,5 +1,8 @@
+#nullable enable
+
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
@@ -120,8 +123,8 @@ internal sealed class CanonicalLinkService
         ICryptoProvider cryptoProvider,
         ProviderConfigStore configStore,
         ILogger logger,
-        IntervalGate legacyLinkWarnGate = null,
-        Func<DateTime> clock = null)
+        IntervalGate? legacyLinkWarnGate = null,
+        Func<DateTime>? clock = null)
     {
         _userManager = userManager ?? throw new ArgumentNullException(nameof(userManager));
         _cryptoProvider = cryptoProvider ?? throw new ArgumentNullException(nameof(cryptoProvider));
@@ -156,7 +159,7 @@ internal sealed class CanonicalLinkService
     /// for SAML and for a token that carried no <c>iss</c>; both skip the binding.
     /// </param>
     /// <returns>The resolved Jellyfin user id.</returns>
-    internal async Task<Guid> ResolveOrCreateAsync(ProviderMode mode, string provider, string canonicalKey, string username, bool allowExistingAccountLink, AdoptionGate adoptionGate = default, string issuer = null)
+    internal async Task<Guid> ResolveOrCreateAsync(ProviderMode mode, string provider, string canonicalKey, string username, bool allowExistingAccountLink, AdoptionGate adoptionGate = default, string? issuer = null)
     {
         // Defense in depth (#95, #155): a login that resolved no stable identity key (OpenID sub /
         // SAML NameID) or no username must never create, adopt, or look up an account. Both callbacks
@@ -253,7 +256,7 @@ internal sealed class CanonicalLinkService
     // re-key and the legacy key after it, resolve neither, and bounce a legitimate user off the adoption
     // gate with a spurious 403. A link whose target user was deleted counts as absent (dangling links are
     // dead, not identities).
-    private ResolutionCandidates ReadResolutionCandidates(ProviderMode mode, string provider, string canonicalKey, string username, string issuer)
+    private ResolutionCandidates ReadResolutionCandidates(ProviderMode mode, string provider, string canonicalKey, string username, string? issuer)
     {
         return _configStore.Read(configuration =>
         {
@@ -321,7 +324,7 @@ internal sealed class CanonicalLinkService
     // Returns the authoritative user id the identity now resolves to (the value the login binds to), or
     // throws when an administrator target must not be adopted by name. The name contains "Migrate", so the
     // #363 conformance rule pins its Guid? return type.
-    private Guid? MigrateLegacyLinkIfEligible(ProviderMode mode, string provider, string canonicalKey, string username, string issuer, User existingAccount)
+    private Guid? MigrateLegacyLinkIfEligible(ProviderMode mode, string provider, string canonicalKey, string username, string? issuer, User existingAccount)
     {
         // The legacy re-key is name-based account matching too (#218): migration fires only when the
         // account currently bearing the name IS the legacy target (legacyNameStillHeldByTarget), so
@@ -368,7 +371,7 @@ internal sealed class CanonicalLinkService
     // Adopts the pre-existing account that shares the display name, after clearing the eligibility gate.
     // existingAccount is non-null (the caller passes it only when a named account resolved), so the admin
     // read cannot NRE.
-    private Guid AdoptExistingAccount(ProviderMode mode, string provider, string canonicalKey, string username, string issuer, User existingAccount, AdoptionGate adoptionGate, Guid candidateUserId)
+    private Guid AdoptExistingAccount(ProviderMode mode, string provider, string canonicalKey, string username, string? issuer, User existingAccount, AdoptionGate adoptionGate, Guid candidateUserId)
     {
         // Same-name adoption trusts the identity provider to make usernames unique and
         // non-reassignable (#218): a new principal asserting an existing user's name is otherwise
@@ -423,7 +426,7 @@ internal sealed class CanonicalLinkService
 
     // Provisions a fresh Jellyfin account for this identity and links it on the subject key, warning first
     // when a now-orphaned legacy link is being left behind.
-    private async Task<Guid> CreateNewAccountAsync(ProviderMode mode, string provider, string canonicalKey, string username, string issuer, Guid? legacyLink)
+    private async Task<Guid> CreateNewAccountAsync(ProviderMode mode, string provider, string canonicalKey, string username, string? issuer, Guid? legacyLink)
     {
         if (legacyLink.HasValue && _legacyLinkWarnGate.TryEnter(_clock()))
         {
@@ -443,19 +446,19 @@ internal sealed class CanonicalLinkService
             {
                 _logger.LogWarning(
                     "SSO login for {Name} via {Mode}/{Provider}: a legacy username-keyed link exists but no live account bears the name (it was renamed on the Jellyfin side), so a fresh account is being provisioned and the original account is now orphaned. Re-link it to this subject via the admin endpoints.",
-                    username?.ReplaceLineEndings(string.Empty),
+                    username.ReplaceLineEndings(string.Empty),
                     mode.ToToken(),
-                    provider?.ReplaceLineEndings(string.Empty));
+                    provider.ReplaceLineEndings(string.Empty));
             }
         }
 
         if (_logger.IsEnabled(LogLevel.Information))
         {
-            _logger.LogInformation("SSO user {Name} doesn't exist, creating...", username?.ReplaceLineEndings(string.Empty));
+            _logger.LogInformation("SSO user {Name} doesn't exist, creating...", username.ReplaceLineEndings(string.Empty));
         }
 
         var user = await _userManager.CreateUserAsync(username).ConfigureAwait(false);
-        user.AuthenticationProviderId = typeof(SSOController).FullName;
+        user.AuthenticationProviderId = typeof(SSOController).FullName!;
         // https://jonathancrozier.com/blog/how-to-generate-a-cryptographically-secure-random-string-in-dot-net-with-c-sharp
         user.Password = _cryptoProvider.CreatePasswordHash(Convert.ToBase64String(RandomNumberGenerator.GetBytes(64))).ToString();
 
@@ -517,7 +520,7 @@ internal sealed class CanonicalLinkService
     /// <param name="jellyfinUserId">The Jellyfin user to link the identity to.</param>
     /// <param name="issuer">The OpenID id_token issuer to issuer-bind the new link to (#186); null for SAML or an unauthenticated admin link, which leaves the link un-stamped (trust-on-first-use applies on its first login).</param>
     /// <returns>The write outcome.</returns>
-    internal CanonicalLinkWriteResult TryCreateLink(ProviderMode mode, string provider, string providerUserId, Guid jellyfinUserId, string issuer = null)
+    internal CanonicalLinkWriteResult TryCreateLink(ProviderMode mode, string provider, string providerUserId, Guid jellyfinUserId, string? issuer = null)
     {
         // Fail closed (#95), linking-side choke point: an SSO identity that did not resolve must not
         // create a link — an empty or whitespace key would persist a dead link no login can ever redeem.
@@ -725,7 +728,7 @@ internal sealed class CanonicalLinkService
     /// <param name="canonicalKey">The stable identity key the link is stored under (OpenID sub / SAML NameID).</param>
     /// <param name="userId">The Jellyfin user the login resolved to.</param>
     /// <returns>True only when a live, enabled link for this identity still points at the user.</returns>
-    internal bool IsIdentityStillLinked(ProviderMode mode, string provider, string canonicalKey, Guid userId)
+    internal bool IsIdentityStillLinked(ProviderMode mode, string provider, string? canonicalKey, Guid userId)
     {
         if (string.IsNullOrWhiteSpace(canonicalKey))
         {
@@ -745,7 +748,7 @@ internal sealed class CanonicalLinkService
     // reports WroteLink=false (so the caller does not re-emit the adoption audit). The link write goes
     // straight into the config (no discarded ActionResult), so a failure to persist propagates rather
     // than falling through as a successful adoption.
-    private (Guid EffectiveUserId, bool WroteLink) LinkCanonicalIfAbsent(ProviderMode mode, string provider, string canonicalKey, Guid candidateUserId, string issuer)
+    private (Guid EffectiveUserId, bool WroteLink) LinkCanonicalIfAbsent(ProviderMode mode, string provider, string canonicalKey, Guid candidateUserId, string? issuer)
     {
         return _configStore.Mutate(configuration =>
         {
@@ -786,7 +789,7 @@ internal sealed class CanonicalLinkService
     // only a dangling one (its target user deleted), which would otherwise block the hand-off on every
     // subsequent login. Returns null only when neither key resolves a live account (the dangling edge), so
     // the login fails closed into the create/adopt gate rather than binding to a dead account.
-    private Guid? MigrateAndResolveCanonicalLink(ProviderMode mode, string provider, string canonicalKey, string legacyKey, string issuer)
+    private Guid? MigrateAndResolveCanonicalLink(ProviderMode mode, string provider, string canonicalKey, string legacyKey, string? issuer)
     {
         return _configStore.Mutate<Guid?>(configuration =>
         {
@@ -840,7 +843,7 @@ internal sealed class CanonicalLinkService
     // directly; callers must hold the config lock (Read / Mutate) while touching it. The mode is the typed
     // ProviderMode the controller parsed once at the HTTP boundary (#369), so both dispatch arms are reached
     // only with a validated value; the default throw stays as a belt against an out-of-range enum value.
-    private static bool TryGetLinks(PluginConfiguration configuration, ProviderMode mode, string provider, bool requireEnabled, out SerializableDictionary<string, Guid> links)
+    private static bool TryGetLinks(PluginConfiguration configuration, ProviderMode mode, string provider, bool requireEnabled, [NotNullWhen(true)] out SerializableDictionary<string, Guid>? links)
     {
         switch (mode)
         {
@@ -859,12 +862,12 @@ internal sealed class CanonicalLinkService
     // and OpenID arms are one body: a missing provider or a null-valued entry returns false; with
     // requireEnabled a disabled provider also returns false. Reads Enabled only after links != null has
     // proven config non-null.
-    private static bool TryGetLinks<T>(SerializableDictionary<string, T> configs, string provider, bool requireEnabled, out SerializableDictionary<string, Guid> links)
+    private static bool TryGetLinks<T>(SerializableDictionary<string, T> configs, string provider, bool requireEnabled, [NotNullWhen(true)] out SerializableDictionary<string, Guid>? links)
         where T : ProviderConfigBase
     {
         var ok = configs.TryGetValue(provider, out var config);
         links = config?.CanonicalLinks;
-        return ok && links != null && (!requireEnabled || config.Enabled);
+        return ok && links != null && (!requireEnabled || config?.Enabled == true);
     }
 
     // Classifies an OpenID subject link's issuer binding against the login's issuer, read under the caller's
@@ -874,7 +877,7 @@ internal sealed class CanonicalLinkService
     // treated as Absent (never written blank; defensive). The Mismatch arm INCLUDES the case where the login
     // carries no issuer while the link has one, so a token that omits `iss` cannot slip past a stamped
     // binding — fail closed.
-    private static IssuerBinding ClassifyIssuer(PluginConfiguration configuration, ProviderMode mode, string provider, string canonicalKey, string issuer)
+    private static IssuerBinding ClassifyIssuer(PluginConfiguration configuration, ProviderMode mode, string provider, string canonicalKey, string? issuer)
     {
         if (mode != ProviderMode.Oid)
         {
@@ -899,7 +902,7 @@ internal sealed class CanonicalLinkService
     // its issuer is still absent, so a concurrent login that already stamped is not overwritten. A no-op for
     // SAML or a blank issuer (nothing safe to bind to) — the link stays un-stamped rather than binding to an
     // empty value.
-    private void StampIssuer(ProviderMode mode, string provider, string canonicalKey, string issuer)
+    private void StampIssuer(ProviderMode mode, string provider, string canonicalKey, string? issuer)
     {
         if (mode != ProviderMode.Oid || string.IsNullOrWhiteSpace(issuer))
         {
@@ -921,7 +924,7 @@ internal sealed class CanonicalLinkService
     // called right after a link WRITE (adopt / create / migrate / manual link) so the fresh link carries the
     // issuer it was minted under. Overwrites any stale value — a link just (re)written under this login belongs
     // to this login's issuer. A no-op for SAML or a blank issuer.
-    private static void StampIssuerInPlace(PluginConfiguration configuration, ProviderMode mode, string provider, string canonicalKey, string issuer)
+    private static void StampIssuerInPlace(PluginConfiguration configuration, ProviderMode mode, string provider, string canonicalKey, string? issuer)
     {
         if (mode != ProviderMode.Oid || string.IsNullOrWhiteSpace(issuer))
         {

@@ -514,7 +514,8 @@ public class SsoOnlyLoginServiceTests
         });
 
         var decision = service.ResolveLoginEnforcement(AliceId, configuredDefaultProvider: null);
-        alice.AuthenticationProviderId = decision.DefaultProvider; // the mint repoints to what the decision returned
+        // The mint repoints to what the decision returned; non-null in this break-glass scenario (asserted next).
+        alice.AuthenticationProviderId = decision.DefaultProvider!;
         Assert.Equal(SsoAuthenticationProviders.SsoProviderId, alice.AuthenticationProviderId);
         Assert.Contains(AliceId, config.SsoOnlyRepointedUserIds);
 

@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -18,7 +20,7 @@ internal static class CanonicalLinkRevoker
     /// <param name="links">The provider's canonical-links map (key -> user id); a null map is a no-op.</param>
     /// <param name="userId">The Jellyfin user id whose links to remove.</param>
     /// <returns>The number of entries removed.</returns>
-    internal static int RemoveUser(IDictionary<string, Guid> links, Guid userId)
+    internal static int RemoveUser(IDictionary<string, Guid>? links, Guid userId)
     {
         if (links is null)
         {
