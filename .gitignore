@@ -469,3 +469,4 @@ AGENTS.md
 docs/*
 !docs/README.md
 !docs/ARCHITECTURE.md
+!docs/PRIVACY.md
