@@ -27,6 +27,8 @@ All types of contributions are encouraged and valued. See the [Table of Contents
   - [Commit Messages](#commit-messages)
 - [Join The Project Team](#join-the-project-team)
 
+> Project governance — who holds access, how decisions are made, and the continuity model — is documented in [GOVERNANCE.md](GOVERNANCE.md).
+
 ## I Have a Question
 
 > If you want to ask a question, we assume that you have read the available [Documentation](https://github.com/iderex/jellyfin-plugin-sso/blob/main/README.md).
