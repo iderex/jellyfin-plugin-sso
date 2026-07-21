@@ -154,14 +154,31 @@ fi
 # --------------------------------------------------------------------------------------------------
 # OIDC browser-role helpers
 # --------------------------------------------------------------------------------------------------
-# oidc_authorize <cookiejar> : drives start -> keycloak login page, prints the login form action URL.
+# oidc_authorize <cookiejar> : drives start -> keycloak login page, prints the login form action URL
+# on stdout. ALL diagnostics go to stderr so they are not captured by the caller's $(...) and are
+# visible in the container log.
 oidc_authorize() {
   jar="$1"
-  auth_url="$(curl -fsS -c "$jar" -b "$jar" -o /dev/null -w '%{redirect_url}' "$JELLYFIN/sso/OID/start/$PROVIDER")"
-  [ -n "$auth_url" ] || { log "no authorize redirect from /start"; return 1; }
-  login_page="$(curl -fsSL -c "$jar" -b "$jar" "$auth_url")" || { log "keycloak login page fetch failed"; return 1; }
+  # /start must 302 to the IdP authorize endpoint.
+  start_out="$(curl -sS -o /dev/null -c "$jar" -b "$jar" -w '%{http_code} %{redirect_url}' "$JELLYFIN/sso/OID/start/$PROVIDER")"
+  start_code="${start_out%% *}"
+  auth_url="${start_out#* }"
+  printf 'oidc_authorize: /start -> HTTP %s location=%s\n' "$start_code" "$auth_url" >&2
+  if [ -z "$auth_url" ]; then
+    printf 'oidc_authorize: /start returned no redirect; body was:\n' >&2
+    curl -sS -c "$jar" -b "$jar" "$JELLYFIN/sso/OID/start/$PROVIDER" >&2 || true
+    return 1
+  fi
+  # Fetch the Keycloak login page (following any Keycloak-internal redirect), keeping the HTTP code.
+  login_page="$(curl -sSL -c "$jar" -b "$jar" -w '\n__HTTP__%{http_code}' "$auth_url")" || { printf 'oidc_authorize: login page curl failed\n' >&2; return 1; }
+  page_code="$(printf '%s' "$login_page" | sed -n 's/.*__HTTP__\([0-9]*\)$/\1/p')"
+  printf 'oidc_authorize: keycloak authorize page -> HTTP %s\n' "$page_code" >&2
   form_action="$(printf '%s' "$login_page" | grep -oE 'action="[^"]*"' | head -1 | sed -e 's/^action="//' -e 's/"$//' -e 's/&amp;/\&/g')"
-  [ -n "$form_action" ] || { log "could not parse keycloak login form action"; return 1; }
+  if [ -z "$form_action" ]; then
+    printf 'oidc_authorize: could not parse a form action from the authorize page; first 1200 chars:\n%s\n' "$(printf '%s' "$login_page" | head -c 1200)" >&2
+    return 1
+  fi
+  printf 'oidc_authorize: form action=%s\n' "$form_action" >&2
   printf '%s' "$form_action"
 }
 
