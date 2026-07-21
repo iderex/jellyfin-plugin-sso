@@ -25,6 +25,7 @@ All types of contributions are encouraged and valued. See the [Table of Contents
   - [Improving The Documentation](#improving-the-documentation)
 - [Styleguides](#styleguides)
   - [Commit Messages](#commit-messages)
+  - [Sign Your Work (DCO)](#sign-your-work-dco)
 - [Join The Project Team](#join-the-project-team)
 
 > Project governance — who holds access, how decisions are made, and the continuity model — is documented in [GOVERNANCE.md](GOVERNANCE.md).
@@ -170,6 +171,26 @@ We are always open to better docs! The main place documentation could be improve
 ### Commit Messages
 
 Short, imperative subject line (`Add SAML replay cache`, not `feat: add ...`); explain the _why_ in the body. **Every commit subject ends with its issue reference(s) in brackets** — `Add SAML replay cache [#123]`, multiple issues as `[#123][#456]` — so the link survives `git blame`/`bisect`/`log`, which show only the subject. GitHub's auto-close keywords (`Closes #N`) additionally go in the body when the commit resolves the issue. The PR-hygiene gate enforces the bracketed subject reference per commit (bots and merge commits exempt).
+
+### Sign Your Work (DCO)
+
+This project uses the [Developer Certificate of Origin](DCO) (DCO 1.1) — a lightweight, standard way to certify that you wrote or otherwise have the right to submit the code you contribute, under the project's GPL-3.0 license. It is not a copyright-assignment CLA; you keep your copyright.
+
+**Every commit must be signed off.** Add the sign-off automatically with `-s`:
+
+```sh
+git commit -s -m "Add SAML replay cache [#123]"
+```
+
+This appends a trailer matching your commit author identity:
+
+```
+Signed-off-by: Your Name <your.email@example.com>
+```
+
+By adding it you certify the [DCO](DCO). Forgot to sign off? Add it retroactively across your branch with `git rebase --signoff <base>` and force-push.
+
+The **DCO gate** verifies every non-merge commit in a pull request carries a matching sign-off and fails the check otherwise (trusted first-party bot commits, e.g. Dependabot, are exempt). This is fail-closed: an unsigned commit blocks the pull request until it is signed off.
 
 ### C#
 
