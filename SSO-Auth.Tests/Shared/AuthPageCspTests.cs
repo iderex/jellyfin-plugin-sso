@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: The jellyfin-plugin-sso authors
+// SPDX-License-Identifier: GPL-3.0-only
+
 using Jellyfin.Plugin.SSO_Auth.Api.Shared;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Xunit;

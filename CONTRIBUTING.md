@@ -196,6 +196,15 @@ The **DCO gate** verifies every non-merge commit in a pull request carries a mat
 
 We format all C# code according to the .NET formatter. Build with `dotnet build --no-restore --warnaserror` (the same command CI runs, so warnings fail the build) and fix anything it reports, and keep `dotnet test` green.
 
+Every C# source file opens with the two-line SPDX header (a conformance test fails the build without it):
+
+```csharp
+// SPDX-FileCopyrightText: The jellyfin-plugin-sso authors
+// SPDX-License-Identifier: GPL-3.0-only
+```
+
+The project is licensed **GPL-3.0-only** (`GPL-3.0-only` is the [SPDX identifier](https://spdx.org/licenses/); see [LICENSE.txt](LICENSE.txt)).
+
 The architecture, comment/documentation, and object-oriented rules a change is held to live in one canonical place — the [Coding Standards](https://github.com/iderex/jellyfin-plugin-sso/wiki/Coding-Standards) wiki page. This guide does not restate them; read that page before a non-trivial change. They are enforced by the conformance fitness functions in `SSO-Auth.Tests/ArchitectureConformanceTests.cs` and the adversarial review gate.
 
 ### HTML/CSS/JS/Markdown

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: The jellyfin-plugin-sso authors
+// SPDX-License-Identifier: GPL-3.0-only
+
 /*
  Was Jitbit's simple SAML 2.0 component for ASP.NET
  https://github.com/jitbit/AspNetSaml/

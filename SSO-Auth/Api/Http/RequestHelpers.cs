@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: The jellyfin-plugin-sso authors
+// SPDX-License-Identifier: GPL-3.0-only
+
 // The following code is a derivative work of the code from the Jellyfin project,
 // which is licensed GPLv2. This code therefore is also licensed under the terms
 // of the GNU Public License, verison 2.
