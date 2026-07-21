@@ -292,8 +292,13 @@ authentik_run_flow() {
         # form fields in `attrs` as JSON rather than rendered HTML. Synthesise the equivalent auto-submit
         # form so the shared, provider-agnostic parser can consume it, and signal that with rc 3 (the body,
         # not a redirect target, is on stdout).
-        printf '%s' "$stage" | jq -r '"<form action=\"" + .url + "\">"
-          + ((.attrs // {}) | to_entries | map("<input name=\"" + .key + "\" value=\"" + (.value | tostring) + "\">") | join(""))
+        # jq defines "s" + null == "s", so a missing `url` or a null field would render a plausible-looking
+        # but broken form and the guard below would be DEAD code. Force an error on each required piece
+        # instead, so a shape drift fails here rather than downstream as an opaque ACS 400.
+        printf '%s' "$stage" | jq -r '"<form action=\"" + (.url // error("autosubmit stage carried no url")) + "\">"
+          + ((.attrs // error("autosubmit stage carried no attrs")) | to_entries
+             | map("<input name=\"" + .key + "\" value=\"" + (.value // error("autosubmit attr \(.key) was null") | tostring) + "\">")
+             | join(""))
           + "</form>"' 2>/dev/null \
           || { printf 'authentik_run_flow[%s]: could not render the autosubmit stage\n' "$slug" >&2; return 1; }
         return 3
@@ -540,12 +545,25 @@ idp_saml_login() {
       hop=0
       while [ "$hop" -lt 4 ]; do
         hop=$((hop + 1))
-        redir_to="$(authentik_run_flow "$jar" "$flow_url" "$user" "$pass")"; flow_rc=$?
+        # `rc=0; out=$(f) || rc=$?` rather than `out=$(f); rc=$?`: the latter only survives `set -e` on
+        # ash/bash (the runtime is alpine's ash), while this form is portable and equally exact.
+        flow_rc=0
+        redir_to="$(authentik_run_flow "$jar" "$flow_url" "$user" "$pass")" || flow_rc=$?
         if [ "$flow_rc" -eq 3 ]; then
-          # The flow ended in an autosubmit stage: what it printed IS the SAML POST-binding form.
-          printf 'idp_saml_login[authentik]: SAML response delivered by an autosubmit stage after %s flow(s)\n' "$hop" >&2
-          printf '%s' "$redir_to"
-          return 0
+          # The flow ended in an autosubmit stage: what it printed IS the SAML POST-binding form. Verify that
+          # before accepting it, symmetric with the redirect branch below — a rendered form that carries no
+          # SAMLResponse must RED here, not downstream as an unparseable page.
+          case "$redir_to" in
+            *'name="SAMLResponse"'*)
+              printf 'idp_saml_login[authentik]: SAML response delivered by an autosubmit stage after %s flow(s)\n' "$hop" >&2
+              printf '%s' "$redir_to"
+              return 0
+              ;;
+            *)
+              printf 'idp_saml_login[authentik]: autosubmit stage carried no SAMLResponse field\n' >&2
+              return 1
+              ;;
+          esac
         fi
         [ "$flow_rc" -eq 0 ] || return 1
         saml_body="$(mktemp)"
@@ -561,6 +579,12 @@ idp_saml_login() {
         rm -f "$saml_body"
         case "$saml_final" in
           */if/flow/*/\?*)
+            # Require PROGRESS: landing back on the same flow means it did not advance, and re-driving it
+            # would burn further credential attempts and then report a misleading "did not reach the form".
+            if [ "$saml_final" = "$flow_url" ]; then
+              printf 'idp_saml_login[authentik]: flow did not advance (still %s) — not retrying\n' "${saml_final%%\?*}" >&2
+              return 1
+            fi
             printf 'idp_saml_login[authentik]: chained into %s\n' "${saml_final%%\?*}" >&2
             flow_url="$saml_final"
             ;;
@@ -708,6 +732,12 @@ elif [ -z "$ACS_STATUS_D" ]; then
   fail "dave: could not read the ACS HTTP status — cannot prove a plugin-side refusal (broken negative test)"
 elif [ "$ACS_STATUS_D" -ge 200 ] && [ "$ACS_STATUS_D" -lt 300 ]; then
   fail "dave: the ACS returned $ACS_STATUS_D with no token — expected a non-2xx plugin refusal, not an ambiguous empty body"
+elif [ "$ACS_STATUS_D" != "401" ]; then
+  # The plugin's ROLE denial is a SPECIFIC outcome: 401. Every other refusal on this endpoint is a different
+  # status (400 malformed/invalid signature/audience, 403 link-forbidden/unverified-email, 429 throttle, 500
+  # unmapped), so accepting "any non-2xx" would let a broken leg print "role gate holds" — the exact pin the
+  # OIDC bob negative already carries.
+  fail "dave: the ACS returned $ACS_STATUS_D, not the role gate's 401 — refused for the WRONG reason (broken negative test)"
 else
   pass "dave: SAML ACS refused the role-less user at the plugin (HTTP $ACS_STATUS_D, no token minted — role gate holds)"
 fi
