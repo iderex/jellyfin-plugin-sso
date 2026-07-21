@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: The jellyfin-plugin-sso authors
+// SPDX-License-Identifier: GPL-3.0-only
+
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -2376,6 +2379,43 @@ public class ArchitectureConformanceTests
             .Where(path => !IsBuildOutput(path))
             .Where(path => declarations.Any(d => d.IsMatch(File.ReadAllText(path))))
             .ToList();
+    }
+
+    [Fact]
+    public void EverySourceFile_CarriesTheSpdxHeader()
+    {
+        // #747: every C# source file opens with the SPDX copyright + licence header, so the licence of any
+        // one file is machine-readable at its top (REUSE / SPDX) and a new file cannot land without it.
+        // GPL-3.0-only is the project's SPDX identifier — it matches the declared "GPL v3.0" exactly, with no
+        // implicit "or later" broadening; the copyright line credits the authors collectively. This test is
+        // the drift guard that keeps the headers complete: a file added without the two opening lines fails
+        // CI here (the header must be the first two lines so it precedes the usings and the file-scoped
+        // namespace, which SPDX/REUSE tooling expects).
+        const string CopyrightLine = "// SPDX-FileCopyrightText: The jellyfin-plugin-sso authors";
+        const string LicenceLine = "// SPDX-License-Identifier: GPL-3.0-only";
+        var offenders = new List<string>();
+        foreach (var root in new[] { "SSO-Auth", "SSO-Auth.Tests", "SSO-Auth.Fuzz" })
+        {
+            foreach (var src in Directory.EnumerateFiles(Path.Combine(RepoRoot(), root), "*.cs", SearchOption.AllDirectories))
+            {
+                if (IsBuildOutput(src))
+                {
+                    continue;
+                }
+
+                var firstLines = File.ReadLines(src).Take(2).ToList();
+                if (firstLines.Count < 2
+                    || firstLines[0].Trim() != CopyrightLine
+                    || firstLines[1].Trim() != LicenceLine)
+                {
+                    offenders.Add(Path.GetFileName(src));
+                }
+            }
+        }
+
+        Assert.True(
+            offenders.Count == 0,
+            "Every C# source file must open with the SPDX copyright + GPL-3.0-only header (#747). Missing or incorrect in: " + string.Join(", ", offenders));
     }
 
     // obj/bin hold generated and compiled output; the source scans read hand-written source only.

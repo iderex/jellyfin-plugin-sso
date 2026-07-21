@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: The jellyfin-plugin-sso authors
+// SPDX-License-Identifier: GPL-3.0-only
+
 using Duende.IdentityModel.OidcClient;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api.Oidc;

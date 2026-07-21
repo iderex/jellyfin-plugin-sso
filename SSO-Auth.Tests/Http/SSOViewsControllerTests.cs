@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: The jellyfin-plugin-sso authors
+// SPDX-License-Identifier: GPL-3.0-only
+
 using System.IO;
 using Jellyfin.Plugin.SSO_Auth.Api.Http;
 using MediaBrowser.Common.Configuration;
