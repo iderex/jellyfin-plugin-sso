@@ -170,6 +170,82 @@ public class ProviderConfigValidatorTests
         Assert.Null(ex);
     }
 
+    // --- ValidatePostLogoutRedirectUri (#727, SLO-4): reject a set value the runtime would silently drop ---
+
+    private const string PostLogoutBase = "https://jellyfin.example.com";
+
+    // PostLogoutRedirectUri is an OpenID-only concept (only OidcLogout consumes it; the SAML LogoutRequest
+    // path just revokes and returns), so ProviderConfigValidator.Validate runs this only over the OpenID
+    // providers — hence every case here uses the "OpenID" protocol label.
+    [Theory]
+    [InlineData("https://evil.example.net/steal")] // off-base: a different authority
+    [InlineData("https://jellyfin.example.com.evil.net/")] // sibling-prefix host: still off-base
+    [InlineData("not-a-url")] // malformed: not an absolute URL
+    [InlineData("ftp://jellyfin.example.com/x")] // absolute but not http(s)
+    [InlineData("https://user:pass@jellyfin.example.com/")] // userinfo can mask the real host
+    public void ValidatePostLogoutRedirectUri_SetButNotAtOrUnderBase_ThrowsNamingProtocolAndProvider(string postLogoutRedirectUri)
+    {
+        var ex = Assert.Throws<ArgumentException>(() =>
+            ProviderConfigValidator.ValidatePostLogoutRedirectUri("OpenID", "idp", PostLogoutBase, postLogoutRedirectUri));
+
+        Assert.Equal("postLogoutRedirectUri", ex.ParamName);
+        Assert.Contains("OpenID", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("idp", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("not at or under the configured Base URL", ex.Message, StringComparison.Ordinal);
+        // Message discipline (RejectInvalid*): the rejected candidate value is NOT echoed back, so a hostile
+        // value cannot ride the exception into any log the controller surfaces.
+        Assert.DoesNotContain(postLogoutRedirectUri, ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("https://jellyfin.example.com/web/")] // under the base path
+    [InlineData("https://jellyfin.example.com")] // the base itself
+    [InlineData("https://jellyfin.example.com/sso/goodbye")] // a deeper path under the base
+    public void ValidatePostLogoutRedirectUri_AtOrUnderBase_DoesNotThrow(string postLogoutRedirectUri)
+    {
+        var ex = Record.Exception(() =>
+            ProviderConfigValidator.ValidatePostLogoutRedirectUri("OpenID", "idp", PostLogoutBase, postLogoutRedirectUri));
+
+        Assert.Null(ex);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")] // blank means no post-logout redirect — always valid
+    public void ValidatePostLogoutRedirectUri_Blank_DoesNotThrow(string? postLogoutRedirectUri)
+    {
+        var ex = Record.Exception(() =>
+            ProviderConfigValidator.ValidatePostLogoutRedirectUri("OpenID", "idp", PostLogoutBase, postLogoutRedirectUri));
+
+        Assert.Null(ex);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void ValidatePostLogoutRedirectUri_NoDeterminateBase_DoesNotThrowEvenForAnOffBaseValue(string? baseUrlOverride)
+    {
+        // Without a Base URL Override the canonical base is derived from the request Host at logout time and is
+        // unknowable at save; the runtime allow-list stays the only check, so the save does not reject a value
+        // it cannot evaluate against the same base the runtime will use. An external URL passes here by design.
+        var ex = Record.Exception(() =>
+            ProviderConfigValidator.ValidatePostLogoutRedirectUri("OpenID", "idp", baseUrlOverride, "https://evil.example.net/steal"));
+
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void ValidatePostLogoutRedirectUri_ControlCharacterInProvider_IsStrippedFromTheEchoedMessage()
+    {
+        var ex = Assert.Throws<ArgumentException>(() =>
+            ProviderConfigValidator.ValidatePostLogoutRedirectUri("OpenID", "co\nrp", PostLogoutBase, "https://evil.example.net/"));
+
+        Assert.DoesNotContain('\n', ex.Message);
+        Assert.DoesNotContain('\r', ex.Message);
+    }
+
     // --- ValidateSamlCertificate (#206): reject a set-but-unloadable X.509; blank/valid pass ---
 
     [Theory]
