@@ -1,0 +1,91 @@
+# authentik seeding for the E2E login harness (#920): a jellyfin-access group, alice (in it) and bob (not),
+# an OAuth2/OIDC provider + application for the plugin, and a groups scope mapping so the id_token/userinfo
+# carries the user's group names under a `groups` claim (the plugin's RoleClaim). Test-only.
+version: 1
+metadata:
+  name: e2e-jellyfin-oidc
+context:
+  redirect_uri: http://jellyfin:8096/sso/OID/redirect/authentik
+entries:
+  - model: authentik_core.group
+    id: grp-access
+    identifiers:
+      name: jellyfin-access
+    attrs:
+      name: jellyfin-access
+
+  - model: authentik_core.user
+    id: user-alice
+    identifiers:
+      username: alice
+    attrs:
+      username: alice
+      name: alice
+      email: alice@example.com
+      password: alice
+      is_active: true
+      groups:
+        - !KeyOf grp-access
+
+  - model: authentik_core.user
+    id: user-bob
+    identifiers:
+      username: bob
+    attrs:
+      username: bob
+      name: bob
+      email: bob@example.com
+      password: bob
+      is_active: true
+
+  - model: authentik_providers_oauth2.scopemapping
+    id: sm-groups
+    identifiers:
+      name: e2e-groups
+    attrs:
+      name: e2e-groups
+      scope_name: groups
+      description: "the user's authentik groups"
+      expression: |
+        return {"groups": [group.name for group in request.user.ak_groups.all()]}
+
+  - model: authentik_providers_oauth2.oauth2provider
+    id: prov-oidc
+    identifiers:
+      name: jellyfin-oidc
+    attrs:
+      name: jellyfin-oidc
+      client_id: jellyfin-oidc
+      client_secret: jellyfin-oidc-secret
+      client_type: confidential
+      # sub_mode is deliberately LEFT AT THE DEFAULT (an opaque, stable subject). The plugin keys the account
+      # link on `sub` precisely so an identity-provider-side rename cannot re-point it, so the harness must
+      # exercise the opaque-subject shape a real deployment gets; the Jellyfin username comes from
+      # preferred_username (supplied by the profile scope), not from sub.
+      include_claims_in_id_token: true
+      # Without an explicit signing key authentik falls back to symmetric HS256 (signed with the client
+      # secret), which a standards-conformant RP rejects as invalid_signature. Pin authentik's built-in
+      # self-signed keypair so id_tokens are RS256-signed and verifiable through the published JWKS.
+      signing_key:
+        !Find [authentik_crypto.certificatekeypair, [name, "authentik Self-signed Certificate"]]
+      authorization_flow:
+        !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      invalidation_flow:
+        !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      redirect_uris:
+        - matching_mode: strict
+          url: !Context redirect_uri
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, openid]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, email]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, profile]]
+        - !KeyOf sm-groups
+
+  - model: authentik_core.application
+    id: app-jellyfin
+    identifiers:
+      slug: jellyfin
+    attrs:
+      name: Jellyfin
+      slug: jellyfin
+      provider: !KeyOf prov-oidc

@@ -39,6 +39,7 @@ DO_NOT_LOAD_PROFILE="${DO_NOT_LOAD_PROFILE:-true}"
 # A provider served over real TLS (Authelia) sets this false so the production https path is exercised.
 DISABLE_HTTPS="${DISABLE_HTTPS:-true}"
 AUTHELIA_URL="${AUTHELIA_URL:-http://authelia:9091}"
+AUTHENTIK_URL="${AUTHENTIK_URL:-http://authentik:9000}"
 
 # A stable device identity for the harness's Jellyfin API calls (the MediaBrowser auth scheme).
 CLIENT="e2e-harness"
@@ -84,6 +85,33 @@ wait_for() {
 # --------------------------------------------------------------------------------------------------
 wait_for "OIDC discovery" "$DISCOVERY_URL"
 wait_for "Jellyfin" "$JELLYFIN/System/Info/Public"
+
+# The id_token must be signed with an ASYMMETRIC, JWKS-verifiable algorithm. An identity provider that falls
+# back to symmetric HS256 (authentik silently does this when its provider has no signing key) makes the RP
+# reject every login with invalid_signature — an actually-hit failure. Assert the advertised algorithm here so
+# the regression names itself instead of surfacing as an opaque callback error mid-login.
+DISCOVERY_DOC="$(curl -fsS "$DISCOVERY_URL" 2>/dev/null || true)"
+DISCOVERY_ALGS="$(printf '%s' "$DISCOVERY_DOC" | jq -r '.id_token_signing_alg_values_supported // [] | join(",")' 2>/dev/null || true)"
+JWKS_URI="$(printf '%s' "$DISCOVERY_DOC" | jq -r '.jwks_uri // empty' 2>/dev/null || true)"
+# The advertised algorithm list alone is a capability claim; also require the JWKS to actually publish a key,
+# so "RS256 supported" cannot pass while no verifiable key exists.
+JWKS_KEYS=0
+if [ -n "$JWKS_URI" ]; then
+  JWKS_KEYS="$(curl -fsS "$JWKS_URI" 2>/dev/null | jq -r '.keys | length' 2>/dev/null || echo 0)"
+fi
+# Accept ANY asymmetric family (RS*/ES*/PS*/EdDSA) rather than RS256 alone — a correct provider may sign
+# ES256 by default (Kanidm does), and pinning one algorithm would red a correctly-configured harness. The
+# security property is unchanged: only a symmetric HS* (or `none`) is refused.
+case "$DISCOVERY_ALGS" in
+  *RS256* | *RS384* | *RS512* | *ES256* | *ES384* | *ES512* | *PS256* | *PS384* | *PS512* | *EdDSA*)
+    if [ "${JWKS_KEYS:-0}" -ge 1 ] 2>/dev/null; then
+      pass "provider advertises asymmetric id_token signing ($DISCOVERY_ALGS) and publishes $JWKS_KEYS JWKS key(s)"
+    else
+      fail "provider advertises asymmetric id_token signing ($DISCOVERY_ALGS) but its JWKS publishes no key — signature validation cannot succeed"
+    fi
+    ;;
+  *) fail "provider advertises no asymmetric id_token signing algorithm (got '${DISCOVERY_ALGS:-<none>}') — a symmetric HS* fallback breaks signature validation" ;;
+esac
 
 # --------------------------------------------------------------------------------------------------
 # Phase 1 — Jellyfin first-run wizard + admin token
@@ -254,6 +282,47 @@ idp_oidc_login() {
       # to the plugin callback with code + state. Capture that callback (do NOT follow into the plugin).
       curl -sS -c "$jar" -b "$jar" -o /dev/null -w '%{redirect_url}' "$redir"
       ;;
+    authentik)
+      # authentik's login is a STATEFUL multi-stage flow-executor (a JSON API built for its SPA), not a form.
+      # Follow the authorize redirect to the flow page (seats the pending authorization in the session and
+      # yields the flow's query string), then drive the default-authentication-flow: identification ->
+      # password -> the non-interactive user_login stage -> the final xak-flow-redirect whose `to` resumes the
+      # authorize and 302s to the plugin callback. Each executor call advances state, so exactly one request
+      # per step.
+      # -f on every leg: without it curl exits 0 on a 4xx/5xx and the error guards below are dead code, so a
+      # rejected stage would only surface three steps later as a missing redirect.
+      flow_url="$(curl -fsSL -c "$jar" -b "$jar" -o /dev/null -w '%{url_effective}' "$auth_url")" || { printf 'idp_oidc_login[authentik]: authorize follow failed\n' >&2; return 1; }
+      # The authorize must land on a flow page carrying a query; `sed` leaves its input UNCHANGED when there is
+      # no "?", so without this guard a non-flow landing would be fed to the executor as a plausible query.
+      # Pin the SAME flow slug the executor URL below hardcodes, so the guard and the executor cannot drift.
+      case "$flow_url" in
+        */if/flow/default-authentication-flow/\?*) : ;;
+        *) printf 'idp_oidc_login[authentik]: authorize did not land on the default authentication flow: %s\n' "${flow_url%%\?*}" >&2; return 1 ;;
+      esac
+      flow_query="$(printf '%s' "$flow_url" | sed 's#[^?]*?##')"
+      case "$flow_query" in
+        next=*) : ;;
+        *) printf 'idp_oidc_login[authentik]: unexpected flow query (no pending authorization)\n' >&2; return 1 ;;
+      esac
+      q_enc="$(printf '%s' "$flow_query" | jq -rR '@uri')"
+      exec_url="$AUTHENTIK_URL/api/v3/flows/executor/default-authentication-flow/?query=$q_enc"
+      curl -fsS -c "$jar" -b "$jar" -H "Content-Type: application/json" \
+        -d "{\"component\":\"ak-stage-identification\",\"uid_field\":\"$user\"}" "$exec_url" >/dev/null \
+        || { printf 'idp_oidc_login[authentik]: identification POST failed\n' >&2; return 1; }
+      curl -fsS -c "$jar" -b "$jar" -H "Content-Type: application/json" \
+        -d "{\"component\":\"ak-stage-password\",\"password\":\"$pass\"}" "$exec_url" >/dev/null \
+        || { printf 'idp_oidc_login[authentik]: password POST failed\n' >&2; return 1; }
+      # Advance the non-interactive stage(s) and read the flow-completion redirect target.
+      redir_to="$(curl -sSL -c "$jar" -b "$jar" "$exec_url" | jq -r '.to // empty' 2>/dev/null)"
+      if [ -z "$redir_to" ]; then
+        printf 'idp_oidc_login[authentik]: no flow-completion redirect (login rejected?)\n' >&2
+        return 1
+      fi
+      case "$redir_to" in /*) redir_to="$AUTHENTIK_URL$redir_to" ;; esac
+      printf 'idp_oidc_login[authentik]: resuming authorize at %s\n' "${redir_to%%\?*}?<query>" >&2
+      # Resume the authorize; it 302s to the plugin callback with code + state (do NOT follow into the plugin).
+      curl -sS -c "$jar" -b "$jar" -o /dev/null -w '%{redirect_url}' "$redir_to"
+      ;;
     *)
       printf 'idp_oidc_login: unknown IDP_KIND=%s\n' "$IDP_KIND" >&2
       return 1
@@ -335,12 +404,17 @@ if CB_URL_BOB="$(idp_oidc_login "$JAR_BOB" "$START_HDR_BOB" bob bob)"; then
       # hardened SAML dave negative so a transport break can never masquerade as a role-gate PASS.
       CB_STATUS_BOB="$(curl -sS -o /dev/null -w '%{http_code}' -H "Cookie: $BINDING_COOKIE_NAME=$BINDING_BOB" "$CB_URL_BOB" 2>/dev/null || true)"
       [ -n "$CB_STATUS_BOB" ] || CB_STATUS_BOB="000"
+      # The plugin's ROLE denial is a SPECIFIC outcome: HTTP 401. Accepting "any non-2xx" would let a token
+      # exchange failure, an invalid-state rejection or an unhandled 500 read as "role gate holds" — mutating
+      # the deny branch to a 400/500 would survive — so pin the exact status the role gate returns.
       if [ "$CB_STATUS_BOB" = "000" ]; then
         fail "bob: could not reach the plugin callback (HTTP 000) — cannot prove a role-gate refusal (broken negative test)"
       elif [ "$CB_STATUS_BOB" -ge 200 ] && [ "$CB_STATUS_BOB" -lt 300 ]; then
         fail "bob: callback returned $CB_STATUS_BOB — the role gate did NOT refuse a role-less user"
+      elif [ "$CB_STATUS_BOB" != "401" ]; then
+        fail "bob: callback returned $CB_STATUS_BOB, not the role gate's 401 — refused for the WRONG reason (broken negative test)"
       else
-        pass "bob: callback refused the role-less user at the plugin (HTTP $CB_STATUS_BOB, role gate holds)"
+        pass "bob: callback refused the role-less user at the plugin (HTTP 401, role gate holds)"
       fi
     fi
   fi

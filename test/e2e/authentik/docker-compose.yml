@@ -1,0 +1,126 @@
+# End-to-end SSO login harness — authentik provider (#920). Boots a real Jellyfin 10.11 server with the
+# packaged plugin installed and a real authentik Identity Provider (postgres + redis + server + worker),
+# driven by the SHARED harness. authentik speaks BOTH OpenID Connect and SAML; this harness exercises OIDC
+# first (SAML follows). It reuses ../harness/harness.sh and the ../jellyfin/config plugin drop.
+#
+# authentik is reached at http://authentik:9000 from both legs, so the issuer is byte-identical. Seeding is
+# declarative via a mounted blueprint (../authentik/blueprint.yaml -> /blueprints/custom) applied by the
+# worker at start: a jellyfin-access group, alice (in it) + bob (not), and an OAuth2/OIDC provider + app.
+name: sso-e2e-authentik
+
+services:
+  postgresql:
+    image: docker.io/library/postgres:16-alpine
+    environment:
+      POSTGRES_USER: authentik
+      POSTGRES_PASSWORD: authentik-e2e-db
+      POSTGRES_DB: authentik
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U authentik"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - ssonet
+
+  redis:
+    image: docker.io/library/redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - ssonet
+
+  authentik:
+    image: ghcr.io/goauthentik/server:2024.12
+    command: server
+    environment:
+      AUTHENTIK_SECRET_KEY: e2e-only-authentik-secret-key-not-for-production-use
+      AUTHENTIK_POSTGRESQL__HOST: postgresql
+      AUTHENTIK_POSTGRESQL__USER: authentik
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      AUTHENTIK_POSTGRESQL__PASSWORD: authentik-e2e-db
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_BOOTSTRAP_PASSWORD: akadmin-e2e-pw
+      AUTHENTIK_BOOTSTRAP_TOKEN: e2e-bootstrap-token
+      AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+    volumes:
+      - ./blueprint.yaml:/blueprints/custom/e2e.yaml:ro
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ssonet
+
+  worker:
+    image: ghcr.io/goauthentik/server:2024.12
+    command: worker
+    environment:
+      AUTHENTIK_SECRET_KEY: e2e-only-authentik-secret-key-not-for-production-use
+      AUTHENTIK_POSTGRESQL__HOST: postgresql
+      AUTHENTIK_POSTGRESQL__USER: authentik
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      AUTHENTIK_POSTGRESQL__PASSWORD: authentik-e2e-db
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_BOOTSTRAP_PASSWORD: akadmin-e2e-pw
+      AUTHENTIK_BOOTSTRAP_TOKEN: e2e-bootstrap-token
+      AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+    volumes:
+      - ./blueprint.yaml:/blueprints/custom/e2e.yaml:ro
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ssonet
+
+  jellyfin:
+    image: jellyfin/jellyfin:10.11.11
+    environment:
+      JELLYFIN_CACHE_DIR: /cache
+    volumes:
+      - ../jellyfin/config:/config
+    networks:
+      - ssonet
+
+  harness:
+    image: alpine:3.20
+    depends_on:
+      - jellyfin
+      - authentik
+    environment:
+      JELLYFIN_URL: http://jellyfin:8096
+      IDP_KIND: authentik
+      PROVIDER: authentik
+      AUTHENTIK_URL: http://authentik:9000
+      OID_ENDPOINT: http://authentik:9000/application/o/jellyfin/
+      DISCOVERY_URL: http://authentik:9000/application/o/jellyfin/.well-known/openid-configuration
+      OIDC_CLIENT_ID: jellyfin-oidc
+      OIDC_CLIENT_SECRET: jellyfin-oidc-secret
+      ROLE_CLAIM: groups
+      OID_SCOPES_JSON: '["openid","email","profile","groups"]'
+      DO_NOT_LOAD_PROFILE: "false"
+      DISABLE_HTTPS: "true"
+      RUN_SAML: "false"
+      JF_ADMIN_USER: e2eadmin
+      JF_ADMIN_PASS: e2e-admin-pw
+    volumes:
+      - ../harness:/harness:ro
+    command: ["sh", "/harness/harness.sh"]
+    networks:
+      - ssonet
+
+networks:
+  ssonet:
+    driver: bridge
+    ipam:
+      config:
+        # SSRF-guard-friendly public-looking range, distinct from the other harnesses.
+        - subnet: 11.0.2.0/24
