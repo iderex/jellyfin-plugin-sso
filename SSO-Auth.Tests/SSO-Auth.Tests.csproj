@@ -9,7 +9,6 @@
     <IsPackable>false</IsPackable>
     <IsPublishable>false</IsPublishable>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
     <!-- Same security-analyzer posture as the main project: all Security-category
          rules enabled, CA findings fail every build. -->
     <AnalysisModeSecurity>All</AnalysisModeSecurity>
@@ -21,13 +20,17 @@
          are driven from ordinary xUnit v3 [Fact]s via Prop.ForAll(...).QuickCheckThrowOnFailure(),
          avoiding the FsCheck.Xunit ↔ xunit-version coupling. -->
     <PackageReference Include="FsCheck" Version="3.3.3" />
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.7.0" />
+    <!-- Statement/branch coverage for the RC coverage gate (#718): the MTP-native
+         Microsoft CodeCoverage extension emits Cobertura via the `coverage` option of
+         `dotnet test`. Its 18.9 line requires Microsoft.Testing.Platform 2.x, so the
+         runner is the MTP-v2 xunit meta package (xunit.v3.mtp-v2, same xunit with the
+         MTP 2.x bridge) and `dotnet test` runs in the .NET 10 SDK's MTP mode
+         (global.json `test.runner`). The VSTest-era packages (Microsoft.NET.Test.Sdk,
+         xunit.runner.visualstudio) are gone with that mode, per the xunit/MTP
+         migration guidance. -->
+    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.9.0" />
     <PackageReference Include="NSubstitute" Version="6.0.0" />
-    <PackageReference Include="xunit.v3" Version="3.2.2" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-      <PrivateAssets>all</PrivateAssets>
-    </PackageReference>
+    <PackageReference Include="xunit.v3.mtp-v2" Version="3.2.2" />
   </ItemGroup>
 
   <ItemGroup>
