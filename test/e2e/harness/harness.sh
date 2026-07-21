@@ -23,6 +23,23 @@ CLIENT_SECRET="${OIDC_CLIENT_SECRET:-jellyfin-oidc-secret}"
 ADMIN_USER="${JF_ADMIN_USER:-e2eadmin}"
 ADMIN_PASS="${JF_ADMIN_PASS:-e2e-admin-pw}"
 
+# Provider-shape parameters. Defaults reproduce the Keycloak harness byte-for-byte; another OIDC provider
+# (e.g. Authelia) overrides them from its compose env. IDP_KIND selects the provider-specific browser-login
+# sequence in idp_oidc_login (Keycloak renders a server-side HTML form; Authelia is a JSON-API login portal).
+IDP_KIND="${IDP_KIND:-keycloak}"
+RUN_SAML="${RUN_SAML:-true}"
+OID_ENDPOINT="${OID_ENDPOINT:-$KEYCLOAK/realms/$REALM}"
+DISCOVERY_URL="${DISCOVERY_URL:-$KEYCLOAK/realms/$REALM/.well-known/openid-configuration}"
+ROLE_CLAIM="${ROLE_CLAIM:-realm_access.roles}"
+OID_SCOPES_JSON="${OID_SCOPES_JSON:-[\"email\"]}"
+# Keycloak carries the roles in the id_token, so the profile fetch is skipped; a provider that only exposes
+# the group/role claim at the userinfo endpoint (e.g. Authelia) sets this false so the plugin fetches it.
+DO_NOT_LOAD_PROFILE="${DO_NOT_LOAD_PROFILE:-true}"
+# DisableHttps relaxes the plugin's https-only issuer requirement for a plaintext-http test IdP (Keycloak).
+# A provider served over real TLS (Authelia) sets this false so the production https path is exercised.
+DISABLE_HTTPS="${DISABLE_HTTPS:-true}"
+AUTHELIA_URL="${AUTHELIA_URL:-http://authelia:9091}"
+
 # A stable device identity for the harness's Jellyfin API calls (the MediaBrowser auth scheme).
 CLIENT="e2e-harness"
 DEVICE="harness"
@@ -65,7 +82,7 @@ wait_for() {
 # --------------------------------------------------------------------------------------------------
 # Phase 0 — readiness
 # --------------------------------------------------------------------------------------------------
-wait_for "Keycloak realm discovery" "$KEYCLOAK/realms/$REALM/.well-known/openid-configuration"
+wait_for "OIDC discovery" "$DISCOVERY_URL"
 wait_for "Jellyfin" "$JELLYFIN/System/Info/Public"
 
 # --------------------------------------------------------------------------------------------------
@@ -90,6 +107,13 @@ jf() {
 # If the wizard is already complete (a re-run against a persisted /config), skip it.
 WIZARD_DONE="$(curl -fsS "$JELLYFIN/System/Info/Public" | jq -r '.StartupWizardCompleted // false')"
 if [ "$WIZARD_DONE" != "true" ]; then
+  # Jellyfin answers /System/Info/Public before the startup-wizard controller is fully ready, so poll the
+  # wizard config endpoint until it responds — otherwise a fast-booting IdP (e.g. Authelia over TLS) lets
+  # the harness race ahead of Jellyfin and the first wizard call fails intermittently (#921).
+  w=0
+  while [ "$w" -lt 30 ] && ! jf GET "/Startup/Configuration" >/dev/null 2>&1; do
+    w=$((w + 1)); sleep 2
+  done
   jf GET  "/Startup/Configuration" >/dev/null || die "wizard: get configuration failed"
   jf POST "/Startup/Configuration" '{"UICulture":"en-US","MetadataCountryCode":"US","PreferredMetadataLanguage":"en"}' >/dev/null || die "wizard: set configuration failed"
   jf GET  "/Startup/User" >/dev/null || die "wizard: get user failed"
@@ -123,17 +147,17 @@ log "== Configuring OpenID provider '$PROVIDER' =="
 #   does not, so bob is refused at the callback.
 OID_CONFIG="$(cat <<JSON
 {
-  "OidEndpoint": "$KEYCLOAK/realms/$REALM",
+  "OidEndpoint": "$OID_ENDPOINT",
   "OidClientId": "$CLIENT_ID",
   "OidSecret": "$CLIENT_SECRET",
   "Enabled": true,
-  "OidScopes": ["email"],
-  "DoNotLoadProfile": true,
+  "OidScopes": $OID_SCOPES_JSON,
+  "DoNotLoadProfile": $DO_NOT_LOAD_PROFILE,
   "DisablePushedAuthorization": true,
-  "DisableHttps": true,
+  "DisableHttps": $DISABLE_HTTPS,
   "EnableAuthorization": true,
   "Roles": ["jellyfin-access"],
-  "RoleClaim": "realm_access.roles"
+  "RoleClaim": "$ROLE_CLAIM"
 }
 JSON
 )"
@@ -168,33 +192,73 @@ extract_binding() {
   grep -i '^set-cookie:' "$1" 2>/dev/null | grep -o "$BINDING_COOKIE_NAME=[^;]*" | head -1 | cut -d= -f2-
 }
 
-# oidc_authorize <cookiejar> <start_headers_file> : drives start -> keycloak login page, prints the login
-# form action URL on stdout and writes the /start response headers (carrying the binding Set-Cookie) to the
-# headers file. ALL diagnostics go to stderr so they are not captured by the caller's $(...) and are
-# visible in the container log.
-oidc_authorize() {
+# oid_start <cookiejar> <start_headers_file> : calls the plugin's provider-agnostic OID /start, writes the
+# response headers (carrying the browser-binding Set-Cookie) to the headers file, and prints the IdP authorize
+# URL it 302s to on stdout. Diagnostics to stderr.
+oid_start() {
   jar="$1"; start_hdr="$2"
-  # /start must 302 to the IdP authorize endpoint.
   start_out="$(curl -sS -D "$start_hdr" -o /dev/null -c "$jar" -b "$jar" -w '%{http_code} %{redirect_url}' "$JELLYFIN/sso/OID/start/$PROVIDER")"
-  start_code="${start_out%% *}"
-  auth_url="${start_out#* }"
-  printf 'oidc_authorize: /start -> HTTP %s location=%s\n' "$start_code" "$auth_url" >&2
+  start_code="${start_out%% *}"; auth_url="${start_out#* }"
+  printf 'oid_start: /start -> HTTP %s location=%s\n' "$start_code" "$auth_url" >&2
   if [ -z "$auth_url" ]; then
-    printf 'oidc_authorize: /start returned no redirect; body was:\n' >&2
+    printf 'oid_start: /start returned no redirect; body was:\n' >&2
     curl -sS -c "$jar" -b "$jar" "$JELLYFIN/sso/OID/start/$PROVIDER" >&2 || true
     return 1
   fi
-  # Fetch the Keycloak login page (following any Keycloak-internal redirect), keeping the HTTP code.
-  login_page="$(curl -sSL -c "$jar" -b "$jar" -w '\n__HTTP__%{http_code}' "$auth_url")" || { printf 'oidc_authorize: login page curl failed\n' >&2; return 1; }
-  page_code="$(printf '%s' "$login_page" | sed -n 's/.*__HTTP__\([0-9]*\)$/\1/p')"
-  printf 'oidc_authorize: keycloak authorize page -> HTTP %s\n' "$page_code" >&2
-  form_action="$(printf '%s' "$login_page" | grep -oE 'action="[^"]*"' | head -1 | sed -e 's/^action="//' -e 's/"$//' -e 's/&amp;/\&/g')"
-  if [ -z "$form_action" ]; then
-    printf 'oidc_authorize: could not parse a form action from the authorize page; first 1200 chars:\n%s\n' "$(printf '%s' "$login_page" | head -c 1200)" >&2
-    return 1
-  fi
-  printf 'oidc_authorize: form action=%s\n' "$form_action" >&2
-  printf '%s' "$form_action"
+  printf '%s' "$auth_url"
+}
+
+# idp_oidc_login <cookiejar> <start_headers_file> <user> <pass> : drives the full browser-role login at the
+# identity provider and prints the plugin CALLBACK url (/sso/OID/redirect/<provider>?code&state) on stdout;
+# it writes the /start headers to start_hdr. Dispatches on IDP_KIND — Keycloak renders a server-side HTML
+# login form; Authelia is a JSON-API login portal. Returns non-zero on a transport break. Diagnostics to
+# stderr so they are not captured by the caller's $(...).
+idp_oidc_login() {
+  jar="$1"; start_hdr="$2"; user="$3"; pass="$4"
+  auth_url="$(oid_start "$jar" "$start_hdr")" || return 1
+  case "$IDP_KIND" in
+    keycloak)
+      login_page="$(curl -sSL -c "$jar" -b "$jar" -w '\n__HTTP__%{http_code}' "$auth_url")" || { printf 'idp_oidc_login[keycloak]: login page curl failed\n' >&2; return 1; }
+      page_code="$(printf '%s' "$login_page" | sed -n 's/.*__HTTP__\([0-9]*\)$/\1/p')"
+      printf 'idp_oidc_login[keycloak]: authorize page -> HTTP %s\n' "$page_code" >&2
+      form_action="$(printf '%s' "$login_page" | grep -oE 'action="[^"]*"' | head -1 | sed -e 's/^action="//' -e 's/"$//' -e 's/&amp;/\&/g')"
+      if [ -z "$form_action" ]; then
+        printf 'idp_oidc_login[keycloak]: could not parse a form action; first 1200 chars:\n%s\n' "$(printf '%s' "$login_page" | head -c 1200)" >&2
+        return 1
+      fi
+      printf 'idp_oidc_login[keycloak]: form action=%s\n' "$form_action" >&2
+      # Keycloak 302s back to the plugin callback with code + state.
+      curl -fsS -c "$jar" -b "$jar" -o /dev/null -w '%{redirect_url}' \
+        --data-urlencode "username=$user" \
+        --data-urlencode "password=$pass" \
+        --data-urlencode "credentialId=" \
+        "$form_action"
+      ;;
+    authelia)
+      # Prime the Authelia session cookie by following the authorize redirect into the login portal.
+      curl -sSL -c "$jar" -b "$jar" -o /dev/null "$auth_url" || { printf 'idp_oidc_login[authelia]: portal GET failed\n' >&2; return 1; }
+      # First factor via the JSON API; the session cookie in the jar carries the flow, and targetURL is the
+      # original authorize URL so Authelia resumes the OIDC exchange after a successful login.
+      ff="$(curl -sS -c "$jar" -b "$jar" -X POST "$AUTHELIA_URL/api/firstfactor" \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json" \
+        -d "{\"username\":\"$user\",\"password\":\"$pass\",\"keepMeLoggedIn\":false,\"targetURL\":\"$auth_url\",\"requestMethod\":\"GET\"}")" || { printf 'idp_oidc_login[authelia]: firstfactor POST failed\n' >&2; return 1; }
+      printf 'idp_oidc_login[authelia]: firstfactor => %s\n' "$ff" >&2
+      redir="$(printf '%s' "$ff" | jq -r '.data.redirect // empty' 2>/dev/null)"
+      if [ -z "$redir" ]; then
+        printf 'idp_oidc_login[authelia]: firstfactor returned no redirect (status=%s)\n' "$(printf '%s' "$ff" | jq -r '.status // "?"' 2>/dev/null)" >&2
+        return 1
+      fi
+      printf 'idp_oidc_login[authelia]: resuming authorize at %s\n' "${redir%%\?*}?<query>" >&2
+      # Resume the authorize with the authenticated session; consent is pre-configured/implicit, so it 302s
+      # to the plugin callback with code + state. Capture that callback (do NOT follow into the plugin).
+      curl -sS -c "$jar" -b "$jar" -o /dev/null -w '%{redirect_url}' "$redir"
+      ;;
+    *)
+      printf 'idp_oidc_login: unknown IDP_KIND=%s\n' "$IDP_KIND" >&2
+      return 1
+      ;;
+  esac
 }
 
 # --------------------------------------------------------------------------------------------------
@@ -203,16 +267,10 @@ oidc_authorize() {
 log "== OIDC round-trip: alice (expect success) =="
 JAR="$(mktemp)"
 START_HDR="$(mktemp)"
-FORM_ACTION="$(oidc_authorize "$JAR" "$START_HDR")" || die "alice: could not reach keycloak login form"
+CB_URL="$(idp_oidc_login "$JAR" "$START_HDR" alice alice)" || die "alice: could not complete the IdP login"
 BINDING="$(extract_binding "$START_HDR")"
 [ -n "$BINDING" ] || die "alice: /start set no browser-binding cookie"
-
-# Post alice's credentials; Keycloak 302s back to the plugin callback with code + state.
-CB_URL="$(curl -fsS -c "$JAR" -b "$JAR" -o /dev/null -w '%{redirect_url}' \
-  --data-urlencode "username=alice" \
-  --data-urlencode "password=alice" \
-  --data-urlencode "credentialId=" \
-  "$FORM_ACTION")" || die "alice: credential POST failed"
+[ -n "$CB_URL" ] || die "alice: the IdP login produced no callback URL"
 log "alice callback URL => ${CB_URL%%\?*}?<query>"
 case "$CB_URL" in
   "$JELLYFIN"/sso/OID/redirect/*) : ;;
@@ -256,28 +314,38 @@ fi
 log "== OIDC round-trip: bob (expect role-gate refusal) =="
 JAR_BOB="$(mktemp)"
 START_HDR_BOB="$(mktemp)"
-if FORM_ACTION_BOB="$(oidc_authorize "$JAR_BOB" "$START_HDR_BOB")"; then
+if CB_URL_BOB="$(idp_oidc_login "$JAR_BOB" "$START_HDR_BOB" bob bob)"; then
   BINDING_BOB="$(extract_binding "$START_HDR_BOB")"
-  CB_URL_BOB="$(curl -fsS -c "$JAR_BOB" -b "$JAR_BOB" -o /dev/null -w '%{redirect_url}' \
-    --data-urlencode "username=bob" \
-    --data-urlencode "password=bob" \
-    --data-urlencode "credentialId=" \
-    "$FORM_ACTION_BOB" || true)"
   if [ -z "$CB_URL_BOB" ]; then
-    fail "bob: Keycloak did not redirect back (authentication itself failed unexpectedly)"
+    fail "bob: the IdP did not redirect back (authentication itself failed unexpectedly)"
+  elif [ -z "$BINDING_BOB" ]; then
+    # Without the binding cookie a later refusal would be the BINDING gate, not the ROLE gate — that would
+    # silently test the wrong control, so a missing cookie is a broken negative test, not a pass.
+    fail "bob: /start set no browser-binding cookie (cannot isolate the role gate)"
   else
-    # The callback must NOT return the success auth page: bob authenticates at Keycloak, but the role
-    # gate denies him, so the plugin returns a non-2xx error page (curl -f makes a 4xx a non-zero exit).
-    # The binding cookie is presented, so this isolates the ROLE gate — a refusal here is the role gate,
-    # not a binding miss.
-    if curl -fsS -o /dev/null -H "Cookie: $BINDING_COOKIE_NAME=$BINDING_BOB" "$CB_URL_BOB" 2>/dev/null; then
-      fail "bob: callback returned success — the role gate did NOT refuse a role-less user"
-    else
-      pass "bob: callback refused the role-less user (role gate holds)"
+    case "$CB_URL_BOB" in
+      "$JELLYFIN"/sso/OID/redirect/*) : ;;
+      *) fail "bob: unexpected callback URL (not the plugin callback): $CB_URL_BOB"; CB_URL_BOB="" ;;
+    esac
+    if [ -n "$CB_URL_BOB" ]; then
+      # bob authenticated at the IdP but carries no jellyfin-access role, so the plugin denies him at the
+      # callback. Read the ACTUAL HTTP status (binding cookie presented, so this isolates the ROLE gate):
+      # a genuine plugin-side refusal is a reached-plugin non-2xx. A 2xx means the role gate let a role-less
+      # user in; an unreachable plugin (HTTP 000) is a broken test, never a refusal. This mirrors the
+      # hardened SAML dave negative so a transport break can never masquerade as a role-gate PASS.
+      CB_STATUS_BOB="$(curl -sS -o /dev/null -w '%{http_code}' -H "Cookie: $BINDING_COOKIE_NAME=$BINDING_BOB" "$CB_URL_BOB" 2>/dev/null || true)"
+      [ -n "$CB_STATUS_BOB" ] || CB_STATUS_BOB="000"
+      if [ "$CB_STATUS_BOB" = "000" ]; then
+        fail "bob: could not reach the plugin callback (HTTP 000) — cannot prove a role-gate refusal (broken negative test)"
+      elif [ "$CB_STATUS_BOB" -ge 200 ] && [ "$CB_STATUS_BOB" -lt 300 ]; then
+        fail "bob: callback returned $CB_STATUS_BOB — the role gate did NOT refuse a role-less user"
+      else
+        pass "bob: callback refused the role-less user at the plugin (HTTP $CB_STATUS_BOB, role gate holds)"
+      fi
     fi
   fi
 else
-  fail "bob: could not reach the Keycloak login form"
+  fail "bob: could not complete the IdP login"
 fi
 
 # --------------------------------------------------------------------------------------------------
@@ -300,6 +368,9 @@ fi
 # ==================================================================================================
 # SAML
 # ==================================================================================================
+# Gated: only a provider that speaks SAML (Keycloak) runs these phases. An OIDC-only provider (Authelia)
+# sets RUN_SAML=false, and the SAML phases below are skipped.
+if [ "$RUN_SAML" = "true" ]; then
 # The SAML browser-binding cookie (#415) — like the OpenID one, always Secure, so presented explicitly
 # over plaintext http. It is checked at the same-origin SAML/Auth mint leg (the cross-site ACS POST does
 # not carry it).
@@ -479,6 +550,10 @@ if [ -n "${STOKEN:-}" ]; then
   fi
 else
   fail "SAML replay check skipped: no token captured from the carol round-trip"
+fi
+
+else
+  log "== SAML phases skipped (RUN_SAML=$RUN_SAML) =="
 fi
 
 # --------------------------------------------------------------------------------------------------

@@ -1,0 +1,105 @@
+# Authelia OpenID Provider config for the E2E login harness (#921). Test-only secrets (clearly marked),
+# an in-container sqlite store, a filesystem notifier, and a single OIDC client for the plugin. Groups are
+# exposed at the userinfo endpoint (the plugin fetches the profile to read them). OIDC-only — no SAML.
+theme: light
+
+log:
+  level: debug
+
+identity_validation:
+  reset_password:
+    jwt_secret: 'insecure_e2e_only_jwt_secret_0123456789abcdef'
+
+server:
+  address: 'tcp://0.0.0.0:9091'
+  # Authelia 4.38 requires its session cookie URL to use a secure scheme, so the portal is served over TLS
+  # with a self-signed cert for login.example.com (test-only). Jellyfin and the harness are pointed at this
+  # cert as their trust anchor.
+  tls:
+    certificate: '/config/tls.crt'
+    key: '/config/tls.key'
+
+authentication_backend:
+  password_reset:
+    disable: true
+  file:
+    path: '/config/users_database.yml'
+
+access_control:
+  default_policy: 'one_factor'
+
+session:
+  secret: 'insecure_e2e_only_session_secret_0123456789ab'
+  cookies:
+    - domain: 'example.com'
+      authelia_url: 'https://login.example.com:9091'
+      name: 'authelia_session'
+      same_site: 'lax'
+      expiration: '1 hour'
+      inactivity: '5 minutes'
+
+regulation:
+  max_retries: 0
+
+storage:
+  encryption_key: 'insecure_e2e_only_storage_encryption_key_0123'
+  local:
+    path: '/config/db.sqlite3'
+
+notifier:
+  disable_startup_check: true
+  filesystem:
+    filename: '/config/notification.txt'
+
+identity_providers:
+  oidc:
+    hmac_secret: 'insecure_e2e_only_hmac_secret_0123456789abcd'
+    jwks:
+      - key_id: 'e2e'
+        algorithm: 'RS256'
+        use: 'sig'
+        key: |
+          -----BEGIN PRIVATE KEY-----
+          MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDF7G5zkkxXZPMW
+          VvCb20qJZuLTgKCJ+BRV2CUI4cGtkQU3LKbJcekX6qmts0H5MgS5VLZbGiE+g3S6
+          iWaI9/LQ48ldZ4vOtFX6rqgE8FbKTS94J6jJ4y/9WfR1bs1pKoOIMTv/g+LN1rGr
+          w7gK0XAkRSrs7QaPzFelxPQ4EztS35x5O6dpB6gY0hJj535V1v5tVUXc5OYCDLXz
+          yUoi+oc0HxMj83TkwQGWgnJIRI4ItnIG0RZtv0c1w/QHQQ6B/+18aulUGAQ7UX9P
+          sfUZGkwyv86VwRjr99Y9BRZrEPyQRVxYO5HcE4A/U4FeRUEXGezqGnzzXWGDq1rU
+          MS9AznCPAgMBAAECggEAGTIzEWVjcJC6XXKt6Llu8LT3VUN/rHC3bgI5HLtYo5bd
+          mhuGFAj7Sn8mIKW8VVPnxAwjts9JwiKL/p81PWSLNcp5vPlMlADjHSmU3CQYeGKB
+          E4PA+gqA9ni4JSb44VV3LyRNZgbNHbUiIyKkUEQ/SW7Auy6lcjLqSYEcMfNIzxDM
+          7zYFAHYvvaDVmDQfvYxam6R0oo4mAz/1ZCPbESrYBqq0jbgryQdwZjeKNRK1pmVQ
+          zgSSKc/5IbZo7kL+emw4/4EwpfMlIhYMffnT2y6ljOvQUnWoRioIXkBHPZql7vUX
+          vNhioeO2hNagIVr/1oTW9hL0fht3VBPYYpd/2WkKaQKBgQDxmFKYczIxLlYCx8wE
+          XVI1hidS+nt03zrpIQazdWgpNNaQWrngI7/T2wmBYyR1XrYwUj8YCrBIW6bwJHVo
+          a+6GsKIjFIxsRdN4aJ25FY8h5cydXRCz99R23V5qgeKD2etcEYEEZttjmP8qUhwO
+          s1XFI7bg0dCT1frEOa+aLjNNnQKBgQDRuYNVRjDGbMicmn1chhf5G71rqGzMv1dx
+          Eunjkoqg9zDYsHiXYvsPLmMsOEhc300F3EuJZ/6cnDTOeXVPkvZyni51NNe/7wMm
+          G6Gx13ci8xhIQc2NfkUb66zDPBBC9yAjv9YXrsXE79BtwSoM0OupguLPX0HzZ1M7
+          bUAOvTb1GwKBgHCdlVq0z9+2/qbbJVGfgpOqjigS1Ht9FwPWvj3m63/RvnaZo+1E
+          HMYPYxXp9fO0C27o17pIOTXxaxajmArtzMkCCwIZMP/DaLjG40aEMy0U5lUwLXoG
+          ewZRWBKDqufVK+3FxwMbQwbhKYg7sBJ2K/PyGuwfQX+4DeVsElvnT0jNAoGBAKB1
+          jXRK9bp7NKoM0Wle9yyS+sRJ4qRsqRxMWkLRtdseBXNk4X8CLhAZb6s/jK3x815O
+          hESnGnj8UrK+3vB5ArIDMIxgV8nztrcLYRVOQ0qsL6HpJrnhKEMKd+4QIGj75s0z
+          UzxfbdUVnqS6q8+OcSAKkjoTKcRvA5FuLxqXzlqNAoGAMkDFfVTeToN/3Be+J2ap
+          egsepEBJljvUs1aIjJVyPog+CU8XLCQanzwv6IO1BwM+OIXXgHtdavWsi26e3kPM
+          lbpovAq6HrMFltGKGdcOgnMX1kCmW+jZnXTvuWWeZ5iPWEIn4WYJzw+eJUUXwjh0
+          hYcuhv+1Hbab7UleeB3F/eg=
+          -----END PRIVATE KEY-----
+    clients:
+      - client_id: 'jellyfin-oidc'
+        client_name: 'Jellyfin'
+        client_secret: '$plaintext$jellyfin-oidc-secret'
+        public: false
+        authorization_policy: 'one_factor'
+        consent_mode: 'implicit'
+        redirect_uris:
+          - 'http://jellyfin:8096/sso/OID/redirect/authelia'
+        scopes:
+          - 'openid'
+          - 'email'
+          - 'profile'
+          - 'groups'
+        userinfo_signed_response_alg: 'none'
+        token_endpoint_auth_method: 'client_secret_post'

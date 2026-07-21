@@ -1,0 +1,90 @@
+# End-to-end SSO login harness — Authelia provider (#921). Boots a real Jellyfin 10.11 server with the
+# packaged plugin installed, a real Authelia OpenID Provider, and the SHARED harness driving a full OIDC
+# login round-trip. It reuses ../harness/harness.sh and the ../jellyfin/config plugin drop from the
+# canonical Keycloak harness (#720); only the IdP container, its file config, and the harness's provider
+# env differ. Authelia is OIDC-only, so RUN_SAML=false.
+#
+# Authelia is reached at https://login.example.com:9091 from BOTH legs (Jellyfin server-to-server discovery/
+# token, and the harness browser role), so the issuer is byte-identical from both sides. Two deliberate
+# choices: (1) the dotted alias login.example.com — Authelia's session-cookie domain must be a real parent
+# domain, which a single-label docker service name is not; (2) TLS — Authelia 4.38 requires its session URL
+# to use a secure scheme, so it serves a self-signed cert that Jellyfin (SSL_CERT_FILE) and the harness
+# (CURL_CA_BUNDLE) are pointed at as their trust anchor. This exercises the plugin's REAL https OIDC path.
+#
+# Local run (build the plugin zip first — see test/e2e/README.md):
+#   docker compose -f test/e2e/authelia/docker-compose.yml up \
+#     --abort-on-container-exit --exit-code-from harness
+name: sso-e2e-authelia
+
+services:
+  authelia:
+    image: authelia/authelia:4.38
+    command: ["authelia", "--config", "/config/configuration.yml"]
+    volumes:
+      - ./configuration.yml:/config/configuration.yml:ro
+      - ./users_database.yml:/config/users_database.yml:ro
+      - ./tls.crt:/config/tls.crt:ro
+      - ./tls.key:/config/tls.key:ro
+    networks:
+      ssonet:
+        aliases:
+          # Authelia needs a dotted domain for its session cookie; Jellyfin and the harness both resolve
+          # this alias to the Authelia container over the compose DNS, and the cert's SAN matches it.
+          - login.example.com
+
+  jellyfin:
+    # Same server the Keycloak harness pins (see ../docker-compose.yml for the version-bind rationale).
+    image: jellyfin/jellyfin:10.11.11
+    # APPEND Authelia's self-signed cert to the system CA bundle (never replace it) before Jellyfin starts,
+    # so the plugin's .NET/OpenSSL TLS trusts Authelia while every real system CA still validates. Replacing
+    # the bundle (e.g. SSL_CERT_FILE pointing at the lone cert) breaks .NET's startup TLS instead.
+    entrypoint: ["/bin/sh", "-c", "cat /certs/authelia.crt >> /etc/ssl/certs/ca-certificates.crt && exec /jellyfin/jellyfin"]
+    environment:
+      JELLYFIN_CACHE_DIR: /cache
+    volumes:
+      # Reuse the shared plugin drop the workflow / local build step unpacks under ../jellyfin/config.
+      - ../jellyfin/config:/config
+      - ./tls.crt:/certs/authelia.crt:ro
+    networks:
+      - ssonet
+
+  harness:
+    image: alpine:3.20
+    depends_on:
+      - jellyfin
+      - authelia
+    environment:
+      JELLYFIN_URL: http://jellyfin:8096
+      IDP_KIND: authelia
+      PROVIDER: authelia
+      AUTHELIA_URL: https://login.example.com:9091
+      OID_ENDPOINT: https://login.example.com:9091
+      DISCOVERY_URL: https://login.example.com:9091/.well-known/openid-configuration
+      OIDC_CLIENT_ID: jellyfin-oidc
+      OIDC_CLIENT_SECRET: jellyfin-oidc-secret
+      # Authelia exposes groups only at the userinfo endpoint, so the plugin must fetch the profile and read
+      # the standard `groups` claim (Keycloak instead carries roles in the id_token).
+      ROLE_CLAIM: groups
+      OID_SCOPES_JSON: '["openid","email","profile","groups"]'
+      DO_NOT_LOAD_PROFILE: "false"
+      DISABLE_HTTPS: "false"
+      RUN_SAML: "false"
+      # The harness's browser-role curl trusts the same self-signed Authelia cert.
+      CURL_CA_BUNDLE: /certs/authelia.crt
+      JF_ADMIN_USER: e2eadmin
+      JF_ADMIN_PASS: e2e-admin-pw
+    volumes:
+      - ../harness:/harness:ro
+      - ./tls.crt:/certs/authelia.crt:ro
+    command: ["sh", "/harness/harness.sh"]
+    networks:
+      - ssonet
+
+networks:
+  ssonet:
+    driver: bridge
+    ipam:
+      config:
+        # Same SSRF-guard-friendly public-looking range as the Keycloak harness: the plugin's outbound
+        # OIDC backchannel refuses RFC1918/loopback/CGNAT, so a default Docker subnet would fail closed.
+        - subnet: 11.0.1.0/24
