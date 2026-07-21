@@ -1,4 +1,4 @@
-name: "SSO Authentication"
+name: "Community SSO for Jellyfin"
 guid: "505ce9d1-d916-42fa-86ca-673ef241d7df"
 imageUrl: "https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/main/img/logo.png"
 version: "4.3.0"

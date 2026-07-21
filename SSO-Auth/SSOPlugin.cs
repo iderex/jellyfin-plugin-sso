@@ -23,6 +23,13 @@ namespace Jellyfin.Plugin.SSO_Auth;
 /// </summary>
 public class SSOPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
 {
+    // The STABLE config-page registration prefix, deliberately DECOUPLED from the display Name below
+    // (the rebrand to "Community SSO for Jellyfin"): these strings are page identifiers baked into the
+    // served config-page URLs and the .js/.css the pages load by name, so they are part of the plugin's
+    // page identity — like the root namespace, they must NOT track a display-name change (a rename here
+    // would break every existing config page's load path). The display Name is free to change; this is not.
+    private const string PageId = "SSO-Auth";
+
     private readonly Lazy<SecretStore> _secrets;
 
     /// <summary>
@@ -68,7 +75,7 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
     /// <summary>
     /// Gets the name of the SSO plugin.
     /// </summary>
-    public override string Name => "SSO-Auth";
+    public override string Name => "Community SSO for Jellyfin";
 
     /// <summary>
     /// Gets the GUID of the SSO plugin.
@@ -164,11 +171,11 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
     public IEnumerable<PluginPageInfo> GetPages() =>
         new[]
         {
-            Page(Name, "Web.configPage.html"),
-            Page(Name + ".js", "Web.config.js"),
-            Page(Name + ".css", "Web.style.css"),
-            Page(Name + "-linking", "Web.linking.html"),
-            Page(Name + "-linking.js", "Web.linking.js"),
+            Page(PageId, "Web.configPage.html"),
+            Page(PageId + ".js", "Web.config.js"),
+            Page(PageId + ".css", "Web.style.css"),
+            Page(PageId + "-linking", "Web.linking.html"),
+            Page(PageId + "-linking.js", "Web.linking.js"),
         };
 
     /// <summary>

@@ -4,10 +4,10 @@
 >
 > **Status: Beta** — the third rung of the maturity ladder (**In-Development → Alpha → Beta → Release Candidate → Full Release**; see the [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap)). Installable by adding this plugin's own repository to Jellyfin (see [Installing](#installing)).
 
-<h1 align="center">Jellyfin SSO Plugin</h1>
+<h1 align="center">Community SSO for Jellyfin</h1>
 
 <p align="center">
-<img alt="Jellyfin SSO Plugin" src="https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/main/img/banner.png" width="820"/>
+<img alt="Community SSO for Jellyfin" src="https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/main/img/banner.png" width="820"/>
 <br/>
 <br/>
 <a href="https://github.com/iderex/jellyfin-plugin-sso/blob/main/LICENSE.txt">
@@ -110,7 +110,7 @@ Jellyfin upstream is building [native OIDC](https://github.com/jellyfin/jellyfin
    - **stable** ships tagged releases only. **beta** publishes on a daily schedule (04:00 UTC) whenever `main` has advanced since the last beta, so betas move fast and may break — use them for testing, not production.
    - Each manifest lists builds for **both Jellyfin 10.11** (.NET 9) and **Jellyfin 12.0** (.NET 10). Jellyfin filters by the plugin's target ABI, so your server is only ever offered the build that runs on it — you don't pick the generation, it does. Jellyfin 12.0 support is currently **beta only** and **not yet validated against a live 12.0 server** (none exists at GA quality to test against): the JF12/5.0 line is CI-built and unit-tested but sits outside the 4.x release-candidate gate, and it clears its own live-validation gate when a Jellyfin 12.0 RC/GA build is available (the stable 12.0 build lands at a 12.0 stable release).
 
-2. Go to **Dashboard → Plugins → Catalog**, find **SSO Authentication**, and install it.
+2. Go to **Dashboard → Plugins → Catalog**, find **Community SSO for Jellyfin**, and install it.
 3. **Restart Jellyfin** to load the plugin.
 
 The plugin GUID is unchanged from the original `9p4` plugin, so a new version installs over an existing one in place and keeps your existing configuration. To switch channels, replace the repository URL and let the catalog offer the other channel's build.
@@ -125,7 +125,7 @@ Copy the **full publish output** (`SSO-Auth.dll` and every dependency DLL beside
 
 **Client support:** SSO sign-in runs in the Jellyfin **Web UI** and in clients that support **Quick Connect** (the mobile and TV apps drive the login through Quick Connect). A native client that does not support Quick Connect cannot complete the browser redirect flow — use the Web UI or a Quick Connect client there.
 
-**Coming from the old plugin repository?** This project is the maintained continuation of the archived `9p4/jellyfin-plugin-sso`. If your Jellyfin still points at the old `9p4` manifest — or at any other now-dead SSO manifest URL, such as a former `jellyfin-plugin-sso-V2` one — it will not receive updates from here. Packaged releases have resumed: replace the stale plugin-repository URL with the 10.11 stable manifest (`https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-release/manifest.json`) under **Dashboard → Plugins → Repositories**, then install **SSO Authentication** from the catalog. The plugin GUID is unchanged, so it updates in place and keeps your existing configuration.
+**Coming from the old plugin repository?** This project is the maintained continuation of the archived `9p4/jellyfin-plugin-sso`. If your Jellyfin still points at the old `9p4` manifest — or at any other now-dead SSO manifest URL, such as a former `jellyfin-plugin-sso-V2` one — it will not receive updates from here. Packaged releases have resumed: replace the stale plugin-repository URL with the 10.11 stable manifest (`https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-release/manifest.json`) under **Dashboard → Plugins → Repositories**, then install **Community SSO for Jellyfin** from the catalog. The plugin GUID is unchanged, so it updates in place and keeps your existing configuration.
 
 ## Configuration
 

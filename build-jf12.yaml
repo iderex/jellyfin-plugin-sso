@@ -1,4 +1,4 @@
-name: "SSO Authentication"
+name: "Community SSO for Jellyfin"
 # Same plugin GUID as the JF10.11 build (build.yaml) — one plugin, so a JF12 server updates it in
 # place. The targetAbi below gates it to the 12.0 line, so a 10.11 server never offers this build and
 # vice versa (the two generations live in separate manifest branches, manifest-jf12-* vs manifest-*).
