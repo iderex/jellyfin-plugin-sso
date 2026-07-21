@@ -846,13 +846,18 @@ public class SSOController : ControllerBase
             return UniformLogoutRejection();
         }
 
-        // Resolve the targeted sessions — strictly the SAME provider and subject (ordinal exact). This is the
-        // blast-radius bound: FindByProviderSubject filters by (provider, subject), so a logout for one
-        // subject can never touch another subject's or another provider's sessions. When the request names
-        // SessionIndex element(s), keep only entries whose captured index is among them; a request with NO
-        // SessionIndex targets every session of the subject (SAML core §3.7).
+        // Resolve the targeted sessions — strictly the SAME provider and subject (ordinal exact), AND only
+        // SAML captures. This is the blast-radius bound: FindByProviderSubject filters by (provider, subject),
+        // so a logout for one subject can never touch another subject's or another provider's sessions. The
+        // Protocol filter keeps the SAML and OpenID flows apart exactly as the SP-initiated path does (an
+        // OpenID and a SAML provider can share a config name and a subject string): a signed SAML LogoutRequest
+        // must never revoke an OpenID capture. When the request names SessionIndex element(s), keep only entries
+        // whose captured index is among them; a request with NO SessionIndex targets every session of the
+        // subject (SAML core §3.7).
         var matches = SSOPlugin.Instance.ReadConfiguration(configuration =>
-            SessionLogoutStore.FindByProviderSubject(configuration, provider, nameId, string.Empty));
+            SessionLogoutStore.FindByProviderSubject(configuration, provider, nameId, string.Empty)
+                .Where(pair => string.Equals(pair.Value.Protocol, SamlProtocol, StringComparison.Ordinal))
+                .ToList());
         if (sessionIndexes.Count > 0)
         {
             matches = matches

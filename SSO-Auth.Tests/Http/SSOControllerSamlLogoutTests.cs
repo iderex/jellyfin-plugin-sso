@@ -399,6 +399,35 @@ public class SSOControllerSamlLogoutTests
         Assert.DoesNotContain("&RelayState=", redirect.Url, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task SamlLogout_DoesNotRevokeAnOpenIdCaptureOfTheSameProviderAndSubject()
+    {
+        // Protocol isolation (SLO-5): a signed SAML LogoutRequest for (adfs, alice) must NOT revoke an OpenID
+        // capture that happens to share the provider name and subject string. The SAML and OpenID flows stay
+        // apart — the inbound path resolves only SAML captures, exactly as the SP-initiated path does.
+        var fixture = SamlLogoutTestFactory.Create(nameId: "alice");
+        var harness = new SsoControllerHarness(c =>
+        {
+            c.EnableSingleLogout = true;
+            c.SamlConfigs["adfs"] = new SamlConfig { Enabled = true, SamlCertificate = fixture.CertificateBase64 };
+            c.LogoutSessions["oid"] = new LogoutSession
+            {
+                Protocol = "OpenID",
+                Provider = "adfs",
+                Subject = "alice",
+                IdToken = "raw.id.token",
+                UserId = UserA,
+            };
+        });
+
+        var result = await harness.Controller.SamlLogout("adfs", fixture.EncodeRequest());
+
+        // No SAML capture matched -> uniform 400, and the OpenID entry is untouched (never revoked, never removed).
+        AssertUniformRejection(result);
+        await harness.SessionManager.DidNotReceive().RevokeUserTokens(Arg.Any<Guid>(), Arg.Any<string>());
+        Assert.True(SSOPlugin.Instance.ReadConfiguration(c => c.LogoutSessions.ContainsKey("oid")));
+    }
+
     // A harness fully configured for the signed inbound LogoutResponse: the fixture's IdP cert validates the
     // inbound request, and an SLO endpoint + a loadable SP signing key let the success path sign the response.
     private static SsoControllerHarness SignedResponseHarness(SamlLogoutFixture fixture) => new SsoControllerHarness(c =>
