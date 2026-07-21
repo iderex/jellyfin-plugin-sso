@@ -813,9 +813,10 @@ public class SSOController : ControllerBase
     /// </summary>
     /// <param name="provider">The SAML provider the LogoutRequest arrived for.</param>
     /// <param name="samlRequest">The <c>SAMLRequest</c> form field (model-bound, so a non-form POST binds null and is rejected).</param>
-    /// <returns>200 when a validated request revoked at least one session; a uniform 400 otherwise.</returns>
+    /// <param name="relayState">The optional <c>RelayState</c> form field, echoed on the signed <c>LogoutResponse</c> (#727, SLO-3c) when within the 80-byte SAML binding cap.</param>
+    /// <returns>A signed <c>LogoutResponse</c> redirect (302) when a validated request revoked at least one session and the provider is configured to sign it, a bare 200 when it cannot be signed, or a uniform 400 otherwise.</returns>
     [HttpPost("SAML/Logout/{provider}")]
-    public async Task<ActionResult> SamlLogout(string provider, [FromForm(Name = "SAMLRequest")] string? samlRequest = null)
+    public async Task<ActionResult> SamlLogout(string provider, [FromForm(Name = "SAMLRequest")] string? samlRequest = null, [FromForm(Name = "RelayState")] string? relayState = null)
     {
         if (RateLimitCheck(SsoRateLimitClass.Logout) is { } throttled)
         {
@@ -839,7 +840,7 @@ public class SSOController : ControllerBase
         // FIXED constant (never request-derived) written only to the audit trail; the caller sees the uniform
         // 400 with no branch-distinguishing detail.
         var validator = new SamlLogoutValidator();
-        if (!validator.TryValidate(config, provider, samlRequest, DateTime.UtcNow, out var nameId, out var sessionIndexes, out var reasonCode))
+        if (!validator.TryValidate(config, provider, samlRequest, DateTime.UtcNow, out var nameId, out var sessionIndexes, out var requestId, out var reasonCode))
         {
             SsoAudit.LogoutRejected(_logger, provider, reasonCode);
             return UniformLogoutRejection();
@@ -915,7 +916,77 @@ public class SSOController : ControllerBase
         }
 
         SsoAudit.LogoutRequested(_logger, provider, succeeded.Count);
-        return Ok();
+
+        // SLO-3c: answer the IdP with a SIGNED LogoutResponse so its Single-Logout loop completes, redirecting
+        // the browser to the IdP SLO endpoint. Emitted ONLY here — on the success path, after a validated
+        // request actually revoked a session — so no rejection can ever produce a signed status-bearing
+        // response (every failure above keeps the uniform 400, no cause oracle). Fail-SAFE: when no SLO
+        // endpoint or signing key is configured, or the build/sign faults, fall back to the bare 200 — the
+        // revocation already stands, and a missing response is degraded interop, never a 500 or an unsigned
+        // downgrade. The redirect target is the save-validated absolute-https SamlSloEndpoint (never
+        // request-derived), so it cannot be an open redirect.
+        string? responseRedirectUrl = null;
+        try
+        {
+            responseRedirectUrl = BuildSamlLogoutResponseRedirectUrl(config, requestId, relayState);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or CryptographicException or FormatException)
+        {
+            if (_logger.IsEnabled(LogLevel.Error))
+            {
+                _logger.LogError("SAML inbound logout for provider {Provider} could not build the signed LogoutResponse: {Reason}; the revocation stands and the endpoint answers 200.", provider?.ReplaceLineEndings(string.Empty), ex.Message);
+            }
+        }
+
+        return responseRedirectUrl is null ? Ok() : Redirect(responseRedirectUrl);
+    }
+
+    // Builds the signed outbound SAML LogoutResponse redirect URL answering a validated inbound LogoutRequest
+    // (#727, SLO-3c), or null when the response cannot be signed (no SLO endpoint, or no loadable signing key).
+    // Fail-closed on the signing key exactly like BuildSamlSloRedirectUrl: a missing/unloadable key returns
+    // null (the endpoint degrades to a bare 200) rather than emitting an UNSIGNED response — the redirect
+    // binding mandates a signature, so an unsigned downgrade is never sent. Reuses the outbound-signing stack
+    // verbatim (revealed-at-use key via SamlSigningKey, the shared SamlRedirectSigner via
+    // SamlLogoutResponseBuilder). InResponseTo/Destination are bound to the validated request and the trusted
+    // configured endpoint; the inbound RelayState is echoed only when within the 80-byte SAML binding cap.
+    private static string? BuildSamlLogoutResponseRedirectUrl(SamlConfig config, string requestId, string? relayState)
+    {
+        var sloEndpoint = config.SamlSloEndpoint?.Trim();
+        if (string.IsNullOrEmpty(sloEndpoint))
+        {
+            return null;
+        }
+
+        // Without an SP entity id there is no valid Issuer for the response. Fail-safe to null (the endpoint
+        // degrades to a bare 200) rather than emit a malformed empty-Issuer response — and this also removes
+        // any NullReferenceException risk from Trim() on a null-deserialized SamlClientId.
+        var issuer = config.SamlClientId?.Trim();
+        if (string.IsNullOrEmpty(issuer))
+        {
+            return null;
+        }
+
+        if (!SamlSigningKey.TryLoad(SSOPlugin.Instance.Secrets.Reveal(config.SamlSigningKeyPfx), out var signingCertificate))
+        {
+            return null;
+        }
+
+        using (signingCertificate)
+        using (var signingKey = SamlSigningKey.GetSigningKey(signingCertificate))
+        {
+            if (signingKey is null)
+            {
+                return null;
+            }
+
+            // Echo the inbound RelayState only when it is within the SAML HTTP binding's 80-BYTE cap
+            // (saml-bindings-2.0 §3.4.3) — measured in UTF-8 bytes, not UTF-16 chars, so a multi-byte value
+            // cannot slip over the wire limit; anything longer is non-conformant and dropped, not reflected.
+            var echoedRelayState = !string.IsNullOrEmpty(relayState) && System.Text.Encoding.UTF8.GetByteCount(relayState) <= 80 ? relayState : null;
+
+            var response = new SamlLogoutResponseBuilder(issuer, requestId, sloEndpoint);
+            return response.GetSignedRedirectUrl(sloEndpoint, echoedRelayState, signingKey);
+        }
     }
 
     // The single uniform rejection for the inbound SAML logout endpoint: one fixed 400 body for every

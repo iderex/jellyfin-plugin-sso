@@ -144,9 +144,9 @@ off, both the RP-initiated OIDC logout route and the inbound SAML
   Jellyfin's token revocation is **user-scoped** (there is no per-token revoke),
   so a `SessionIndex`-scoped request still revokes the whole matched user's
   tokens — documented, and safe (it errs toward ending more of the named user's
-  sessions, never someone else's). A `200` is returned only when at least one
+  sessions, never someone else's). Success is reported only when at least one
   session was actually revoked; a request that matched sessions but revoked none
-  fails closed.
+  fails closed with the uniform 400.
 - **RP-initiated OIDC logout** ends the caller's own local session, then
   redirects to the IdP's discovered `end_session_endpoint` — **host-bound to the
   discovered issuer** (open-redirect/SSRF defense) — with the caller's own
@@ -163,13 +163,19 @@ off, both the RP-initiated OIDC logout route and the inbound SAML
   fail-safe: a missing SLO endpoint, an unloadable signing key, or no captured
   session degrades to a local-only logout — an unsigned request is never emitted
   and the local session is always ended.
-- **Honest scope limits.** A **signed outbound `LogoutResponse`** to an inbound
-  `LogoutRequest` is **not yet implemented** (tracked on
-  [#727](https://github.com/iderex/jellyfin-plugin-sso/issues/727)): a validated
-  inbound request is answered with a `200` after revocation, which most identity
-  providers accept. Logout events (`LogoutRequested`/`LogoutRejected`) are
-  audited by reason code — never raw `NameID`/`SessionIndex` — and the inbound
-  endpoint is rate-limited.
+- **The inbound endpoint answers with a signed `LogoutResponse`.** After a
+  validated request revokes a session, the SP closes the IdP's Single-Logout loop
+  by redirecting the browser to the provider's configured `SamlSloEndpoint` with
+  a **signed** `LogoutResponse` (`Status=Success`, `InResponseTo` bound to the
+  request ID, `Destination` pinned to that endpoint), signed with the
+  service-provider key through the same shared redirect-binding signer. It is
+  emitted **only on the success path** — every rejection keeps the uniform 400,
+  so no rejection cause can leak through a status-bearing response — and is
+  **fail-safe**: with no SLO endpoint or no loadable signing key the endpoint
+  answers a bare `200` (an unsigned response is never emitted). Any inbound
+  `RelayState` is echoed only within the 80-byte SAML binding cap. Logout events
+  (`LogoutRequested`/`LogoutRejected`) are audited by reason code — never raw
+  `NameID`/`SessionIndex` — and the inbound endpoint is rate-limited.
 
 ## EU Cyber Resilience Act (CRA) position
 

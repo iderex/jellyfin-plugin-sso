@@ -45,6 +45,7 @@ internal sealed class SamlLogoutValidator
     /// <param name="nowUtc">The current UTC time (supplied for determinism).</param>
     /// <param name="nameId">On success, the subject NameID the request names.</param>
     /// <param name="sessionIndexes">On success, the SessionIndex values the request carries (possibly empty).</param>
+    /// <param name="requestId">On success, the request's <c>ID</c> — the value the SP echoes as the <c>InResponseTo</c> of the signed <c>LogoutResponse</c> (#727, SLO-3c). Empty on failure.</param>
     /// <param name="reasonCode">On failure, a fixed audit reason code; empty on success.</param>
     /// <returns><see langword="true"/> when the request is fully valid; otherwise <see langword="false"/>.</returns>
     internal bool TryValidate(
@@ -54,11 +55,13 @@ internal sealed class SamlLogoutValidator
         DateTime nowUtc,
         out string nameId,
         out IReadOnlyList<string> sessionIndexes,
+        out string requestId,
         out string reasonCode)
     {
         ArgumentNullException.ThrowIfNull(config);
         nameId = string.Empty;
         sessionIndexes = Array.Empty<string>();
+        requestId = string.Empty;
 
         if (!SamlLogoutRequest.TryParse(config.SamlCertificate ?? string.Empty, config.SamlSecondaryCertificate, rawRequest, out var logoutRequest))
         {
@@ -102,7 +105,8 @@ internal sealed class SamlLogoutValidator
         // still finds and acts on them. Replay protection here is a hygiene/DoS bound, not a session-minting
         // gate, so single-use-regardless is the safe default.
         var retention = SamlReplayCache.ComputeRetention(nowUtc, logoutRequest.GetNotOnOrAfter());
-        var replayKey = ProviderScopedKey.For(provider, logoutRequest.GetRequestId());
+        var resolvedRequestId = logoutRequest.GetRequestId();
+        var replayKey = ProviderScopedKey.For(provider, resolvedRequestId);
         if (!LogoutReplays.TryConsume(replayKey, retention, nowUtc, out _))
         {
             reasonCode = RejectReason.Replay;
@@ -111,6 +115,9 @@ internal sealed class SamlLogoutValidator
 
         nameId = resolvedNameId;
         sessionIndexes = logoutRequest.GetSessionIndexes();
+        // TryConsume succeeded above, and ProviderScopedKey.For fails closed on a null/blank id, so a true
+        // return here guarantees a usable request ID to echo as the LogoutResponse InResponseTo.
+        requestId = resolvedRequestId ?? string.Empty;
         reasonCode = string.Empty;
         return true;
     }
