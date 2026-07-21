@@ -1,0 +1,80 @@
+# Developer Certificate of Origin (DCO) sign-off gate (#746). A contributor
+# legal-authorization mechanism — OpenSSF Silver / OSPS-LE-01.01 — implemented as a
+# self-contained first-party check, no external DCO App or third-party action (the
+# same internal-only posture as the PR-hygiene gate). It verifies every non-merge
+# commit in the PR carries a `Signed-off-by:` trailer matching its author, i.e. the
+# author asserted the DCO in ./DCO. Fail-closed: any unsigned commit reds the check.
+name: DCO
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Read-only: the check only reads git history.
+permissions:
+  contents: read
+
+# Cancel a superseded run on the same PR; re-verification is cheap and idempotent.
+concurrency:
+  group: dco-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  dco:
+    name: DCO sign-off
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Full history so the base..head commit range is walkable; no push, so
+          # drop the persisted token.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify DCO sign-off on every commit
+        # The base/head SHAs are passed via env, never interpolated into the script,
+        # so an attacker-crafted ref can never be evaluated as shell.
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          fail=0
+          # Guard the walk explicitly so a `git rev-list` failure reds the job
+          # instead of silently passing it. A command-substitution failure inside a
+          # `for ... in $(...)` word list does not trip `set -e`, which would pass
+          # the gate with nothing verified (fail-open); an `if !` guard is
+          # unambiguously fail-closed in every shell.
+          if ! commits=$(git rev-list --no-merges "$BASE_SHA".."$HEAD_SHA"); then
+            echo "::error::Could not walk the commit range ${BASE_SHA}..${HEAD_SHA}."
+            exit 1
+          fi
+          for sha in $commits; do
+            author_name=$(git show -s --format='%an' "$sha")
+            author_email=$(git show -s --format='%ae' "$sha")
+            # Trusted first-party automation authors bot commits that cannot
+            # self-sign; exempt them, as the DCO App does. An explicit allowlist of
+            # GitHub's own bot identities — not a `*[bot]@...` glob — so a human
+            # cannot self-exempt by crafting a `[bot]`-shaped author email.
+            case "$author_email" in
+              *"+dependabot[bot]@users.noreply.github.com" \
+              | "dependabot[bot]@users.noreply.github.com" \
+              | *"+github-actions[bot]@users.noreply.github.com" \
+              | "github-actions[bot]@users.noreply.github.com")
+                echo "skip  $sha (bot: $author_email)"; continue ;;
+            esac
+            expected="Signed-off-by: ${author_name} <${author_email}>"
+            if git show -s --format='%B' "$sha" | grep -qxF "$expected"; then
+              echo "ok    $sha"
+            else
+              echo "FAIL  $sha is missing: ${expected}"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::One or more commits lack a DCO Signed-off-by matching the author. Sign your work with 'git commit -s' (or add it retroactively with 'git rebase --signoff <base>'). See CONTRIBUTING.md and ./DCO."
+            exit 1
+          fi
+          echo "All commits carry a matching DCO sign-off."
