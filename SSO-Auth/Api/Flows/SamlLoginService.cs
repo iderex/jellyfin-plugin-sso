@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Api.Identity;
 using Jellyfin.Plugin.SSO_Auth.Api.Linking;
+using Jellyfin.Plugin.SSO_Auth.Api.Logout;
 using Jellyfin.Plugin.SSO_Auth.Api.Net;
 using Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 using Jellyfin.Plugin.SSO_Auth.Api.Provider;
@@ -321,6 +322,7 @@ internal sealed class SamlLoginService
                 provider,
                 identity,
                 samlResponse.GetInResponseTo() ?? string.Empty,
+                samlResponse.GetSessionIndex(),
                 clientKey,
                 DateTime.UtcNow);
             if (!_outcomes.CommitReserved(outcome))
@@ -652,13 +654,16 @@ internal sealed class SamlLoginService
         //
         // From here the SAML and OpenID paths are one: the verified identity flows into the shared completion
         // tail. SAML keys the link on the NameID and carries no email_verified claim, so AdoptionGate.None; the
-        // resolver's admin-adoption refusal (#218) still applies.
+        // resolver's admin-adoption refusal (#218) still applies. The logout context carries the assertion's
+        // SessionIndex captured at the callback (#727, SLO-3a) — SAML has no id_token — so the completion tail
+        // can persist the Single Logout state (EnableSingleLogout-gated, fail-safe) exactly as for OpenID.
         return await _loginCompletion.CompleteAsync(
             outcome.Identity,
             response,
             config,
             AdoptionGate.None,
-            remoteEndPointResolver).ConfigureAwait(false);
+            remoteEndPointResolver,
+            logoutContext: new LogoutContext(outcome.SessionIndex, IdToken: null)).ConfigureAwait(false);
     }
 
     // Correlates a response to an AuthnRequest this server issued (#156, #415) and enforces the browser

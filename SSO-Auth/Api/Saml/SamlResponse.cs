@@ -538,6 +538,22 @@ internal sealed class SamlResponse : IDisposable
     }
 
     /// <summary>
+    /// Gets the first AuthnStatement's SessionIndex — the identity provider's handle for the SSO session
+    /// this assertion established, captured at login so a later Single Logout request can name the session
+    /// it ends (#727, SLO-3a). It lives inside the assertion, so it is signature-covered; read from
+    /// Assertion[1] only, consistent with every other getter (the validated assertion), and from the FIRST
+    /// AuthnStatement only, so a second statement cannot smuggle in a different index.
+    /// </summary>
+    /// <returns>The SessionIndex attribute, or null when the assertion carries no AuthnStatement or the
+    /// statement carries no SessionIndex (fail-safe: absent simply means no capture).</returns>
+    public string? GetSessionIndex()
+    {
+        var node = _xmlDoc.SelectSingleNode("/samlp:Response/saml:Assertion[1]/saml:AuthnStatement", _xmlNameSpaceManager) as XmlElement;
+        var sessionIndex = node?.GetAttribute("SessionIndex");
+        return string.IsNullOrEmpty(sessionIndex) ? null : sessionIndex;
+    }
+
+    /// <summary>
     /// Gets the bearer SubjectConfirmationData's Recipient — the assertion-consumer URL the identity
     /// provider minted this assertion for. It lives inside the assertion, so it is covered by the
     /// signature regardless of whether the whole Response or only the Assertion is signed. The caller

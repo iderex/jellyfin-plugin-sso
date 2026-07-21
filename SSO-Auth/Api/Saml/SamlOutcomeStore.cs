@@ -282,12 +282,14 @@ internal sealed class SamlOutcomeStore
 /// redeem is an atomic remove of the whole record, so a redeemer never observes a torn outcome. It carries
 /// the protocol-agnostic <see cref="VerifiedIdentity"/> the mint path needs plus the correlation facts the
 /// mint leg still enforces there (the assertion's <c>InResponseTo</c>, matched against the browser-binding
-/// cookie that the cross-site ACS POST could not carry).
+/// cookie that the cross-site ACS POST could not carry), and the assertion's <c>SessionIndex</c> so the
+/// completion tail can capture the Single Logout state (#727, SLO-3a).
 /// </summary>
 /// <param name="Token">The CSPRNG token keying the entry — the only value that crosses to the browser.</param>
 /// <param name="Provider">The provider that verified the login; a token is redeemable only on its own provider's endpoint.</param>
 /// <param name="Identity">The verified identity and privileges the mint path is keyed on (#473).</param>
 /// <param name="InResponseTo">The assertion's <c>InResponseTo</c> (empty for an unsolicited response), correlated + browser-bound at the mint leg (#415).</param>
+/// <param name="SessionIndex">The assertion's first AuthnStatement <c>SessionIndex</c> (#727, SLO-3a), or null when absent — a later Single Logout request resolves the session by it.</param>
 /// <param name="ClientKey">The normalized client key that reserved this outcome's per-client budget slot (#327), or null for an exempt source.</param>
 /// <param name="Created">When the outcome was created, used to time it out.</param>
 internal sealed record SamlLoginOutcome(
@@ -295,5 +297,6 @@ internal sealed record SamlLoginOutcome(
     string Provider,
     VerifiedIdentity Identity,
     string InResponseTo,
+    string? SessionIndex,
     string? ClientKey,
     DateTime Created);

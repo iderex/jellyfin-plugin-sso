@@ -31,8 +31,8 @@ public class SamlOutcomeStoreTests
     private static VerifiedIdentity Identity(string provider = "adfs") =>
         TestIdentities.Saml(provider, "alice", SamlAuthorizeStateBuilder.Build(new List<string>(), new SamlConfig()));
 
-    private static SamlLoginOutcome Outcome(string token, string provider = "adfs", string inResponseTo = "", string? clientKey = null, DateTime? created = null) =>
-        new SamlLoginOutcome(token, provider, Identity(provider), inResponseTo, clientKey, created ?? Now);
+    private static SamlLoginOutcome Outcome(string token, string provider = "adfs", string inResponseTo = "", string? sessionIndex = null, string? clientKey = null, DateTime? created = null) =>
+        new SamlLoginOutcome(token, provider, Identity(provider), inResponseTo, sessionIndex, clientKey, created ?? Now);
 
     [Fact]
     public void Add_ThenRedeem_SucceedsOnce_ThenReplayReturnsNull()
@@ -46,6 +46,20 @@ public class SamlOutcomeStoreTests
 
         // Single-use: a replay of the same token finds nothing (the atomic redeem removed it).
         Assert.Null(store.TryRedeem("tok-1", "adfs", Now));
+    }
+
+    [Fact]
+    public void Redeem_YieldsTheStoredSessionIndex()
+    {
+        // The SessionIndex tunnel (#727, SLO-3a): the ACS callback stores the assertion's SessionIndex on
+        // the outcome, and the mint leg gets it back verbatim on the redeem — with null (an assertion
+        // without one) tunnelling through just as faithfully, so absence stays "simply no capture".
+        var store = new SamlOutcomeStore();
+        Assert.True(store.TryAdd(Outcome("tok-1", sessionIndex: "_slo-session-1"), out _));
+        Assert.True(store.TryAdd(Outcome("tok-2"), out _));
+
+        Assert.Equal("_slo-session-1", store.TryRedeem("tok-1", "adfs", Now)!.SessionIndex);
+        Assert.Null(store.TryRedeem("tok-2", "adfs", Now)!.SessionIndex);
     }
 
     [Fact]
