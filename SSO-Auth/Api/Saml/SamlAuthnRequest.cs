@@ -1,3 +1,5 @@
+#nullable enable
+
 /*
  Was Jitbit's simple SAML 2.0 component for ASP.NET
  https://github.com/jitbit/AspNetSaml/
@@ -93,7 +95,7 @@ internal sealed class SamlAuthnRequest
     /// <param name="samlEndpoint">The SAML endpoint.</param>
     /// <param name="relayState">The relay state.</param>
     /// <returns>The redirect url.</returns>
-    public string GetRedirectUrl(string samlEndpoint, string relayState = null)
+    public string GetRedirectUrl(string samlEndpoint, string? relayState = null)
     {
         ArgumentNullException.ThrowIfNull(samlEndpoint);
 
@@ -120,7 +122,7 @@ internal sealed class SamlAuthnRequest
     /// <param name="relayState">The relay state, omitted when null or empty.</param>
     /// <param name="signingKey">The service-provider private key — RSA or ECDSA (#493).</param>
     /// <returns>The signed redirect url.</returns>
-    public string GetSignedRedirectUrl(string samlEndpoint, string relayState, AsymmetricAlgorithm signingKey)
+    public string GetSignedRedirectUrl(string samlEndpoint, string? relayState, AsymmetricAlgorithm signingKey)
     {
         ArgumentNullException.ThrowIfNull(samlEndpoint);
 

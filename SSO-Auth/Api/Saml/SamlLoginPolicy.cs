@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -18,7 +20,7 @@ internal static class SamlLoginPolicy
     /// <param name="assertionRoles">The role values carried by the (already signature-validated) assertion.</param>
     /// <param name="allowedRoles">The provider's configured login allow-list.</param>
     /// <returns>True when no allow-list is configured (RBAC off) or the assertion carries at least one allowed role.</returns>
-    internal static bool IsLoginAllowed(IEnumerable<string> assertionRoles, string[] allowedRoles)
+    internal static bool IsLoginAllowed(IEnumerable<string?>? assertionRoles, string?[]? allowedRoles)
     {
         // No allow-list configured => role-based login is disabled, everyone authenticated is allowed.
         if (allowedRoles == null || allowedRoles.Length == 0)

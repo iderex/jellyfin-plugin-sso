@@ -1,4 +1,7 @@
+#nullable enable
+
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 using System.Xml;
 
@@ -32,7 +35,7 @@ internal static class SamlResponseLoader
     /// <param name="responseString">The untrusted SAML response (Base64).</param>
     /// <param name="response">The parsed response on success; otherwise <see langword="null"/>.</param>
     /// <returns><see langword="true"/> if the response parsed; otherwise <see langword="false"/>.</returns>
-    internal static bool TryParse(string certificateStr, string responseString, out SamlResponse response)
+    internal static bool TryParse(string certificateStr, string? responseString, [NotNullWhen(true)] out SamlResponse? response)
         => TryParse(certificateStr, null, responseString, out response);
 
     /// <summary>
@@ -46,7 +49,7 @@ internal static class SamlResponseLoader
     /// <param name="responseString">The untrusted SAML response (Base64).</param>
     /// <param name="response">The parsed response on success; otherwise <see langword="null"/>.</param>
     /// <returns><see langword="true"/> if the response parsed; otherwise <see langword="false"/>.</returns>
-    internal static bool TryParse(string certificateStr, string secondaryCertificateStr, string responseString, out SamlResponse response)
+    internal static bool TryParse(string certificateStr, string? secondaryCertificateStr, string? responseString, [NotNullWhen(true)] out SamlResponse? response)
     {
         // A null or empty body is the most common malformed callback (an absent SAMLResponse form field
         // yields a null string on the unauthenticated ACS endpoint); reject it here rather than let

@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -22,7 +24,7 @@ internal static class SamlRecipientValidator
     /// True when the Recipient is present and matches an expected URL, and the Destination (if any)
     /// also matches. False otherwise — a missing Recipient fails closed.
     /// </returns>
-    internal static bool IsBound(string recipient, string destination, IReadOnlyCollection<string> expectedAcsUrls)
+    internal static bool IsBound(string? recipient, string? destination, IReadOnlyCollection<string> expectedAcsUrls)
     {
         recipient = recipient?.Trim();
         if (string.IsNullOrEmpty(recipient) || !expectedAcsUrls.Contains(recipient, StringComparer.Ordinal))

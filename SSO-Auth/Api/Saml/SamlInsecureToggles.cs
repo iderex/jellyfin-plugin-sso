@@ -1,3 +1,5 @@
+#nullable enable
+
 using System.Collections.Generic;
 using Jellyfin.Plugin.SSO_Auth.Config;
 
@@ -18,7 +20,7 @@ internal static class SamlInsecureToggles
     /// </summary>
     /// <param name="config">The SAML provider configuration.</param>
     /// <returns>The enabled insecure option names.</returns>
-    internal static IReadOnlyList<string> Enabled(SamlConfig config)
+    internal static IReadOnlyList<string> Enabled(SamlConfig? config)
     {
         var enabled = new List<string>();
         if (config == null)

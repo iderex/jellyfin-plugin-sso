@@ -1,5 +1,8 @@
+#nullable enable
+
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using Jellyfin.Plugin.SSO_Auth.Api.Authz;
 using Jellyfin.Plugin.SSO_Auth.Api.Identity;
 using Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
@@ -91,7 +94,7 @@ internal sealed class SamlAssertionValidator
     /// <param name="rawResponse">The untrusted, Base64-encoded SAMLResponse.</param>
     /// <param name="samlResponse">The parsed, validated response on success; otherwise null.</param>
     /// <returns>True when the response parsed and passed response-level validation; otherwise false.</returns>
-    internal bool TryValidate(SamlConfig config, string provider, string requestBaseUrl, string rawResponse, out SamlResponse samlResponse)
+    internal bool TryValidate(SamlConfig config, string provider, string requestBaseUrl, string? rawResponse, [NotNullWhen(true)] out SamlResponse? samlResponse)
     {
         // A malformed response (non-base64, malformed XML, prohibited DOCTYPE) fails TryParse and is
         // rejected the same way an invalid one is — a clean 4xx, never an unhandled 500 (#199). The
@@ -99,7 +102,7 @@ internal sealed class SamlAssertionValidator
         // accepted across an identity-provider signing-key overlap window (#491); when it is blank the
         // trial narrows to the primary alone (both the primary and any secondary are additionally required
         // to be within their validity window — see IsWithinValidityPeriod).
-        if (!SamlResponseLoader.TryParse(config.SamlCertificate, config.SamlSecondaryCertificate, rawResponse, out samlResponse))
+        if (!SamlResponseLoader.TryParse(config.SamlCertificate ?? string.Empty, config.SamlSecondaryCertificate, rawResponse, out samlResponse))
         {
             return false;
         }
@@ -168,7 +171,7 @@ internal sealed class SamlAssertionValidator
     /// <param name="identity">The verified identity on success; otherwise null.</param>
     /// <param name="rejection">The fail-closed outcome on failure; otherwise null.</param>
     /// <returns>True with <paramref name="identity"/> set on success; false with <paramref name="rejection"/> set.</returns>
-    internal bool TryProduceVerifiedIdentity(SamlConfig config, string provider, SamlResponse samlResponse, IReadOnlyList<string> assertionRoles, out VerifiedIdentity identity, out LoginOutcome rejection)
+    internal bool TryProduceVerifiedIdentity(SamlConfig config, string provider, SamlResponse samlResponse, IReadOnlyList<string> assertionRoles, [NotNullWhen(true)] out VerifiedIdentity? identity, [NotNullWhen(false)] out LoginOutcome? rejection)
     {
         identity = null;
 

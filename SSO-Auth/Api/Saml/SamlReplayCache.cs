@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Concurrent;
 using Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
@@ -124,7 +126,7 @@ internal sealed class SamlReplayCache
     /// <param name="nowUtc">The current time.</param>
     /// <param name="shouldWarnCapacity">True for at most one caller per interval when a fail-closed cap refusal occurred, so the caller can log it once; false on any other outcome (first use, replay, missing ID).</param>
     /// <returns>True if this is the first use; false on replay, a missing ID, or a fail-closed cap refusal.</returns>
-    internal bool TryConsume(string assertionId, DateTime expiryUtc, DateTime nowUtc, out bool shouldWarnCapacity)
+    internal bool TryConsume(string? assertionId, DateTime expiryUtc, DateTime nowUtc, out bool shouldWarnCapacity)
     {
         PruneExpired(nowUtc);
         shouldWarnCapacity = false;

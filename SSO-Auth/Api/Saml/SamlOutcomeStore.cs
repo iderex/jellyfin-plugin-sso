@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -122,7 +124,7 @@ internal sealed class SamlOutcomeStore
     /// <param name="now">The reference time driving the throttled capacity warning.</param>
     /// <param name="shouldWarnCapacity">True when the caller should emit the throttled capacity warning.</param>
     /// <returns>True if a slot was reserved; false if refused (per-client sub-cap or global cap).</returns>
-    internal bool TryReserve(string clientKey, DateTime now, out bool shouldWarnCapacity)
+    internal bool TryReserve(string? clientKey, DateTime now, out bool shouldWarnCapacity)
     {
         // Per-client sub-cap (#327): reserve this client's slot BEFORE the global check so one source cannot
         // fill the whole budget and lock out every other login. A null key is exempt.
@@ -164,7 +166,7 @@ internal sealed class SamlOutcomeStore
     /// client's sub-cap slot does not leak. A null/exempt key reserved nothing, so it releases nothing.
     /// </summary>
     /// <param name="clientKey">The client key whose reserved slot is freed, or null (a no-op).</param>
-    internal void ReleaseReservation(string clientKey) => _perClient.Release(clientKey);
+    internal void ReleaseReservation(string? clientKey) => _perClient.Release(clientKey);
 
     /// <summary>
     /// Registers a fully-verified login outcome under its CSPRNG token in one atomic step — a convenience for
@@ -207,7 +209,7 @@ internal sealed class SamlOutcomeStore
     /// <param name="provider">The provider named in the consuming request's route.</param>
     /// <param name="now">The current time.</param>
     /// <returns>The redeemed outcome, or null when not redeemable.</returns>
-    internal SamlLoginOutcome TryRedeem(string token, string provider, DateTime now)
+    internal SamlLoginOutcome? TryRedeem(string? token, string provider, DateTime now)
     {
         if (string.IsNullOrEmpty(token)
             || !_outcomes.TryGetValue(token, out var outcome)
@@ -292,5 +294,5 @@ internal sealed record SamlLoginOutcome(
     string Provider,
     VerifiedIdentity Identity,
     string InResponseTo,
-    string ClientKey,
+    string? ClientKey,
     DateTime Created);

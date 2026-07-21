@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 
@@ -64,7 +66,7 @@ internal static class SamlSignatureAlgorithms
     /// </summary>
     /// <param name="transforms">The transform-algorithm URIs of one reference, in order.</param>
     /// <returns>True only if there is at least one transform and all are allowed.</returns>
-    internal static bool AreTransformsAllowed(IEnumerable<string> transforms)
+    internal static bool AreTransformsAllowed(IEnumerable<string?> transforms)
         => AllOnList(AllowedTransforms, transforms);
 
     /// <summary>
@@ -83,7 +85,7 @@ internal static class SamlSignatureAlgorithms
     /// <param name="signatureMethod">The SignedInfo signature-method URI.</param>
     /// <param name="digestMethods">The digest-method URI of every reference.</param>
     /// <returns>True only if the signature method is allowed and there is at least one reference, all of whose digests are allowed.</returns>
-    internal static bool IsAllowed(string signatureMethod, IEnumerable<string> digestMethods)
+    internal static bool IsAllowed(string signatureMethod, IEnumerable<string?> digestMethods)
         => IsSignatureMethodAllowed(signatureMethod)
            && AllOnList(AllowedDigestMethods, digestMethods);
 
@@ -92,7 +94,7 @@ internal static class SamlSignatureAlgorithms
     // rejected, an empty chain is rejected (nothing was actually signed/canonicalized), and a null
     // element normalizes to string.Empty — never on any allowlist — so it is rejected too. Short-circuits
     // on the first off-list element. Defined once so the two call sites cannot drift apart (#395).
-    private static bool AllOnList(HashSet<string> allow, IEnumerable<string> values)
+    private static bool AllOnList(HashSet<string> allow, IEnumerable<string?> values)
     {
         if (values == null)
         {
