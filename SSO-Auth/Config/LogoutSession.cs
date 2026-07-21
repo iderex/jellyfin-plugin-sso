@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 
 namespace Jellyfin.Plugin.SSO_Auth.Config;
@@ -22,37 +24,37 @@ public class LogoutSession
     /// audit-protocol spelling written by the login path, <c>VerifiedIdentity.AuditProtocol</c>), selecting
     /// which logout mechanism applies.
     /// </summary>
-    public string Protocol { get; set; }
+    public string Protocol { get; set; } = string.Empty;
 
     /// <summary>
     /// Gets or sets the provider name (its config-dictionary key) the session was authenticated through.
     /// </summary>
-    public string Provider { get; set; }
+    public string Provider { get; set; } = string.Empty;
 
     /// <summary>
     /// Gets or sets the stable subject (the OpenID <c>sub</c> claim or the SAML <c>NameID</c>) the inbound
     /// SAML <c>LogoutRequest</c> path matches on.
     /// </summary>
-    public string Subject { get; set; }
+    public string Subject { get; set; } = string.Empty;
 
     /// <summary>
     /// Gets or sets the identity-provider session identifier (the OpenID <c>sid</c> claim or the SAML
     /// <c>SessionIndex</c>), when the provider issued one; otherwise blank.
     /// </summary>
-    public string SessionIndex { get; set; }
+    public string? SessionIndex { get; set; }
 
     /// <summary>
     /// Gets or sets the id_token issuer (the <c>iss</c> claim) the logout URL is host-bound to, so an
     /// RP-initiated logout can only be built against the discovered authority (OpenID only).
     /// </summary>
-    public string Issuer { get; set; }
+    public string? Issuer { get; set; }
 
     /// <summary>
     /// Gets or sets the OpenID <c>end_session_endpoint</c> captured from discovery at login (#727, SLO-2),
     /// so an RP-initiated logout needs no runtime rediscovery. Blank when the OP advertises none (or for
     /// SAML), in which case logout falls back to local-only. Not a secret — a public provider URL.
     /// </summary>
-    public string EndSessionEndpoint { get; set; }
+    public string? EndSessionEndpoint { get; set; }
 
     /// <summary>
     /// Gets or sets the raw OpenID <c>id_token</c> used as the <c>id_token_hint</c> for an RP-initiated
@@ -64,7 +66,7 @@ public class LogoutSession
     // plaintext in memory until the next persist, so the belt-and-suspenders matters. XML persistence is
     // unaffected (XmlSerializer ignores this attribute), so the encrypted token still round-trips to disk.
     [System.Text.Json.Serialization.JsonIgnore]
-    public string IdToken { get; set; }
+    public string? IdToken { get; set; }
 
     /// <summary>
     /// Gets or sets the Jellyfin user id whose tokens a logout revokes.

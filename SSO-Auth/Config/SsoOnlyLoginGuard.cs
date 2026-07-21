@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Api.Session;
@@ -154,7 +156,7 @@ internal static class SsoOnlyLoginGuard
     /// <param name="currentProviderId">The account's CURRENT <c>AuthenticationProviderId</c>, used to leave a third-party-provider account untouched exactly as the sweep does.</param>
     /// <param name="configuredDefaultProvider">The provider config's own <c>DefaultProvider</c> (already trimmed), applied only while the mode is off.</param>
     /// <returns>The provider id to write, or the configured default when the mode is off.</returns>
-    internal static string ResolveLoginProvider(PluginConfiguration configuration, string username, string currentProviderId, string configuredDefaultProvider)
+    internal static string? ResolveLoginProvider(PluginConfiguration configuration, string username, string currentProviderId, string? configuredDefaultProvider)
     {
         if (configuration is not { DisablePasswordLogin: true })
         {

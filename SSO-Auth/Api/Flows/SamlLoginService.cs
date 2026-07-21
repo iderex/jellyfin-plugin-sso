@@ -575,7 +575,7 @@ internal sealed class SamlLoginService
     // (DER). Fail-closed: a missing/corrupt at-rest key throws CryptographicException, and a garbage or
     // private-key-less PKCS#12 fails to load — both return false so the caller emits no descriptor for it.
     // The private key never leaves this method; only certificate.RawData (the public DER) is exported.
-    private static bool TryRevealPublicCertificate(string storedPfx, out string? publicCertificateBase64)
+    private static bool TryRevealPublicCertificate(string? storedPfx, out string? publicCertificateBase64)
     {
         publicCertificateBase64 = null;
 

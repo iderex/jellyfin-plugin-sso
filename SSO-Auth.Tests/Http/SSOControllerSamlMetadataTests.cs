@@ -67,7 +67,7 @@ public class SSOControllerSamlMetadataTests
         {
             Enabled = true,
             SamlClientId = "https://sp",
-            BaseUrlOverride = null,
+            BaseUrlOverride = string.Empty,
         });
 
         var result = Assert.IsType<ContentResult>(harness.Controller.SamlMetadata("adfs"));

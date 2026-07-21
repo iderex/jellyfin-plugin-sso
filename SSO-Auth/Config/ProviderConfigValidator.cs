@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Linq;
 using Jellyfin.Plugin.SSO_Auth.Api;
@@ -124,7 +126,7 @@ internal static class ProviderConfigValidator
     /// <param name="provider">The provider name, echoed (line-ending-stripped) in the rejection message.</param>
     /// <param name="config">The OpenID provider configuration to check; a null config is tolerated.</param>
     /// <exception cref="ArgumentException">RequireAcr is set with blank AcrValues.</exception>
-    internal static void ValidateAcrRequirement(string provider, OidConfig config)
+    internal static void ValidateAcrRequirement(string provider, OidConfig? config)
     {
         if (config?.RequireAcr == true && string.IsNullOrWhiteSpace(config.AcrValues))
         {
@@ -147,7 +149,7 @@ internal static class ProviderConfigValidator
     /// <param name="provider">The provider name, echoed (line-ending-stripped) in the rejection message.</param>
     /// <param name="baseUrlOverride">The override value to check.</param>
     /// <exception cref="ArgumentException">The override is non-blank and not a valid absolute http(s) URL.</exception>
-    internal static void ValidateBaseUrlOverride(string protocol, string provider, string baseUrlOverride)
+    internal static void ValidateBaseUrlOverride(string protocol, string provider, string? baseUrlOverride)
     {
         if (CanonicalBaseUrl.IsInvalidOverride(baseUrlOverride))
         {
@@ -168,9 +170,9 @@ internal static class ProviderConfigValidator
     /// <param name="provider">The provider name, echoed (line-ending-stripped) in the rejection message.</param>
     /// <param name="certificate">The Base64-encoded (DER) X.509 certificate to check.</param>
     /// <exception cref="ArgumentException">The certificate is non-blank and not loadable.</exception>
-    internal static void ValidateSamlCertificate(string provider, string certificate)
+    internal static void ValidateSamlCertificate(string provider, string? certificate)
     {
-        if (SamlCertificate.IsInvalid(certificate))
+        if (SamlCertificate.IsInvalid(certificate ?? string.Empty))
         {
             throw new ArgumentException(
                 $"SAML provider '{provider?.ReplaceLineEndings(string.Empty)}' has an invalid signing certificate; it must be a Base64-encoded (DER) X.509 certificate.",
@@ -192,9 +194,9 @@ internal static class ProviderConfigValidator
     /// <param name="provider">The provider name, echoed (line-ending-stripped) in the rejection message.</param>
     /// <param name="certificate">The Base64-encoded (DER) X.509 certificate to check.</param>
     /// <exception cref="ArgumentException">The certificate is non-blank and not loadable.</exception>
-    internal static void ValidateSamlSecondaryCertificate(string provider, string certificate)
+    internal static void ValidateSamlSecondaryCertificate(string provider, string? certificate)
     {
-        if (SamlCertificate.IsInvalid(certificate))
+        if (SamlCertificate.IsInvalid(certificate ?? string.Empty))
         {
             throw new ArgumentException(
                 $"SAML provider '{provider?.ReplaceLineEndings(string.Empty)}' has an invalid secondary signing certificate; it must be a Base64-encoded (DER) X.509 certificate.",
@@ -222,7 +224,7 @@ internal static class ProviderConfigValidator
     /// <param name="provider">The provider name, echoed (control-stripped) in the rejection message.</param>
     /// <param name="mappings">The permission-role mappings to check.</param>
     /// <exception cref="ArgumentException">An entry names an invalid or dedicated permission.</exception>
-    internal static void ValidatePermissionRoleMappings(string protocol, string provider, System.Collections.Generic.IEnumerable<PermissionRoleMap> mappings)
+    internal static void ValidatePermissionRoleMappings(string protocol, string provider, System.Collections.Generic.IEnumerable<PermissionRoleMap>? mappings)
     {
         if (mappings == null)
         {
@@ -271,7 +273,7 @@ internal static class ProviderConfigValidator
     /// <param name="provider">The provider name, echoed (line-ending-stripped) in the rejection message.</param>
     /// <param name="mappings">The parental-rating mappings to check.</param>
     /// <exception cref="ArgumentException">An entry has a negative score or lists no roles.</exception>
-    internal static void ValidateParentalRatingMappings(string protocol, string provider, System.Collections.Generic.IEnumerable<ParentalRatingRoleMap> mappings)
+    internal static void ValidateParentalRatingMappings(string protocol, string provider, System.Collections.Generic.IEnumerable<ParentalRatingRoleMap>? mappings)
     {
         if (mappings == null)
         {
@@ -316,9 +318,9 @@ internal static class ProviderConfigValidator
     /// <param name="provider">The provider name, echoed (line-ending-stripped) in the rejection message.</param>
     /// <param name="signingKeyPfx">The Base64-encoded PKCS#12 (PFX) signing key to check.</param>
     /// <exception cref="ArgumentException">The key is non-blank and not a loadable PFX with an RSA or ECDSA private key.</exception>
-    internal static void ValidateSamlSigningKey(string provider, string signingKeyPfx)
+    internal static void ValidateSamlSigningKey(string provider, string? signingKeyPfx)
     {
-        if (SamlSigningKey.IsInvalid(signingKeyPfx))
+        if (SamlSigningKey.IsInvalid(signingKeyPfx ?? string.Empty))
         {
             throw new ArgumentException(
                 $"SAML provider '{provider?.ReplaceLineEndings(string.Empty)}' has an invalid request signing key; it must be a Base64-encoded, unencrypted PKCS#12 (PFX) blob containing an RSA or ECDSA private key.",

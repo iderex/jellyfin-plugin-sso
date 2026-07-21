@@ -62,8 +62,8 @@ public class ConfigPreservationTests
     [Fact]
     public void Preserve_NullConfigMaps_DoNotThrow()
     {
-        var incoming = new PluginConfiguration { OidConfigs = null, SamlConfigs = null };
-        var live = new PluginConfiguration { OidConfigs = null, SamlConfigs = null };
+        var incoming = new PluginConfiguration { OidConfigs = null!, SamlConfigs = null! };
+        var live = new PluginConfiguration { OidConfigs = null!, SamlConfigs = null! };
 
         // Fail-safe: a malformed config with missing maps must not NRE the save path.
         var exception = Record.Exception(() => ServerManagedFields.Preserve(incoming, live));
@@ -80,13 +80,13 @@ public class ConfigPreservationTests
         // A malformed Add before #350 could store a null provider entry; preserving with a null on
         // either side must skip it, not NRE the whole config-page save.
         var live = new PluginConfiguration();
-        live.OidConfigs["null-in-live"] = null;
+        live.OidConfigs["null-in-live"] = null!;
         live.OidConfigs["null-in-incoming"] = new OidConfig { CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub"] = User } };
-        live.SamlConfigs["saml-null-in-live"] = null;
+        live.SamlConfigs["saml-null-in-live"] = null!;
 
         var incoming = new PluginConfiguration();
         incoming.OidConfigs["null-in-live"] = new OidConfig();
-        incoming.OidConfigs["null-in-incoming"] = null;
+        incoming.OidConfigs["null-in-incoming"] = null!;
         incoming.SamlConfigs["saml-null-in-live"] = new SamlConfig();
 
         var exception = Record.Exception(() => ServerManagedFields.Preserve(incoming, live));
@@ -500,7 +500,7 @@ public class ConfigPreservationTests
     {
         var incoming = new PluginConfiguration();
         incoming.OidConfigs["idp"] = new OidConfig { BaseUrlOverride = "https://jellyfin.example.com" };
-        incoming.OidConfigs["idp-blank"] = new OidConfig { BaseUrlOverride = null };
+        incoming.OidConfigs["idp-blank"] = new OidConfig { BaseUrlOverride = string.Empty };
         incoming.SamlConfigs["saml"] = new SamlConfig { BaseUrlOverride = "https://sso.example.com/jellyfin" };
         incoming.SamlConfigs["saml-blank"] = new SamlConfig { BaseUrlOverride = "   " };
 
@@ -531,7 +531,7 @@ public class ConfigPreservationTests
     [Fact]
     public void ValidateBaseUrlOverrides_NullConfigMaps_DoNotThrow()
     {
-        var incoming = new PluginConfiguration { OidConfigs = null, SamlConfigs = null };
+        var incoming = new PluginConfiguration { OidConfigs = null!, SamlConfigs = null! };
 
         ProviderConfigValidator.Validate(incoming, new PluginConfiguration());
     }
@@ -685,8 +685,8 @@ public class ConfigPreservationTests
         Assert.True(back.EnableLiveTvManagement);
         Assert.Equal(original.LiveTvRoles, back.LiveTvRoles);
         Assert.Equal(original.LiveTvManagementRoles, back.LiveTvManagementRoles);
-        Assert.Equal("user", back.FolderRoleMapping[0].Role);
-        Assert.Equal("folder-a", back.FolderRoleMapping[0].Folders[0]);
+        Assert.Equal("user", back.FolderRoleMapping![0].Role);
+        Assert.Equal("folder-a", back.FolderRoleMapping![0].Folders![0]);
         Assert.Equal("provider", back.DefaultProvider);
         Assert.Equal("https", back.SchemeOverride);
         Assert.Equal(8443, back.PortOverride);
@@ -833,7 +833,7 @@ public class ConfigPreservationTests
     [Fact]
     public void ValidateSamlCertificates_NullMap_DoesNotThrow()
     {
-        ProviderConfigValidator.Validate(new PluginConfiguration { SamlConfigs = null }, new PluginConfiguration());
+        ProviderConfigValidator.Validate(new PluginConfiguration { SamlConfigs = null! }, new PluginConfiguration());
     }
 
     [Fact]

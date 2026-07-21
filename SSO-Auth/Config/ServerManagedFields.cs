@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 
 namespace Jellyfin.Plugin.SSO_Auth.Config;
@@ -58,7 +60,7 @@ internal static class ServerManagedFields
     // group resolves to. Only providers present in BOTH maps are touched (a deleted provider stays
     // deleted; a newly added one keeps its own empty map), and a null map on either side (a legacy store,
     // a partial post) preserves nothing rather than NRE the save.
-    private static void Preserve<T>(SerializableDictionary<string, T> incoming, SerializableDictionary<string, T> live, Action<T, T> preserveProvider)
+    private static void Preserve<T>(SerializableDictionary<string, T>? incoming, SerializableDictionary<string, T>? live, Action<T, T> preserveProvider)
         where T : ProviderConfigBase
     {
         if (incoming is null || live is null)
@@ -149,7 +151,7 @@ internal static class ServerManagedFields
     /// <param name="incoming">The key about to be persisted; blank when the save did not rotate it.</param>
     /// <param name="live">The corresponding stored key.</param>
     /// <returns>The incoming key when non-blank, otherwise the stored key.</returns>
-    private static string PreserveSigningKeyIfBlank(string incoming, string live)
+    private static string? PreserveSigningKeyIfBlank(string? incoming, string? live)
         => string.IsNullOrWhiteSpace(incoming) ? live : incoming;
 
     /// <summary>
@@ -164,7 +166,7 @@ internal static class ServerManagedFields
     /// <param name="incoming">The provider config about to be persisted.</param>
     /// <param name="live">The current live provider config.</param>
     /// <returns>The secret to persist for the updated provider.</returns>
-    internal static string ResolveUpdatedSecret(OidConfig incoming, OidConfig live)
+    internal static string? ResolveUpdatedSecret(OidConfig incoming, OidConfig live)
     {
         if (!string.IsNullOrWhiteSpace(incoming.OidSecret))
         {

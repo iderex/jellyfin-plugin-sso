@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -14,13 +16,13 @@ namespace Jellyfin.Plugin.SSO_Auth.Config;
 /// new-provider setup. The field is still persisted to the config XML (this converter only affects
 /// System.Text.Json).
 /// </summary>
-internal sealed class WriteOnlySecretConverter : JsonConverter<string>
+internal sealed class WriteOnlySecretConverter : JsonConverter<string?>
 {
     /// <inheritdoc />
-    public override string Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    public override string? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         => reader.GetString();
 
     /// <inheritdoc />
-    public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options)
+    public override void Write(Utf8JsonWriter writer, string? value, JsonSerializerOptions options)
         => writer.WriteNullValue();
 }

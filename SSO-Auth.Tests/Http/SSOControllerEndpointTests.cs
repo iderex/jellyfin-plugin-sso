@@ -169,7 +169,7 @@ public class SSOControllerEndpointTests
         var harness = new SsoControllerHarness(c =>
         {
             c.OidConfigs["keycloak"] = new OidConfig { Enabled = true };
-            c.OidConfigs["broken"] = null;
+            c.OidConfigs["broken"] = null!;
         });
 
         var result = Assert.IsType<OkObjectResult>(harness.Controller.OidProviderNames());
@@ -209,7 +209,7 @@ public class SSOControllerEndpointTests
         var harness = new SsoControllerHarness(c =>
         {
             c.SamlConfigs["adfs"] = new SamlConfig { Enabled = true };
-            c.SamlConfigs["broken"] = null;
+            c.SamlConfigs["broken"] = null!;
         });
 
         var result = Assert.IsType<OkObjectResult>(harness.Controller.SamlProviderNames());

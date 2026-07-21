@@ -57,7 +57,7 @@ public class SSOControllerConfigTransferTests
 
         // Take the redacted document the export would hand out, flip a non-secret setting, and re-import it.
         var wire = WireRoundTrip(ExportedDocument(harness));
-        wire.Configuration.OidConfigs["idp"].EnableAuthorization = true;
+        wire.Configuration!.OidConfigs["idp"].EnableAuthorization = true;
 
         var result = harness.Controller.ImportConfig(wire);
 
