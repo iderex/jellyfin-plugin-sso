@@ -660,6 +660,134 @@ public class SSOController : ControllerBase
     }
 
     /// <summary>
+    /// Inbound IdP-initiated SAML Single Logout (#727, SLO-3b): accepts a signed <c>LogoutRequest</c> and
+    /// revokes the linked Jellyfin sessions. This is the UNAUTHENTICATED, session-destructive surface — its
+    /// only trust anchor is the request's XML signature against the provider's configured certificate(s), so
+    /// it mirrors the login-side hardening (enveloped-signature + wrapping defense, weak-algorithm rejection,
+    /// DTD-prohibited parse, replay one-time-use). POST-binding only (the <c>SAMLRequest</c> form field,
+    /// Base64). Single Logout is opt-in and off by default: while it is off the whole surface rejects WITHOUT
+    /// parsing. Every rejection — feature off, unknown provider, bad signature, replay, unknown subject — is
+    /// the SAME uniform 400 with a fixed body, so the causes cannot be told apart (no oracle); only a
+    /// validly-signed request that resolves at least one session returns 200.
+    /// </summary>
+    /// <param name="provider">The SAML provider the LogoutRequest arrived for.</param>
+    /// <param name="samlRequest">The <c>SAMLRequest</c> form field (model-bound, so a non-form POST binds null and is rejected).</param>
+    /// <returns>200 when a validated request revoked at least one session; a uniform 400 otherwise.</returns>
+    [HttpPost("SAML/Logout/{provider}")]
+    public async Task<ActionResult> SamlLogout(string provider, [FromForm(Name = "SAMLRequest")] string? samlRequest = null)
+    {
+        if (RateLimitCheck(SsoRateLimitClass.Logout) is { } throttled)
+        {
+            return throttled;
+        }
+
+        // Read the feature flag AND the provider config in one lock acquisition. Single Logout is opt-in/off
+        // by default: a disabled feature, an unknown provider, and a disabled provider all collapse to the ONE
+        // uniform 400 below, and NONE of them parses the untrusted body — so the inbound signed-XML sink is
+        // unreachable while the feature is off, and neither the feature state nor the provider set can be
+        // probed apart.
+        var (singleLogoutEnabled, config) = SSOPlugin.Instance.ReadConfiguration(configuration =>
+            (configuration.EnableSingleLogout, configuration.SamlConfigs.TryGetValue(provider, out var samlConfig) ? samlConfig : null));
+
+        if (!singleLogoutEnabled || config is not { Enabled: true })
+        {
+            return UniformLogoutRejection();
+        }
+
+        // Parse + signature/time-bound validate + one-time-use consume. On any failure the reason code is a
+        // FIXED constant (never request-derived) written only to the audit trail; the caller sees the uniform
+        // 400 with no branch-distinguishing detail.
+        var validator = new SamlLogoutValidator();
+        if (!validator.TryValidate(config, provider, samlRequest, DateTime.UtcNow, out var nameId, out var sessionIndexes, out var reasonCode))
+        {
+            SsoAudit.LogoutRejected(_logger, provider, reasonCode);
+            return UniformLogoutRejection();
+        }
+
+        // Resolve the targeted sessions — strictly the SAME provider and subject (ordinal exact). This is the
+        // blast-radius bound: FindByProviderSubject filters by (provider, subject), so a logout for one
+        // subject can never touch another subject's or another provider's sessions. When the request names
+        // SessionIndex element(s), keep only entries whose captured index is among them; a request with NO
+        // SessionIndex targets every session of the subject (SAML core §3.7).
+        var matches = SSOPlugin.Instance.ReadConfiguration(configuration =>
+            SessionLogoutStore.FindByProviderSubject(configuration, provider, nameId, string.Empty));
+        if (sessionIndexes.Count > 0)
+        {
+            matches = matches
+                .Where(pair => sessionIndexes.Contains(pair.Value.SessionIndex ?? string.Empty, StringComparer.Ordinal))
+                .ToList();
+        }
+
+        // A validated request resolving NO session is the "unknown-subject" case: render the SAME uniform 400
+        // as a validation failure. An anonymous attacker can never produce a valid signature to reach here, so
+        // this discloses nothing; only the trusted IdP (which already knows its own subjects) can distinguish
+        // it from a 200, which is acceptable.
+        if (matches.Count == 0)
+        {
+            SsoAudit.LogoutRejected(_logger, provider, "no_matching_session");
+            return UniformLogoutRejection();
+        }
+
+        // Revoke the tokens of each DISTINCT matched user. RevokeUserTokens is USER-scoped — Jellyfin exposes
+        // no per-token revoke — so a SessionIndex-scoped request still revokes the whole matched user's tokens;
+        // that is honest and safe (a logout can only ever end sessions, never grant or link). A revoke fault
+        // for one user must NOT abort the loop (availability fail-safe): the remaining users are still logged
+        // out, and a faulted user's store entry is LEFT in place (not consumed) so nothing is silently dropped.
+        var succeeded = new HashSet<Guid>();
+        foreach (var userId in matches.Select(pair => pair.Value.UserId).Distinct())
+        {
+            try
+            {
+                await _sessionManager.RevokeUserTokens(userId, null).ConfigureAwait(false);
+                succeeded.Add(userId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Revoking tokens during SAML logout failed for one user; the remaining matched users are still logged out.");
+            }
+        }
+
+        // Remove only the entries whose user was actually revoked, so a transient revoke fault leaves that
+        // user's entry for a later retry/prune rather than dropping it.
+        var consumedKeys = matches.Where(pair => succeeded.Contains(pair.Value.UserId)).Select(pair => pair.Key).ToList();
+        if (consumedKeys.Count > 0)
+        {
+            SSOPlugin.Instance.MutateConfiguration(configuration =>
+            {
+                foreach (var key in consumedKeys)
+                {
+                    SessionLogoutStore.Remove(configuration, key);
+                }
+            });
+        }
+
+        // Fail-closed on the destructive action itself: a 200 must mean at least one user was ACTUALLY logged
+        // out. Sessions matched but EVERY revoke faulted (succeeded.Count == 0) means no token was invalidated
+        // and the user stays authenticated — so we must NOT tell the IdP the logout succeeded. Audit the fault
+        // and return the uniform 400; the matched entries were left in the store above (nothing was consumed),
+        // so a retry can still act. This is the fail-CLOSED half of the per-user fail-SAFE loop: one user's
+        // fault does not abort the others (availability), but zero successful revokes is never reported as done.
+        if (succeeded.Count == 0)
+        {
+            SsoAudit.LogoutRejected(_logger, provider, "revoke_failed");
+            return UniformLogoutRejection();
+        }
+
+        SsoAudit.LogoutRequested(_logger, provider, succeeded.Count);
+        return Ok();
+    }
+
+    // The single uniform rejection for the inbound SAML logout endpoint: one fixed 400 body for every
+    // rejection cause (feature off, unknown/disabled provider, bad signature, replay, unknown subject), so no
+    // branch-distinguishing detail leaks to the caller. Plain text, mirroring LoginStatusMapper's Emit shape.
+    private static ContentResult UniformLogoutRejection() => new ContentResult
+    {
+        Content = "SAML logout request could not be processed",
+        ContentType = MediaTypeNames.Text.Plain,
+        StatusCode = StatusCodes.Status400BadRequest,
+    };
+
+    /// <summary>
     /// Adds a SAML configuration. If the provider already exists, overwrite it.
     /// </summary>
     /// <param name="provider">The provider name to add.</param>

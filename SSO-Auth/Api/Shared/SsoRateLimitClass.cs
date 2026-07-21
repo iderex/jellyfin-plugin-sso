@@ -8,8 +8,9 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Shared;
 /// folds the class into the limiter key as <c>class + ":" + clientKey</c>, so each value here names one
 /// independent budget: the anonymous login stages (<see cref="Challenge"/>/<see cref="Callback"/>/<see cref="Auth"/>),
 /// the elevation-gated Test-connection probe (<see cref="Test"/>), the anonymous SP-metadata read
-/// (<see cref="Metadata"/>), the admin SSO-revoke (<see cref="Unregister"/>, #516), and the authenticated
-/// link/unlink write surface (<see cref="Link"/>, #382). These are named constants rather than bare string
+/// (<see cref="Metadata"/>), the admin SSO-revoke (<see cref="Unregister"/>, #516), the authenticated
+/// link/unlink write surface (<see cref="Link"/>, #382), and the Single Logout surface
+/// (<see cref="Logout"/>, #727). These are named constants rather than bare string
 /// literals at the call sites precisely because the value is LOAD-BEARING on the limiter grouping: a typo in a
 /// literal ("challange") compiles cleanly and silently mints a separate, empty bucket, weakening the rate limit
 /// undetectably. Referencing a member instead makes a typo a compile error, and the
@@ -39,4 +40,7 @@ internal static class SsoRateLimitClass
 
     /// <summary>The authenticated account link/unlink write surface (#382).</summary>
     internal const string Link = "link";
+
+    /// <summary>The anonymous inbound SAML <c>LogoutRequest</c> Single Logout surface (#727, SLO-3b). (The authenticated OIDC RP-initiated logout route is caller-scoped and not rate-limited today.)</summary>
+    internal const string Logout = "logout";
 }

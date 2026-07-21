@@ -213,6 +213,51 @@ internal static class SsoAudit
             breakGlassAdmin?.ReplaceLineEndings(string.Empty));
     }
 
+    /// <summary>
+    /// Records a validated inbound SAML <c>LogoutRequest</c> that terminated sessions (#727, SLO-3b). Only
+    /// non-sensitive fields are logged: the provider name and the count of Jellyfin users whose tokens were
+    /// revoked — never the raw NameID or SessionIndex, which are subject identifiers (T-I1). The provider is
+    /// route input, so its line endings are stripped inline before logging (log-forging defense).
+    /// </summary>
+    /// <param name="logger">The logger.</param>
+    /// <param name="provider">The SAML provider the request arrived for.</param>
+    /// <param name="usersRevoked">How many distinct Jellyfin users had their tokens revoked.</param>
+    internal static void LogoutRequested(ILogger logger, string provider, int usersRevoked)
+    {
+        if (!logger.IsEnabled(LogLevel.Information))
+        {
+            return;
+        }
+
+        logger.LogInformation(
+            "[SSO Audit] SAML logout requested: a validated LogoutRequest for provider '{Provider}' revoked tokens for {UsersRevoked} user(s).",
+            provider?.ReplaceLineEndings(string.Empty),
+            usersRevoked);
+    }
+
+    /// <summary>
+    /// Records an inbound SAML <c>LogoutRequest</c> being rejected fail-closed (#727, SLO-3b). The reason is a
+    /// FIXED code (unsigned/malformed/replay/no-matching-session, a constant, never request-derived text), so
+    /// a blocked forged logout leaves a trail (T-R1) without disclosing subject identifiers or which branch
+    /// rejected it to the caller (the caller sees only a uniform 400). The provider is route input, stripped
+    /// of line endings inline before logging.
+    /// </summary>
+    /// <param name="logger">The logger.</param>
+    /// <param name="provider">The SAML provider the request arrived for.</param>
+    /// <param name="reasonCode">The fixed rejection reason code (not request-derived).</param>
+    internal static void LogoutRejected(ILogger logger, string provider, string reasonCode)
+    {
+        if (!logger.IsEnabled(LogLevel.Warning))
+        {
+            return;
+        }
+
+        logger.LogWarning(
+            "[SSO Audit] SAML logout request REJECTED for provider '{Provider}' ({ReasonCode}). No session was terminated.",
+            provider?.ReplaceLineEndings(string.Empty),
+            reasonCode);
+    }
+
     /// <summary>Records a provider being saved with one or more default-on security checks disabled (#140, #672).</summary>
     /// <param name="logger">The logger.</param>
     /// <param name="protocol">The protocol (OpenID or SAML).</param>
