@@ -129,10 +129,14 @@ OID_CONFIG="$(cat <<JSON
 }
 JSON
 )"
-curl -fsS -X POST "$JELLYFIN/sso/OID/Add/$PROVIDER" \
+ADD_STATUS="$(curl -sS -o /tmp/add.out -w '%{http_code}' -X POST "$JELLYFIN/sso/OID/Add/$PROVIDER" \
   -H "Content-Type: application/json" \
   -H "Authorization: MediaBrowser Token=\"$ADMIN_TOKEN\"" \
-  -d "$OID_CONFIG" >/dev/null || die "OID/Add failed"
+  -d "$OID_CONFIG")" || true
+if [ "$ADD_STATUS" != "200" ] && [ "$ADD_STATUS" != "204" ]; then
+  log "OID/Add returned HTTP $ADD_STATUS: $(cat /tmp/add.out 2>/dev/null)"
+  die "OID/Add failed (is the plugin loaded? a 404 means it is not)"
+fi
 log "Provider configured"
 
 # --------------------------------------------------------------------------------------------------

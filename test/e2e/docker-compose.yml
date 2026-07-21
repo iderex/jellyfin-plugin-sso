@@ -32,7 +32,12 @@ services:
       - ssonet
 
   jellyfin:
-    image: jellyfin/jellyfin:10.11.0
+    # Match the Jellyfin version the plugin is COMPILED against (SSO-Auth.csproj JellyfinVersion,
+    # currently 10.11.11): the packaged plugin references MediaBrowser.Controller 10.11.11.0, and .NET
+    # will not bind an assembly reference DOWN to an older patch, so an older 10.11.0 server refuses to
+    # load the plugin. targetAbi (10.11.0.0) governs the API surface the abi-floor job checks, not the
+    # embedded reference version the runtime binds against.
+    image: jellyfin/jellyfin:10.11.11
     environment:
       # A container-local cache/data root keeps the writable state off the bind-mounted /config
       # so only the plugin drop and the plugin's own configuration live under ./jellyfin/config.
