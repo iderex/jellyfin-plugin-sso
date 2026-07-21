@@ -8,6 +8,19 @@ full login round-trips headlessly and asserts the outcomes. It supplements — i
 It runs in CI via [`.github/workflows/e2e-login.yml`](../../.github/workflows/e2e-login.yml) and can
 be run locally with one command once you have built the plugin.
 
+## Provider matrix (release/beta only)
+
+Keycloak is the **canonical** harness and the only one that runs on a pull request touching the harness,
+on the nightly schedule, and on a manual dispatch (there is deliberately no `push` trigger — the PR run
+already validated it). Additional self-hostable identity providers get their own
+harness under `test/e2e/<provider>/` (one issue each — authentik, Authelia, Pocket ID, Kanidm, Zitadel,
+Dex; tracked in [#919](https://github.com/iderex/jellyfin-plugin-sso/issues/919)), and the **full
+provider matrix runs only at a release and a beta-release** — never on a routine merge, so the
+cross-provider pass is release-gate evidence, not a per-commit cost. A provider joins the matrix by
+adding one `{ name, compose }` object to the release list in the workflow's `select` job, pointing at
+its `test/e2e/<provider>/docker-compose.yml`. Cloud providers (Google, Entra ID) cannot run in
+ephemeral CI, so they are verified manually and marked as such in the README provider table.
+
 ## What it verifies
 
 - The **packaged JPRM zip** loads on Linux (the `#181` packaged-crypto-DLL load path that
