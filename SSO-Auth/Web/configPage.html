@@ -1999,6 +1999,36 @@
                   <div class="inputContainer">
                     <label
                       class="inputLabel inputLabelUnfocused"
+                      for="saml-SamlSloEndpoint"
+                      >SAML SLO Endpoint:</label
+                    >
+                    <input
+                      is="emby-input"
+                      id="saml-SamlSloEndpoint"
+                      type="text"
+                      class="sso-text"
+                      aria-describedby="saml-SamlSloEndpoint-error"
+                    />
+                    <div
+                      class="sso-inline-error"
+                      id="saml-SamlSloEndpoint-error"
+                      role="alert"
+                      hidden
+                    ></div>
+                    <div class="fieldDescription">
+                      The identity provider's Single-Logout (SLO) URL — a
+                      distinct endpoint from the SSO endpoint above, where the
+                      browser is redirected with a signed SP-initiated
+                      LogoutRequest. Must be an absolute https URL. Leave blank
+                      to disable SP-initiated Single Logout (logout stays
+                      local-only). Only used when the global "Enable Single
+                      Logout" option is on.
+                    </div>
+                  </div>
+
+                  <div class="inputContainer">
+                    <label
+                      class="inputLabel inputLabelUnfocused"
                       for="saml-SamlClientId"
                       >SAML Client ID (SP entity id):
                       <span class="sso-required" aria-hidden="true"

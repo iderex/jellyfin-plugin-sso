@@ -155,12 +155,20 @@ off, both the RP-initiated OIDC logout route and the inbound SAML
   ignored at runtime), and validated at both points by one shared predicate. A
   missing or unreachable `end_session_endpoint` degrades to a local-only logout —
   it never breaks sign-out.
-- **Honest scope limits.** SP-initiated outbound SAML logout and a signed
-  outbound `LogoutResponse` to the IdP are **not yet implemented** (tracked on
+- **SP-initiated outbound SAML logout** ends the caller's own local session and
+  then redirects the browser to the provider's configured `SamlSloEndpoint` (a
+  validated absolute-`https` URL, never request-derived) with a `LogoutRequest`
+  carrying only the caller's own `NameID`/`SessionIndex`, **signed** with the
+  service-provider key through the shared redirect-binding signer. It is
+  fail-safe: a missing SLO endpoint, an unloadable signing key, or no captured
+  session degrades to a local-only logout — an unsigned request is never emitted
+  and the local session is always ended.
+- **Honest scope limits.** A **signed outbound `LogoutResponse`** to an inbound
+  `LogoutRequest` is **not yet implemented** (tracked on
   [#727](https://github.com/iderex/jellyfin-plugin-sso/issues/727)): a validated
-  inbound `LogoutRequest` is answered with a `200` after revocation, which most
-  identity providers accept. Logout events (`LogoutRequested`/`LogoutRejected`)
-  are audited by reason code — never raw `NameID`/`SessionIndex` — and the inbound
+  inbound request is answered with a `200` after revocation, which most identity
+  providers accept. Logout events (`LogoutRequested`/`LogoutRejected`) are
+  audited by reason code — never raw `NameID`/`SessionIndex` — and the inbound
   endpoint is rate-limited.
 
 ## EU Cyber Resilience Act (CRA) position

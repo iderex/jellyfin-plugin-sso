@@ -75,6 +75,7 @@ internal static class ProviderConfigValidator
             {
                 ValidateProviderName("SAML", kvp.Key, isNew: live?.SamlConfigs?.ContainsKey(kvp.Key) != true);
                 ValidateBaseUrlOverride("SAML", kvp.Key, kvp.Value?.BaseUrlOverride);
+                ValidateSamlSloEndpoint(kvp.Key, kvp.Value?.SamlSloEndpoint);
                 ValidateSamlCertificate(kvp.Key, kvp.Value?.SamlCertificate);
                 ValidateSamlSecondaryCertificate(kvp.Key, kvp.Value?.SamlSecondaryCertificate);
                 ValidateSamlSigningKey(kvp.Key, kvp.Value?.SamlSigningKeyPfx);
@@ -205,6 +206,40 @@ internal static class ProviderConfigValidator
             throw new ArgumentException(
                 $"{protocol} provider '{provider?.ReplaceLineEndings(string.Empty)}' has a Post Logout Redirect URI that is not at or under the configured Base URL; it must be an absolute http(s) URL at or under this server's base URL, or it is ignored at logout. Leave it blank for no post-logout redirect.",
                 nameof(postLogoutRedirectUri));
+        }
+    }
+
+    // A malformed SAML SLO endpoint (#727, SLO-3c) would be persisted and then silently disable SP-initiated
+    // Single Logout (the logout route falls back to local-only), so the admin gets no feedback that the
+    // endpoint they configured never fires. Reject it at save. It reuses the SAME absolute-URL predicate the
+    // Base URL override validates through (CanonicalBaseUrl.TryNormalize — absolute http(s), no
+    // query/fragment/userinfo) and then narrows to https: the redirect carries a signed LogoutRequest naming
+    // the subject NameID, so it must not traverse plaintext http. Blank is valid (no SP-initiated SLO). The
+    // provider name is line-ending-stripped inline in case it reaches a log through the thrown exception.
+
+    /// <summary>
+    /// Rejects a SAML Single-Logout (SLO) endpoint (#727, SLO-3c) that is set but is not a valid absolute
+    /// https URL, which would otherwise persist and then silently disable SP-initiated Single Logout (the
+    /// logout route falls back to local-only). Reuses <see cref="CanonicalBaseUrl.TryNormalize"/> — the same
+    /// absolute-URL predicate the Base URL override validates through — and narrows to https so the signed
+    /// LogoutRequest never traverses plaintext http. A blank endpoint is valid (no SP-initiated SLO).
+    /// </summary>
+    /// <param name="provider">The provider name, echoed (line-ending-stripped) in the rejection message.</param>
+    /// <param name="sloEndpoint">The SAML SLO endpoint to check.</param>
+    /// <exception cref="ArgumentException">The endpoint is non-blank and not a valid absolute https URL.</exception>
+    internal static void ValidateSamlSloEndpoint(string provider, string? sloEndpoint)
+    {
+        if (string.IsNullOrWhiteSpace(sloEndpoint))
+        {
+            return;
+        }
+
+        if (!CanonicalBaseUrl.TryNormalize(sloEndpoint, out var normalized)
+            || !normalized.StartsWith("https://", StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"SAML provider '{provider?.ReplaceLineEndings(string.Empty)}' has an invalid SAML SLO Endpoint; it must be an absolute https URL such as https://idp.example.com/slo, or left blank to disable SP-initiated Single Logout.",
+                nameof(sloEndpoint));
         }
     }
 

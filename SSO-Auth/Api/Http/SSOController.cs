@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Mime;
+using System.Security.Cryptography;
 using System.Threading.Tasks;
 using Jellyfin.Data;
 using Jellyfin.Database.Implementations.Entities;
@@ -262,6 +263,123 @@ public class SSOController : ControllerBase
         return endSessionUrl is null ? LocalRedirect("~/") : Redirect(endSessionUrl);
     }
 
+    /// <summary>
+    /// SP-initiated outbound SAML Single Logout (#727, SLO-3c). Ends the CALLER's local Jellyfin session, then
+    /// — when Single Logout is enabled, the provider has a configured SLO endpoint, a signing key loads, and the
+    /// caller has a captured SAML session with a NameID — redirects the browser to the identity provider's
+    /// Single-Logout endpoint with a SIGNED <c>LogoutRequest</c>, so the IdP session is terminated too.
+    /// Fail-safe: a missing SLO endpoint, a missing/unloadable signing key, or no captured session degrades to a
+    /// local-only logout (a host-independent redirect back to this server) — none of those must ever break the
+    /// local logout or 500. Authenticated, rate-limited, and every action is scoped strictly to the caller's own
+    /// user id — a user can only log THEMSELVES out, and the LogoutRequest can only ever carry the caller's own
+    /// NameID.
+    /// </summary>
+    /// <param name="provider">The SAML provider to end the session at.</param>
+    /// <returns>A redirect to the IdP SLO URL, or to this server for a local-only logout.</returns>
+    [Authorize]
+    [HttpGet("SAML/logout/{provider}")]
+    public async Task<ActionResult> SamlSpLogout(string provider)
+    {
+        // Deliberately NOT rate-limited, matching the authenticated OID/logout route: the Logout rate-limit
+        // class guards the ANONYMOUS inbound SAML LogoutRequest endpoint (SLO-3b). Throttling this
+        // [Authorize] self-logout would risk leaving the caller's own local session live under throttle —
+        // a security action must always be able to end the caller's session, and the route already requires
+        // a valid session to reach.
+        var auth = await _authContext.GetAuthorizationInfo(HttpContext.Request).ConfigureAwait(false);
+
+        // Read the Single Logout feature flag, the provider config, AND the caller's most recent captured SAML
+        // session for this provider in one lock acquisition. Scoped to the caller's own user id (FindByUser is
+        // user-id-scoped and empty for Guid.Empty), and filtered to a SAML capture — a SAML session carries no
+        // id_token, so the Protocol tag distinguishes it from an OpenID capture for the same provider. The
+        // captured Subject is the caller's own NameID; nothing here can read another user's session.
+        var (singleLogoutEnabled, config, match) = SSOPlugin.Instance.ReadConfiguration(configuration =>
+            (configuration.EnableSingleLogout,
+             configuration.SamlConfigs.TryGetValue(provider, out var samlConfig) ? samlConfig : null,
+             SessionLogoutStore.FindByUser(configuration, auth.UserId)
+                 .FirstOrDefault(pair =>
+                     string.Equals(pair.Value.Provider, provider, StringComparison.Ordinal)
+                     && string.Equals(pair.Value.Protocol, SamlProtocol, StringComparison.Ordinal))));
+
+        // End the caller's local Jellyfin session (their current token only) in EVERY path, then drop the
+        // consumed entry so the captured session state is not retained past the logout.
+        if (!string.IsNullOrEmpty(auth.Token))
+        {
+            await _sessionManager.Logout(auth.Token).ConfigureAwait(false);
+        }
+
+        if (match.Value is not null)
+        {
+            SSOPlugin.Instance.MutateConfiguration(configuration => SessionLogoutStore.Remove(configuration, match.Key));
+        }
+
+        // Build the signed LogoutRequest redirect only when everything the SP-initiated path needs is present:
+        // the feature is on, the caller has a captured SAML session naming a NameID, the provider is configured
+        // with an SLO endpoint, and a signing key loads. ANY missing piece — or any fault building/signing —
+        // fails SAFE to a local-only logout, never a 500 (the local logout already completed above).
+        string? sloRedirectUrl = null;
+        if (singleLogoutEnabled && config is not null && match.Value is { } captured && !string.IsNullOrEmpty(captured.Subject))
+        {
+            try
+            {
+                sloRedirectUrl = BuildSamlSloRedirectUrl(config, captured);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or CryptographicException or FormatException)
+            {
+                // Fail-safe: the local logout already stands. A missing/unloadable signing key
+                // (InvalidOperationException/CryptographicException), a corrupt at-rest secret envelope
+                // (FormatException), or a signer rejection (ArgumentException) degrades to a local-only logout
+                // rather than surfacing a 500. Key material is never part of the message, so nothing sensitive
+                // is logged.
+                if (_logger.IsEnabled(LogLevel.Error))
+                {
+                    _logger.LogError("SAML SP-initiated logout for provider {Provider} could not build the signed LogoutRequest: {Reason}; the local logout stands and the browser returns to this server.", provider?.ReplaceLineEndings(string.Empty), ex.Message);
+                }
+            }
+        }
+
+        // Redirect to the IdP SLO URL (the SLO endpoint is validated as an absolute https URL at save), or —
+        // local-only — back to this server via a LOCAL redirect. As with the OpenID logout, the local fallback
+        // uses a host-independent "~/" redirect rather than a request-Host-derived absolute target, so a spoofed
+        // Host can never turn the fallback into an open redirect.
+        return sloRedirectUrl is null ? LocalRedirect("~/") : Redirect(sloRedirectUrl);
+    }
+
+    // Builds the signed SP-initiated LogoutRequest redirect URL for a captured SAML session (#727, SLO-3c), or
+    // null when SP-initiated SLO is not configured (no SLO endpoint). Fail-closed on the signing key: a missing
+    // or unloadable key returns null (the caller degrades to local-only) rather than sending an UNSIGNED
+    // LogoutRequest — the SLO redirect binding requires a signature, so an unsigned downgrade is never emitted.
+    // Reuses the outbound-signing infrastructure verbatim: the encrypted-at-rest signing key is revealed at the
+    // point of use (mirroring the challenge), loaded through SamlSigningKey, and handed to the shared
+    // SamlRedirectSigner via SamlLogoutRequestBuilder. The subject NameID and SessionIndex come only from the
+    // caller's OWN captured session, so the request can never name another user.
+    private static string? BuildSamlSloRedirectUrl(SamlConfig config, LogoutSession captured)
+    {
+        var sloEndpoint = config.SamlSloEndpoint?.Trim();
+        if (string.IsNullOrEmpty(sloEndpoint))
+        {
+            return null;
+        }
+
+        // Reveal the encrypted-at-rest signing key only now, at the moment it signs. A missing/unloadable key
+        // returns null (local-only), never an unsigned request.
+        if (!SamlSigningKey.TryLoad(SSOPlugin.Instance.Secrets.Reveal(config.SamlSigningKeyPfx), out var signingCertificate))
+        {
+            return null;
+        }
+
+        using (signingCertificate)
+        using (var signingKey = SamlSigningKey.GetSigningKey(signingCertificate))
+        {
+            if (signingKey is null)
+            {
+                return null;
+            }
+
+            var request = new SamlLogoutRequestBuilder(config.SamlClientId.Trim(), captured.Subject, captured.SessionIndex);
+            return request.GetSignedRedirectUrl(sloEndpoint, relayState: null, signingKey);
+        }
+    }
+
     // Rejects a malformed canonical base-URL override (#139) at the OID/SAML Add endpoints. These persist
     // through MutateConfiguration, which passes the live configuration object, so they bypass the
     // config-page save-time validation in ProviderConfigStore.Save (which only runs for a fresh
@@ -340,6 +458,29 @@ public class SSOController : ControllerBase
         if (SamlSigningKey.IsInvalid(signingKeyPfx))
         {
             throw new ArgumentException("The SAML request signing key must be a Base64-encoded, unencrypted PKCS#12 (PFX) blob containing an RSA or ECDSA private key, or left blank.", nameof(signingKeyPfx));
+        }
+    }
+
+    // Rejects a malformed SAML SLO endpoint (#727, SLO-3c) at the SAML/Add endpoint, the door that mirrors
+    // the config-page save-time SLO-endpoint check in ProviderConfigValidator for the Add path that
+    // bypasses it. It must be an absolute https URL — the redirect carries a signed LogoutRequest naming the
+    // subject, so it must not traverse plaintext http. Reuses the same CanonicalBaseUrl.TryNormalize
+    // absolute-URL predicate the Base URL override guard uses, narrowed to https. Blank is valid (no
+    // SP-initiated Single Logout). The message stays generic (never echoes the caller's endpoint back).
+
+    /// <summary>
+    /// Rejects a malformed SAML SLO endpoint at the SAML/Add endpoint (#727, SLO-3c), the Add-path
+    /// counterpart to the config-page save-time SLO-endpoint check. A blank endpoint is valid.
+    /// </summary>
+    /// <param name="sloEndpoint">The SAML SLO endpoint posted to the Add endpoint.</param>
+    /// <exception cref="ArgumentException">The endpoint is non-blank and not a valid absolute https URL.</exception>
+    internal static void RejectInvalidSamlSloEndpoint(string? sloEndpoint)
+    {
+        if (!string.IsNullOrWhiteSpace(sloEndpoint)
+            && (!CanonicalBaseUrl.TryNormalize(sloEndpoint, out var normalized)
+                || !normalized.StartsWith("https://", StringComparison.Ordinal)))
+        {
+            throw new ArgumentException("The SAML SLO Endpoint must be an absolute https URL such as https://idp.example.com/slo, or left blank.", nameof(sloEndpoint));
         }
     }
 
@@ -799,6 +940,7 @@ public class SSOController : ControllerBase
     {
         RejectNullProviderBody(newConfig);
         RejectInvalidBaseUrlOverride(newConfig.BaseUrlOverride);
+        RejectInvalidSamlSloEndpoint(newConfig.SamlSloEndpoint);
         RejectInvalidSamlCertificate(newConfig.SamlCertificate);
         RejectInvalidSamlSecondaryCertificate(newConfig.SamlSecondaryCertificate);
         RejectInvalidSamlSigningKey(newConfig.SamlSigningKeyPfx);

@@ -1618,7 +1618,7 @@ public class ArchitectureConformanceTests
 
         var expected = new[]
         {
-            "SamlEndpoint", "SamlClientId", "SamlCertificate", "SamlSecondaryCertificate", "SamlAudience",
+            "SamlEndpoint", "SamlSloEndpoint", "SamlClientId", "SamlCertificate", "SamlSecondaryCertificate", "SamlAudience",
             "DoNotValidateAudience", "ValidateRecipient", "ValidateInResponseTo", "SignAuthnRequests",
             "SamlSigningKeyPfx", "SamlRolloverSigningKeyPfx",
             "Enabled", "EnableAuthorization", "DefaultProvider", "AllowExistingAccountLink", "ProvisionNewUsersDisabled",
@@ -1628,7 +1628,7 @@ public class ArchitectureConformanceTests
             "HideLoginButton", "LoginButtonText",
         };
 
-        Assert.Equal(32, expected.Length);
+        Assert.Equal(33, expected.Length);
         var missing = expected.Where(p => !markedProps.Contains(p)).ToList();
         Assert.True(
             missing.Count == 0,

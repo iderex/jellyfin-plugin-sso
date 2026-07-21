@@ -170,6 +170,37 @@ public class ProviderConfigValidatorTests
         Assert.Null(ex);
     }
 
+    // --- ValidateSamlSloEndpoint (#727, SLO-3c): reject a set-but-malformed/non-https endpoint; blank/https pass ---
+
+    [Theory]
+    [InlineData("not-a-url")] // not absolute
+    [InlineData("http://idp.example.com/slo")] // absolute but plaintext http — the signed LogoutRequest must not traverse http
+    [InlineData("ftp://idp.example.com/slo")] // absolute but not http(s)
+    [InlineData("https://user:pass@idp.example.com/slo")] // userinfo can mask the real host
+    [InlineData("https://idp.example.com/slo?x=1")] // a query is rejected by the shared absolute-URL predicate
+    public void ValidateSamlSloEndpoint_MalformedOrNonHttps_ThrowsNamingProvider(string sloEndpoint)
+    {
+        var ex = Assert.Throws<ArgumentException>(
+            () => ProviderConfigValidator.ValidateSamlSloEndpoint("idp", sloEndpoint));
+
+        Assert.Equal("sloEndpoint", ex.ParamName);
+        Assert.Contains("idp", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("invalid SAML SLO Endpoint", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")] // blank disables SP-initiated Single Logout
+    [InlineData("https://idp.example.com/slo")]
+    [InlineData("https://idp.example.com/adfs/ls")] // a path is allowed
+    public void ValidateSamlSloEndpoint_BlankOrValidHttpsUrl_DoesNotThrow(string? sloEndpoint)
+    {
+        var ex = Record.Exception(() => ProviderConfigValidator.ValidateSamlSloEndpoint("idp", sloEndpoint!));
+
+        Assert.Null(ex);
+    }
+
     // --- ValidatePostLogoutRedirectUri (#727, SLO-4): reject a set value the runtime would silently drop ---
 
     private const string PostLogoutBase = "https://jellyfin.example.com";
