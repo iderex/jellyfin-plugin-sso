@@ -1,8 +1,6 @@
 using System.Collections.Generic;
 using Jellyfin.Plugin.SSO_Auth.Api.Authz;
 
-#nullable enable
-
 namespace Jellyfin.Plugin.SSO_Auth.Api.Identity;
 
 /// <summary>

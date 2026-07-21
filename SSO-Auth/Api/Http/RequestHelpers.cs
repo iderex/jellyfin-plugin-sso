@@ -38,12 +38,10 @@ internal static class RequestHelpers
 
         var auth = await authContext.GetAuthorizationInfo(requestContext).ConfigureAwait(false);
 
-        var authenticatedUser = auth?.User;
-
         // Fail closed on an unresolved caller: a null authorization result or unauthenticated request
         // is an explicit deny, not a NullReferenceException that would surface as a 500. Every real
         // caller sits behind [Authorize], so this only guards the ambiguous/misconfigured case.
-        if (authenticatedUser is null)
+        if (auth?.User is not { } authenticatedUser)
         {
             return false;
         }

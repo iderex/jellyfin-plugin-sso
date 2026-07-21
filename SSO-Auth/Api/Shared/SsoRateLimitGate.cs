@@ -1,5 +1,3 @@
-#nullable enable
-
 using System;
 using System.Net;
 using Jellyfin.Plugin.SSO_Auth.Api;
@@ -49,7 +47,7 @@ internal static class SsoRateLimitGate
     /// <param name="logger">The caller's logger, for the bounded throttle-engaged observability signal (#195).</param>
     /// <param name="response">The response whose Retry-After header a throttled outcome sets (#474).</param>
     /// <returns>Null when the request may proceed, or the throttled 429 outcome otherwise.</returns>
-    internal static ActionResult? Check(string endpointClass, IPAddress remoteIp, ILogger logger, HttpResponse response)
+    internal static ActionResult? Check(string endpointClass, IPAddress? remoteIp, ILogger logger, HttpResponse response)
     {
         var (enabled, maxAttempts, windowSeconds) = SSOPlugin.Instance.ReadConfiguration(
             c => (c.EnableRateLimit, c.RateLimitMaxAttempts, c.RateLimitWindowSeconds));

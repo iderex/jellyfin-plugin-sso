@@ -1,5 +1,3 @@
-#nullable enable
-
 using System;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Api.Session;
@@ -74,7 +72,7 @@ internal static class SsoOnlyLoginGuard
     /// <param name="breakGlassUsername">The designated break-glass admin username (may be blank).</param>
     /// <param name="breakGlass">The resolved login state of that account.</param>
     /// <returns>The guard verdict.</returns>
-    internal static SsoOnlyGuardVerdict Evaluate(string breakGlassUsername, BreakGlassAdminState breakGlass)
+    internal static SsoOnlyGuardVerdict Evaluate(string? breakGlassUsername, BreakGlassAdminState breakGlass)
     {
         if (string.IsNullOrWhiteSpace(breakGlassUsername))
         {

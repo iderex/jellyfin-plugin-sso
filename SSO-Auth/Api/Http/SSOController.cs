@@ -228,7 +228,7 @@ public class SSOController : ControllerBase
         var canonicalBase = CanonicalBaseUrl.Resolve(
             config?.BaseUrlOverride, Request.Scheme, Request.Host.Host, Request.Host.Port, Request.PathBase, config?.SchemeOverride, config?.PortOverride);
 
-        string endSessionUrl = null;
+        string? endSessionUrl = null;
         if (match.Value is { } captured)
         {
             try
@@ -272,7 +272,7 @@ public class SSOController : ControllerBase
     /// </summary>
     /// <param name="baseUrlOverride">The override value posted to the Add endpoint.</param>
     /// <exception cref="ArgumentException">The override is non-blank and not a valid absolute http(s) URL.</exception>
-    internal static void RejectInvalidBaseUrlOverride(string baseUrlOverride)
+    internal static void RejectInvalidBaseUrlOverride(string? baseUrlOverride)
     {
         if (CanonicalBaseUrl.IsInvalidOverride(baseUrlOverride))
         {
@@ -292,7 +292,7 @@ public class SSOController : ControllerBase
     /// </summary>
     /// <param name="certificateStr">The Base64-encoded (DER) X.509 certificate posted to the Add endpoint.</param>
     /// <exception cref="ArgumentException">The certificate is non-blank and not loadable.</exception>
-    internal static void RejectInvalidSamlCertificate(string certificateStr)
+    internal static void RejectInvalidSamlCertificate(string? certificateStr)
     {
         if (SamlCertificate.IsInvalid(certificateStr))
         {
@@ -313,7 +313,7 @@ public class SSOController : ControllerBase
     /// </summary>
     /// <param name="certificateStr">The Base64-encoded (DER) X.509 certificate posted to the Add endpoint.</param>
     /// <exception cref="ArgumentException">The certificate is non-blank and not loadable.</exception>
-    internal static void RejectInvalidSamlSecondaryCertificate(string certificateStr)
+    internal static void RejectInvalidSamlSecondaryCertificate(string? certificateStr)
     {
         if (SamlCertificate.IsInvalid(certificateStr))
         {
@@ -332,7 +332,7 @@ public class SSOController : ControllerBase
     /// </summary>
     /// <param name="signingKeyPfx">The Base64-encoded PKCS#12 (PFX) signing key posted to the Add endpoint.</param>
     /// <exception cref="ArgumentException">The key is non-blank and not a loadable PFX with an RSA or ECDSA private key.</exception>
-    internal static void RejectInvalidSamlSigningKey(string signingKeyPfx)
+    internal static void RejectInvalidSamlSigningKey(string? signingKeyPfx)
     {
         if (SamlSigningKey.IsInvalid(signingKeyPfx))
         {
@@ -599,7 +599,7 @@ public class SSOController : ControllerBase
     /// <returns>A webpage that will complete the client-side flow.</returns>
     [HttpPost("SAML/p/{provider}")]
     [HttpPost("SAML/post/{provider}")]
-    public ActionResult SamlCallback(string provider, [FromQuery] string relayState = null, [FromForm(Name = "SAMLResponse")] string formSamlResponse = null)
+    public ActionResult SamlCallback(string provider, [FromQuery] string? relayState = null, [FromForm(Name = "SAMLResponse")] string? formSamlResponse = null)
     {
         if (RateLimitCheck(SsoRateLimitClass.Callback) is { } throttled)
         {
@@ -1300,6 +1300,6 @@ public class SSOController : ControllerBase
     // IP classifier, endpoint-class keying, the #195 observability signal); this wrapper only supplies the
     // three request-scoped inputs it needs — the endpoint class, the connection's remote address, and the
     // response the retry-delay header is set on — so the controller keeps no rate-limit state of its own.
-    private ActionResult RateLimitCheck(string endpointClass) =>
+    private ActionResult? RateLimitCheck(string endpointClass) =>
         SsoRateLimitGate.Check(endpointClass, HttpContext.Connection.RemoteIpAddress, _logger, Response);
 }

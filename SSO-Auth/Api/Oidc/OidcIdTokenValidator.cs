@@ -12,8 +12,6 @@ using Jellyfin.Plugin.SSO_Auth.Api.Crypto;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
 
-#nullable enable
-
 namespace Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 
 /// <summary>

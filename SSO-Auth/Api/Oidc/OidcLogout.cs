@@ -1,5 +1,3 @@
-#nullable enable
-
 using System;
 using Jellyfin.Plugin.SSO_Auth.Api.Net;
 

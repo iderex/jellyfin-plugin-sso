@@ -60,7 +60,7 @@ public class SSOPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
     /// <summary>
     /// Gets the instance of the SSO plugin.
     /// </summary>
-    public static SSOPlugin Instance { get; private set; }
+    public static SSOPlugin Instance { get; private set; } = null!;
 
     /// <summary>
     /// Gets the name of the SSO plugin.
