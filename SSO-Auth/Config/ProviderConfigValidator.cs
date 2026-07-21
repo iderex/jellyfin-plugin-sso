@@ -6,6 +6,7 @@ using System.Linq;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Api.Authz;
 using Jellyfin.Plugin.SSO_Auth.Api.Net;
+using Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 using Jellyfin.Plugin.SSO_Auth.Api.Provider;
 using Jellyfin.Plugin.SSO_Auth.Api.Saml;
 
@@ -17,6 +18,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Config;
 /// by composing the per-provider checks below; those per-provider methods are also exercised directly,
 /// one predicate at a time, by the unit tests (hence internal, not private). The single source of truth
 /// is the underlying <see cref="CanonicalBaseUrl.IsInvalidOverride"/>,
+/// <see cref="OidcLogout.IsAllowedPostLogoutRedirect"/> (the SAME allow-list the logout runtime enforces),
 /// <see cref="SamlCertificate.IsInvalid"/>, <see cref="SamlSigningKey.IsInvalid"/>, and
 /// <see cref="ProviderNameValidator.IsInvalid"/> predicates — the SAME ones the Add endpoints' own
 /// guards (<c>SSOController.RejectInvalid*</c>) delegate to. The two admin write paths keep separate
@@ -57,6 +59,7 @@ internal static class ProviderConfigValidator
             {
                 ValidateProviderName("OpenID", kvp.Key, isNew: live?.OidConfigs?.ContainsKey(kvp.Key) != true);
                 ValidateBaseUrlOverride("OpenID", kvp.Key, kvp.Value?.BaseUrlOverride);
+                ValidatePostLogoutRedirectUri("OpenID", kvp.Key, kvp.Value?.BaseUrlOverride, kvp.Value?.PostLogoutRedirectUri);
                 ValidatePermissionRoleMappings("OpenID", kvp.Key, kvp.Value?.PermissionRoleMappings);
                 ValidateParentalRatingMappings("OpenID", kvp.Key, kvp.Value?.ParentalRatingRoleMappings);
                 ValidateAcrRequirement(kvp.Key, kvp.Value);
@@ -157,6 +160,51 @@ internal static class ProviderConfigValidator
             throw new ArgumentException(
                 $"{protocol} provider '{provider?.ReplaceLineEndings(string.Empty)}' has an invalid Base URL override; it must be an absolute http(s) URL such as https://jellyfin.example.com.",
                 nameof(baseUrlOverride));
+        }
+    }
+
+    // A post_logout_redirect_uri that is set but not at/under this server's canonical base is silently
+    // dropped at logout (OidcLogout omits it and the logout completes with no redirect back), so the admin
+    // gets no feedback that their configured return URL never fires (#727, SLO-4). Reject it at save so the
+    // mis-set is caught instead of failing as a silent runtime no-op. The base is only DETERMINATE at save
+    // time when it is pinned via the per-provider Base URL Override — without an override the runtime derives
+    // it from the request Host, which does not exist at save time — so the check applies exactly when the
+    // canonical base is knowable from the config alone, and it reuses the SAME allow-list predicate the
+    // runtime enforces (OidcLogout.IsAllowedPostLogoutRedirect) rather than restating the URL rule. The
+    // provider name is line-ending-stripped inline in case it reaches a log through the thrown exception, and
+    // the candidate value is deliberately NOT echoed (RejectInvalid* message discipline). OpenID-only: only
+    // the OpenID logout path consumes post_logout_redirect_uri, so Validate runs this only over OidConfigs
+    // (the property lives on the shared base but no SAML runtime path honours it).
+
+    /// <summary>
+    /// Rejects a non-blank <c>post_logout_redirect_uri</c> (#727, SLO-4) that the runtime would silently drop
+    /// — i.e. one that is not an absolute http(s) URL at or under this server's canonical base — so the admin
+    /// gets feedback instead of a return URL that never fires. OpenID-only (only the OpenID logout path uses
+    /// it). The base is taken from the provider's Base URL Override; when no override pins it (the base is
+    /// request-derived and unknown at save time) the check is skipped, leaving the runtime allow-list as the
+    /// sole check. A blank value is valid (no post-logout redirect). Reuses
+    /// <see cref="OidcLogout.IsAllowedPostLogoutRedirect"/>, the one allow-list predicate.
+    /// </summary>
+    /// <param name="protocol">The protocol label (always "OpenID") echoed in the rejection message.</param>
+    /// <param name="provider">The provider name, echoed (line-ending-stripped) in the rejection message.</param>
+    /// <param name="baseUrlOverride">The provider's canonical base-URL override; only a valid override makes the base determinate at save time.</param>
+    /// <param name="postLogoutRedirectUri">The configured post-logout return URL to check.</param>
+    /// <exception cref="ArgumentException">The value is non-blank, the base is determinate, and the value is not at/under it.</exception>
+    internal static void ValidatePostLogoutRedirectUri(string protocol, string provider, string? baseUrlOverride, string? postLogoutRedirectUri)
+    {
+        // Blank means no post-logout redirect — always valid. Without a determinate canonical base the
+        // runtime's own allow-list stays the only check (the base is the request Host, unknown here).
+        if (string.IsNullOrWhiteSpace(postLogoutRedirectUri)
+            || !CanonicalBaseUrl.TryNormalize(baseUrlOverride, out var canonicalBase))
+        {
+            return;
+        }
+
+        if (!OidcLogout.IsAllowedPostLogoutRedirect(postLogoutRedirectUri, canonicalBase, out _))
+        {
+            throw new ArgumentException(
+                $"{protocol} provider '{provider?.ReplaceLineEndings(string.Empty)}' has a Post Logout Redirect URI that is not at or under the configured Base URL; it must be an absolute http(s) URL at or under this server's base URL, or it is ignored at logout. Leave it blank for no post-logout redirect.",
+                nameof(postLogoutRedirectUri));
         }
     }
 

@@ -85,4 +85,39 @@ public class OidcLogoutTests
         var url = OidcLogout.BuildEndSessionUrl(EndSession, Issuer, null, "c", null, Base);
         Assert.Equal(EndSession + "?client_id=c", url);
     }
+
+    // The allow-list predicate is now internal and reused by the config-page save validator (#727, SLO-4), so
+    // pin its contract directly — it is the single source of truth both the runtime builder above and
+    // ProviderConfigValidator.ValidatePostLogoutRedirectUri call.
+
+    [Theory]
+    [InlineData("https://jellyfin.example.com")] // the base itself
+    [InlineData("https://jellyfin.example.com/web/")] // under the base path
+    public void IsAllowedPostLogoutRedirect_AtOrUnderBase_IsAllowed_AndReturnsTheCandidate(string candidate)
+    {
+        Assert.True(OidcLogout.IsAllowedPostLogoutRedirect(candidate, Base, out var allowed));
+        Assert.Equal(candidate, allowed);
+    }
+
+    [Theory]
+    [InlineData("https://evil.example.net/steal")] // different authority
+    [InlineData("https://jellyfin.example.com.evil.net/")] // sibling-prefix host
+    [InlineData("not-a-url")] // not absolute
+    [InlineData("ftp://jellyfin.example.com/x")] // not http(s)
+    [InlineData("https://user:pass@jellyfin.example.com/")] // userinfo
+    [InlineData("")] // blank candidate
+    public void IsAllowedPostLogoutRedirect_OffBaseOrMalformedOrBlank_IsRejected_WithEmptyOut(string candidate)
+    {
+        Assert.False(OidcLogout.IsAllowedPostLogoutRedirect(candidate, Base, out var allowed));
+        Assert.Equal(string.Empty, allowed);
+    }
+
+    [Fact]
+    public void IsAllowedPostLogoutRedirect_BlankBase_IsRejected()
+    {
+        // A blank canonical base cannot allow-list anything (the save validator relies on this to skip the
+        // check when no Base URL Override pins a determinate base).
+        Assert.False(OidcLogout.IsAllowedPostLogoutRedirect(Base, null, out var allowed));
+        Assert.Equal(string.Empty, allowed);
+    }
 }

@@ -267,6 +267,60 @@
           </form>
 
           <!--
+            Single Logout (#727) — GLOBAL setting. EnableSingleLogout lives on the root PluginConfiguration,
+            not on a provider, so — like ManageLoginPageButtons above — it sits OUTSIDE both provider forms and
+            carries NO sso-* marker class: it is saved by its own handler (config.js saveSingleLogout), which
+            re-posts the whole configuration with only this flag changed, and loaded by loadConfiguration. The
+            per-provider return URL (PostLogoutRedirectUri) is an ordinary persisting provider-form field in
+            each editor below.
+          -->
+          <form id="sso-single-logout" class="esqConfigurationForm">
+            <div
+              class="verticalSection"
+              is="emby-collapse"
+              title="Single Logout"
+            >
+              <div class="collapseContent">
+                <div
+                  class="checkboxContainer checkboxContainer-withDescription"
+                >
+                  <label>
+                    <input
+                      is="emby-checkbox"
+                      id="EnableSingleLogout"
+                      name="EnableSingleLogout"
+                      type="checkbox"
+                    />
+                    <span>Enable Single Logout</span>
+                  </label>
+                  <div class="fieldDescription checkboxFieldDescription">
+                    Off by default. When on, each successful login stores the
+                    per-session state a logout needs, and two logout surfaces
+                    become active: the RP-initiated OpenID logout route (which
+                    ends the linked Jellyfin session and can redirect the
+                    browser on to the identity provider's end-session endpoint)
+                    and the inbound SAML LogoutRequest endpoint (which ends the
+                    Jellyfin session matched by the request). While off, no
+                    per-session logout state is captured and both surfaces
+                    reject; local Jellyfin logout is unaffected either way. Set
+                    each OpenID provider's optional post-logout redirect URL in
+                    its editor below.
+                  </div>
+                </div>
+
+                <button
+                  id="SaveSingleLogout"
+                  is="emby-button"
+                  type="button"
+                  class="raised button-submit block emby-button"
+                >
+                  <span>Save</span>
+                </button>
+              </div>
+            </div>
+          </form>
+
+          <!--
             Provider workspace (#365 UI redesign). The provider LIST replaces the old select -> Load flow:
             each saved OpenID provider is a card (name + type badge + enabled/disabled pill); clicking a card
             loads it into the editor below. The hidden <select id="selectProvider"> is retained as the state
@@ -698,6 +752,30 @@
                       effect while the global "Manage login buttons on the login
                       page" option is on and the button is not hidden; any text
                       is safe — it is always rendered inert, never as markup.
+                    </div>
+                  </div>
+
+                  <div class="inputContainer">
+                    <label
+                      class="inputLabel inputLabelUnfocused"
+                      for="PostLogoutRedirectUri"
+                      >Post-logout redirect URL:
+                      <span class="sso-optional">(optional)</span></label
+                    >
+                    <input
+                      is="emby-input"
+                      id="PostLogoutRedirectUri"
+                      type="text"
+                      class="sso-text"
+                    />
+                    <div class="fieldDescription">
+                      The URL the identity provider returns the browser to after
+                      an RP-initiated OpenID logout, sent as
+                      post_logout_redirect_uri. Honoured only if it is an
+                      absolute http(s) URL at or under this server's base URL;
+                      an off-base or malformed value is rejected on save. Leave
+                      blank for no post-logout redirect. Only takes effect while
+                      the global "Enable Single Logout" option is on.
                     </div>
                   </div>
                 </div>

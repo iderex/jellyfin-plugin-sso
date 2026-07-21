@@ -182,6 +182,12 @@ const ssoConfigurationPage = {
         page.querySelector("#ManageLoginPageButtons").checked = Boolean(
           config.ManageLoginPageButtons,
         );
+        // The GLOBAL Single Logout opt-in (#727) rides the same configuration load. Like
+        // ManageLoginPageButtons it is a root PluginConfiguration flag, not a provider field, so it has its
+        // own save path (saveSingleLogout) and no sso-* marker class.
+        page.querySelector("#EnableSingleLogout").checked = Boolean(
+          config.EnableSingleLogout,
+        );
       },
     );
 
@@ -1017,6 +1023,39 @@ const ssoConfigurationPage = {
               title: "Save failed",
               message:
                 "Could not save the login-page button setting. The saved configuration was rejected by the server; reload the page and try again.",
+            });
+          },
+        );
+      },
+    );
+  },
+  // Save the GLOBAL Single Logout opt-in (#727). EnableSingleLogout is a root PluginConfiguration flag, so
+  // — exactly like saveLoginButtons — this fetches the live configuration, changes ONLY this flag, and
+  // re-posts the whole document, so the provider dictionaries and every other root setting ride along
+  // unchanged. The per-provider post-logout redirect URL is saved with its provider, not here.
+  saveSingleLogout: (page) => {
+    ApiClient.getPluginConfiguration(ssoConfigurationPage.pluginUniqueId).then(
+      (config) => {
+        config.EnableSingleLogout = page.querySelector(
+          "#EnableSingleLogout",
+        ).checked;
+
+        ApiClient.updatePluginConfiguration(
+          ssoConfigurationPage.pluginUniqueId,
+          config,
+        ).then(
+          function (result) {
+            Dashboard.processPluginConfigurationUpdateResult(result);
+            ssoConfigurationPage.loadConfiguration(page);
+            Dashboard.alert("Settings saved.");
+          },
+          // Report a genuine save failure rather than swallowing it: this PUT re-posts the whole
+          // configuration, so the server can reject it for a reason unrelated to this toggle (#336).
+          function () {
+            Dashboard.alert({
+              title: "Save failed",
+              message:
+                "Could not save the Single Logout setting. The saved configuration was rejected by the server; reload the page and try again.",
             });
           },
         );
@@ -2281,6 +2320,12 @@ export default function initSsoConfigurationPage(view) {
 
   view.querySelector("#SaveLoginButtons").addEventListener("click", (e) => {
     ssoConfigurationPage.saveLoginButtons(view);
+    e.preventDefault();
+    return false;
+  });
+
+  view.querySelector("#SaveSingleLogout").addEventListener("click", (e) => {
+    ssoConfigurationPage.saveSingleLogout(view);
     e.preventDefault();
     return false;
   });

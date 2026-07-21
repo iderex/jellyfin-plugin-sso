@@ -104,9 +104,20 @@ internal static class OidcLogout
             && string.Equals(a.Host, b.Host, StringComparison.OrdinalIgnoreCase)
             && a.Port == b.Port;
 
-    // The return URL is allowed only when it normalizes to a valid base and sits at or under the server's
-    // canonical base (same origin + path prefix), so logout can only return to this Jellyfin.
-    private static bool IsAllowedPostLogoutRedirect(string? candidate, string? canonicalBaseUrl, out string allowed)
+    /// <summary>
+    /// Whether a <c>post_logout_redirect_uri</c> candidate is allowed: it normalizes to a valid http(s) URL
+    /// with no userinfo and sits at or under this server's <paramref name="canonicalBaseUrl"/> (same origin +
+    /// path prefix), so a logout can only return the browser to this Jellyfin. The SINGLE source of truth for
+    /// the return-URL rule — the runtime builder above and the save-time
+    /// <c>ProviderConfigValidator.ValidatePostLogoutRedirectUri</c> both call it, so the config-page save
+    /// rejects exactly the values the runtime would silently drop (no second, divergent URL rule). A blank
+    /// candidate or blank base yields <see langword="false"/>.
+    /// </summary>
+    /// <param name="candidate">The desired post-logout return URL (may be null/blank).</param>
+    /// <param name="canonicalBaseUrl">This server's canonical base, the allow-list root.</param>
+    /// <param name="allowed">The accepted return URL when the result is <see langword="true"/>, else empty.</param>
+    /// <returns><see langword="true"/> if the candidate is a return URL at or under the canonical base.</returns>
+    internal static bool IsAllowedPostLogoutRedirect(string? candidate, string? canonicalBaseUrl, out string allowed)
     {
         allowed = string.Empty;
         if (string.IsNullOrWhiteSpace(candidate)
