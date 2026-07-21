@@ -26,8 +26,18 @@ on:
   # The FULL provider matrix runs on a release AND a beta-release (a prerelease), never on a routine push.
   release:
     types: [published, prereleased]
-  # On-demand from any branch (runs the single-provider set).
+  # On-demand from any branch. `providers: all` runs the FULL matrix, which is the only way to exercise a
+  # newly-added provider harness before a release actually happens — without it a new entry's first-ever run
+  # would be on release day.
   workflow_dispatch:
+    inputs:
+      providers:
+        description: "Which provider harnesses to run"
+        type: choice
+        options:
+          - canonical
+          - all
+        default: canonical
 
 # Deny-all at the workflow level; the e2e job reads the repo to build the plugin and needs nothing else.
 permissions: {}
@@ -51,14 +61,18 @@ jobs:
       - id: pick
         env:
           IS_RELEASE: ${{ github.event_name == 'release' }}
+          # A manual dispatch may opt into the full matrix; the input is a constrained choice, and both values
+          # reach the shell only through env (never interpolated into the script body).
+          DISPATCH_ALL: ${{ github.event_name == 'workflow_dispatch' && inputs.providers == 'all' }}
         run: |
           set -euo pipefail
           keycloak='{"name":"Keycloak (OIDC + SAML)","compose":"test/e2e/docker-compose.yml"}'
           authelia='{"name":"Authelia (OIDC)","compose":"test/e2e/authelia/docker-compose.yml"}'
+          authentik='{"name":"authentik (OIDC)","compose":"test/e2e/authentik/docker-compose.yml"}'
           # The full provider matrix (release/beta only). Append one object per shipped harness as each
-          # test/e2e/<provider>/ lands: #920 authentik, #922 pocket-id, #923 kanidm, #924 zitadel, #925 dex.
-          if [ "$IS_RELEASE" = "true" ]; then
-            include="[$keycloak,$authelia]"
+          # test/e2e/<provider>/ lands: #922 pocket-id, #923 kanidm, #924 zitadel, #925 dex.
+          if [ "$IS_RELEASE" = "true" ] || [ "$DISPATCH_ALL" = "true" ]; then
+            include="[$keycloak,$authelia,$authentik]"
           else
             include="[$keycloak]"
           fi

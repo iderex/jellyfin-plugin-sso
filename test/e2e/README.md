@@ -13,8 +13,10 @@ be run locally with one command once you have built the plugin.
 Keycloak is the **canonical** harness and the only one that runs on a pull request touching the harness,
 on the nightly schedule, and on a manual dispatch (there is deliberately no `push` trigger — the PR run
 already validated it). Additional self-hostable identity providers get their own harness under
-`test/e2e/<provider>/`. **Authelia** (`test/e2e/authelia/`, OIDC) is implemented; the rest are one issue
-each — authentik, Pocket ID, Kanidm, Zitadel, Dex; tracked in
+`test/e2e/<provider>/`. **Authelia** (`test/e2e/authelia/`, OIDC) and **authentik**
+(`test/e2e/authentik/`, OIDC — its SAML half is still open on
+[#920](https://github.com/iderex/jellyfin-plugin-sso/issues/920)) are implemented; the rest are one issue
+each — Pocket ID, Kanidm, Zitadel, Dex; tracked in
 [#919](https://github.com/iderex/jellyfin-plugin-sso/issues/919). The **full provider matrix runs only at
 a release and a beta-release** — never on a routine merge, so the cross-provider pass is release-gate
 evidence, not a per-commit cost. A provider joins the matrix by adding one `{ name, compose }` object to
@@ -88,6 +90,12 @@ docker compose -f test/e2e/docker-compose.yml down -v
 
 A green run prints `ALL E2E CHECKS PASSED`. In CI, container logs are dumped automatically on
 failure.
+
+**Running more than one provider locally:** every provider's compose bind-mounts the same
+`test/e2e/jellyfin/config`, and `docker compose down -v` does not clear a bind mount. Wipe it (and re-unpack
+the plugin) between providers — otherwise the second run reuses a Jellyfin that already completed the wizard
+and already has `alice` linked to the first provider, which is not what CI does (each matrix entry runs on a
+fresh runner).
 
 To run the **Authelia** harness instead, generate its self-signed TLS cert first (never committed), then
 point `docker compose` at its file — the plugin drop from step 2 is reused unchanged:
