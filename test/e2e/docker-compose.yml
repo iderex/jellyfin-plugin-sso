@@ -73,3 +73,14 @@ services:
 networks:
   ssonet:
     driver: bridge
+    ipam:
+      config:
+        # The plugin hardens its outbound OIDC backchannel (discovery/token/JWKS) with an SSRF guard
+        # that refuses to connect to any RFC1918 / loopback / CGNAT address (IpAddressClassifier) — a
+        # production defense we must NOT weaken. Every default Docker subnet (10/8, 172.16/12,
+        # 192.168/16) is blocked by it, so a containerised IdP on a default network is unreachable and
+        # discovery fails closed. Put this test network on an IP range the guard treats as public so the
+        # containerised Keycloak is reachable exactly as a real public IdP would be, with the
+        # hostname-based issuer (http://keycloak:8080/realms/e2e) preserved. 11.0.0.0/24 is not routed
+        # anywhere the stack needs; only the three containers use it.
+        - subnet: 11.0.0.0/24
