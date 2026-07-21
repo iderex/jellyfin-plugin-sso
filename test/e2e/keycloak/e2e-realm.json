@@ -52,6 +52,40 @@
           }
         }
       ]
+    },
+    {
+      "clientId": "jellyfin-saml",
+      "name": "Jellyfin SSO (SAML)",
+      "enabled": true,
+      "protocol": "saml",
+      "frontchannelLogout": true,
+      "redirectUris": [
+        "http://jellyfin:8096/sso/SAML/post/*",
+        "http://jellyfin:8096/sso/SAML/p/*"
+      ],
+      "attributes": {
+        "saml.server.signature": "true",
+        "saml.assertion.signature": "true",
+        "saml.client.signature": "false",
+        "saml.force.post.binding": "true",
+        "saml.authnstatement": "true",
+        "saml_name_id_format": "username",
+        "saml_signature_canonicalization_method": "http://www.w3.org/2001/10/xml-exc-c14n#",
+        "saml.signature.algorithm": "RSA_SHA256"
+      },
+      "protocolMappers": [
+        {
+          "name": "role-list",
+          "protocol": "saml",
+          "protocolMapper": "saml-role-list-mapper",
+          "consentRequired": false,
+          "config": {
+            "single": "false",
+            "attribute.nameformat": "Basic",
+            "attribute.name": "Role"
+          }
+        }
+      ]
     }
   ],
   "users": [
@@ -84,6 +118,40 @@
         {
           "type": "password",
           "value": "bob",
+          "temporary": false
+        }
+      ],
+      "realmRoles": []
+    },
+    {
+      "username": "carol",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "carol@example.com",
+      "firstName": "Carol",
+      "lastName": "Example",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "carol",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "jellyfin-access"
+      ]
+    },
+    {
+      "username": "dave",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "dave@example.com",
+      "firstName": "Dave",
+      "lastName": "Example",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dave",
           "temporary": false
         }
       ],

@@ -297,6 +297,172 @@ else
   fail "replay check skipped: no state captured from the alice round-trip"
 fi
 
+# ==================================================================================================
+# SAML
+# ==================================================================================================
+# The SAML browser-binding cookie (#415) — like the OpenID one, always Secure, so presented explicitly
+# over plaintext http. It is checked at the same-origin SAML/Auth mint leg (the cross-site ACS POST does
+# not carry it).
+SAML_BINDING_COOKIE_NAME="__Host-sso_saml_state_binding"
+
+# saml_authorize <jar> <start_hdr> : /start -> keycloak login form action URL (stdout). Diagnostics to
+# stderr. Writes the /start response headers (carrying the SAML binding Set-Cookie) to start_hdr.
+saml_authorize() {
+  jar="$1"; start_hdr="$2"
+  start_out="$(curl -sS -D "$start_hdr" -o /dev/null -c "$jar" -b "$jar" -w '%{http_code} %{redirect_url}' "$JELLYFIN/sso/SAML/start/$PROVIDER")"
+  code="${start_out%% *}"; auth_url="${start_out#* }"
+  printf 'saml_authorize: /start -> HTTP %s location=%s\n' "$code" "${auth_url%%\?*}?<SAMLRequest>" >&2
+  if [ -z "$auth_url" ]; then
+    printf 'saml_authorize: /start returned no redirect; body was:\n' >&2
+    curl -sS -c "$jar" -b "$jar" "$JELLYFIN/sso/SAML/start/$PROVIDER" >&2 || true
+    return 1
+  fi
+  login_page="$(curl -sSL -c "$jar" -b "$jar" "$auth_url")" || { printf 'saml_authorize: login page curl failed\n' >&2; return 1; }
+  form_action="$(printf '%s' "$login_page" | grep -oE 'action="[^"]*"' | head -1 | sed -e 's/^action="//' -e 's/"$//' -e 's/&amp;/\&/g')"
+  if [ -z "$form_action" ]; then
+    printf 'saml_authorize: could not parse a form action; first 800 chars:\n%s\n' "$(printf '%s' "$login_page" | head -c 800)" >&2
+    return 1
+  fi
+  printf '%s' "$form_action"
+}
+
+# saml_acs_post <jar> <form_action> <user> <pass> : posts credentials to Keycloak, parses the returned
+# SAML POST-binding auto-submit form, and posts SAMLResponse to the plugin's ACS. Prints the ACS response
+# body on stdout; diagnostics to stderr. Returns non-zero if any leg fails to produce what the next needs.
+saml_acs_post() {
+  jar="$1"; form_action="$2"; user="$3"; pass="$4"
+  post_page="$(curl -sSL -c "$jar" -b "$jar" \
+    --data-urlencode "username=$user" \
+    --data-urlencode "password=$pass" \
+    --data-urlencode "credentialId=" \
+    "$form_action")" || { printf 'saml_acs_post: credential POST failed\n' >&2; return 1; }
+  acs_url="$(printf '%s' "$post_page" | grep -oE 'form[^>]*action="[^"]*"' | head -1 | sed -E 's/.*action="//; s/".*//; s/&amp;/\&/g')"
+  saml_resp="$(printf '%s' "$post_page" | grep -oE 'name="SAMLResponse"[^>]*value="[^"]*"' | head -1 | sed -E 's/.*value="//; s/".*//')"
+  relay="$(printf '%s' "$post_page" | grep -oE 'name="RelayState"[^>]*value="[^"]*"' | head -1 | sed -E 's/.*value="//; s/".*//')"
+  if [ -z "$acs_url" ] || [ -z "$saml_resp" ]; then
+    printf 'saml_acs_post: could not parse SAMLResponse form (acs=%s, resp_len=%s); first 800 chars:\n%s\n' "$acs_url" "${#saml_resp}" "$(printf '%s' "$post_page" | head -c 800)" >&2
+    return 1
+  fi
+  printf 'saml_acs_post: posting SAMLResponse to %s\n' "$acs_url" >&2
+  if [ -n "$relay" ]; then
+    curl -sS -X POST "$acs_url" --data-urlencode "SAMLResponse=$saml_resp" --data-urlencode "RelayState=$relay"
+  else
+    curl -sS -X POST "$acs_url" --data-urlencode "SAMLResponse=$saml_resp"
+  fi
+}
+
+# --------------------------------------------------------------------------------------------------
+# Phase 7 — configure the SAML provider (IdP signing cert fetched from Keycloak's SAML descriptor)
+# --------------------------------------------------------------------------------------------------
+log "== Configuring SAML provider '$PROVIDER' =="
+DESCRIPTOR="$(curl -fsS "$KEYCLOAK/realms/$REALM/protocol/saml/descriptor")" || die "SAML: descriptor fetch failed"
+IDP_CERT="$(printf '%s' "$DESCRIPTOR" | tr -d '\n\r' | grep -oiE '<[a-z0-9]*:?X509Certificate>[^<]*' | head -1 | sed -E 's/.*X509Certificate>//' | tr -d ' \t')"
+[ -n "$IDP_CERT" ] || die "SAML: could not extract the IdP signing certificate from the descriptor"
+log "SAML IdP signing certificate captured (${#IDP_CERT} base64 chars)"
+
+SAML_CONFIG="$(cat <<JSON
+{
+  "SamlEndpoint": "$KEYCLOAK/realms/$REALM/protocol/saml",
+  "SamlClientId": "jellyfin-saml",
+  "SamlCertificate": "$IDP_CERT",
+  "Enabled": true,
+  "EnableAuthorization": true,
+  "Roles": ["jellyfin-access"]
+}
+JSON
+)"
+SADD_STATUS="$(curl -sS -o /tmp/samladd.out -w '%{http_code}' -X POST "$JELLYFIN/sso/SAML/Add/$PROVIDER" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: MediaBrowser Token=\"$ADMIN_TOKEN\"" \
+  -d "$SAML_CONFIG")" || true
+if [ "$SADD_STATUS" != "200" ] && [ "$SADD_STATUS" != "204" ]; then
+  log "SAML/Add returned HTTP $SADD_STATUS: $(cat /tmp/samladd.out 2>/dev/null)"
+  die "SAML/Add failed"
+fi
+SNAMES="$(curl -fsS "$JELLYFIN/sso/SAML/GetNames")" || die "SAML GetNames failed"
+log "SAML GetNames => $SNAMES"
+if printf '%s' "$SNAMES" | jq -e --arg p "$PROVIDER" 'index($p)' >/dev/null 2>&1; then
+  pass "SAML provider '$PROVIDER' is listed by SAML/GetNames"
+else
+  fail "SAML provider '$PROVIDER' not listed by SAML/GetNames"
+fi
+
+# --------------------------------------------------------------------------------------------------
+# Phase 8 — full SAML round-trip for carol (milestone 4)
+# --------------------------------------------------------------------------------------------------
+log "== SAML round-trip: carol (expect success) =="
+JAR_S="$(mktemp)"
+SHDR="$(mktemp)"
+SFORM="$(saml_authorize "$JAR_S" "$SHDR")" || die "carol: could not reach the Keycloak SAML login form"
+SBIND="$(grep -i '^set-cookie:' "$SHDR" 2>/dev/null | grep -o "$SAML_BINDING_COOKIE_NAME=[^;]*" | head -1 | cut -d= -f2-)"
+[ -n "$SBIND" ] || die "carol: /start set no SAML browser-binding cookie"
+
+ACS_PAGE="$(saml_acs_post "$JAR_S" "$SFORM" "carol" "carol")" || die "carol: SAML login/ACS leg failed"
+STOKEN="$(printf '%s' "$ACS_PAGE" | grep -oE 'var data = "[^"]*"' | head -1 | sed -e 's/^var data = "//' -e 's/"$//')"
+if [ -z "$STOKEN" ]; then
+  log "carol: ACS response carried no login token; first 600 chars: $(printf '%s' "$ACS_PAGE" | head -c 600)"
+  die "carol: the ACS callback did not mint a login-outcome token (signature/audience/role gate?)"
+fi
+
+# Redeem the token at the same-origin SAML/Auth mint leg, presenting the SAML binding cookie explicitly.
+SAUTH="$(curl -fsS -H "Cookie: $SAML_BINDING_COOKIE_NAME=$SBIND" -X POST "$JELLYFIN/sso/SAML/Auth/$PROVIDER" \
+  -H "Content-Type: application/json" \
+  -d "{\"deviceId\":\"$DEVICE_ID\",\"appName\":\"Jellyfin Web\",\"appVersion\":\"10.8.0\",\"deviceName\":\"$DEVICE\",\"data\":\"$STOKEN\"}")" || die "carol: SAML/Auth failed"
+S_JF_TOKEN="$(printf '%s' "$SAUTH" | jq -r '.AccessToken')"
+S_JF_USER="$(printf '%s' "$SAUTH" | jq -r '.User.Name')"
+if [ -n "$S_JF_TOKEN" ] && [ "$S_JF_TOKEN" != "null" ]; then
+  pass "carol: Jellyfin session token minted via SAML (user='$S_JF_USER')"
+else
+  fail "carol: SAML/Auth did not mint a session token"
+fi
+
+if [ -n "${S_JF_TOKEN:-}" ] && [ "$S_JF_TOKEN" != "null" ]; then
+  SME="$(curl -fsS "$JELLYFIN/Users/Me" -H "Authorization: MediaBrowser Token=\"$S_JF_TOKEN\"")" || SME=""
+  SME_NAME="$(printf '%s' "$SME" | jq -r '.Name // empty' 2>/dev/null || true)"
+  if [ "$SME_NAME" = "carol" ]; then
+    pass "carol: SAML session token works against GET /Users/Me (Name='carol')"
+  else
+    fail "carol: GET /Users/Me did not return the carol user (got '$SME_NAME')"
+  fi
+fi
+
+# --------------------------------------------------------------------------------------------------
+# Phase 9 — SAML role-gate negative: dave is refused
+# --------------------------------------------------------------------------------------------------
+log "== SAML round-trip: dave (expect role-gate refusal) =="
+JAR_SD="$(mktemp)"
+SHDR_D="$(mktemp)"
+if SFORM_D="$(saml_authorize "$JAR_SD" "$SHDR_D")"; then
+  # dave authenticates at Keycloak, but the assertion carries no jellyfin-access role, so the ACS
+  # callback denies (no login-outcome token is minted). A token here would be a role-gate failure.
+  ACS_PAGE_D="$(saml_acs_post "$JAR_SD" "$SFORM_D" "dave" "dave" || true)"
+  DTOKEN="$(printf '%s' "$ACS_PAGE_D" | grep -oE 'var data = "[^"]*"' | head -1 | sed -e 's/^var data = "//' -e 's/"$//')"
+  if [ -n "$DTOKEN" ]; then
+    fail "dave: the ACS callback minted a token — the SAML role gate did NOT refuse a role-less user"
+  else
+    pass "dave: SAML callback refused the role-less user (role gate holds)"
+  fi
+else
+  fail "dave: could not reach the Keycloak SAML login form"
+fi
+
+# --------------------------------------------------------------------------------------------------
+# Phase 10 — SAML fail-closed negative: a replayed one-time login-outcome token is refused
+# --------------------------------------------------------------------------------------------------
+log "== SAML fail-closed negative: replayed token (expect refusal) =="
+if [ -n "${STOKEN:-}" ]; then
+  # carol's STOKEN was already redeemed once in Phase 8; replaying it must be rejected.
+  if curl -fsS -o /dev/null -H "Cookie: $SAML_BINDING_COOKIE_NAME=$SBIND" -X POST "$JELLYFIN/sso/SAML/Auth/$PROVIDER" \
+      -H "Content-Type: application/json" \
+      -d "{\"deviceId\":\"$DEVICE_ID\",\"appName\":\"Jellyfin Web\",\"appVersion\":\"10.8.0\",\"deviceName\":\"$DEVICE\",\"data\":\"$STOKEN\"}" 2>/dev/null; then
+    fail "SAML: replayed login-outcome token was accepted — one-time-use is NOT enforced"
+  else
+    pass "SAML: replayed login-outcome token refused (one-time-use holds)"
+  fi
+else
+  fail "SAML replay check skipped: no token captured from the carol round-trip"
+fi
+
 # --------------------------------------------------------------------------------------------------
 # Summary
 # --------------------------------------------------------------------------------------------------

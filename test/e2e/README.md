@@ -15,10 +15,13 @@ be run locally with one command once you have built the plugin.
   configured, enabled provider.
 - A **full OIDC round-trip** for `alice` (challenge → Keycloak login → callback → `OID/Auth`) mints a
   Jellyfin session token that works against `GET /Users/Me`.
-- **Role gating**: `bob`, who lacks the `jellyfin-access` role, is refused at the callback.
-- A **fail-closed negative**: a replayed one-time state token is refused.
-
-SAML round-trips are added in a later milestone.
+- A **full SAML round-trip** for `carol` (challenge → Keycloak login → ACS POST → `SAML/Auth`) mints a
+  Jellyfin session token that works against `GET /Users/Me` — exercising the packaged SAML crypto DLLs
+  (#181) and the signed-assertion validation path.
+- **Role gating**: `bob` (OIDC) and `dave` (SAML), who lack the `jellyfin-access` role, are refused at
+  the callback.
+- **Fail-closed negatives**: a replayed one-time OIDC state, and a replayed one-time SAML login-outcome
+  token, are both refused.
 
 ## Architecture (avoiding the issuer-hostname trap)
 
@@ -31,9 +34,13 @@ them in its browser role:
 - Jellyfin: `http://jellyfin:8096`
 - plugin redirect: `http://jellyfin:8096/sso/OID/redirect/keycloak`
 
-The Keycloak realm (`test/e2e/keycloak/e2e-realm.json`) defines the `jellyfin-oidc` client, the
-`jellyfin-access` realm role, and the users `alice` (in the role) and `bob` (not). A protocol mapper
-emits the realm roles into the id_token as `realm_access.roles`, which the plugin's `RoleClaim` reads.
+The Keycloak realm (`test/e2e/keycloak/e2e-realm.json`) defines the `jellyfin-oidc` and `jellyfin-saml`
+clients, the `jellyfin-access` realm role, and four users: `alice`/`carol` (in the role) and
+`bob`/`dave` (not). OIDC uses `alice`/`bob`; SAML uses the distinct `carol`/`dave` so the two protocols
+never contend over the same Jellyfin account. A protocol mapper emits the realm roles into the id_token
+as `realm_access.roles` (read by the plugin's OIDC `RoleClaim`) and into the SAML assertion as a `Role`
+attribute (read by the SAML role gate). The SAML IdP signing certificate is fetched at run time from
+Keycloak's SAML descriptor and configured through the plugin's `SAML/Add` admin API.
 
 ## Run it locally
 

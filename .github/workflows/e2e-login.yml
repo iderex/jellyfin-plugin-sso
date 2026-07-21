@@ -1,7 +1,7 @@
 # End-to-end SSO login harness (#720/#727). Boots a real Jellyfin 10.11 + Keycloak stack with the
-# PACKAGED plugin zip installed, and drives full OIDC login round-trips headlessly, asserting a
-# Jellyfin session token is minted and usable, that the role gate refuses a role-less user, and that
-# a replayed one-time state is refused. It supplements — never replaces — the manual Release-QA
+# PACKAGED plugin zip installed, and drives full OIDC and SAML login round-trips headlessly, asserting a
+# Jellyfin session token is minted and usable, that the role gate refuses a role-less user, and that a
+# replayed one-time state/token is refused. It supplements — never replaces — the manual Release-QA
 # checklist. The maintainer's local Docker is currently broken by a version bug, so this runs on the
 # GitHub runners' working Docker; it also runs locally once Docker is restored (see test/e2e/README.md).
 name: E2E Login Harness
@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   e2e:
-    name: OIDC round-trip (Jellyfin + Keycloak)
+    name: OIDC + SAML round-trip (Jellyfin + Keycloak)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
