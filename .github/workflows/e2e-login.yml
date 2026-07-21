@@ -1,0 +1,87 @@
+# End-to-end SSO login harness (#720/#727). Boots a real Jellyfin 10.11 + Keycloak stack with the
+# PACKAGED plugin zip installed, and drives full OIDC and SAML login round-trips headlessly, asserting a
+# Jellyfin session token is minted and usable, that the role gate refuses a role-less user, and that a
+# replayed one-time state/token is refused. It supplements — never replaces — the manual Release-QA
+# checklist. The maintainer's local Docker is currently broken by a version bug, so this runs on the
+# GitHub runners' working Docker; it also runs locally once Docker is restored (see test/e2e/README.md).
+name: E2E Login Harness
+
+on:
+  # Nightly, so a real-stack OIDC+SAML login pass is per-day evidence (#720 gate-(a) support), offset
+  # from the Scorecard (27 4) and Stryker (41 5) crons so the scheduled runs do not contend for a runner.
+  schedule:
+    - cron: "17 3 * * *"
+  # Re-validate whenever the harness itself changes (a PR touching the compose/realm/driver or this
+  # workflow), so the E2E stays green as it evolves — without paying the ~10-min Docker run on every push.
+  pull_request:
+    paths:
+      - "test/e2e/**"
+      - ".github/workflows/e2e-login.yml"
+  # On-demand from any branch.
+  workflow_dispatch:
+
+# Deny-all at the workflow level; the single job reads the repo to build the plugin and needs nothing else.
+permissions: {}
+
+# Cancel a superseded run on the same ref — this is a test harness, not a publish, so cancelling an
+# obsolete run is safe.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: OIDC + SAML round-trip (Jellyfin + Keycloak)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Build packaged plugin (JPRM)
+        uses: oddstr13/jellyfin-plugin-repository-manager@9497a0a499416cc572ed2e07a391d9f943a37b4d # v1.1.1
+        id: jprm
+        with:
+          dotnet-target: "net9.0"
+
+      - name: Install the packaged plugin into the Jellyfin config
+        # Unpack the exact packaged zip the release ships (meta.json + the plugin and its
+        # non-host-provided dependency DLLs) into the bind-mounted Jellyfin plugins directory, so the
+        # harness exercises the SAME artifact users install — including the packaged crypto DLL load
+        # path on Linux (#181) that `dotnet test` cannot see. World-writable so the Jellyfin container
+        # can persist the plugin's own provider configuration under /config regardless of its uid.
+        env:
+          ARTIFACT: ${{ steps.jprm.outputs.artifact }}
+        run: |
+          set -euo pipefail
+          plugin_dir="test/e2e/jellyfin/config/plugins/SSO-Auth"
+          mkdir -p "$plugin_dir"
+          unzip -o "$ARTIFACT" -d "$plugin_dir"
+          echo "Installed plugin files:"
+          ls -la "$plugin_dir"
+          chmod -R 0777 test/e2e/jellyfin
+
+      - name: Run the E2E login harness
+        run: |
+          set -euo pipefail
+          docker compose -f test/e2e/docker-compose.yml up \
+            --abort-on-container-exit --exit-code-from harness
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: |
+          echo "===== docker compose logs ====="
+          docker compose -f test/e2e/docker-compose.yml logs --no-color || true
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f test/e2e/docker-compose.yml down -v || true

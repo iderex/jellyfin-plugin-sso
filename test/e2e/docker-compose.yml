@@ -1,0 +1,86 @@
+# End-to-end SSO login harness (#720/#727). Boots a real Jellyfin 10.11 server with the
+# packaged plugin installed, a real Keycloak identity provider (OIDC, and later SAML), and a
+# small harness container that drives full login round-trips against them.
+#
+# Every service shares one Docker network and is addressed by its service-DNS name, so the
+# OIDC issuer/redirect URLs are byte-identical whether Jellyfin resolves them server-to-server
+# (discovery, token exchange) or the harness resolves them in its browser role. That is what
+# avoids the classic issuer-hostname mismatch: issuer is always http://keycloak:8080/realms/e2e,
+# Jellyfin is always http://jellyfin:8096, and the plugin redirect is always
+# http://jellyfin:8096/sso/OID/redirect/keycloak.
+#
+# Local run (see test/e2e/README.md for the plugin-build prerequisite):
+#   docker compose -f test/e2e/docker-compose.yml up --build \
+#     --abort-on-container-exit --exit-code-from harness
+name: sso-e2e
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev", "--import-realm", "--http-port=8080"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HTTP_ENABLED: "true"
+      # Dev mode already derives the issuer from the request host (keycloak:8080 for both the
+      # server-to-server and browser legs); strict hostname off keeps that behaviour explicit.
+      KC_HOSTNAME_STRICT: "false"
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - ./keycloak/e2e-realm.json:/opt/keycloak/data/import/e2e-realm.json:ro
+    networks:
+      - ssonet
+
+  jellyfin:
+    # Match the Jellyfin version the plugin is COMPILED against (SSO-Auth.csproj JellyfinVersion,
+    # currently 10.11.11): the packaged plugin references MediaBrowser.Controller 10.11.11.0, and .NET
+    # will not bind an assembly reference DOWN to an older patch, so an older 10.11.0 server refuses to
+    # load the plugin. targetAbi (10.11.0.0) governs the API surface the abi-floor job checks, not the
+    # embedded reference version the runtime binds against.
+    image: jellyfin/jellyfin:10.11.11
+    environment:
+      # A container-local cache/data root keeps the writable state off the bind-mounted /config
+      # so only the plugin drop and the plugin's own configuration live under ./jellyfin/config.
+      JELLYFIN_CACHE_DIR: /cache
+    volumes:
+      # The packaged plugin zip is unpacked into ./jellyfin/config/plugins/<Name>_<ver>/ before
+      # the stack comes up (the workflow does this; locally, see the README). /config must be
+      # writable — the plugin persists its provider configuration under /config/plugins/configurations/.
+      - ./jellyfin/config:/config
+    networks:
+      - ssonet
+
+  harness:
+    image: alpine:3.20
+    depends_on:
+      - jellyfin
+      - keycloak
+    environment:
+      JELLYFIN_URL: http://jellyfin:8096
+      KEYCLOAK_URL: http://keycloak:8080
+      REALM: e2e
+      PROVIDER: keycloak
+      OIDC_CLIENT_ID: jellyfin-oidc
+      OIDC_CLIENT_SECRET: jellyfin-oidc-secret
+      JF_ADMIN_USER: e2eadmin
+      JF_ADMIN_PASS: e2e-admin-pw
+    volumes:
+      - ./harness:/harness:ro
+    command: ["sh", "/harness/harness.sh"]
+    networks:
+      - ssonet
+
+networks:
+  ssonet:
+    driver: bridge
+    ipam:
+      config:
+        # The plugin hardens its outbound OIDC backchannel (discovery/token/JWKS) with an SSRF guard
+        # that refuses to connect to any RFC1918 / loopback / CGNAT address (IpAddressClassifier) — a
+        # production defense we must NOT weaken. Every default Docker subnet (10/8, 172.16/12,
+        # 192.168/16) is blocked by it, so a containerised IdP on a default network is unreachable and
+        # discovery fails closed. Put this test network on an IP range the guard treats as public so the
+        # containerised Keycloak is reachable exactly as a real public IdP would be, with the
+        # hostname-based issuer (http://keycloak:8080/realms/e2e) preserved. 11.0.0.0/24 is not routed
+        # anywhere the stack needs; only the three containers use it.
+        - subnet: 11.0.0.0/24

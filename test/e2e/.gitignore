@@ -1,0 +1,3 @@
+# The Jellyfin server state and the unpacked plugin are generated at run time (the workflow, or the
+# local build step in test/e2e/README.md) — never committed.
+jellyfin/config/
