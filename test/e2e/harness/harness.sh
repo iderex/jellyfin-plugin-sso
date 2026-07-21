@@ -328,7 +328,11 @@ saml_authorize() {
 
 # saml_acs_post <jar> <form_action> <user> <pass> : posts credentials to Keycloak, parses the returned
 # SAML POST-binding auto-submit form, and posts SAMLResponse to the plugin's ACS. Prints the ACS response
-# body on stdout; diagnostics to stderr. Returns non-zero if any leg fails to produce what the next needs.
+# body on stdout, with a trailing  __ACSHTTP__<code>  marker line carrying the ACS HTTP status (so a caller
+# can tell an actual plugin-side deny — a reached-ACS non-2xx — apart from a token-less body a broken leg
+# would also produce); diagnostics go to stderr. Returns NON-ZERO if it cannot get through the Keycloak
+# login, cannot parse the SAMLResponse form, or cannot connect to the ACS — i.e. a genuine transport break
+# is a hard failure the caller must red on, never something to swallow as a "refusal".
 saml_acs_post() {
   jar="$1"; form_action="$2"; user="$3"; pass="$4"
   post_page="$(curl -sSL -c "$jar" -b "$jar" \
@@ -344,10 +348,13 @@ saml_acs_post() {
     return 1
   fi
   printf 'saml_acs_post: posting SAMLResponse to %s\n' "$acs_url" >&2
+  # -w appends the ACS HTTP status so the caller can assert an actual plugin refusal; NO -f, so a
+  # non-2xx deny still returns the body+marker (a role-gate refusal is an expected outcome here, not a
+  # transport error). A real connection failure to the ACS still exits non-zero and reds the caller.
   if [ -n "$relay" ]; then
-    curl -sS -X POST "$acs_url" --data-urlencode "SAMLResponse=$saml_resp" --data-urlencode "RelayState=$relay"
+    curl -sS -w '\n__ACSHTTP__%{http_code}' -X POST "$acs_url" --data-urlencode "SAMLResponse=$saml_resp" --data-urlencode "RelayState=$relay"
   else
-    curl -sS -X POST "$acs_url" --data-urlencode "SAMLResponse=$saml_resp"
+    curl -sS -w '\n__ACSHTTP__%{http_code}' -X POST "$acs_url" --data-urlencode "SAMLResponse=$saml_resp"
   fi
 }
 
@@ -432,18 +439,29 @@ fi
 log "== SAML round-trip: dave (expect role-gate refusal) =="
 JAR_SD="$(mktemp)"
 SHDR_D="$(mktemp)"
-if SFORM_D="$(saml_authorize "$JAR_SD" "$SHDR_D")"; then
-  # dave authenticates at Keycloak, but the assertion carries no jellyfin-access role, so the ACS
-  # callback denies (no login-outcome token is minted). A token here would be a role-gate failure.
-  ACS_PAGE_D="$(saml_acs_post "$JAR_SD" "$SFORM_D" "dave" "dave" || true)"
-  DTOKEN="$(printf '%s' "$ACS_PAGE_D" | grep -oE 'var data = "[^"]*"' | head -1 | sed -e 's/^var data = "//' -e 's/"$//')"
-  if [ -n "$DTOKEN" ]; then
-    fail "dave: the ACS callback minted a token — the SAML role gate did NOT refuse a role-less user"
-  else
-    pass "dave: SAML callback refused the role-less user (role gate holds)"
-  fi
+# dave must run the SAME real round-trip carol does — reach the Keycloak SAML login form, authenticate,
+# and drive a genuine SAMLResponse POST to the plugin's ACS — and ONLY THEN be refused by the plugin. A
+# broken transport leg (no login form, failed Keycloak login, unparseable SAMLResponse, or an
+# unreachable ACS) must RED the run, not masquerade as a role-gate refusal: a token-less body from a
+# broken leg is indistinguishable from a deny unless we first prove the round-trip actually happened.
+SFORM_D="$(saml_authorize "$JAR_SD" "$SHDR_D")" || die "dave: could not reach the Keycloak SAML login form"
+# saml_acs_post returns non-zero only when it cannot get dave through Keycloak or reach the ACS at all;
+# a reached-ACS (any HTTP status, including the expected deny) returns 0 with the body + status marker.
+ACS_PAGE_D="$(saml_acs_post "$JAR_SD" "$SFORM_D" "dave" "dave")" || die "dave: could not authenticate at Keycloak or reach the SAML ACS (broken negative test)"
+ACS_STATUS_D="$(printf '%s' "$ACS_PAGE_D" | sed -n 's/.*__ACSHTTP__\([0-9][0-9]*\)$/\1/p')"
+DTOKEN="$(printf '%s' "$ACS_PAGE_D" | grep -oE 'var data = "[^"]*"' | head -1 | sed -e 's/^var data = "//' -e 's/"$//')"
+log "dave: reached the SAML ACS; it returned HTTP ${ACS_STATUS_D:-<none>}"
+# The refusal must be an ACTUAL plugin-side deny after a real ACS round-trip: a non-2xx status AND no
+# login-outcome token minted. A minted token is a role-gate failure; a 2xx (or an unreadable status) is
+# a broken test, not a proven refusal.
+if [ -n "$DTOKEN" ]; then
+  fail "dave: the ACS callback minted a login-outcome token — the SAML role gate did NOT refuse a role-less user"
+elif [ -z "$ACS_STATUS_D" ]; then
+  fail "dave: could not read the ACS HTTP status — cannot prove a plugin-side refusal (broken negative test)"
+elif [ "$ACS_STATUS_D" -ge 200 ] && [ "$ACS_STATUS_D" -lt 300 ]; then
+  fail "dave: the ACS returned $ACS_STATUS_D with no token — expected a non-2xx plugin refusal, not an ambiguous empty body"
 else
-  fail "dave: could not reach the Keycloak SAML login form"
+  pass "dave: SAML ACS refused the role-less user at the plugin (HTTP $ACS_STATUS_D, no token minted — role gate holds)"
 fi
 
 # --------------------------------------------------------------------------------------------------
