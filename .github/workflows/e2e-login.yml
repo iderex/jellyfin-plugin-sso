@@ -7,10 +7,17 @@
 name: E2E Login Harness
 
 on:
-  # Push-triggered on the harness branch so the compose flow can be iterated against real Docker in
-  # CI. workflow_dispatch allows an on-demand run from any branch.
-  push:
-    branches: ["feature/e2e-login-harness-720"]
+  # Nightly, so a real-stack OIDC+SAML login pass is per-day evidence (#720 gate-(a) support), offset
+  # from the Scorecard (27 4) and Stryker (41 5) crons so the scheduled runs do not contend for a runner.
+  schedule:
+    - cron: "17 3 * * *"
+  # Re-validate whenever the harness itself changes (a PR touching the compose/realm/driver or this
+  # workflow), so the E2E stays green as it evolves — without paying the ~10-min Docker run on every push.
+  pull_request:
+    paths:
+      - "test/e2e/**"
+      - ".github/workflows/e2e-login.yml"
+  # On-demand from any branch.
   workflow_dispatch:
 
 # Deny-all at the workflow level; the single job reads the repo to build the plugin and needs nothing else.
