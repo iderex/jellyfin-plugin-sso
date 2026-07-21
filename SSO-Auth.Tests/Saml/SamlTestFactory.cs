@@ -46,6 +46,8 @@ internal static class SamlTestFactory
     /// <param name="audience">When set, emits a Conditions/AudienceRestriction with this single Audience.</param>
     /// <param name="audiences">When set, emits a Conditions/AudienceRestriction with these Audiences (overrides audience).</param>
     /// <param name="scope">Which element to sign.</param>
+    /// <param name="sessionIndex">When set, emits an AuthnStatement carrying this SessionIndex attribute (#727, SLO-3a).</param>
+    /// <param name="includeAuthnStatement">When true, emits an AuthnStatement even without a sessionIndex (the absent-attribute case).</param>
     /// <param name="signWithSha1">When true, sign with RSA-SHA1/SHA1 digest (for weak-algorithm tests).</param>
     /// <param name="signingKeyBits">RSA signing-key size in bits; defaults to 2048. Set below the floor (e.g. 1024) for the minimum signing-key-strength tests (#733).</param>
     /// <returns>A fixture exposing the certificate and the signed document.</returns>
@@ -60,6 +62,8 @@ internal static class SamlTestFactory
         string? audience = null,
         string[]? audiences = null,
         SignatureScope scope = SignatureScope.Response,
+        string? sessionIndex = null,
+        bool includeAuthnStatement = false,
         bool signWithSha1 = false,
         bool signWithCommentsC14n = false,
         bool signWithInclusiveC14n = false,
@@ -157,6 +161,14 @@ internal static class SamlTestFactory
             ? "<saml:Advice><saml:Assertion ID=\"_advice\" Version=\"2.0\"><saml:Issuer>https://idp.example.com</saml:Issuer></saml:Assertion></saml:Advice>"
             : string.Empty;
 
+        // The AuthnStatement whose SessionIndex the Single Logout capture reads (#727, SLO-3a). Emitted with
+        // the attribute when sessionIndex is set, or bare (includeAuthnStatement) for the absent-attribute case.
+        var authnStatement = sessionIndex != null || includeAuthnStatement
+            ? "<saml:AuthnStatement" + (sessionIndex == null ? string.Empty : " SessionIndex=\"" + SecurityElement.Escape(sessionIndex) + "\"") + ">" +
+                  "<saml:AuthnContext><saml:AuthnContextClassRef>urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport</saml:AuthnContextClassRef></saml:AuthnContext>" +
+              "</saml:AuthnStatement>"
+            : string.Empty;
+
         var xml =
             "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" ID=\"" + responseId + "\" Version=\"2.0\"" + destinationAttribute + ">" +
                 "<saml:Assertion ID=\"" + assertionId + "\" Version=\"2.0\">" +
@@ -169,6 +181,7 @@ internal static class SamlTestFactory
                             subjectConfirmationData +
                         "</saml:SubjectConfirmation>" +
                     "</saml:Subject>" +
+                    authnStatement +
                     "<saml:AttributeStatement>" +
                         "<saml:Attribute Name=\"Role\"><saml:AttributeValue>" + SecurityElement.Escape(role) + "</saml:AttributeValue></saml:Attribute>" +
                     "</saml:AttributeStatement>" +

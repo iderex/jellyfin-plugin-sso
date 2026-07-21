@@ -11,6 +11,9 @@ using Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 using Jellyfin.Plugin.SSO_Auth.Api.Saml;
 using Jellyfin.Plugin.SSO_Auth.Api.Flows;
 using Jellyfin.Plugin.SSO_Auth.Config;
+using MediaBrowser.Controller.Authentication;
+using MediaBrowser.Controller.Session;
+using MediaBrowser.Model.Dto;
 using Microsoft.AspNetCore.Mvc;
 using NSubstitute;
 using Xunit;
@@ -75,6 +78,29 @@ public class SSOControllerSamlTokenTests
     }
 
     [Fact]
+    public async Task LoginRoundTrip_SingleLogoutOn_CapturesTheAssertionSessionIndex()
+    {
+        // SLO-3a (#727) end to end: the ACS callback reads the assertion's SessionIndex into the stored
+        // outcome, the token mint hands it to the shared completion tail as the SAML logout context (no
+        // id_token — SAML has none), and with EnableSingleLogout on the tail persists it keyed by the
+        // minted session id, so a later Single Logout request can resolve the session.
+        var fixture = SamlTestFactory.Create(nameId: "alice", sessionIndex: "_slo-session-1");
+        var harness = ProvisioningHarness(fixture, out _);
+        harness.Configuration.EnableSingleLogout = true;
+        harness.SessionManager.AuthenticateDirect(Arg.Any<AuthenticationRequest>())
+            .Returns(new AuthenticationResult { SessionInfo = new SessionInfoDto { Id = "session-key-slo" } });
+
+        var token = ExtractToken(harness.Controller.SamlCallback("adfs", formSamlResponse: fixture.EncodeResponse()));
+        Assert.IsType<OkObjectResult>(await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = token }));
+
+        Assert.True(harness.Configuration.LogoutSessions.ContainsKey("session-key-slo"));
+        var entry = harness.Configuration.LogoutSessions["session-key-slo"];
+        Assert.Equal("_slo-session-1", entry.SessionIndex);
+        Assert.Equal("adfs", entry.Provider);
+        Assert.Null(entry.IdToken);
+    }
+
+    [Fact]
     public async Task Token_IsSingleUse_ReplayRejectsWithoutSecondMint()
     {
         var fixture = SamlTestFactory.Create(nameId: "alice");
@@ -115,7 +141,7 @@ public class SSOControllerSamlTokenTests
         // it as out of its window, so it cannot mint even though its token is otherwise well-formed.
         var identity = TestIdentities.Saml("adfs", "alice", SamlAuthorizeStateBuilder.Build(new System.Collections.Generic.List<string>(), new SamlConfig()));
         var token = SamlOutcomeStore.NewToken();
-        SamlLoginService.SeedSamlOutcomeForTests(new SamlLoginOutcome(token, "adfs", identity, string.Empty, null, DateTime.UtcNow.AddHours(-1)));
+        SamlLoginService.SeedSamlOutcomeForTests(new SamlLoginOutcome(token, "adfs", identity, string.Empty, null, null, DateTime.UtcNow.AddHours(-1)));
 
         var result = Assert.IsType<ContentResult>(await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = token }));
         Assert.Equal(400, result.StatusCode);
@@ -180,7 +206,7 @@ public class SSOControllerSamlTokenTests
         SamlLoginService.SetSamlOutcomeStoreForTests(store);
         var filler = SamlOutcomeStore.NewToken();
         var fillerIdentity = TestIdentities.Saml("adfs", "filler", SamlAuthorizeStateBuilder.Build(new System.Collections.Generic.List<string>(), new SamlConfig()));
-        Assert.True(store.TryAdd(new SamlLoginOutcome(filler, "adfs", fillerIdentity, string.Empty, null, DateTime.UtcNow), out _));
+        Assert.True(store.TryAdd(new SamlLoginOutcome(filler, "adfs", fillerIdentity, string.Empty, null, null, DateTime.UtcNow), out _));
 
         // The callback is refused at the store cap — a fail-closed 500 — and the assertion's one-time replay
         // id is NOT consumed, because the reservation is checked ahead of the consume.

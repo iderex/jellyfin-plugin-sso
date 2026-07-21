@@ -338,6 +338,90 @@ public class SamlResponseTests
         Assert.Null(Load(fixture).GetNameID());
     }
 
+    // --- SessionIndex capture for Single Logout (#727, SLO-3a) ---
+
+    [Fact]
+    public void GetSessionIndex_ValidResponse_ReturnsSignedSessionIndex()
+    {
+        // The AuthnStatement sits inside the assertion, so the SessionIndex is signature-covered.
+        var fixture = SamlTestFactory.Create(sessionIndex: "_slo-session-42");
+        var response = Load(fixture);
+
+        Assert.True(response.IsValid());
+        Assert.Equal("_slo-session-42", response.GetSessionIndex());
+    }
+
+    [Fact]
+    public void GetSessionIndex_AuthnStatementWithoutSessionIndex_ReturnsNull()
+    {
+        // An IdP that emits an AuthnStatement without a SessionIndex simply yields no capture — null,
+        // never a throw (fail-safe: Single Logout is then unavailable for the session, nothing else).
+        var fixture = SamlTestFactory.Create(includeAuthnStatement: true);
+        Assert.Null(Load(fixture).GetSessionIndex());
+    }
+
+    [Fact]
+    public void GetSessionIndex_NoAuthnStatement_ReturnsNull()
+    {
+        var fixture = SamlTestFactory.Create();
+        Assert.Null(Load(fixture).GetSessionIndex());
+    }
+
+    [Fact]
+    public void GetSessionIndex_SecondAuthnStatement_IsNotConsulted()
+    {
+        // Session-index smuggling via a second statement: only the FIRST AuthnStatement is read, so a
+        // trailing statement carrying a different (attacker-chosen) index never becomes the captured value —
+        // neither when the first statement has its own index nor when it lacks the attribute entirely.
+        // GetSessionIndex reads the DOM, so no signature is needed here (same idiom as the multi-value
+        // Role test in this suite).
+        var firstIndexed =
+            "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" ID=\"_r\" Version=\"2.0\">" +
+                "<saml:Assertion ID=\"_a\" Version=\"2.0\">" +
+                    "<saml:Subject><saml:NameID>alice</saml:NameID></saml:Subject>" +
+                    "<saml:AuthnStatement SessionIndex=\"_genuine\" />" +
+                    "<saml:AuthnStatement SessionIndex=\"_smuggled\" />" +
+                "</saml:Assertion>" +
+            "</samlp:Response>";
+        using (var response = new SamlResponse(SamlFixture.ForeignCertificateBase64(), SamlFixture.Encode(firstIndexed)))
+        {
+            Assert.Equal("_genuine", response.GetSessionIndex());
+        }
+
+        var firstBare =
+            "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" ID=\"_r\" Version=\"2.0\">" +
+                "<saml:Assertion ID=\"_a\" Version=\"2.0\">" +
+                    "<saml:Subject><saml:NameID>alice</saml:NameID></saml:Subject>" +
+                    "<saml:AuthnStatement />" +
+                    "<saml:AuthnStatement SessionIndex=\"_smuggled\" />" +
+                "</saml:Assertion>" +
+            "</samlp:Response>";
+        using (var response = new SamlResponse(SamlFixture.ForeignCertificateBase64(), SamlFixture.Encode(firstBare)))
+        {
+            Assert.Null(response.GetSessionIndex());
+        }
+    }
+
+    [Fact]
+    public void GetSessionIndex_AuthnStatementInSecondAssertion_IsNotConsulted()
+    {
+        // Assertion[1] scoping, consistent with every other getter: an AuthnStatement smuggled into a
+        // SECOND assertion is never read (such a response is rejected by the single-assertion invariant
+        // anyway, but the getter must not widen its scope regardless).
+        var xml =
+            "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" ID=\"_r\" Version=\"2.0\">" +
+                "<saml:Assertion ID=\"_a\" Version=\"2.0\">" +
+                    "<saml:Subject><saml:NameID>alice</saml:NameID></saml:Subject>" +
+                "</saml:Assertion>" +
+                "<saml:Assertion ID=\"_b\" Version=\"2.0\">" +
+                    "<saml:AuthnStatement SessionIndex=\"_smuggled\" />" +
+                "</saml:Assertion>" +
+            "</samlp:Response>";
+        using var response = new SamlResponse(SamlFixture.ForeignCertificateBase64(), SamlFixture.Encode(xml));
+
+        Assert.Null(response.GetSessionIndex());
+    }
+
     [Fact]
     public void GetCustomAttributes_ValidResponse_ReturnsRole()
     {

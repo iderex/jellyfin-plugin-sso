@@ -73,7 +73,7 @@ internal sealed class LoginCompletionService
     /// <param name="config">The provider configuration governing authorization/folder/default-provider grants.</param>
     /// <param name="adoptionGate">The extra proof a same-named adoption must clear (#218).</param>
     /// <param name="remoteEndPointResolver">Resolves the normalized client IP for the activity log (#177); the controller reads it from <c>HttpContext</c> and passes it in so this tier stays HttpContext-free. Evaluated at the original point inside the minter — after avatar/persistence, and not at all on the fail-closed path.</param>
-    /// <param name="logoutContext">The optional Single Logout material captured at the callback (the id_token/sid, #727); persisted after the mint only when <c>EnableSingleLogout</c> is on. Null (the default, and the SAML path today) skips the capture.</param>
+    /// <param name="logoutContext">The optional Single Logout material captured at the callback (the OpenID id_token/sid or the SAML SessionIndex, #727); persisted after the mint only when <c>EnableSingleLogout</c> is on. Null (the default) skips the capture.</param>
     /// <returns>The HTTP result for the completed (or refused) login.</returns>
     internal async Task<ActionResult> CompleteAsync(
         VerifiedIdentity identity,
