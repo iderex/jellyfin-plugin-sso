@@ -1,9 +1,15 @@
-# End-to-end SSO login harness (#720/#727). Boots a real Jellyfin 10.11 + Keycloak stack with the
-# PACKAGED plugin zip installed, and drives full OIDC and SAML login round-trips headlessly, asserting a
-# Jellyfin session token is minted and usable, that the role gate refuses a role-less user, and that a
-# replayed one-time state/token is refused. It supplements — never replaces — the manual Release-QA
-# checklist. The maintainer's local Docker is currently broken by a version bug, so this runs on the
-# GitHub runners' working Docker; it also runs locally once Docker is restored (see test/e2e/README.md).
+# End-to-end SSO login harness (#720/#727/#919). Boots a real Jellyfin 10.11 + identity-provider stack with
+# the PACKAGED plugin zip installed, and drives full login round-trips headlessly, asserting a Jellyfin
+# session token is minted and usable, that the role gate refuses a role-less user, and that a replayed
+# one-time state/token is refused. It supplements — never replaces — the manual Release-QA checklist.
+#
+# Provider-matrix policy (#919): a PR touching the harness, the nightly run, and a manual dispatch exercise
+# ONLY the canonical Keycloak harness (there is deliberately no `push` trigger — the PR run already validated
+# it, and paying the ~10-min Docker run again on the merge commit is wasteful); the FULL provider matrix (one
+# entry per shipped test/e2e/<provider>/ harness) runs ONLY at a release and a beta-release, so the
+# cross-provider pass is release-gate evidence, not a per-commit cost. The maintainer's local Docker is
+# currently broken by a version bug, so this runs on
+# the GitHub runners' working Docker; it also runs locally once Docker is restored (see test/e2e/README.md).
 name: E2E Login Harness
 
 on:
@@ -17,10 +23,13 @@ on:
     paths:
       - "test/e2e/**"
       - ".github/workflows/e2e-login.yml"
-  # On-demand from any branch.
+  # The FULL provider matrix runs on a release AND a beta-release (a prerelease), never on a routine push.
+  release:
+    types: [published, prereleased]
+  # On-demand from any branch (runs the single-provider set).
   workflow_dispatch:
 
-# Deny-all at the workflow level; the single job reads the repo to build the plugin and needs nothing else.
+# Deny-all at the workflow level; the e2e job reads the repo to build the plugin and needs nothing else.
 permissions: {}
 
 # Cancel a superseded run on the same ref — this is a test harness, not a publish, so cancelling an
@@ -30,12 +39,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Choose which providers to run: the FULL matrix only on a release/beta-release; every other trigger
+  # (a PR touching the harness, the nightly schedule, a manual dispatch) runs just the one canonical
+  # Keycloak harness. A provider joins the release matrix by adding one { name, compose } object below, at its
+  # test/e2e/<provider>/ compose file — the matrix grows one line per issue (#919).
+  select:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - id: pick
+        env:
+          IS_RELEASE: ${{ github.event_name == 'release' }}
+        run: |
+          set -euo pipefail
+          keycloak='{"name":"Keycloak (OIDC + SAML)","compose":"test/e2e/docker-compose.yml"}'
+          # The full provider matrix (release/beta only). Append one object per shipped harness as each
+          # test/e2e/<provider>/ lands: #920 authentik, #921 authelia, #922 pocket-id, #923 kanidm,
+          # #924 zitadel, #925 dex. Until then the release run is the Keycloak harness alone.
+          if [ "$IS_RELEASE" = "true" ]; then
+            include="[$keycloak]"
+          else
+            include="[$keycloak]"
+          fi
+          echo "matrix={\"include\":$include}" >> "$GITHUB_OUTPUT"
+
   e2e:
-    name: OIDC + SAML round-trip (Jellyfin + Keycloak)
+    needs: select
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
+    strategy:
+      # One provider's failure must not cancel the others in the release matrix.
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.select.outputs.matrix) }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -71,17 +110,23 @@ jobs:
           chmod -R 0777 test/e2e/jellyfin
 
       - name: Run the E2E login harness
+        env:
+          COMPOSE: ${{ matrix.compose }}
         run: |
           set -euo pipefail
-          docker compose -f test/e2e/docker-compose.yml up \
+          docker compose -f "$COMPOSE" up \
             --abort-on-container-exit --exit-code-from harness
 
       - name: Dump container logs on failure
         if: failure()
+        env:
+          COMPOSE: ${{ matrix.compose }}
         run: |
           echo "===== docker compose logs ====="
-          docker compose -f test/e2e/docker-compose.yml logs --no-color || true
+          docker compose -f "$COMPOSE" logs --no-color || true
 
       - name: Tear down
         if: always()
-        run: docker compose -f test/e2e/docker-compose.yml down -v || true
+        env:
+          COMPOSE: ${{ matrix.compose }}
+        run: docker compose -f "$COMPOSE" down -v || true
