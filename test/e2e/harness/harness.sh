@@ -30,6 +30,14 @@ DEVICE_ID="e2e-harness-device"
 VERSION="1.0.0"
 EMBY_AUTH="MediaBrowser Client=\"$CLIENT\", Device=\"$DEVICE\", DeviceId=\"$DEVICE_ID\", Version=\"$VERSION\""
 
+# The plugin's browser-binding cookie (#326). It is always marked Secure (every real OpenID deployment is
+# HTTPS at the browser edge), so over the harness's plaintext http, curl stores it but will NOT send it
+# back. We therefore capture its value from the /start response and present it EXPLICITLY as a Cookie
+# header on the callback and OID/Auth legs — curl does not enforce Secure on a manually-set header, and the
+# server reads the cookie by name regardless of the __Host- prefix. This exercises the real binding check
+# without weakening the production Secure/__Host- policy.
+BINDING_COOKIE_NAME="__Host-sso_oid_state_binding"
+
 FAILURES=0
 log()  { printf '%s\n' "$*"; }
 pass() { printf 'PASS: %s\n' "$*"; }
@@ -154,13 +162,20 @@ fi
 # --------------------------------------------------------------------------------------------------
 # OIDC browser-role helpers
 # --------------------------------------------------------------------------------------------------
-# oidc_authorize <cookiejar> : drives start -> keycloak login page, prints the login form action URL
-# on stdout. ALL diagnostics go to stderr so they are not captured by the caller's $(...) and are
+# extract_binding <headers_file> : prints the browser-binding cookie value from a /start response's
+# Set-Cookie headers.
+extract_binding() {
+  grep -i '^set-cookie:' "$1" 2>/dev/null | grep -o "$BINDING_COOKIE_NAME=[^;]*" | head -1 | cut -d= -f2-
+}
+
+# oidc_authorize <cookiejar> <start_headers_file> : drives start -> keycloak login page, prints the login
+# form action URL on stdout and writes the /start response headers (carrying the binding Set-Cookie) to the
+# headers file. ALL diagnostics go to stderr so they are not captured by the caller's $(...) and are
 # visible in the container log.
 oidc_authorize() {
-  jar="$1"
+  jar="$1"; start_hdr="$2"
   # /start must 302 to the IdP authorize endpoint.
-  start_out="$(curl -sS -o /dev/null -c "$jar" -b "$jar" -w '%{http_code} %{redirect_url}' "$JELLYFIN/sso/OID/start/$PROVIDER")"
+  start_out="$(curl -sS -D "$start_hdr" -o /dev/null -c "$jar" -b "$jar" -w '%{http_code} %{redirect_url}' "$JELLYFIN/sso/OID/start/$PROVIDER")"
   start_code="${start_out%% *}"
   auth_url="${start_out#* }"
   printf 'oidc_authorize: /start -> HTTP %s location=%s\n' "$start_code" "$auth_url" >&2
@@ -187,7 +202,10 @@ oidc_authorize() {
 # --------------------------------------------------------------------------------------------------
 log "== OIDC round-trip: alice (expect success) =="
 JAR="$(mktemp)"
-FORM_ACTION="$(oidc_authorize "$JAR")" || die "alice: could not reach keycloak login form"
+START_HDR="$(mktemp)"
+FORM_ACTION="$(oidc_authorize "$JAR" "$START_HDR")" || die "alice: could not reach keycloak login form"
+BINDING="$(extract_binding "$START_HDR")"
+[ -n "$BINDING" ] || die "alice: /start set no browser-binding cookie"
 
 # Post alice's credentials; Keycloak 302s back to the plugin callback with code + state.
 CB_URL="$(curl -fsS -c "$JAR" -b "$JAR" -o /dev/null -w '%{redirect_url}' \
@@ -201,15 +219,16 @@ case "$CB_URL" in
   *) die "alice: unexpected callback URL: $CB_URL" ;;
 esac
 
-# Follow the callback WITH the binding cookie so the plugin promotes the state to redeemable, and
-# capture the intermediate auth page. The page embeds  var data = "<state>";  which is exactly what
-# a real browser posts to OID/Auth.
-AUTH_PAGE="$(curl -fsS -c "$JAR" -b "$JAR" "$CB_URL")" || die "alice: callback did not return the auth page"
+# Follow the callback WITH the binding cookie (presented explicitly — see BINDING_COOKIE_NAME above) so
+# the plugin's browser-binding check passes and it promotes the state to redeemable, and capture the
+# intermediate auth page. The page embeds  var data = "<state>";  which is exactly what a real browser
+# posts to OID/Auth.
+AUTH_PAGE="$(curl -fsS -H "Cookie: $BINDING_COOKIE_NAME=$BINDING" "$CB_URL")" || die "alice: callback did not return the auth page"
 STATE="$(printf '%s' "$AUTH_PAGE" | grep -oE 'var data = "[^"]*"' | head -1 | sed -e 's/^var data = "//' -e 's/"$//')"
 [ -n "$STATE" ] || die "alice: could not extract state token from the auth page"
 
 # Post to OID/Auth with the binding cookie -> the minted Jellyfin session (AuthenticationResult).
-AUTH_RESULT="$(curl -fsS -c "$JAR" -b "$JAR" -X POST "$JELLYFIN/sso/OID/Auth/$PROVIDER" \
+AUTH_RESULT="$(curl -fsS -H "Cookie: $BINDING_COOKIE_NAME=$BINDING" -X POST "$JELLYFIN/sso/OID/Auth/$PROVIDER" \
   -H "Content-Type: application/json" \
   -d "{\"deviceId\":\"$DEVICE_ID\",\"appName\":\"Jellyfin Web\",\"appVersion\":\"10.8.0\",\"deviceName\":\"$DEVICE\",\"data\":\"$STATE\"}")" || die "alice: OID/Auth failed"
 JF_TOKEN="$(printf '%s' "$AUTH_RESULT" | jq -r '.AccessToken')"
@@ -236,7 +255,9 @@ fi
 # --------------------------------------------------------------------------------------------------
 log "== OIDC round-trip: bob (expect role-gate refusal) =="
 JAR_BOB="$(mktemp)"
-if FORM_ACTION_BOB="$(oidc_authorize "$JAR_BOB")"; then
+START_HDR_BOB="$(mktemp)"
+if FORM_ACTION_BOB="$(oidc_authorize "$JAR_BOB" "$START_HDR_BOB")"; then
+  BINDING_BOB="$(extract_binding "$START_HDR_BOB")"
   CB_URL_BOB="$(curl -fsS -c "$JAR_BOB" -b "$JAR_BOB" -o /dev/null -w '%{redirect_url}' \
     --data-urlencode "username=bob" \
     --data-urlencode "password=bob" \
@@ -245,9 +266,11 @@ if FORM_ACTION_BOB="$(oidc_authorize "$JAR_BOB")"; then
   if [ -z "$CB_URL_BOB" ]; then
     fail "bob: Keycloak did not redirect back (authentication itself failed unexpectedly)"
   else
-    # The callback must NOT return the success auth page: the role gate denies bob, so the plugin
-    # returns a non-2xx error page. curl -f makes a 4xx a non-zero exit.
-    if curl -fsS -o /dev/null -c "$JAR_BOB" -b "$JAR_BOB" "$CB_URL_BOB" 2>/dev/null; then
+    # The callback must NOT return the success auth page: bob authenticates at Keycloak, but the role
+    # gate denies him, so the plugin returns a non-2xx error page (curl -f makes a 4xx a non-zero exit).
+    # The binding cookie is presented, so this isolates the ROLE gate — a refusal here is the role gate,
+    # not a binding miss.
+    if curl -fsS -o /dev/null -H "Cookie: $BINDING_COOKIE_NAME=$BINDING_BOB" "$CB_URL_BOB" 2>/dev/null; then
       fail "bob: callback returned success — the role gate did NOT refuse a role-less user"
     else
       pass "bob: callback refused the role-less user (role gate holds)"
@@ -263,7 +286,7 @@ fi
 log "== Fail-closed negative: replayed state (expect refusal) =="
 if [ -n "${STATE:-}" ]; then
   # alice's STATE was already redeemed once in Phase 4; replaying it must be rejected.
-  if curl -fsS -o /dev/null -c "$JAR" -b "$JAR" -X POST "$JELLYFIN/sso/OID/Auth/$PROVIDER" \
+  if curl -fsS -o /dev/null -H "Cookie: $BINDING_COOKIE_NAME=$BINDING" -X POST "$JELLYFIN/sso/OID/Auth/$PROVIDER" \
       -H "Content-Type: application/json" \
       -d "{\"deviceId\":\"$DEVICE_ID\",\"appName\":\"Jellyfin Web\",\"appVersion\":\"10.8.0\",\"deviceName\":\"$DEVICE\",\"data\":\"$STATE\"}" 2>/dev/null; then
     fail "replayed state was accepted — one-time-use is NOT enforced"
