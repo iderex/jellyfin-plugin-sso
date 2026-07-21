@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -146,7 +148,7 @@ internal sealed class OidcStateStore
     /// <param name="now">The current time.</param>
     /// <param name="presentedBindingId">The browser-binding id the callback presented (its cookie value) (#326).</param>
     /// <returns>The pending state, or null when unknown, already promoted, expired, provider-mismatched, or binding-mismatched.</returns>
-    internal AuthorizeSession.Pending PeekCurrent(string token, string provider, DateTime now, string presentedBindingId)
+    internal AuthorizeSession.Pending? PeekCurrent(string token, string provider, DateTime now, string? presentedBindingId)
     {
         return !string.IsNullOrEmpty(token)
             && _states.TryGetValue(token, out var session)
@@ -187,7 +189,7 @@ internal sealed class OidcStateStore
     /// <param name="now">The current time.</param>
     /// <param name="presentedBindingId">The browser-binding id the caller presented (its cookie value) (#326).</param>
     /// <returns>The redeemed snapshot, or null when not redeemable, already claimed, or binding-mismatched.</returns>
-    internal AuthorizeSession.Ready TryRedeem(string responseData, string provider, DateTime now, string presentedBindingId)
+    internal AuthorizeSession.Ready? TryRedeem(string responseData, string provider, DateTime now, string? presentedBindingId)
     {
         if (string.IsNullOrEmpty(responseData)
             || !_states.TryGetValue(responseData, out var session)

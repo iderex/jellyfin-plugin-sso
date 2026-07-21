@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using Duende.IdentityModel.OidcClient;
 using Jellyfin.Plugin.SSO_Auth.Api.Authz;
@@ -20,7 +22,7 @@ internal abstract class AuthorizeSession
     // Private so the sum is closed to exactly the two nested variants below: a nested type can call the
     // enclosing type's private constructor through base(...), but no other type — in this assembly or
     // any other — can introduce a third variant.
-    private AuthorizeSession(string token, string provider, bool isLinking, string bindingId, string clientKey, DateTime created)
+    private AuthorizeSession(string token, string provider, bool isLinking, string bindingId, string? clientKey, DateTime created)
     {
         Token = token;
         Provider = provider;
@@ -52,7 +54,7 @@ internal abstract class AuthorizeSession
     /// Gets the normalized client key that reserved this state's per-client budget slot (#327), or null for
     /// an unattributable/exempt source; recorded so the store releases the right client's slot on redeem or prune.
     /// </summary>
-    internal string ClientKey { get; }
+    internal string? ClientKey { get; }
 
     /// <summary>Gets when this state was created, used to time it out.</summary>
     internal DateTime Created { get; }
@@ -83,7 +85,7 @@ internal abstract class AuthorizeSession
             bool isLinking,
             DateTime created,
             string bindingId,
-            string clientKey,
+            string? clientKey,
             ProviderInformation providerInformation,
             bool responseIssuerRequired)
             : base(oidcState.State, provider, isLinking, bindingId, clientKey, created)

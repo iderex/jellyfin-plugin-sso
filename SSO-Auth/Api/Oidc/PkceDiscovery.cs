@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Linq;
 using Newtonsoft.Json;
@@ -23,7 +25,7 @@ internal static class PkceDiscovery
     /// <c>true</c> only when <c>S256</c> is advertised; <c>false</c> on absence, an empty/other-only set,
     /// a non-array value, non-string elements, or malformed/blank JSON.
     /// </returns>
-    internal static bool SupportsS256(string discoveryJson)
+    internal static bool SupportsS256(string? discoveryJson)
     {
         if (string.IsNullOrWhiteSpace(discoveryJson))
         {

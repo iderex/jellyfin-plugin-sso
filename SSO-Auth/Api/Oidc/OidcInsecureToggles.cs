@@ -1,3 +1,5 @@
+#nullable enable
+
 using System.Collections.Generic;
 using Jellyfin.Plugin.SSO_Auth.Config;
 
@@ -17,7 +19,7 @@ internal static class OidcInsecureToggles
     /// </summary>
     /// <param name="config">The OpenID provider configuration.</param>
     /// <returns>The enabled insecure option names.</returns>
-    internal static IReadOnlyList<string> Enabled(OidConfig config)
+    internal static IReadOnlyList<string> Enabled(OidConfig? config)
     {
         var enabled = new List<string>();
         if (config == null)

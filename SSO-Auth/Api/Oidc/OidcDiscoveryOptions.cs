@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using Duende.IdentityModel.OidcClient;
 using Jellyfin.Plugin.SSO_Auth.Api.Provider;
@@ -30,7 +32,7 @@ internal static class OidcDiscoveryOptions
     {
         var authority = config.OidEndpoint?.Trim();
         var options = new OidcClientOptions { Authority = authority };
-        var oidEndpointUri = new Uri(authority);
+        var oidEndpointUri = new Uri(authority!);
         options.Policy.Discovery.AdditionalEndpointBaseAddresses.Add(oidEndpointUri.GetLeftPart(UriPartial.Authority));
         options.Policy.Discovery.ValidateEndpoints = !config.DoNotValidateEndpoints; // For Google and other providers with different endpoints
         options.Policy.Discovery.RequireHttps = !config.DisableHttps;
