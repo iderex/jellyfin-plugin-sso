@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 using System;
+using System.IO;
+using System.IO.Compression;
+using System.Text;
 using System.Threading.Tasks;
+using System.Xml;
 using Jellyfin.Plugin.SSO_Auth;
 using Jellyfin.Plugin.SSO_Auth.Config;
 using Microsoft.AspNetCore.Mvc;
@@ -25,6 +29,9 @@ public class SSOControllerSamlLogoutTests
     private static readonly Guid UserB = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
 
     private const string UniformRejectionBody = "SAML logout request could not be processed";
+    private const string SloEndpoint = "https://idp.example.com/slo";
+    private const string SpEntityId = "jellyfin-sp";
+    private const string SuccessStatus = "urn:oasis:names:tc:SAML:2.0:status:Success";
 
     private static LogoutSession Session(string subject, Guid userId, string? sessionIndex) => new LogoutSession
     {
@@ -244,10 +251,207 @@ public class SSOControllerSamlLogoutTests
         Assert.Equal(400, unsignedResult.StatusCode);
     }
 
+    [Fact]
+    public async Task SamlLogout_FullyConfigured_RevokesAndRedirectsToSlo_WithSignedSuccessResponse()
+    {
+        // SLO-3c: with an SLO endpoint AND a signing key configured, a validated request that revokes a session
+        // answers the IdP with a SIGNED LogoutResponse redirect (Success, InResponseTo bound to the request).
+        var fixture = SamlLogoutTestFactory.Create(nameId: "alice", requestId: "_req-abc");
+        var harness = new SsoControllerHarness(c =>
+        {
+            c.EnableSingleLogout = true;
+            c.SamlConfigs["adfs"] = new SamlConfig
+            {
+                Enabled = true,
+                SamlCertificate = fixture.CertificateBase64, // the IdP cert that validates the inbound request
+                SamlClientId = SpEntityId,
+                SamlSloEndpoint = SloEndpoint,
+                SamlSigningKeyPfx = SamlSigningKeyFactory.CreatePfxBase64(), // OUR SP key that signs the response
+            };
+            c.LogoutSessions["a"] = Session("alice", UserA, null);
+        });
+
+        var result = await harness.Controller.SamlLogout("adfs", fixture.EncodeRequest());
+
+        var redirect = Assert.IsType<RedirectResult>(result);
+        Assert.StartsWith(SloEndpoint + "?SAMLResponse=", redirect.Url, StringComparison.Ordinal);
+        Assert.Contains("&SigAlg=", redirect.Url, StringComparison.Ordinal);
+        Assert.Contains("&Signature=", redirect.Url, StringComparison.Ordinal);
+
+        // The response binds to the request (InResponseTo) and reports Success, from our SP Issuer.
+        var doc = DecodeSamlResponse(redirect.Url);
+        var nsmgr = Namespaces(doc);
+        Assert.Equal("_req-abc", doc.DocumentElement!.GetAttribute("InResponseTo"));
+        Assert.Equal(SpEntityId, doc.SelectSingleNode("/samlp:LogoutResponse/saml:Issuer", nsmgr)!.InnerText);
+        Assert.Equal(SuccessStatus, ((XmlElement)doc.SelectSingleNode("/samlp:LogoutResponse/samlp:Status/samlp:StatusCode", nsmgr)!).GetAttribute("Value"));
+
+        // The revocation still happened and the entry was consumed — the signed response is additive.
+        await harness.SessionManager.Received(1).RevokeUserTokens(UserA, null);
+        Assert.False(SSOPlugin.Instance.ReadConfiguration(c => c.LogoutSessions.ContainsKey("a")));
+    }
+
+    [Fact]
+    public async Task SamlLogout_SloEndpointButNoLoadableSigningKey_Returns200Fallback_NeverUnsigned()
+    {
+        // Fail-safe: an SLO endpoint is set but the signing key does not load. The revocation stands, and the
+        // endpoint answers a bare 200 rather than emitting an UNSIGNED response or a 500.
+        var fixture = SamlLogoutTestFactory.Create(nameId: "alice");
+        var harness = new SsoControllerHarness(c =>
+        {
+            c.EnableSingleLogout = true;
+            c.SamlConfigs["adfs"] = new SamlConfig
+            {
+                Enabled = true,
+                SamlCertificate = fixture.CertificateBase64,
+                SamlClientId = SpEntityId,
+                SamlSloEndpoint = SloEndpoint,
+                SamlSigningKeyPfx = "not-a-real-pfx", // set but unloadable
+            };
+            c.LogoutSessions["a"] = Session("alice", UserA, null);
+        });
+
+        var result = await harness.Controller.SamlLogout("adfs", fixture.EncodeRequest());
+
+        Assert.IsType<OkResult>(result);
+        await harness.SessionManager.Received(1).RevokeUserTokens(UserA, null);
+        Assert.False(SSOPlugin.Instance.ReadConfiguration(c => c.LogoutSessions.ContainsKey("a")));
+    }
+
+    [Fact]
+    public async Task SamlLogout_EchoesInboundRelayState_OnTheSignedResponse()
+    {
+        // The inbound RelayState is echoed on the signed response so the IdP can correlate its SLO loop.
+        var fixture = SamlLogoutTestFactory.Create(nameId: "alice");
+        var harness = new SsoControllerHarness(c =>
+        {
+            c.EnableSingleLogout = true;
+            c.SamlConfigs["adfs"] = new SamlConfig
+            {
+                Enabled = true,
+                SamlCertificate = fixture.CertificateBase64,
+                SamlClientId = SpEntityId,
+                SamlSloEndpoint = SloEndpoint,
+                SamlSigningKeyPfx = SamlSigningKeyFactory.CreatePfxBase64(),
+            };
+            c.LogoutSessions["a"] = Session("alice", UserA, null);
+        });
+
+        const string RelayState = "idp-correlation-99";
+        var result = await harness.Controller.SamlLogout("adfs", fixture.EncodeRequest(), RelayState);
+
+        var redirect = Assert.IsType<RedirectResult>(result);
+        Assert.Contains("&RelayState=" + Uri.EscapeDataString(RelayState), redirect.Url, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SamlLogout_OverlongRelayState_IsDropped_NotReflected()
+    {
+        // A RelayState beyond the 80-byte SAML binding cap is non-conformant and dropped rather than reflected.
+        var fixture = SamlLogoutTestFactory.Create(nameId: "alice");
+        var harness = new SsoControllerHarness(c =>
+        {
+            c.EnableSingleLogout = true;
+            c.SamlConfigs["adfs"] = new SamlConfig
+            {
+                Enabled = true,
+                SamlCertificate = fixture.CertificateBase64,
+                SamlClientId = SpEntityId,
+                SamlSloEndpoint = SloEndpoint,
+                SamlSigningKeyPfx = SamlSigningKeyFactory.CreatePfxBase64(),
+            };
+            c.LogoutSessions["a"] = Session("alice", UserA, null);
+        });
+
+        var overlong = new string('x', 81);
+        var result = await harness.Controller.SamlLogout("adfs", fixture.EncodeRequest(), overlong);
+
+        var redirect = Assert.IsType<RedirectResult>(result);
+        Assert.DoesNotContain("&RelayState=", redirect.Url, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SamlLogout_RelayStateAtExactly80Bytes_IsEchoed()
+    {
+        // Lower-boundary of the 80-byte cap: exactly 80 bytes is within the limit and MUST be echoed (pins the
+        // <= 80 boundary so a <=-to-< mutant is caught).
+        var fixture = SamlLogoutTestFactory.Create(nameId: "alice");
+        var harness = SignedResponseHarness(fixture);
+
+        var relayState = new string('x', 80); // 80 ASCII bytes
+        var result = await harness.Controller.SamlLogout("adfs", fixture.EncodeRequest(), relayState);
+
+        var redirect = Assert.IsType<RedirectResult>(result);
+        Assert.Contains("&RelayState=" + Uri.EscapeDataString(relayState), redirect.Url, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SamlLogout_MultibyteRelayStateOver80Bytes_IsDropped()
+    {
+        // The cap is measured in UTF-8 BYTES, not UTF-16 chars: 41 euro signs are 41 chars but 123 bytes, so
+        // they exceed the 80-byte binding limit and are dropped rather than reflected over-cap.
+        var fixture = SamlLogoutTestFactory.Create(nameId: "alice");
+        var harness = SignedResponseHarness(fixture);
+
+        var multibyte = new string('€', 41); // 41 UTF-16 chars, 123 UTF-8 bytes
+        var result = await harness.Controller.SamlLogout("adfs", fixture.EncodeRequest(), multibyte);
+
+        var redirect = Assert.IsType<RedirectResult>(result);
+        Assert.DoesNotContain("&RelayState=", redirect.Url, StringComparison.Ordinal);
+    }
+
+    // A harness fully configured for the signed inbound LogoutResponse: the fixture's IdP cert validates the
+    // inbound request, and an SLO endpoint + a loadable SP signing key let the success path sign the response.
+    private static SsoControllerHarness SignedResponseHarness(SamlLogoutFixture fixture) => new SsoControllerHarness(c =>
+    {
+        c.EnableSingleLogout = true;
+        c.SamlConfigs["adfs"] = new SamlConfig
+        {
+            Enabled = true,
+            SamlCertificate = fixture.CertificateBase64,
+            SamlClientId = SpEntityId,
+            SamlSloEndpoint = SloEndpoint,
+            SamlSigningKeyPfx = SamlSigningKeyFactory.CreatePfxBase64(),
+        };
+        c.LogoutSessions["a"] = Session("alice", UserA, null);
+    });
+
     private static void AssertUniformRejection(ActionResult result)
     {
         var content = Assert.IsType<ContentResult>(result);
         Assert.Equal(400, content.StatusCode);
         Assert.Equal(UniformRejectionBody, content.Content);
+    }
+
+    // Extracts and inflates the SAMLResponse query parameter of the redirect URL back into its XML document.
+    private static XmlDocument DecodeSamlResponse(string url)
+    {
+        var query = url[(url.IndexOf('?') + 1)..];
+        string? encoded = null;
+        foreach (var pair in query.Split('&'))
+        {
+            var eq = pair.IndexOf('=');
+            if (eq > 0 && pair[..eq] == "SAMLResponse")
+            {
+                encoded = Uri.UnescapeDataString(pair[(eq + 1)..]);
+                break;
+            }
+        }
+
+        Assert.NotNull(encoded);
+        var compressed = Convert.FromBase64String(encoded!);
+        using var input = new MemoryStream(compressed);
+        using var deflate = new DeflateStream(input, CompressionMode.Decompress);
+        using var reader = new StreamReader(deflate, new UTF8Encoding(false));
+        var doc = new XmlDocument { XmlResolver = null };
+        doc.LoadXml(reader.ReadToEnd());
+        return doc;
+    }
+
+    private static XmlNamespaceManager Namespaces(XmlDocument doc)
+    {
+        var nsmgr = new XmlNamespaceManager(doc.NameTable);
+        nsmgr.AddNamespace("saml", "urn:oasis:names:tc:SAML:2.0:assertion");
+        nsmgr.AddNamespace("samlp", "urn:oasis:names:tc:SAML:2.0:protocol");
+        return nsmgr;
     }
 }

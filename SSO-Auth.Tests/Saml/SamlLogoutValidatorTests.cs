@@ -32,11 +32,13 @@ public class SamlLogoutValidatorTests : IDisposable
         var fixture = SamlLogoutTestFactory.Create(nameId: "alice", sessionIndexes: new[] { "idx-1" });
         var validator = new SamlLogoutValidator();
 
-        var ok = validator.TryValidate(ProviderTrusting(fixture.CertificateBase64), "adfs", fixture.EncodeRequest(), DateTime.UtcNow, out var nameId, out var sessionIndexes, out var reason);
+        var ok = validator.TryValidate(ProviderTrusting(fixture.CertificateBase64), "adfs", fixture.EncodeRequest(), DateTime.UtcNow, out var nameId, out var sessionIndexes, out var requestId, out var reason);
 
         Assert.True(ok);
         Assert.Equal("alice", nameId);
         Assert.Equal(new[] { "idx-1" }, sessionIndexes);
+        // The validated request ID is exposed so the endpoint can echo it as the LogoutResponse InResponseTo.
+        Assert.False(string.IsNullOrEmpty(requestId));
         Assert.Equal(string.Empty, reason);
     }
 
@@ -49,9 +51,9 @@ public class SamlLogoutValidatorTests : IDisposable
         var config = ProviderTrusting(fixture.CertificateBase64);
         var encoded = fixture.EncodeRequest();
 
-        Assert.True(validator.TryValidate(config, "adfs", encoded, DateTime.UtcNow, out _, out _, out _));
+        Assert.True(validator.TryValidate(config, "adfs", encoded, DateTime.UtcNow, out _, out _, out _, out _));
 
-        var replayed = validator.TryValidate(config, "adfs", encoded, DateTime.UtcNow, out _, out _, out var reason);
+        var replayed = validator.TryValidate(config, "adfs", encoded, DateTime.UtcNow, out _, out _, out _, out var reason);
 
         Assert.False(replayed);
         Assert.Equal(SamlLogoutValidator.RejectReason.Replay, reason);
@@ -63,7 +65,7 @@ public class SamlLogoutValidatorTests : IDisposable
         var fixture = SamlLogoutTestFactory.Create(sign: false);
         var validator = new SamlLogoutValidator();
 
-        var ok = validator.TryValidate(ProviderTrusting(fixture.CertificateBase64), "adfs", fixture.EncodeRequest(), DateTime.UtcNow, out _, out _, out var reason);
+        var ok = validator.TryValidate(ProviderTrusting(fixture.CertificateBase64), "adfs", fixture.EncodeRequest(), DateTime.UtcNow, out _, out _, out _, out var reason);
 
         Assert.False(ok);
         Assert.Equal(SamlLogoutValidator.RejectReason.Invalid, reason);
@@ -74,7 +76,7 @@ public class SamlLogoutValidatorTests : IDisposable
     {
         var validator = new SamlLogoutValidator();
 
-        var ok = validator.TryValidate(ProviderTrusting(SamlFixture.ForeignCertificateBase64()), "adfs", "not-base64-!!!", DateTime.UtcNow, out _, out _, out var reason);
+        var ok = validator.TryValidate(ProviderTrusting(SamlFixture.ForeignCertificateBase64()), "adfs", "not-base64-!!!", DateTime.UtcNow, out _, out _, out _, out var reason);
 
         Assert.False(ok);
         Assert.Equal(SamlLogoutValidator.RejectReason.Malformed, reason);
@@ -90,7 +92,7 @@ public class SamlLogoutValidatorTests : IDisposable
         var noName = SamlLogoutTestFactory.Create(includeNameId: false, requestId: SharedId);
         var validator = new SamlLogoutValidator();
 
-        var firstOk = validator.TryValidate(ProviderTrusting(noName.CertificateBase64), "adfs", noName.EncodeRequest(), DateTime.UtcNow, out _, out _, out var reason);
+        var firstOk = validator.TryValidate(ProviderTrusting(noName.CertificateBase64), "adfs", noName.EncodeRequest(), DateTime.UtcNow, out _, out _, out _, out var reason);
 
         Assert.False(firstOk);
         Assert.Equal(SamlLogoutValidator.RejectReason.Invalid, reason);
@@ -98,7 +100,7 @@ public class SamlLogoutValidatorTests : IDisposable
         // Re-present the SAME request ID, now with a NameID: it must succeed — the slot was never consumed, so
         // this is not rejected as a Replay (which would prove the NameID guard ran before TryConsume).
         var corrected = SamlLogoutTestFactory.Create(nameId: "alice", requestId: SharedId);
-        var secondOk = validator.TryValidate(ProviderTrusting(corrected.CertificateBase64), "adfs", corrected.EncodeRequest(), DateTime.UtcNow, out var nameId, out _, out var secondReason);
+        var secondOk = validator.TryValidate(ProviderTrusting(corrected.CertificateBase64), "adfs", corrected.EncodeRequest(), DateTime.UtcNow, out var nameId, out _, out _, out var secondReason);
 
         Assert.True(secondOk);
         Assert.NotEqual(SamlLogoutValidator.RejectReason.Replay, secondReason);
