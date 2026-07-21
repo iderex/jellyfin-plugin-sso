@@ -67,6 +67,9 @@ internal sealed class SsoControllerHarness
         // statics too; clear them so a prior test's stored outcome or consumed assertion id cannot leak in.
         SamlLoginService.ResetSamlOutcomesForTests();
         SamlAssertionValidator.ResetReplaysForTests();
+        // The inbound SAML LogoutRequest one-time-use cache (#727, SLO-3b) is a process-wide static too;
+        // clear it so a prior test's consumed request id cannot leak into this one.
+        SamlLogoutValidator.ResetReplaysForTests();
 
         Configuration = new PluginConfiguration();
         configure?.Invoke(Configuration);
