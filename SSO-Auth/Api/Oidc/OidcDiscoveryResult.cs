@@ -1,3 +1,5 @@
+#nullable enable
+
 using Duende.IdentityModel.OidcClient;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api.Oidc;

@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Http;
@@ -47,7 +49,7 @@ internal static class AuthorizeStateBinding
     /// <param name="storedBindingId">The id recorded on the stored state.</param>
     /// <param name="presentedBindingId">The id presented by the callback (the cookie value).</param>
     /// <returns>True only when both are present and equal.</returns>
-    internal static bool Matches(string storedBindingId, string presentedBindingId)
+    internal static bool Matches(string storedBindingId, string? presentedBindingId)
         => !string.IsNullOrEmpty(storedBindingId)
            && string.Equals(storedBindingId, presentedBindingId, StringComparison.Ordinal);
 

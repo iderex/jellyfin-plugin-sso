@@ -52,7 +52,7 @@ public class OidcStateStoreTests
         ProviderInformation? info = null,
         bool responseIssuerRequired = false,
         string? clientKey = null)
-        => new(new AuthorizeState { State = stateValue }, provider, isLinking, created, binding, clientKey, info, responseIssuerRequired);
+        => new(new AuthorizeState { State = stateValue }, provider, isLinking, created, binding!, clientKey, info!, responseIssuerRequired);
 
     // A promoted Ready: the redeemable variant the callback produces once the role gate passes. Building it
     // from a Pending + a valid role-gate result is exactly the production promotion path.
@@ -126,7 +126,7 @@ public class OidcStateStoreTests
     {
         // The null belt survives the consolidation: a seeded null can never peek or redeem.
         var store = Store();
-        store.Seed("t", null);
+        store.Seed("t", null!);
 
         Assert.Null(store.PeekCurrent("t", "p", Now, Binding));
         Assert.Null(store.TryRedeem("t", "p", Now, Binding));
@@ -759,7 +759,7 @@ public class OidcStateStoreTests
     // so TryRedeem — which requires a promoted state — can exercise the per-client release.
     private static void Validate(OidcStateStore store, string token) =>
         store.Promote(
-            store.PeekCurrent(token, "p", Now, Binding),
+            store.PeekCurrent(token, "p", Now, Binding)!,
             new OidcAuthorizeStateBuilder.OidcAuthorizeState("u", "sub", null, null, true, false, false, false, new List<string>(), null));
 
     [Fact]

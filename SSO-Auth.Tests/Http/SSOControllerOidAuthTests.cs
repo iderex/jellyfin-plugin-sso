@@ -228,7 +228,7 @@ public class SSOControllerOidAuthTests
     // the verified-email login gate (#166).
     private static void SeedValidState(SsoControllerHarness harness, string token, bool? emailVerified = null)
     {
-        var pending = new AuthorizeSession.Pending(new AuthorizeState { State = token }, "kc", isLinking: false, DateTime.UtcNow, Binding, clientKey: null, providerInformation: null, responseIssuerRequired: false);
+        var pending = new AuthorizeSession.Pending(new AuthorizeState { State = token }, "kc", isLinking: false, DateTime.UtcNow, Binding, clientKey: null, providerInformation: null!, responseIssuerRequired: false);
         var ready = new AuthorizeSession.Ready(
             pending,
             new OidcAuthorizeStateBuilder.OidcAuthorizeState(

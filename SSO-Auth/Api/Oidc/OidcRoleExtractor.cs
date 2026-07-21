@@ -1,3 +1,5 @@
+#nullable enable
+
 using System.Collections.Generic;
 using System.Linq;
 using Newtonsoft.Json;
@@ -73,7 +75,7 @@ internal static class OidcRoleExtractor
                 return new List<string>();
             }
 
-            return rolesArray.Where(token => token.Type == JTokenType.String).Select(token => token.Value<string>()).ToList();
+            return rolesArray.Where(token => token.Type == JTokenType.String).Select(token => token.Value<string>()!).ToList();
         }
         catch (JsonException)
         {
