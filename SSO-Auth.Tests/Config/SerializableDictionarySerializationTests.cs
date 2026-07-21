@@ -67,6 +67,7 @@ public class SerializableDictionarySerializationTests
     }
 
     private static string Serialize<TKey, TValue>(SerializableDictionary<TKey, TValue> value)
+        where TKey : notnull
     {
         var serializer = new XmlSerializer(typeof(SerializableDictionary<TKey, TValue>));
         using var writer = new StringWriter();
@@ -75,12 +76,14 @@ public class SerializableDictionarySerializationTests
     }
 
     private static SerializableDictionary<TKey, TValue> RoundTrip<TKey, TValue>(SerializableDictionary<TKey, TValue> value)
+        where TKey : notnull
         => Deserialize<TKey, TValue>(Serialize(value));
 
     // Deserializes through the XmlReader overload with DTD processing prohibited (the
     // XmlReaderSettings default) — the hardened pattern CA5369 requires, mirroring how the
     // production type is only ever read through an XmlReader.
     private static SerializableDictionary<TKey, TValue> Deserialize<TKey, TValue>(string xml)
+        where TKey : notnull
     {
         var serializer = new XmlSerializer(typeof(SerializableDictionary<TKey, TValue>));
         using var stringReader = new StringReader(xml);

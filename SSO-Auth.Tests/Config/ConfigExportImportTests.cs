@@ -220,8 +220,8 @@ public class ConfigExportImportTests
         // The camelCase document deserializes back (case-insensitive) with the provider intact and the secret
         // still redacted to null.
         var wire = JsonSerializer.Deserialize<ConfigExportDocument>(json, options)!;
-        Assert.Equal("client-1", wire.Configuration.OidConfigs["idp"].OidClientId);
-        Assert.True(string.IsNullOrEmpty(wire.Configuration.OidConfigs["idp"].OidSecret));
+        Assert.Equal("client-1", wire.Configuration!.OidConfigs["idp"].OidClientId);
+        Assert.True(string.IsNullOrEmpty(wire.Configuration!.OidConfigs["idp"].OidSecret));
     }
 
     [Fact]

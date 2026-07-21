@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 
 namespace Jellyfin.Plugin.SSO_Auth.Config;
@@ -40,7 +42,7 @@ internal static class ConfigImport
     /// admin.
     /// </param>
     /// <exception cref="ArgumentException">The document is unsupported, empty, carries an invalid provider, or asserts SSO-only with no surviving admin login path.</exception>
-    internal static void Apply(PluginConfiguration live, ConfigExportDocument document, Func<string, BreakGlassAdminState> resolveBreakGlass = null)
+    internal static void Apply(PluginConfiguration live, ConfigExportDocument document, Func<string, BreakGlassAdminState>? resolveBreakGlass = null)
     {
         ArgumentNullException.ThrowIfNull(live);
         ArgumentNullException.ThrowIfNull(document);
@@ -65,7 +67,7 @@ internal static class ConfigImport
         // enables the mode through the elevated, audited SSO-Only endpoints, not by import.
         if (imported.DisablePasswordLogin)
         {
-            var breakGlass = imported.BreakGlassAdminUsername;
+            var breakGlass = imported.BreakGlassAdminUsername ?? string.Empty;
             SsoOnlyLoginGuard.AssertCanActivate(breakGlass, resolveBreakGlass?.Invoke(breakGlass) ?? default);
         }
 

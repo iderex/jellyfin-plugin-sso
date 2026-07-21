@@ -668,7 +668,7 @@ public class CanonicalLinkServiceTests
         // The login-path companion to the admin null-config guards: a provider stored as a null config
         // object (reachable via #350) must REJECT the login (fail closed), never fall through to the
         // adoption gate whose create/adopt arms would mint a session for an unusable provider.
-        var (service, _, users, _) = Build(c => c.OidConfigs["broken"] = null);
+        var (service, _, users, _) = Build(c => c.OidConfigs["broken"] = null!);
         users.GetUserByName("alice").Returns((User?)null); // name is free -> the create arm would fire if it fell through
 
         await Assert.ThrowsAsync<AccountLinkForbiddenException>(() =>
@@ -682,7 +682,7 @@ public class CanonicalLinkServiceTests
     {
         // A provider stored with a null config object (reachable via #350's null-body add) must be read
         // as absent, not dereferenced into a 500 — same fail-closed treatment as a missing provider.
-        var (service, _, _, _) = Build(c => c.OidConfigs["broken"] = null);
+        var (service, _, _, _) = Build(c => c.OidConfigs["broken"] = null!);
 
         var result = service.TryRemoveLink(ProviderMode.Oid, "broken", "sub-1", Existing);
 
@@ -697,7 +697,7 @@ public class CanonicalLinkServiceTests
         var (service, _, _, _) = Build(c =>
         {
             c.OidConfigs["kc"] = new OidConfig { Enabled = true, CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing } };
-            c.OidConfigs["broken"] = null;
+            c.OidConfigs["broken"] = null!;
         });
 
         var oid = service.LinksByUser(ProviderMode.Oid, Existing);

@@ -110,7 +110,7 @@ internal static class RolePrivilegeMapper
     // Whether the login's role is on a configured allow-list. Null-safe both ways (ordinal): a null list
     // or a null entry is simply not a match — never a NullReferenceException — so an admin misconfiguration
     // or a stray null fails closed (grants nothing) instead of throwing a 500.
-    private static bool IsOnList(IEnumerable<string> allowed, string role) =>
+    private static bool IsOnList(IEnumerable<string>? allowed, string role) =>
         allowed != null && allowed.Any(entry => string.Equals(role, entry, StringComparison.Ordinal));
 
     /// <summary>

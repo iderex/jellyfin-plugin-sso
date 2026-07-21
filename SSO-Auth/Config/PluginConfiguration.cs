@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Xml.Serialization;
@@ -9,8 +11,8 @@ namespace Jellyfin.Plugin.SSO_Auth.Config;
 /// </summary>
 public class PluginConfiguration : MediaBrowser.Model.Plugins.BasePluginConfiguration
 {
-    private List<Guid> _ssoOnlyRepointedUserIds;
-    private SerializableDictionary<string, LogoutSession> _logoutSessions;
+    private List<Guid>? _ssoOnlyRepointedUserIds;
+    private SerializableDictionary<string, LogoutSession>? _logoutSessions;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PluginConfiguration"/> class.
@@ -103,7 +105,7 @@ public class PluginConfiguration : MediaBrowser.Model.Plugins.BasePluginConfigur
     /// and only ever pointed at an account that is ALREADY an administrator (it cannot grant admin — T-E1).
     /// Blank means no break-glass admin is designated, so the mode cannot be enabled.
     /// </summary>
-    public string BreakGlassAdminUsername { get; set; }
+    public string? BreakGlassAdminUsername { get; set; }
 
     /// <summary>
     /// Gets or sets the ids of the accounts SSO-only mode has repointed off the built-in password provider
@@ -170,7 +172,7 @@ public class PluginConfiguration : MediaBrowser.Model.Plugins.BasePluginConfigur
 // is the disposition rather than a per-property annotation.
 public abstract class ProviderConfigBase
 {
-    private SerializableDictionary<string, Guid> _canonicalLinks;
+    private SerializableDictionary<string, Guid>? _canonicalLinks;
 
     /// <summary>
     /// Gets or sets the canonical external base URL for this provider, e.g.
@@ -179,7 +181,7 @@ public abstract class ProviderConfigBase
     /// <c>Host</c> header (#139), so a spoofed or proxy-forwarded host cannot redirect the login elsewhere.
     /// It overrides the scheme and port overrides. Blank keeps the request-host behavior.
     /// </summary>
-    public string BaseUrlOverride { get; set; }
+    public string BaseUrlOverride { get; set; } = string.Empty;
 
     /// <summary>
     /// Gets or sets a value indicating whether the provider is enabled.
@@ -194,7 +196,7 @@ public abstract class ProviderConfigBase
     /// means no post-logout redirect. No effect while <see cref="PluginConfiguration.EnableSingleLogout"/> is
     /// off.
     /// </summary>
-    public string PostLogoutRedirectUri { get; set; }
+    public string? PostLogoutRedirectUri { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether this provider is HIDDEN from the managed login-page buttons
@@ -209,7 +211,7 @@ public abstract class ProviderConfigBase
     /// name. The value is HTML-encoded into the login disclaimer, so any text is safe. No effect while
     /// <see cref="PluginConfiguration.ManageLoginPageButtons"/> is off or <see cref="HideLoginButton"/> is on.
     /// </summary>
-    public string LoginButtonText { get; set; }
+    public string? LoginButtonText { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether RBAC is enabled.
@@ -243,17 +245,17 @@ public abstract class ProviderConfigBase
     /// <summary>
     /// Gets or sets what folders should users have access to by default.
     /// </summary>
-    public string[] EnabledFolders { get; set; }
+    public string[]? EnabledFolders { get; set; }
 
     /// <summary>
     /// Gets or sets the roles that are checked to determine whether the user is an administrator.
     /// </summary>
-    public string[] AdminRoles { get; set; }
+    public string[]? AdminRoles { get; set; }
 
     /// <summary>
     /// Gets or sets what roles are checked to determine whether the user is allowed to use Jellyfin.
     /// </summary>
-    public string[] Roles { get; set; }
+    public string[]? Roles { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether RBAC is used to manage folder access.
@@ -278,19 +280,19 @@ public abstract class ProviderConfigBase
     /// <summary>
     /// Gets or sets the roles that are checked to determine whether the user is allowed to view Live TV.
     /// </summary>
-    public string[] LiveTvRoles { get; set; }
+    public string[]? LiveTvRoles { get; set; }
 
     /// <summary>
     /// Gets or sets the roles that are checked to determine whether the user is allowed to manage Live TV.
     /// </summary>
-    public string[] LiveTvManagementRoles { get; set; }
+    public string[]? LiveTvManagementRoles { get; set; }
 
     /// <summary>
     /// Gets or sets which folders map to what roles in RBAC.
     /// </summary>
     [XmlArray("FolderRoleMappings")]
     [XmlArrayItem(typeof(FolderRoleMap), ElementName = "FolderRoleMappings")]
-    public List<FolderRoleMap> FolderRoleMapping { get; set; }
+    public List<FolderRoleMap>? FolderRoleMapping { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether the generic role-to-permission mapping
@@ -315,7 +317,7 @@ public abstract class ProviderConfigBase
     /// </summary>
     [XmlArray("PermissionRoleMappings")]
     [XmlArrayItem(typeof(PermissionRoleMap), ElementName = "PermissionRoleMappings")]
-    public List<PermissionRoleMap> PermissionRoleMappings { get; set; }
+    public List<PermissionRoleMap>? PermissionRoleMappings { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether the role-to-parental-rating mapping
@@ -339,7 +341,7 @@ public abstract class ProviderConfigBase
     /// </summary>
     [XmlArray("ParentalRatingRoleMappings")]
     [XmlArrayItem(typeof(ParentalRatingRoleMap), ElementName = "ParentalRatingRoleMappings")]
-    public List<ParentalRatingRoleMap> ParentalRatingRoleMappings { get; set; }
+    public List<ParentalRatingRoleMap>? ParentalRatingRoleMappings { get; set; }
 
     /// <summary>
     /// Gets or sets the authentication provider id written to the user's Jellyfin account
@@ -347,12 +349,12 @@ public abstract class ProviderConfigBase
     /// user attribute; SSO logins themselves always resolve through the per-provider canonical-link maps,
     /// not this field. Blank leaves the account's existing provider id untouched.
     /// </summary>
-    public string DefaultProvider { get; set; }
+    public string? DefaultProvider { get; set; }
 
     /// <summary>
     /// Gets or sets the redirect scheme override.
     /// </summary>
-    public string SchemeOverride { get; set; }
+    public string SchemeOverride { get; set; } = string.Empty;
 
     /// <summary>
     /// Gets or sets the redirect port override.
@@ -401,17 +403,17 @@ public class SamlConfig : ProviderConfigBase
     /// <summary>
     /// Gets or sets the SAML information endpoint.
     /// </summary>
-    public string SamlEndpoint { get; set; }
+    public string SamlEndpoint { get; set; } = string.Empty;
 
     /// <summary>
     /// Gets or sets the SAML provider's client ID.
     /// </summary>
-    public string SamlClientId { get; set; }
+    public string SamlClientId { get; set; } = string.Empty;
 
     /// <summary>
     /// Gets or sets the SAML public key.
     /// </summary>
-    public string SamlCertificate { get; set; }
+    public string? SamlCertificate { get; set; }
 
     /// <summary>
     /// Gets or sets an OPTIONAL second identity-provider signing certificate accepted alongside
@@ -430,13 +432,13 @@ public class SamlConfig : ProviderConfigBase
     /// certificate here before the cutover and promotes it into <see cref="SamlCertificate"/> (clearing
     /// this field) once the provider has fully rotated — with no login downtime across the overlap window.
     /// </summary>
-    public string SamlSecondaryCertificate { get; set; }
+    public string? SamlSecondaryCertificate { get; set; }
 
     /// <summary>
     /// Gets or sets the audience (SP entity id) that a SAML response must be addressed to. When
     /// unset, the SamlClientId is used. Ignored when <see cref="DoNotValidateAudience"/> is set.
     /// </summary>
-    public string SamlAudience { get; set; }
+    public string? SamlAudience { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether to skip validating the assertion's AudienceRestriction.
@@ -480,7 +482,7 @@ public class SamlConfig : ProviderConfigBase
     /// to the config XML.
     /// </summary>
     [System.Text.Json.Serialization.JsonConverter(typeof(WriteOnlySecretConverter))]
-    public string SamlSigningKeyPfx { get; set; }
+    public string? SamlSigningKeyPfx { get; set; }
 
     /// <summary>
     /// Gets or sets an OPTIONAL second service-provider signing key for a zero-downtime rollover of the
@@ -497,7 +499,7 @@ public class SamlConfig : ProviderConfigBase
     /// and preserved on a save that leaves it blank.
     /// </summary>
     [System.Text.Json.Serialization.JsonConverter(typeof(WriteOnlySecretConverter))]
-    public string SamlRolloverSigningKeyPfx { get; set; }
+    public string? SamlRolloverSigningKeyPfx { get; set; }
 }
 
 /// <summary>
@@ -509,12 +511,12 @@ public class SamlConfig : ProviderConfigBase
 [XmlRoot("PluginConfiguration")]
 public class OidConfig : ProviderConfigBase
 {
-    private SerializableDictionary<string, string> _canonicalLinkIssuers;
+    private SerializableDictionary<string, string>? _canonicalLinkIssuers;
 
     /// <summary>
     /// Gets or sets the OpenID well-known information endpoint.
     /// </summary>
-    public string OidEndpoint { get; set; }
+    public string? OidEndpoint { get; set; }
 
     /// <summary>
     /// Gets or sets, per canonical link, the discovered issuer the link was minted under (#186). Keyed
@@ -543,7 +545,7 @@ public class OidConfig : ProviderConfigBase
     /// <summary>
     /// Gets or sets OpenID client ID.
     /// </summary>
-    public string OidClientId { get; set; }
+    public string OidClientId { get; set; } = string.Empty;
 
     /// <summary>
     /// Gets or sets OpenID shared secret.
@@ -556,7 +558,7 @@ public class OidConfig : ProviderConfigBase
     // so leaving the field blank keeps the stored secret; a new value replaces it. A plain
     // [JsonIgnore] is wrong here — it is bidirectional and would also drop the value on save.
     [System.Text.Json.Serialization.JsonConverter(typeof(WriteOnlySecretConverter))]
-    public string OidSecret { get; set; }
+    public string? OidSecret { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether adopting a same-named pre-existing account additionally
@@ -591,14 +593,14 @@ public class OidConfig : ProviderConfigBase
     /// allow-list <see cref="RequireAcr"/> checks the returned <c>acr</c> claim against. Settable in the
     /// admin provider form as well as the config XML.
     /// </summary>
-    public string AcrValues { get; set; }
+    public string? AcrValues { get; set; }
 
     /// <summary>
     /// Gets or sets the OIDC <c>prompt</c> parameter sent on the authorization request (#757, OIDC Core
     /// §3.1.2.1) — e.g. <c>login</c> to force re-authentication, or <c>consent</c>. Empty by default: the
     /// parameter is then omitted. Settable in the admin provider form as well as the config XML.
     /// </summary>
-    public string Prompt { get; set; }
+    public string? Prompt { get; set; }
 
     /// <summary>
     /// Gets or sets the OIDC <c>max_age</c> parameter (seconds) sent on the authorization request (#757,
@@ -622,22 +624,22 @@ public class OidConfig : ProviderConfigBase
     /// <summary>
     /// Gets or sets the claim to check roles against. Separated by "."s.
     /// </summary>
-    public string RoleClaim { get; set; }
+    public string? RoleClaim { get; set; }
 
     /// <summary>
     /// Gets or Sets additional Scopes to request access to in the authorization request.
     /// </summary>
-    public string[] OidScopes { get; set; }
+    public string?[]? OidScopes { get; set; }
 
     /// <summary>
     /// Gets or sets the default username claim when creating new accounts.
     /// </summary>
-    public string DefaultUsernameClaim { get; set; }
+    public string? DefaultUsernameClaim { get; set; }
 
     /// <summary>
     /// Gets or sets the URL format of the new user avatar.
     /// </summary>
-    public string AvatarUrlFormat { get; set; }
+    public string? AvatarUrlFormat { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether the zero-config fallback to the standard OIDC
@@ -701,12 +703,12 @@ public class FolderRoleMap
     /// <summary>
     /// Gets or sets the role of the mapping.
     /// </summary>
-    public string Role { get; set; }
+    public string? Role { get; set; }
 
     /// <summary>
     /// Gets or sets the folders that are allowed from the given role.
     /// </summary>
-    public List<string> Folders { get; set; }
+    public List<string>? Folders { get; set; }
 }
 
 /// <summary>
@@ -722,13 +724,13 @@ public class PermissionRoleMap
     /// enum name (e.g. <c>EnableContentDownloading</c>). An unknown name, or one of the dedicated
     /// permissions managed elsewhere (administrator, all-folders, Live TV), is rejected on save.
     /// </summary>
-    public string Permission { get; set; }
+    public string? Permission { get; set; }
 
     /// <summary>
     /// Gets or sets the roles that grant the permission. A login holding any of these roles is granted
     /// the permission; a login holding none has it explicitly revoked.
     /// </summary>
-    public string[] Roles { get; set; }
+    public string[]? Roles { get; set; }
 }
 
 /// <summary>
@@ -749,5 +751,5 @@ public class ParentalRatingRoleMap
     /// Gets or sets the roles the ceiling applies to. A login holding any of these roles is capped at
     /// <see cref="Score"/>; a login holding none is left untouched.
     /// </summary>
-    public string[] Roles { get; set; }
+    public string[]? Roles { get; set; }
 }

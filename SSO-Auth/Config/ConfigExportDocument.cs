@@ -1,3 +1,5 @@
+#nullable enable
+
 namespace Jellyfin.Plugin.SSO_Auth.Config;
 
 /// <summary>
@@ -24,5 +26,5 @@ public class ConfigExportDocument
     /// configuration whose secrets and server-managed link maps are withheld at the JSON boundary; on import
     /// it is the incoming configuration to merge into the target.
     /// </summary>
-    public PluginConfiguration Configuration { get; set; }
+    public PluginConfiguration? Configuration { get; set; }
 }

@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using Jellyfin.Plugin.SSO_Auth.Api;
@@ -113,7 +115,7 @@ internal sealed class ProviderConfigStore
     public void Save(BasePluginConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        List<(string Protocol, string Provider, IReadOnlyList<string> Options)> insecureToAudit = null;
+        List<(string Protocol, string Provider, IReadOnlyList<string> Options)>? insecureToAudit = null;
         lock (Sync)
         {
             if (configuration is PluginConfiguration incoming && !ReferenceEquals(incoming, _live()))
