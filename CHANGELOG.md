@@ -7,6 +7,16 @@ digit and differ by release cadence). The channel and Jellyfin generation are a
 suffix on the git tag and GitHub release name only (`-stable`, `-beta.<run>`,
 `-JF12-*`), never part of the installed numeric version.
 
+## Unreleased
+
+### Changed
+
+- **Renamed to "Community SSO for Jellyfin".** The plugin's display name (the
+  catalog entry, the dashboard plugin name, and the documentation) is now
+  **Community SSO for Jellyfin**. The plugin GUID, the assembly, and the
+  configuration are unchanged, so the rename lands as an in-place update that
+  keeps every existing setting.
+
 ## 4.3.0
 
 A feature release. This line advances the plugin's maturity to **Beta** on the
