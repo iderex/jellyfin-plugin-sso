@@ -738,9 +738,13 @@ internal sealed class SamlLoginService
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
 
-        string providerUserId = samlResponse.GetNameID();
+        // GetNameID is null when the assertion carries no NameID; coalesce to empty so it flows into
+        // TryCreateLink's fail-closed empty-subject guard (which rejects a blank key as EmptyKey), never
+        // creating a canonical link keyed on an absent subject — the same fail-closed treatment the
+        // session-mint path applies (#95).
+        var providerUserId = samlResponse.GetNameID();
 
-        return FlowResponses.MapCanonicalLinkWrite(_canonicalLinks.TryCreateLink(ProviderMode.Saml, provider, providerUserId, jellyfinUserId));
+        return FlowResponses.MapCanonicalLinkWrite(_canonicalLinks.TryCreateLink(ProviderMode.Saml, provider, providerUserId ?? string.Empty, jellyfinUserId));
     }
 
     // Reads a provider's config under the config lock, so an anonymous login-path lookup does not race an

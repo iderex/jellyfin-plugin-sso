@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Concurrent;
 using Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
@@ -89,7 +91,7 @@ internal sealed class SamlRequestCache
     /// <param name="clientKey">The normalized client key for the per-client sub-cap (#327), or null to exempt.</param>
     /// <param name="shouldWarnCapacity">True when the caller should emit the throttled capacity warning (a cap refusal, at most once per interval).</param>
     /// <returns>True if the entry was registered; false if refused (blank ID, per-client sub-cap, or global cap).</returns>
-    internal bool Register(string requestId, string bindingId, DateTime expiryUtc, DateTime nowUtc, string clientKey, out bool shouldWarnCapacity)
+    internal bool Register(string? requestId, string bindingId, DateTime expiryUtc, DateTime nowUtc, string? clientKey, out bool shouldWarnCapacity)
     {
         PruneExpired(nowUtc);
         shouldWarnCapacity = false;
@@ -133,7 +135,7 @@ internal sealed class SamlRequestCache
     /// <param name="nowUtc">The current time.</param>
     /// <param name="bindingId">The binding id recorded at registration (empty if none), when this returns true.</param>
     /// <returns>True if the ID was outstanding and is now consumed; false otherwise.</returns>
-    internal bool TryConsume(string requestId, DateTime nowUtc, out string bindingId)
+    internal bool TryConsume(string? requestId, DateTime nowUtc, out string bindingId)
     {
         PruneExpired(nowUtc);
         bindingId = string.Empty;
@@ -192,5 +194,5 @@ internal sealed class SamlRequestCache
     // exempt source). The binding id ties the eventual response to the browser that started the flow; it
     // is returned on consume so the session-mint endpoint can require the request's cookie to match.
     // Empty binding for entries registered before browser binding existed (treated as unbound).
-    private readonly record struct Entry(DateTime ExpiryUtc, string BindingId, string ClientKey);
+    private readonly record struct Entry(DateTime ExpiryUtc, string BindingId, string? ClientKey);
 }

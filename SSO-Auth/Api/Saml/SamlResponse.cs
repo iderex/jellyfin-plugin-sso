@@ -1,3 +1,5 @@
+#nullable enable
+
 /*
  Was Jitbit's simple SAML 2.0 component for ASP.NET
  https://github.com/jitbit/AspNetSaml/
@@ -65,7 +67,7 @@ internal sealed class SamlResponse : IDisposable
     /// <param name="certificateStr">The primary certificate formatted as a Base64 string.</param>
     /// <param name="secondaryCertificateStr">The optional secondary certificate (Base64), or blank for none.</param>
     /// <param name="responseString">The SAML response formatted as a string.</param>
-    public SamlResponse(string certificateStr, string secondaryCertificateStr, string responseString)
+    public SamlResponse(string certificateStr, string? secondaryCertificateStr, string responseString)
     {
         // Decode and load the certificate(s), then parse the response — in that exact order, so the
         // exception sequence SamlResponseLoader.TryParse catches is unchanged: FormatException (bad
@@ -107,7 +109,7 @@ internal sealed class SamlResponse : IDisposable
     // are the identity provider's PUBLIC signing certificate; a configured-but-unloadable secondary throws
     // the same load exceptions as the primary and is rejected the same fail-closed way (the admin write
     // paths reject it up front via SamlCertificate.IsInvalid).
-    private static List<X509Certificate2> LoadCandidateCertificates(string certificateStr, string secondaryCertificateStr)
+    private static List<X509Certificate2> LoadCandidateCertificates(string certificateStr, string? secondaryCertificateStr)
     {
         var certificates = new List<X509Certificate2>
         {
@@ -235,18 +237,30 @@ internal sealed class SamlResponse : IDisposable
     // Runs after ValidateSignatureReference, which guarantees exactly one reference exists.
     private static bool IsSignatureAlgorithmAllowed(SignedXml signedXml)
     {
-        if (!SamlSignatureAlgorithms.IsCanonicalizationAllowed(signedXml.SignedInfo.CanonicalizationMethod))
+        // A null SignedInfo (SignedXml exposes it as nullable) means there is nothing to allow-list against,
+        // so reject rather than risk trusting an unvalidated algorithm — fail closed. In practice LoadXml has
+        // already populated it (a malformed signature throws instead), so this guard never fires on a
+        // well-formed signature; every unexpected null flows to a rejection.
+        var signedInfo = signedXml.SignedInfo;
+        if (signedInfo is null)
+        {
+            return false;
+        }
+
+        // Every algorithm URI the BCL exposes as nullable is coalesced to string.Empty, which is not in any
+        // allowlist, so a missing/null algorithm is rejected exactly like a disallowed one (fail closed).
+        if (!SamlSignatureAlgorithms.IsCanonicalizationAllowed(signedInfo.CanonicalizationMethod ?? string.Empty))
         {
             return false;
         }
 
         var digestMethods = new List<string>();
-        foreach (Reference reference in signedXml.SignedInfo.References)
+        foreach (Reference reference in signedInfo.References)
         {
             var transforms = new List<string>();
             foreach (Transform transform in reference.TransformChain)
             {
-                transforms.Add(transform.Algorithm);
+                transforms.Add(transform.Algorithm ?? string.Empty);
             }
 
             if (!SamlSignatureAlgorithms.AreTransformsAllowed(transforms))
@@ -254,10 +268,10 @@ internal sealed class SamlResponse : IDisposable
                 return false;
             }
 
-            digestMethods.Add(reference.DigestMethod);
+            digestMethods.Add(reference.DigestMethod ?? string.Empty);
         }
 
-        return SamlSignatureAlgorithms.IsAllowed(signedXml.SignedInfo.SignatureMethod, digestMethods);
+        return SamlSignatureAlgorithms.IsAllowed(signedInfo.SignatureMethod ?? string.Empty, digestMethods);
     }
 
     // The signature must verify against at least one candidate certificate that is CURRENTLY within its
@@ -310,7 +324,7 @@ internal sealed class SamlResponse : IDisposable
     /// </summary>
     /// <param name="expectedAudience">The audience (SP entity id) this response must be addressed to.</param>
     /// <returns>Whether the response is valid and bound to this audience.</returns>
-    public bool IsValid(string expectedAudience)
+    public bool IsValid(string? expectedAudience)
     {
         if (!IsValid())
         {
@@ -334,7 +348,7 @@ internal sealed class SamlResponse : IDisposable
     /// a log); it is never a substitute for <see cref="IsValid()"/>.
     /// </summary>
     /// <returns>The SignedInfo signature-method URI, or null if unsigned.</returns>
-    public string GetSignatureAlgorithm()
+    public string? GetSignatureAlgorithm()
     {
         // Same position-bound selection as IsValid, so the diagnostic reflects the signature that
         // would actually be validated rather than any signature found anywhere in the document.
@@ -351,8 +365,8 @@ internal sealed class SamlResponse : IDisposable
         try
         {
             var signedXml = new SignedXml(_xmlDoc);
-            signedXml.LoadXml((XmlElement)nodeList[0]);
-            return signedXml.SignedInfo.SignatureMethod;
+            signedXml.LoadXml((XmlElement)nodeList[0]!);
+            return signedXml.SignedInfo?.SignatureMethod;
         }
         catch (Exception ex) when (ex is CryptographicException or XmlException or ArgumentException or FormatException)
         {
@@ -394,7 +408,7 @@ internal sealed class SamlResponse : IDisposable
     /// Gets the ID attribute of the assertion, used to enforce one-time use (replay protection).
     /// </summary>
     /// <returns>The assertion ID, or null when absent.</returns>
-    public string GetAssertionId()
+    public string? GetAssertionId()
     {
         var assertion = _xmlDoc.SelectSingleNode("/samlp:Response/saml:Assertion[1]", _xmlNameSpaceManager) as XmlElement;
         var id = assertion?.GetAttribute("ID");
@@ -436,22 +450,27 @@ internal sealed class SamlResponse : IDisposable
     // still matches the copied element elsewhere in the tree.
     private bool ValidateSignatureReference(SignedXml signedXml, XmlElement signatureElement)
     {
-        if (signedXml.SignedInfo.References.Count != 1) // exactly one reference, no more, no less
+        // A null SignedInfo (nullable on SignedXml) carries no reference to bind, so reject — fail closed.
+        // LoadXml populates it on a well-formed signature (and throws otherwise), so this never fires in
+        // practice; an unexpected null is a rejection, never a pass.
+        var signedInfo = signedXml.SignedInfo;
+        if (signedInfo is null || signedInfo.References.Count != 1) // exactly one reference, no more, no less
         {
             return false;
         }
 
-        var reference = (Reference)signedXml.SignedInfo.References[0];
+        var reference = (Reference)signedInfo.References[0]!;
 
         // A same-document ID reference only ("#id"); an empty (whole-document "") or external URI is
         // rejected. A "#"-only or non-NCName fragment never reaches here — SignedXml.LoadXml resolves
         // the reference eagerly and throws on it, which IsValid catches and turns into a rejection.
-        if (string.IsNullOrEmpty(reference.Uri) || reference.Uri[0] != '#')
+        var referenceUri = reference.Uri;
+        if (string.IsNullOrEmpty(referenceUri) || referenceUri[0] != '#')
         {
             return false;
         }
 
-        var idElement = signedXml.GetIdElement(_xmlDoc, reference.Uri.Substring(1));
+        var idElement = signedXml.GetIdElement(_xmlDoc, referenceUri.Substring(1));
         if (idElement == null)
         {
             return false;
@@ -511,7 +530,7 @@ internal sealed class SamlResponse : IDisposable
     /// </summary>
     /// <returns>The name ID attribute, or null when the assertion carries no NameID (the caller
     /// rejects such a login; previously this threw and surfaced as a 500).</returns>
-    public string GetNameID()
+    public string? GetNameID()
     {
         var node = _xmlDoc.SelectSingleNode("/samlp:Response/saml:Assertion[1]/saml:Subject/saml:NameID", _xmlNameSpaceManager);
         return node?.InnerText;
@@ -524,7 +543,7 @@ internal sealed class SamlResponse : IDisposable
     /// binds it to this service provider's own ACS URL (#156).
     /// </summary>
     /// <returns>The Recipient attribute, or null when absent.</returns>
-    public string GetRecipient()
+    public string? GetRecipient()
     {
         var node = _xmlDoc.SelectSingleNode(BearerSubjectConfirmationDataXPath, _xmlNameSpaceManager) as XmlElement;
         var recipient = node?.GetAttribute("Recipient");
@@ -538,7 +557,7 @@ internal sealed class SamlResponse : IDisposable
     /// IdP-initiated (unsolicited) response.
     /// </summary>
     /// <returns>The InResponseTo attribute, or null when absent.</returns>
-    public string GetInResponseTo()
+    public string? GetInResponseTo()
     {
         var node = _xmlDoc.SelectSingleNode(BearerSubjectConfirmationDataXPath, _xmlNameSpaceManager) as XmlElement;
         var inResponseTo = node?.GetAttribute("InResponseTo");
@@ -552,7 +571,7 @@ internal sealed class SamlResponse : IDisposable
     /// always-signed <see cref="GetRecipient"/> (#156).
     /// </summary>
     /// <returns>The Destination attribute, or null when absent.</returns>
-    public string GetDestination()
+    public string? GetDestination()
     {
         var node = _xmlDoc.SelectSingleNode("/samlp:Response", _xmlNameSpaceManager) as XmlElement;
         var destination = node?.GetAttribute("Destination");
@@ -594,7 +613,7 @@ internal sealed class SamlResponse : IDisposable
 
             foreach (XmlNode value in values)
             {
-                output.Add(value?.InnerText);
+                output.Add(value?.InnerText ?? string.Empty);
             }
         }
 

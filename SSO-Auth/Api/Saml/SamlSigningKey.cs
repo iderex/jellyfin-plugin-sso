@@ -1,4 +1,7 @@
+#nullable enable
+
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 
@@ -20,7 +23,7 @@ internal static class SamlSigningKey
     /// <param name="pfxBase64">The stored Base64 PKCS#12 blob, or blank when signing is not configured.</param>
     /// <param name="certificate">The loaded certificate with its private key, or null on failure.</param>
     /// <returns><see langword="true"/> only when a non-blank blob loaded into a usable certificate.</returns>
-    internal static bool TryLoad(string pfxBase64, out X509Certificate2 certificate)
+    internal static bool TryLoad(string? pfxBase64, [NotNullWhen(true)] out X509Certificate2? certificate)
     {
         certificate = null;
         if (string.IsNullOrWhiteSpace(pfxBase64))
@@ -82,12 +85,12 @@ internal static class SamlSigningKey
     /// </summary>
     /// <param name="certificate">The loaded signing certificate.</param>
     /// <returns>The RSA or ECDSA private key, or null when the certificate cannot sign.</returns>
-    internal static AsymmetricAlgorithm GetSigningKey(X509Certificate2 certificate)
+    internal static AsymmetricAlgorithm? GetSigningKey(X509Certificate2 certificate)
     {
         ArgumentNullException.ThrowIfNull(certificate);
 
         // Prefer RSA (the common case and the byte-identical existing path); fall back to ECDSA. Any other
         // key type returns null, which the callers treat as "unusable" and fail closed on.
-        return (AsymmetricAlgorithm)certificate.GetRSAPrivateKey() ?? certificate.GetECDsaPrivateKey();
+        return (AsymmetricAlgorithm?)certificate.GetRSAPrivateKey() ?? certificate.GetECDsaPrivateKey();
     }
 }

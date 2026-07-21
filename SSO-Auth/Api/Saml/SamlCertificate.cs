@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -22,7 +24,7 @@ internal static class SamlCertificate
     /// </summary>
     /// <param name="certificateStr">The Base64-encoded (DER) certificate string.</param>
     /// <returns><see langword="true"/> if the value is set but not a loadable certificate.</returns>
-    internal static bool IsInvalid(string certificateStr)
+    internal static bool IsInvalid(string? certificateStr)
     {
         if (string.IsNullOrWhiteSpace(certificateStr))
         {
