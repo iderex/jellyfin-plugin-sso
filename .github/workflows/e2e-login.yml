@@ -3,12 +3,12 @@
 # session token is minted and usable, that the role gate refuses a role-less user, and that a replayed
 # one-time state/token is refused. It supplements — never replaces — the manual Release-QA checklist.
 #
-# Provider-matrix policy (#919): a PR touching the harness, the nightly run, and a manual dispatch exercise
-# ONLY the canonical Keycloak harness (there is deliberately no `push` trigger — the PR run already validated
-# it, and paying the ~10-min Docker run again on the merge commit is wasteful); the FULL provider matrix (one
-# entry per shipped test/e2e/<provider>/ harness) runs ONLY at a release and a beta-release, so the
-# cross-provider pass is release-gate evidence, not a per-commit cost. The maintainer's local Docker is
-# currently broken by a version bug, so this runs on
+# Provider-matrix policy (#919): a PR touching the harness, the nightly run, and a DEFAULT manual dispatch
+# exercise ONLY the canonical Keycloak harness (there is deliberately no `push` trigger — the PR run already
+# validated it, and paying the ~10-min Docker run again on the merge commit is wasteful). The FULL provider
+# matrix (one entry per shipped test/e2e/<provider>/ harness) runs at a release and a beta-release — so the
+# cross-provider pass is release-gate evidence, not a per-commit cost — and on a manual dispatch with
+# `providers: all`, which is how a newly added harness is proven green BEFORE a release. This runs on
 # the GitHub runners' working Docker; it also runs locally once Docker is restored (see test/e2e/README.md).
 name: E2E Login Harness
 
@@ -49,9 +49,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Choose which providers to run: the FULL matrix only on a release/beta-release; every other trigger
-  # (a PR touching the harness, the nightly schedule, a manual dispatch) runs just the one canonical
-  # Keycloak harness. A provider joins the release matrix by adding one { name, compose } object below, at its
+  # Choose which providers to run: the FULL matrix on a release/beta-release OR a manual dispatch with
+  # `providers: all`; every other trigger (a PR touching the harness, the nightly schedule, a default
+  # dispatch) runs just the one canonical Keycloak harness. A provider joins that matrix by adding one
+  # { name, compose } object below, at its
   # test/e2e/<provider>/ compose file — the matrix grows one line per issue (#919).
   select:
     runs-on: ubuntu-latest

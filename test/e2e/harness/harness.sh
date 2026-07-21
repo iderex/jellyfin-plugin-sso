@@ -90,10 +90,27 @@ wait_for "Jellyfin" "$JELLYFIN/System/Info/Public"
 # back to symmetric HS256 (authentik silently does this when its provider has no signing key) makes the RP
 # reject every login with invalid_signature — an actually-hit failure. Assert the advertised algorithm here so
 # the regression names itself instead of surfacing as an opaque callback error mid-login.
-DISCOVERY_ALGS="$(curl -fsS "$DISCOVERY_URL" 2>/dev/null | jq -r '.id_token_signing_alg_values_supported // [] | join(",")' 2>/dev/null || true)"
+DISCOVERY_DOC="$(curl -fsS "$DISCOVERY_URL" 2>/dev/null || true)"
+DISCOVERY_ALGS="$(printf '%s' "$DISCOVERY_DOC" | jq -r '.id_token_signing_alg_values_supported // [] | join(",")' 2>/dev/null || true)"
+JWKS_URI="$(printf '%s' "$DISCOVERY_DOC" | jq -r '.jwks_uri // empty' 2>/dev/null || true)"
+# The advertised algorithm list alone is a capability claim; also require the JWKS to actually publish a key,
+# so "RS256 supported" cannot pass while no verifiable key exists.
+JWKS_KEYS=0
+if [ -n "$JWKS_URI" ]; then
+  JWKS_KEYS="$(curl -fsS "$JWKS_URI" 2>/dev/null | jq -r '.keys | length' 2>/dev/null || echo 0)"
+fi
+# Accept ANY asymmetric family (RS*/ES*/PS*/EdDSA) rather than RS256 alone — a correct provider may sign
+# ES256 by default (Kanidm does), and pinning one algorithm would red a correctly-configured harness. The
+# security property is unchanged: only a symmetric HS* (or `none`) is refused.
 case "$DISCOVERY_ALGS" in
-  *RS256*) pass "provider advertises RS256 id_token signing (asymmetric, JWKS-verifiable)" ;;
-  *) fail "provider does not advertise RS256 id_token signing (got '${DISCOVERY_ALGS:-<none>}') — a symmetric HS256 fallback breaks signature validation" ;;
+  *RS256* | *RS384* | *RS512* | *ES256* | *ES384* | *ES512* | *PS256* | *PS384* | *PS512* | *EdDSA*)
+    if [ "${JWKS_KEYS:-0}" -ge 1 ] 2>/dev/null; then
+      pass "provider advertises asymmetric id_token signing ($DISCOVERY_ALGS) and publishes $JWKS_KEYS JWKS key(s)"
+    else
+      fail "provider advertises asymmetric id_token signing ($DISCOVERY_ALGS) but its JWKS publishes no key — signature validation cannot succeed"
+    fi
+    ;;
+  *) fail "provider advertises no asymmetric id_token signing algorithm (got '${DISCOVERY_ALGS:-<none>}') — a symmetric HS* fallback breaks signature validation" ;;
 esac
 
 # --------------------------------------------------------------------------------------------------
@@ -277,9 +294,10 @@ idp_oidc_login() {
       flow_url="$(curl -fsSL -c "$jar" -b "$jar" -o /dev/null -w '%{url_effective}' "$auth_url")" || { printf 'idp_oidc_login[authentik]: authorize follow failed\n' >&2; return 1; }
       # The authorize must land on a flow page carrying a query; `sed` leaves its input UNCHANGED when there is
       # no "?", so without this guard a non-flow landing would be fed to the executor as a plausible query.
+      # Pin the SAME flow slug the executor URL below hardcodes, so the guard and the executor cannot drift.
       case "$flow_url" in
-        */if/flow/*\?*) : ;;
-        *) printf 'idp_oidc_login[authentik]: authorize did not land on a flow page: %s\n' "${flow_url%%\?*}" >&2; return 1 ;;
+        */if/flow/default-authentication-flow/\?*) : ;;
+        *) printf 'idp_oidc_login[authentik]: authorize did not land on the default authentication flow: %s\n' "${flow_url%%\?*}" >&2; return 1 ;;
       esac
       flow_query="$(printf '%s' "$flow_url" | sed 's#[^?]*?##')"
       case "$flow_query" in
