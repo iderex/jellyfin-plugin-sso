@@ -1,0 +1,25 @@
+name: Feature request
+description: Suggest an improvement or a new capability.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: >-
+        The underlying need, not only the proposed mechanism - e.g. "users
+        cannot find the SSO button" rather than "add HTML injection". If it is
+        about a specific IdP or protocol, name it.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution (optional)
+      description: How you imagine it working, alternatives you considered, links to prior art (other plugins, specs).
+  - type: markdown
+    attributes:
+      value: >-
+        Note: this is a solo-maintained, security-first project. Requests are
+        triaged against the roadmap milestones; protocol/IdP additions usually
+        start as an evaluation issue before any code.

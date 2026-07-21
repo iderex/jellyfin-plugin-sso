@@ -1,0 +1,67 @@
+name: Bug report
+description: Something in the plugin does not work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Thanks for the report. The version/server/provider fields below are what
+        almost every support thread ends up asking for - filling them in up
+        front usually saves a round-trip. **Never post secrets** (client
+        secrets, certificates, tokens); redact them from configs and logs.
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      description: Dashboard -> Plugins -> SSO Authentication (e.g. 4.3.0, or a beta tag like 4.3.0-beta.123).
+      placeholder: 4.3.0
+    validations:
+      required: true
+  - type: input
+    id: jellyfin-version
+    attributes:
+      label: Jellyfin server version
+      description: The 10.11.x (stable) or 12.0.x (beta line) server version.
+      placeholder: 10.11.3
+    validations:
+      required: true
+  - type: dropdown
+    id: provider-type
+    attributes:
+      label: Provider type
+      options:
+        - OpenID Connect (OIDC)
+        - SAML 2.0
+        - Both / not sure
+        - Not provider-related
+    validations:
+      required: true
+  - type: input
+    id: idp
+    attributes:
+      label: Identity provider
+      description: Which IdP and version (Keycloak, Authelia, authentik, Entra ID, ADFS, ...).
+      placeholder: Keycloak 26
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what did you expect?
+      description: Steps to reproduce if you have them. Screenshots welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: >-
+        Jellyfin log lines around the failure (the SSO plugin logs under
+        Jellyfin.Plugin.SSO_Auth). Secrets redacted. Rendered as code
+        automatically.
+      render: text
+  - type: checkboxes
+    id: reverse-proxy
+    attributes:
+      label: Environment
+      options:
+        - label: The server runs behind a reverse proxy (please note which in the description)
+        - label: This worked on a previous plugin version (please note which)
