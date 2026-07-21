@@ -1,27 +1,8 @@
-# Code owners for jellyfin-plugin-sso
+# Code owners for jellyfin-plugin-sso.
 #
-# Auto-requests the maintainer team's review on every change, with extra
-# emphasis on the security-critical paths (the SSO login path, crypto, config
-# persistence, and the release pipeline). Because the PR author is never
-# requested on their own PR, an author-excluded subset of the team is asked to
-# review each change.
-#
-# Note: development and review here are AI-driven (see the README's note on AI);
-# the reviews on these accounts are AI-assisted, not independent human auditing.
-# The listed reviewers are the maintainer team's accounts; a maintainer oversees
-# and can intervene. Ownership is enforced only for accounts with write access.
+# Sole maintainer. This documents ownership; it does not auto-request a review,
+# since GitHub never requests a pull request's own author and every change is
+# authored by the maintainer. The review layer is the adversarial multi-lens
+# review gate (see the README's note on AI-assisted development).
 
-# Default owners for everything in the repo.
-*                        @iderex @TheRealStroopwafel @rekamer @shippingToken
-
-# SSO login path and crypto: SAML core, controller/API helpers, admin config.
-/SSO-Auth/Saml.cs        @iderex @TheRealStroopwafel @rekamer @shippingToken
-/SSO-Auth/Api/           @iderex @TheRealStroopwafel @rekamer @shippingToken
-/SSO-Auth/Config/        @iderex @TheRealStroopwafel @rekamer @shippingToken
-
-# Release pipeline and CI.
-/.github/workflows/      @iderex @TheRealStroopwafel @rekamer @shippingToken
-/build.yaml              @iderex @TheRealStroopwafel @rekamer @shippingToken
-
-# Security policy.
-/SECURITY.md             @iderex @TheRealStroopwafel @rekamer @shippingToken
+* @iderex
