@@ -1,5 +1,3 @@
-#nullable enable
-
 using System;
 
 namespace Jellyfin.Plugin.SSO_Auth.Config;
@@ -87,7 +85,7 @@ internal static class ServerManagedFields
     /// </summary>
     /// <param name="incoming">The provider config about to be persisted; a null entry is skipped.</param>
     /// <param name="live">The current live provider config to read server-managed values from; null skips.</param>
-    internal static void Preserve(OidConfig incoming, OidConfig live)
+    internal static void Preserve(OidConfig incoming, OidConfig? live)
     {
         // A null provider entry (a malformed Add before #350, or a legacy store) carries no
         // server-managed fields; skip it rather than NRE the whole config-page save.
@@ -126,7 +124,7 @@ internal static class ServerManagedFields
     /// </summary>
     /// <param name="incoming">The provider config about to be persisted; a null entry is skipped.</param>
     /// <param name="live">The current live provider config to read server-managed values from; null skips.</param>
-    internal static void Preserve(SamlConfig incoming, SamlConfig live)
+    internal static void Preserve(SamlConfig incoming, SamlConfig? live)
     {
         if (incoming is null || live is null)
         {

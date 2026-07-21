@@ -1,5 +1,3 @@
-#nullable enable
-
 using System.Collections.Generic;
 using Microsoft.Extensions.Logging;
 
@@ -143,7 +141,7 @@ internal static class SsoAudit
     /// <param name="actor">The elevated administrator who enabled the mode.</param>
     /// <param name="breakGlassAdmin">The designated break-glass admin whose password door survives.</param>
     /// <param name="repointedCount">How many accounts were repointed off the password provider.</param>
-    internal static void SsoOnlyLoginEnabled(ILogger logger, string actor, string breakGlassAdmin, int repointedCount)
+    internal static void SsoOnlyLoginEnabled(ILogger logger, string actor, string? breakGlassAdmin, int repointedCount)
     {
         if (!logger.IsEnabled(LogLevel.Warning))
         {
@@ -199,7 +197,7 @@ internal static class SsoAudit
     /// <param name="logger">The logger.</param>
     /// <param name="actor">The elevated administrator who changed the designation.</param>
     /// <param name="breakGlassAdmin">The newly designated break-glass admin.</param>
-    internal static void BreakGlassAdminDesignated(ILogger logger, string actor, string breakGlassAdmin)
+    internal static void BreakGlassAdminDesignated(ILogger logger, string actor, string? breakGlassAdmin)
     {
         if (!logger.IsEnabled(LogLevel.Warning))
         {

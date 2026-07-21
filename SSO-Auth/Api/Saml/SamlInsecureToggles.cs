@@ -1,5 +1,3 @@
-#nullable enable
-
 using System.Collections.Generic;
 using Jellyfin.Plugin.SSO_Auth.Config;
 

@@ -1,5 +1,3 @@
-#nullable enable
-
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -75,7 +73,7 @@ internal sealed class SsoOnlyLoginService
     /// </summary>
     /// <param name="username">The candidate break-glass admin username.</param>
     /// <returns>The resolved login state.</returns>
-    internal BreakGlassAdminState DescribeBreakGlass(string username)
+    internal BreakGlassAdminState DescribeBreakGlass(string? username)
     {
         if (string.IsNullOrWhiteSpace(username))
         {

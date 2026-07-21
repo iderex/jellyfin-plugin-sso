@@ -1,7 +1,5 @@
 using System;
 
-#nullable enable
-
 namespace Jellyfin.Plugin.SSO_Auth.Api.Provider;
 
 /// <summary>

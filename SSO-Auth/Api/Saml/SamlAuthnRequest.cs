@@ -1,5 +1,3 @@
-#nullable enable
-
 /*
  Was Jitbit's simple SAML 2.0 component for ASP.NET
  https://github.com/jitbit/AspNetSaml/

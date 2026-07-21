@@ -1,5 +1,3 @@
-#nullable enable
-
 using MediaBrowser.Controller.Authentication;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api.Session;

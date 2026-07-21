@@ -74,7 +74,7 @@ public class SSOControllerAddTests
     {
         var harness = new SsoControllerHarness();
 
-        Assert.Throws<ArgumentException>(() => harness.Controller.OidAdd("keycloak", null));
+        Assert.Throws<ArgumentException>(() => harness.Controller.OidAdd("keycloak", null!));
 
         // Fail-closed: a null [FromBody] is rejected at the door, so no null entry is stored (#350).
         Assert.False(SSOPlugin.Instance.ReadConfiguration(c => c.OidConfigs.ContainsKey("keycloak")));
@@ -85,7 +85,7 @@ public class SSOControllerAddTests
     {
         var harness = new SsoControllerHarness();
 
-        Assert.Throws<ArgumentException>(() => harness.Controller.SamlAdd("adfs", null));
+        Assert.Throws<ArgumentException>(() => harness.Controller.SamlAdd("adfs", null!));
 
         Assert.False(SSOPlugin.Instance.ReadConfiguration(c => c.SamlConfigs.ContainsKey("adfs")));
     }

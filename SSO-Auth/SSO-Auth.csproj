@@ -7,6 +7,7 @@
          publish pipeline builds each target into its own package with its own targetAbi. -->
     <TargetFrameworks>net9.0;net10.0</TargetFrameworks>
     <RootNamespace>Jellyfin.Plugin.SSO_Auth</RootNamespace>
+    <Nullable>enable</Nullable>
     <AssemblyVersion>4.3.0</AssemblyVersion>
     <FileVersion>4.3.0</FileVersion>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>

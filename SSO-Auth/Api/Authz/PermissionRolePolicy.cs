@@ -4,8 +4,6 @@ using System.Linq;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.SSO_Auth.Config;
 
-#nullable enable
-
 namespace Jellyfin.Plugin.SSO_Auth.Api.Authz;
 
 /// <summary>

@@ -1,5 +1,3 @@
-#nullable enable
-
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -516,7 +514,7 @@ internal sealed class OidcLoginService
     /// <param name="response">The client information carrying the state token in <c>Data</c>.</param>
     /// <param name="bindingCookie">The browser-binding cookie value the redeem presented (#326).</param>
     /// <returns>The link-creation result, or a fail-closed rejection.</returns>
-    internal ActionResult Link(string provider, Guid jellyfinUserId, AuthResponse response, string bindingCookie)
+    internal ActionResult Link(string provider, Guid jellyfinUserId, AuthResponse response, string? bindingCookie)
     {
         if (string.IsNullOrEmpty(response?.Data))
         {

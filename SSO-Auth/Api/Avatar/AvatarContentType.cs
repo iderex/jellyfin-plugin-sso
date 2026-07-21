@@ -1,5 +1,3 @@
-#nullable enable
-
 using System.Diagnostics.CodeAnalysis;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api.Avatar;

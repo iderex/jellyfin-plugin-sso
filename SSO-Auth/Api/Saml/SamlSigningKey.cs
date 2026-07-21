@@ -1,5 +1,3 @@
-#nullable enable
-
 using System;
 using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
@@ -57,7 +55,7 @@ internal static class SamlSigningKey
     /// </summary>
     /// <param name="pfxBase64">The Base64 PKCS#12 blob.</param>
     /// <returns><see langword="true"/> if the value is set but not a loadable signing key.</returns>
-    internal static bool IsInvalid(string pfxBase64)
+    internal static bool IsInvalid(string? pfxBase64)
     {
         if (string.IsNullOrWhiteSpace(pfxBase64))
         {

@@ -7,8 +7,6 @@ using Jellyfin.Plugin.SSO_Auth.Api.Authz;
 using Jellyfin.Plugin.SSO_Auth.Api.Avatar;
 using Jellyfin.Plugin.SSO_Auth.Config;
 
-#nullable enable
-
 namespace Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 
 /// <summary>

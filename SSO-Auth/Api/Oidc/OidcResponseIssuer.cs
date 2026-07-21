@@ -4,8 +4,6 @@ using Microsoft.IdentityModel.Tokens;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
-#nullable enable
-
 namespace Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 
 /// <summary>
