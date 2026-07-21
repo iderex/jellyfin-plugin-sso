@@ -407,6 +407,17 @@ public class SamlConfig : ProviderConfigBase
     public string SamlEndpoint { get; set; } = string.Empty;
 
     /// <summary>
+    /// Gets or sets the identity provider's SAML Single-Logout (SLO) endpoint — a DISTINCT URL from
+    /// <see cref="SamlEndpoint"/> (the SSO endpoint), where the browser is redirected with a signed
+    /// SP-initiated <c>LogoutRequest</c> (#727, SLO-3c). Blank (the default) means no SP-initiated Single
+    /// Logout: the logout route degrades to a fail-safe local-only logout. It must be an absolute https URL
+    /// when set (validated at save by <see cref="ProviderConfigValidator.ValidateSamlSloEndpoint"/>), so the
+    /// signed LogoutRequest — which names the subject NameID — never traverses plaintext http. No effect while
+    /// <see cref="PluginConfiguration.EnableSingleLogout"/> is off.
+    /// </summary>
+    public string SamlSloEndpoint { get; set; } = string.Empty;
+
+    /// <summary>
     /// Gets or sets the SAML provider's client ID.
     /// </summary>
     public string SamlClientId { get; set; } = string.Empty;

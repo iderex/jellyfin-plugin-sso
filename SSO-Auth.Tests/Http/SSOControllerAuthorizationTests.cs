@@ -46,11 +46,12 @@ public sealed class SSOControllerAuthorizationTests : IClassFixture<SsoAuthoriza
     };
 
     // The endpoints guarded by a bare [Authorize] (any authenticated caller, no elevation) — the canonical
-    // link management surface, plus the RP-initiated OpenID logout (#727), where a user logs THEMSELVES out
-    // (every action is scoped to the caller's own user id), so it is deliberately non-elevated.
+    // link management surface, plus the RP-initiated OpenID logout and the SP-initiated SAML logout (#727),
+    // where a user logs THEMSELVES out (every action is scoped to the caller's own user id), so they are
+    // deliberately non-elevated.
     private static readonly string[] ExpectedAuthenticatedActions =
     {
-        "AddCanonicalLink", "DeleteCanonicalLink", "GetSamlLinksByUser", "GetOidLinksByUser", "OidLogout",
+        "AddCanonicalLink", "DeleteCanonicalLink", "GetSamlLinksByUser", "GetOidLinksByUser", "OidLogout", "SamlSpLogout",
     };
 
     private readonly SsoAuthorizationServerFixture _fixture;
