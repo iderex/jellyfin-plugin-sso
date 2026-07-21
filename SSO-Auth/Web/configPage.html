@@ -215,6 +215,58 @@
           </form>
 
           <!--
+            Login-page buttons (#722) — GLOBAL setting. ManageLoginPageButtons lives on the root
+            PluginConfiguration, not on a provider, so it deliberately sits OUTSIDE both provider forms
+            and carries NO sso-* marker class: it is saved by its own handler (config.js
+            saveLoginButtons), which re-posts the whole configuration with only this flag changed, and
+            loaded by loadConfiguration. The per-provider button settings (HideLoginButton,
+            LoginButtonText) are ordinary persisting provider-form fields in each editor below.
+          -->
+          <form id="sso-login-buttons" class="esqConfigurationForm">
+            <div
+              class="verticalSection"
+              is="emby-collapse"
+              title="Login Page Buttons"
+            >
+              <div class="collapseContent">
+                <div
+                  class="checkboxContainer checkboxContainer-withDescription"
+                >
+                  <label>
+                    <input
+                      is="emby-checkbox"
+                      id="ManageLoginPageButtons"
+                      name="ManageLoginPageButtons"
+                      type="checkbox"
+                    />
+                    <span>Manage login buttons on the login page</span>
+                  </label>
+                  <div class="fieldDescription checkboxFieldDescription">
+                    Off by default: the plugin never touches the server's login
+                    branding unless you opt in here. When on, a managed "Sign in
+                    with …" block — one button per enabled provider — is spliced
+                    into the login page's branding disclaimer and refreshed
+                    whenever this plugin's configuration is saved (and at server
+                    start). When off, only that managed block is removed; any
+                    disclaimer content you wrote yourself is preserved either
+                    way. Each provider's editor below can hide its button or
+                    give it a custom label.
+                  </div>
+                </div>
+
+                <button
+                  id="SaveLoginButtons"
+                  is="emby-button"
+                  type="button"
+                  class="raised button-submit block emby-button"
+                >
+                  <span>Save</span>
+                </button>
+              </div>
+            </div>
+          </form>
+
+          <!--
             Provider workspace (#365 UI redesign). The provider LIST replaces the old select -> Load flow:
             each saved OpenID provider is a card (name + type badge + enabled/disabled pill); clicking a card
             loads it into the editor below. The hidden <select id="selectProvider"> is retained as the state
@@ -603,6 +655,50 @@
                       />
                       <span>Enabled</span>
                     </label>
+                  </div>
+
+                  <div
+                    class="checkboxContainer checkboxContainer-withDescription"
+                  >
+                    <label>
+                      <input
+                        is="emby-checkbox"
+                        id="HideLoginButton"
+                        name="HideLoginButton"
+                        type="checkbox"
+                        class="sso-toggle"
+                      />
+                      <span>Hide from managed login-page buttons</span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">
+                      Excludes this provider from the managed "Sign in with …"
+                      block on the login page while keeping it usable through
+                      its direct start URL. Only takes effect while the global
+                      "Manage login buttons on the login page" option is on; it
+                      never hides anything you added to the branding yourself.
+                    </div>
+                  </div>
+
+                  <div class="inputContainer">
+                    <label
+                      class="inputLabel inputLabelUnfocused"
+                      for="LoginButtonText"
+                      >Login button text:
+                      <span class="sso-optional">(optional)</span></label
+                    >
+                    <input
+                      is="emby-input"
+                      id="LoginButtonText"
+                      type="text"
+                      class="sso-text"
+                    />
+                    <div class="fieldDescription">
+                      Custom label for this provider's managed login-page
+                      button. Leave blank to use the provider name. Only takes
+                      effect while the global "Manage login buttons on the login
+                      page" option is on and the button is not hidden; any text
+                      is safe — it is always rendered inert, never as markup.
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1968,6 +2064,50 @@
                       />
                       <span>Enabled</span>
                     </label>
+                  </div>
+
+                  <div
+                    class="checkboxContainer checkboxContainer-withDescription"
+                  >
+                    <label>
+                      <input
+                        is="emby-checkbox"
+                        id="saml-HideLoginButton"
+                        name="saml-HideLoginButton"
+                        type="checkbox"
+                        class="sso-toggle"
+                      />
+                      <span>Hide from managed login-page buttons</span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">
+                      Excludes this provider from the managed "Sign in with …"
+                      block on the login page while keeping it usable through
+                      its direct start URL. Only takes effect while the global
+                      "Manage login buttons on the login page" option is on; it
+                      never hides anything you added to the branding yourself.
+                    </div>
+                  </div>
+
+                  <div class="inputContainer">
+                    <label
+                      class="inputLabel inputLabelUnfocused"
+                      for="saml-LoginButtonText"
+                      >Login button text:
+                      <span class="sso-optional">(optional)</span></label
+                    >
+                    <input
+                      is="emby-input"
+                      id="saml-LoginButtonText"
+                      type="text"
+                      class="sso-text"
+                    />
+                    <div class="fieldDescription">
+                      Custom label for this provider's managed login-page
+                      button. Leave blank to use the provider name. Only takes
+                      effect while the global "Manage login buttons on the login
+                      page" option is on and the button is not hidden; any text
+                      is safe — it is always rendered inert, never as markup.
+                    </div>
                   </div>
                 </div>
               </div>

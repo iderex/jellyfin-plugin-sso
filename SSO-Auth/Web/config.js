@@ -176,6 +176,12 @@ const ssoConfigurationPage = {
           page,
           config.SamlConfigs || {},
         );
+        // The GLOBAL login-page buttons opt-in (#722) rides the same configuration load. It is a root
+        // PluginConfiguration flag, not a provider field, so it has its own save path (saveLoginButtons)
+        // and no sso-* marker class.
+        page.querySelector("#ManageLoginPageButtons").checked = Boolean(
+          config.ManageLoginPageButtons,
+        );
       },
     );
 
@@ -975,6 +981,42 @@ const ssoConfigurationPage = {
               title: "Delete failed",
               message:
                 "Could not remove the provider. The saved configuration was rejected by the server; reload the page and try again.",
+            });
+          },
+        );
+      },
+    );
+  },
+  // Save the GLOBAL login-page buttons opt-in (#722). ManageLoginPageButtons is a root
+  // PluginConfiguration flag, so this fetches the live configuration, changes ONLY this flag, and
+  // re-posts the whole document — the provider dictionaries and every other root setting ride along
+  // unchanged, exactly as the provider save/delete paths do. The server reacts to the saved
+  // configuration itself (LoginButtonManager listens for the configuration change), so no extra
+  // endpoint call is needed: on save the managed block is injected/refreshed, or — with the flag
+  // off — only the managed region is removed and the admin's own branding is preserved.
+  saveLoginButtons: (page) => {
+    ApiClient.getPluginConfiguration(ssoConfigurationPage.pluginUniqueId).then(
+      (config) => {
+        config.ManageLoginPageButtons = page.querySelector(
+          "#ManageLoginPageButtons",
+        ).checked;
+
+        ApiClient.updatePluginConfiguration(
+          ssoConfigurationPage.pluginUniqueId,
+          config,
+        ).then(
+          function (result) {
+            Dashboard.processPluginConfigurationUpdateResult(result);
+            ssoConfigurationPage.loadConfiguration(page);
+            Dashboard.alert("Settings saved.");
+          },
+          // Report a genuine save failure rather than swallowing it: this PUT re-posts the whole
+          // configuration, so the server can reject it for a reason unrelated to this toggle (#336).
+          function () {
+            Dashboard.alert({
+              title: "Save failed",
+              message:
+                "Could not save the login-page button setting. The saved configuration was rejected by the server; reload the page and try again.",
             });
           },
         );
@@ -2236,6 +2278,12 @@ export default function initSsoConfigurationPage(view) {
 
   // Populate the redirect URI once at init (the blank editor shows its placeholder until a name is typed).
   ssoConfigurationPage.updateRedirectUri(view);
+
+  view.querySelector("#SaveLoginButtons").addEventListener("click", (e) => {
+    ssoConfigurationPage.saveLoginButtons(view);
+    e.preventDefault();
+    return false;
+  });
 
   view.querySelector("#ExportConfig").addEventListener("click", (e) => {
     ssoConfigurationPage.exportConfig(view);

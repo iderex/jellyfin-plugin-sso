@@ -1437,7 +1437,7 @@ public class ArchitectureConformanceTests
         // The full save-contract roster, pinned after the #365 provider-workspace redesign reordered and
         // regrouped the form into native accordion sections. ProviderFormFieldIds_MatchOidConfigProperties
         // guards the FORWARD direction (no stray marked id) and a reverse pin for the security-critical
-        // SUBSET; this test is the exhaustive reverse pin: every one of the 34 persisting fields must still
+        // SUBSET; this test is the exhaustive reverse pin: every one of the 41 persisting fields must still
         // render as a marked input with its exact id, so a field silently dropped or unmarked during a
         // future re-layout — which would stop it persisting — fails here rather than shipping as silent data
         // loss. The provider-name KEY input (OidProviderName) is deliberately unmarked (it supplies the
@@ -1478,9 +1478,10 @@ public class ArchitectureConformanceTests
             "RequirePkce", "AllowExistingAccountLink", "ProvisionNewUsersDisabled", "RequireVerifiedEmailForAdoption", "RequireVerifiedEmailForLogin",
             "AcrValues", "Prompt", "MaxAge", "RequireAcr",
             "DisableHttps", "DisablePushedAuthorization", "DoNotValidateEndpoints", "DoNotValidateIssuerName", "DoNotValidateResponseIssuer",
+            "HideLoginButton", "LoginButtonText",
         };
 
-        Assert.Equal(39, expected.Length);
+        Assert.Equal(41, expected.Length);
         var missing = expected.Where(id => !markedIds.Contains(id)).ToList();
         Assert.True(
             missing.Count == 0,
@@ -1584,7 +1585,7 @@ public class ArchitectureConformanceTests
     public void SamlProviderForm_RendersEveryPersistingFieldId()
     {
         // The exhaustive reverse pin for the SAML save contract (#725), the twin of
-        // ProviderForm_RendersEveryPersistingFieldId: every one of the 30 persisting SAML fields must render
+        // ProviderForm_RendersEveryPersistingFieldId: every one of the 32 persisting SAML fields must render
         // as a marked input with its exact "saml-"-prefixed id, so a field silently dropped or unmarked during
         // a future re-layout — which would stop it persisting — fails here rather than shipping as silent data
         // loss. The provider-name KEY input (saml-provider-name) is deliberately unmarked (it supplies the
@@ -1624,9 +1625,10 @@ public class ArchitectureConformanceTests
             "Roles", "AdminRoles", "EnableAllFolders", "EnabledFolders", "EnableFolderRoles", "FolderRoleMapping",
             "EnableLiveTvRoles", "LiveTvRoles", "LiveTvManagementRoles", "EnableLiveTv", "EnableLiveTvManagement",
             "SchemeOverride", "PortOverride", "BaseUrlOverride",
+            "HideLoginButton", "LoginButtonText",
         };
 
-        Assert.Equal(30, expected.Length);
+        Assert.Equal(32, expected.Length);
         var missing = expected.Where(p => !markedProps.Contains(p)).ToList();
         Assert.True(
             missing.Count == 0,
