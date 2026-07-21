@@ -69,7 +69,7 @@ jobs:
           set -euo pipefail
           keycloak='{"name":"Keycloak (OIDC + SAML)","compose":"test/e2e/docker-compose.yml"}'
           authelia='{"name":"Authelia (OIDC)","compose":"test/e2e/authelia/docker-compose.yml"}'
-          authentik='{"name":"authentik (OIDC)","compose":"test/e2e/authentik/docker-compose.yml"}'
+          authentik='{"name":"authentik (OIDC + SAML)","compose":"test/e2e/authentik/docker-compose.yml"}'
           # The full provider matrix (release/beta only). Append one object per shipped harness as each
           # test/e2e/<provider>/ lands: #922 pocket-id, #923 kanidm, #924 zitadel, #925 dex.
           if [ "$IS_RELEASE" = "true" ] || [ "$DISPATCH_ALL" = "true" ]; then

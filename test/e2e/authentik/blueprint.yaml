@@ -38,6 +38,44 @@ entries:
       password: bob
       is_active: true
 
+  # SAML uses distinct users from OIDC (carol/dave vs alice/bob) so the two protocols never contend over the
+  # same Jellyfin account — the same split the Keycloak realm uses.
+  - model: authentik_core.user
+    id: user-carol
+    identifiers:
+      username: carol
+    attrs:
+      username: carol
+      name: carol
+      email: carol@example.com
+      password: carol
+      is_active: true
+      groups:
+        - !KeyOf grp-access
+
+  - model: authentik_core.user
+    id: user-dave
+    identifiers:
+      username: dave
+    attrs:
+      username: dave
+      name: dave
+      email: dave@example.com
+      password: dave
+      is_active: true
+
+  # The plugin's SAML role gate reads an assertion attribute named exactly `Role`. authentik's built-in
+  # Groups mapping emits the WS-Federation claim URI instead, so emit the group names under `Role` here.
+  - model: authentik_providers_saml.samlpropertymapping
+    id: sm-saml-role
+    identifiers:
+      name: e2e-saml-role
+    attrs:
+      name: e2e-saml-role
+      saml_name: Role
+      expression: |
+        return [group.name for group in request.user.ak_groups.all()]
+
   - model: authentik_providers_oauth2.scopemapping
     id: sm-groups
     identifiers:
@@ -89,3 +127,43 @@ entries:
       name: Jellyfin
       slug: jellyfin
       provider: !KeyOf prov-oidc
+
+  - model: authentik_providers_saml.samlprovider
+    id: prov-saml
+    identifiers:
+      name: jellyfin-saml
+    attrs:
+      name: jellyfin-saml
+      # Dotted host: authentik validates this with Django's URLValidator, which rejects a single-label
+      # hostname. The compose gives the Jellyfin service a `jellyfin.example.com` alias for exactly this.
+      acs_url: http://jellyfin.example.com:8096/sso/SAML/post/authentik
+      audience: jellyfin-saml
+      sp_binding: post
+      # The plugin validates an enveloped assertion signature, so the assertion must be signed with a real
+      # keypair — the same reason the OAuth2 provider pins a signing key above.
+      sign_assertion: true
+      sign_response: false
+      signing_kp:
+        !Find [authentik_crypto.certificatekeypair, [name, "authentik Self-signed Certificate"]]
+      # NameID = the username, so the subject the plugin binds to is the stable account name the harness
+      # asserts against (mirrors the Keycloak realm).
+      name_id_mapping:
+        !Find [
+          authentik_providers_saml.samlpropertymapping,
+          [name, "authentik default SAML Mapping: Username"],
+        ]
+      authorization_flow:
+        !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      invalidation_flow:
+        !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      property_mappings:
+        - !KeyOf sm-saml-role
+
+  - model: authentik_core.application
+    id: app-jellyfin-saml
+    identifiers:
+      slug: jellyfin-saml
+    attrs:
+      name: Jellyfin (SAML)
+      slug: jellyfin-saml
+      provider: !KeyOf prov-saml

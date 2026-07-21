@@ -88,7 +88,12 @@ services:
     volumes:
       - ../jellyfin/config:/config
     networks:
-      - ssonet
+      ssonet:
+        aliases:
+          # authentik validates a SAML provider's acs_url with Django's URLValidator, which rejects a
+          # single-label host like `jellyfin`. The dotted alias makes the ACS URL valid while resolving to
+          # this same container (the OIDC redirect_uris use a different validator and need no alias).
+          - jellyfin.example.com
 
   harness:
     image: alpine:3.20
@@ -108,7 +113,15 @@ services:
       OID_SCOPES_JSON: '["openid","email","profile","groups"]'
       DO_NOT_LOAD_PROFILE: "false"
       DISABLE_HTTPS: "true"
-      RUN_SAML: "false"
+      # authentik speaks BOTH protocols, so this harness exercises SAML too (carol/dave, kept distinct from
+      # the OIDC alice/bob so the two flows never contend over one Jellyfin account).
+      RUN_SAML: "true"
+      SAML_DESCRIPTOR_URL: http://authentik:9000/application/saml/jellyfin-saml/metadata/
+      SAML_ENDPOINT: http://authentik:9000/application/saml/jellyfin-saml/sso/binding/redirect/
+      SAML_CLIENT_ID: jellyfin-saml
+      # authentik rejects an AuthnRequest whose ACS URL differs from the provider's configured one (HTTP 400),
+      # and its provider ACS must use a dotted host, so the plugin is pinned to the same canonical base.
+      SAML_BASE_URL_OVERRIDE: http://jellyfin.example.com:8096
       JF_ADMIN_USER: e2eadmin
       JF_ADMIN_PASS: e2e-admin-pw
     volumes:
