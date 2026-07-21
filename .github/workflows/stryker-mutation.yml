@@ -11,14 +11,28 @@
 #   detection. The standing bar stays "every security branch has a negative
 #   test"; mutation score measures whether we actually met it.
 #
-# NON-BLOCKING BY CONSTRUCTION (three independent reasons):
+# NON-BLOCKING for the SCORE, loud for BREAKAGE (#899):
 #   1. No `pull_request` trigger. This workflow never runs as a PR check, so it
 #      is not — and cannot silently become — a required status check on the
-#      protected branch. It runs weekly and on manual dispatch only.
+#      protected branch. It runs on manual dispatch (and, when re-enabled,
+#      weekly).
 #   2. `thresholds.break` is 0 in stryker-config.json, so `dotnet stryker` never
-#      exits non-zero on a low score. The score is reported, not enforced.
-#   3. The scan step is `continue-on-error: true` as a belt-and-braces guard, so
-#      even an infrastructure hiccup here can never turn a run red.
+#      exits non-zero on a LOW SCORE. The score is reported, not enforced.
+#   3. An infrastructure failure, by contrast, MUST show red: the former
+#      `continue-on-error: true` + `if-no-files-found: warn` combination let a
+#      run that produced no report at all end green — exactly how the MTP
+#      migration's Stryker breakage stayed invisible until the #718 review
+#      predicted it and a dispatch confirmed it. A run with no report now fails
+#      visibly (fail-closed reporting; the run is still never a merge gate).
+#
+# CURRENTLY BLOCKED UPSTREAM (#899): dotnet-stryker (<= 4.16.0) drives its runs
+# through VSTest and cannot mutate a Microsoft.Testing.Platform-only test
+# project (stryker-mutator/stryker-net#3094); since the #718 MTP migration every
+# run fails at startup with "Microsoft.Testing.Platform ... not yet supported".
+# The weekly cron is therefore PAUSED (commented out) so the schedule does not
+# emit a known-red run every Monday; manual dispatch stays available to re-test.
+# When a Stryker release supports MTP: bump the tool pin, dispatch once, and
+# re-enable the cron (#899 tracks this).
 #
 # Hardened per the repo workflow policy (see zizmor.yml): every action is
 # SHA-pinned with a version comment, checkout runs with persist-credentials:false,
@@ -28,10 +42,13 @@
 name: Stryker mutation testing
 
 on:
-  schedule:
-    # Weekly (Mondays). Offset from the Scorecard cron (27 4 * * 1) so the two
-    # scheduled runs do not contend for a runner at the same minute.
-    - cron: "41 5 * * 1"
+  # Weekly cron PAUSED while Stryker lacks Microsoft.Testing.Platform support
+  # (see the blocked-upstream note above; #899). Re-enable when the tool pin is
+  # bumped to an MTP-capable release:
+  # schedule:
+  #   # Weekly (Mondays). Offset from the Scorecard cron (27 4 * * 1) so the two
+  #   # scheduled runs do not contend for a runner at the same minute.
+  #   - cron: "41 5 * * 1"
   # Let a maintainer run it on demand from the Actions tab.
   workflow_dispatch:
 
@@ -83,22 +100,25 @@ jobs:
         # Installs dotnet-stryker at the version pinned in .config/dotnet-tools.json.
         run: dotnet tool restore
 
-      - name: Run Stryker (scoped, non-blocking)
-        # Never fail the run: break=0 in config already prevents a non-zero exit
-        # on a low score; continue-on-error is the second guard for any other
-        # failure. Run from the test project directory so Stryker picks up
-        # stryker-config.json and auto-detects the single project under test.
-        continue-on-error: true
+      - name: Run Stryker (scoped, score-non-blocking)
+        # break=0 in config keeps a LOW SCORE from exiting non-zero (the score is
+        # a signal, not a gate). A tool/infrastructure failure, however, exits
+        # non-zero and now fails the run visibly — no continue-on-error, per the
+        # fail-closed-reporting note at the top (#899). Run from the test project
+        # directory so Stryker picks up stryker-config.json and auto-detects the
+        # single project under test.
         working-directory: SSO-Auth.Tests
         run: dotnet stryker
 
       - name: Upload mutation report
-        # Publish the HTML/markdown report as a run artifact regardless of the
-        # scan outcome, so surviving mutants can be reviewed offline.
+        # Publish the HTML/markdown report as a run artifact even when the scan
+        # step failed, so whatever partial output exists can be reviewed — but a
+        # run that produced NO report fails here (if-no-files-found: error), so
+        # silent signal loss is impossible (#899).
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: stryker-mutation-report
           path: SSO-Auth.Tests/StrykerOutput/**/reports/**
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
