@@ -183,6 +183,8 @@ jobs:
             Jellyfin 12.0 (.NET 10) beta ${{ steps.version.outputs.base }}-JF12-beta (plugin version ${{ steps.version.outputs.beta }}).
             Install via the beta repository URL (a Jellyfin 12.0 server picks this build automatically by targetAbi):
             https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json
+
+            Scope note (#743): the JF12/5.0 line is **not validated against a live Jellyfin 12.0 server yet** — no 12.0 GA server exists to run the E2E checklist against. It is CI-built and unit/conformance-tested only, and it is NOT part of the 4.x (Jellyfin 10.11) release-candidate gate; the 5.0 line clears its own live-validation gate when a Jellyfin 12.0 RC/GA build is available. Use these betas for testing, not production.
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     - name: Publish the draft release

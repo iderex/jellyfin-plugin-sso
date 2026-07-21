@@ -108,7 +108,7 @@ Jellyfin upstream is building [native OIDC](https://github.com/jellyfin/jellyfin
    | **stable** | `https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-release/manifest.json` |
    | **beta**   | `https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json`    |
    - **stable** ships tagged releases only. **beta** publishes on a daily schedule (04:00 UTC) whenever `main` has advanced since the last beta, so betas move fast and may break — use them for testing, not production.
-   - Each manifest lists builds for **both Jellyfin 10.11** (.NET 9) and **Jellyfin 12.0** (.NET 10). Jellyfin filters by the plugin's target ABI, so your server is only ever offered the build that runs on it — you don't pick the generation, it does. Jellyfin 12.0 support is currently **beta only** (the stable 12.0 build lands at a 12.0 stable release).
+   - Each manifest lists builds for **both Jellyfin 10.11** (.NET 9) and **Jellyfin 12.0** (.NET 10). Jellyfin filters by the plugin's target ABI, so your server is only ever offered the build that runs on it — you don't pick the generation, it does. Jellyfin 12.0 support is currently **beta only** and **not yet validated against a live 12.0 server** (none exists at GA quality to test against): the JF12/5.0 line is CI-built and unit-tested but sits outside the 4.x release-candidate gate, and it clears its own live-validation gate when a Jellyfin 12.0 RC/GA build is available (the stable 12.0 build lands at a 12.0 stable release).
 
 2. Go to **Dashboard → Plugins → Catalog**, find **SSO Authentication**, and install it.
 3. **Restart Jellyfin** to load the plugin.
