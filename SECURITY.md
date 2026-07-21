@@ -117,6 +117,52 @@ integrity is covered by the SLSA attestation and the checksum sidecars above.
 
 For how these controls together cover what an automated PR reviewer would catch — and the one accepted residual — see [Review Gate](https://github.com/iderex/jellyfin-plugin-sso/wiki/Review-Gate). For how they map onto the OpenSSF Best Practices passing level through an honest Silver/Gold + OSPS-Baseline assessment — including the criteria a solo, AI-assisted project structurally cannot meet — see the [Security & Maturity Self-Assessment](https://github.com/iderex/jellyfin-plugin-sso/wiki/Security-and-Maturity-Self-Assessment). For the authentication surface mapped to OWASP ASVS 5.0 and the OAuth 2.0 Security BCP (RFC 9700) — Met / Partial / N-A with source citations and honestly-recorded residuals — see the [Security Conformance self-assessment](https://github.com/iderex/jellyfin-plugin-sso/wiki/Security-Conformance).
 
+## Single Logout security posture
+
+Single Logout (SLO) propagates a sign-out between the identity provider and
+Jellyfin. It is **opt-in and off by default** (`EnableSingleLogout`): with it
+off, both the RP-initiated OIDC logout route and the inbound SAML
+`LogoutRequest` endpoint reject without acting.
+
+- **The inbound SAML `LogoutRequest` endpoint is unauthenticated but
+  signature-gated, fail-closed.** An IdP-initiated logout can revoke sessions,
+  so the request is validated with the same defenses as the login assertion
+  before anything is revoked: a hardened XML parse (DTD/DOCTYPE prohibited,
+  external resolver disabled, size-bounded), an enveloped signature bound to the
+  request root by an exactly-one, `#id`, covers-root reference (XML
+  signature-wrapping defense), a signature/digest/transform/canonicalization
+  **algorithm allowlist** (SHA-1/MD5 rejected), and a certificate trial across
+  the provider's configured verification certificate(s) with validity-window and
+  signing-key-strength enforcement. Unsigned, wrong-key, wrapped, weak-algorithm,
+  malformed, expired, or replayed requests are all rejected with a **uniform
+  400** carrying no cause-distinguishing detail, and the request ID is consumed
+  one-time to block replay. There is a negative test for each of these branches.
+- **Blast radius is bounded.** A valid `LogoutRequest` revokes only the sessions
+  of the `(provider, NameID)` it names — matched exactly, no normalization — and,
+  when it carries `SessionIndex` elements, only sessions whose captured index
+  matches; it can never reach another subject's or another provider's sessions.
+  Jellyfin's token revocation is **user-scoped** (there is no per-token revoke),
+  so a `SessionIndex`-scoped request still revokes the whole matched user's
+  tokens — documented, and safe (it errs toward ending more of the named user's
+  sessions, never someone else's). A `200` is returned only when at least one
+  session was actually revoked; a request that matched sessions but revoked none
+  fails closed.
+- **RP-initiated OIDC logout** ends the caller's own local session, then
+  redirects to the IdP's discovered `end_session_endpoint` — **host-bound to the
+  discovered issuer** (open-redirect/SSRF defense) — with the caller's own
+  `id_token_hint`. Any `post_logout_redirect_uri` is **allow-listed against this
+  server's canonical base URL** (an off-base value is rejected at config-save and
+  ignored at runtime), and validated at both points by one shared predicate. A
+  missing or unreachable `end_session_endpoint` degrades to a local-only logout —
+  it never breaks sign-out.
+- **Honest scope limits.** SP-initiated outbound SAML logout and a signed
+  outbound `LogoutResponse` to the IdP are **not yet implemented** (tracked on
+  [#727](https://github.com/iderex/jellyfin-plugin-sso/issues/727)): a validated
+  inbound `LogoutRequest` is answered with a `200` after revocation, which most
+  identity providers accept. Logout events (`LogoutRequested`/`LogoutRejected`)
+  are audited by reason code — never raw `NameID`/`SessionIndex` — and the inbound
+  endpoint is rate-limited.
+
 ## EU Cyber Resilience Act (CRA) position
 
 - **This is a non-commercial FLOSS project.** It is developed and published
