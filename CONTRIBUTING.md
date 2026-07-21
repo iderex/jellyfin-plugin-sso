@@ -154,6 +154,11 @@ dotnet test --no-build --verbosity normal    # the xUnit project SSO-Auth.Tests 
 npx prettier --check "**/*.{js,html,md,css,scss}"   # for any .js/.html/.md/.css change
 ```
 
+`dotnet test` requires the **.NET 10 SDK**: the repo's `global.json` selects the
+SDK's Microsoft.Testing.Platform mode of `dotnet test` (#718), which older SDKs
+do not support (the build itself multi-targets net9.0 + net10.0 either way, so
+you need both runtimes' SDKs installed — exactly what CI installs).
+
 CI restores in a separate step, so its build/test use `--no-restore`/`--no-build`; on a fresh local clone run `dotnet restore` once first (or drop `--no-restore` on the first build) or the build fails before any package is fetched.
 
 **Developing the admin UI.** The settings page and the account-linking page are **embedded resources**, not files served from disk: `configPage.html`, `config.js`, and the `linking.*` assets are compiled into `SSO-Auth.dll` (see the `<EmbeddedResource>` entries in `SSO-Auth.csproj`). So the edit loop is **rebuild → redeploy the DLL → restart Jellyfin**: `dotnet publish -c Release`, copy the output into your Jellyfin `config/plugins/sso/`, and restart the server; there is no live reload. Jellyfin's logs (the plugin logs through them) live under the server's `config/log/` directory. One gotcha while iterating: the `/SSOViews` assets are served with an ETag derived from the assembly `FileVersion`, so a browser will `304`-serve the **previous** build of `linking.js`/`linking.css` until the version changes — disable the browser cache (DevTools → Network → "Disable cache") during a UI edit session, or you will be testing stale assets.

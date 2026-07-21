@@ -63,6 +63,40 @@ jobs:
       run: dotnet build --no-restore --warnaserror
     - name: Test
       run: dotnet test --no-build --verbosity normal
+    # Line coverage for the RC coverage gate (#718). A second, instrumented run
+    # of the net10.0 leg (the MTP CodeCoverage extension emits Cobertura); the
+    # plain run above stays the canonical pass/fail signal for test correctness,
+    # so a test failure under instrumentation (exit code 2 - timing heisenbugs
+    # under the ~13x instrumentation overhead) is ignored HERE only; the
+    # zero-tests exit (8) and any collector failure still fail this step.
+    - name: Coverage (net10.0)
+      run: dotnet test --project SSO-Auth.Tests/SSO-Auth.Tests.csproj -f net10.0 --no-build --coverage --coverage-output-format cobertura --coverage-output coverage.cobertura.xml --ignore-exit-code 2
+    - name: Enforce the security-surface coverage bar
+      # Fail-closed threshold on the security-decision surface only (#718): the
+      # whole-codebase number is reported and tracked in docs/METRICS.md, but the
+      # gate keys on the modules that decide auth/authz/linking/abuse outcomes, so
+      # a trivially-thin non-critical path cannot trip it and a security-path
+      # regression cannot slip through it.
+      #
+      # set -o pipefail is LOAD-BEARING: without it the step's status is tee's
+      # exit 0 and every rejection the script makes (below-bar, unreadable or
+      # empty report) would be silently discarded - the gate would be decorative.
+      # GitHub's default shell for a bare `run:` is `bash -e` WITHOUT pipefail
+      # (the same trap the vulnerable-dependency step above guards against).
+      run: |
+        set -o pipefail
+        python3 scripts/check-coverage.py TestResults/coverage.cobertura.xml | tee -a "$GITHUB_STEP_SUMMARY"
+    - name: Upload coverage report
+      # always(): the report must survive a gate failure - it is exactly the
+      # artifact needed to diagnose one. if-no-files-found stays error, so a
+      # missing report still reds the job through this step.
+      if: ${{ always() }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # tag=v7.0.1
+      with:
+        name: coverage-report
+        retention-days: 30
+        if-no-files-found: error
+        path: TestResults/coverage.cobertura.xml
 
   # Verify the plugin's used Jellyfin API surface actually exists on the OLDEST server it claims to
   # support (build.yaml targetAbi), not only in the newer SDK the shipping build compiles against. A

@@ -161,7 +161,7 @@ Found a vulnerability? Please report it **privately** via GitHub's ["Report a vu
 
 ## Contributing
 
-Issues and pull requests are welcome. The plugin targets **.NET 9** and **Jellyfin 10.11**. Build with `dotnet build` / `dotnet publish` and run the tests with `dotnet test`. CI builds and tests every change, and the login path goes through an adversarial review. See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow.
+Issues and pull requests are welcome. The plugin targets **.NET 9 / Jellyfin 10.11** and **.NET 10 / Jellyfin 12**. Build with `dotnet build` / `dotnet publish` and run the tests with `dotnet test` (the test runner needs the .NET 10 SDK). CI builds and tests every change, and the login path goes through an adversarial review. See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow.
 
 ## Credits
 
