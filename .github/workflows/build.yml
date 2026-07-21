@@ -85,3 +85,54 @@ jobs:
           retention-days: 30
           if-no-files-found: error
           path: ${{ steps.jprm.outputs.artifact }}
+
+  # The CycloneDX SBOM runs in its OWN release-only job, DELIBERATELY WITHOUT the
+  # signing scopes the build job holds. The SBOM generator installs a NuGet global
+  # tool at run time; keeping it out of the job that carries id-token/attestations
+  # write means a compromised tool can never reach the Sigstore signing identity or
+  # mint a provenance attestation (SLSA L3 build-isolation). The SBOM is shipped as
+  # a checksummed release asset (like the beta/JF12 legs), not attested — the
+  # isolation is worth more than attesting the side-document.
+  sbom:
+    name: Generate SBOM
+    if: ${{ inputs.attest }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      # Both SDKs: the SBOM documents the FULL multi-target closure, so the
+      # whole-solution restore must evaluate both the net9.0 and net10.0 targets
+      # (matching the JF12 legs' dual-SDK setup) regardless of which single target a
+      # given publish leg ships.
+      - name: Setup .NET
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.x
+
+      # Materialise the locked restore graph the SBOM reads. --locked-mode rejects a
+      # drifted or tampered graph (RestoreLockedMode is also forced in CI), so the
+      # SBOM documents exactly the committed packages.lock.json closure.
+      - name: Restore dependencies
+        run: dotnet restore --locked-mode
+
+      - name: Generate CycloneDX SBOM
+        id: sbom
+        uses: ./.github/actions/cyclonedx-sbom
+        with:
+          output-dir: sbom
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # tag=v7.0.1
+        with:
+          name: sbom-artifact
+          retention-days: 30
+          if-no-files-found: error
+          path: ${{ steps.sbom.outputs.sbom-path }}

@@ -77,10 +77,17 @@ jobs:
         path: .
         dotnet-target: "net10.0"
         output: _dist
+    # CycloneDX SBOM of the net10 shipping closure, into the release staging dir so
+    # the checksum loop and `files: _dist/*` ship it as a release asset. Reads the
+    # --locked-mode restore above; the same single generator publish.yml uses.
+    - name: Generate CycloneDX SBOM
+      uses: ./.github/actions/cyclonedx-sbom
+      with:
+        output-dir: _dist
     - name: Prepare GitHub Release assets
       run: |-
         pushd _dist
-        for file in ./*.zip; do
+        for file in ./*.zip ./sbom.cyclonedx.json; do
           md5sum ${file#./} >> ${file%.*}.md5
           sha256sum ${file#./} >> ${file%.*}.sha256
         done

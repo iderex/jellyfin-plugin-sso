@@ -68,6 +68,27 @@ gh attestation verify <plugin>.zip --repo iderex/jellyfin-plugin-sso
 The provenance attestation complements the checksum sidecars — it does not
 replace the manifest MD5.
 
+### Software Bill of Materials (SBOM)
+
+Every release also ships a **CycloneDX SBOM** (`sbom.cyclonedx.json`) enumerating
+the plugin's direct and transitive dependency closure, generated from the
+committed `packages.lock.json` restored in locked mode. It is the dependency
+inventory a downstream redistributor needs for its own CRA Annex I duties
+(and satisfies OSPS-QA-02.02). The SBOM covers the **full multi-target closure**
+(both the net9.0 / Jellyfin 10.11 and net10.0 / Jellyfin 12.0 lines) — a
+conservative superset of any single release's shipped ABI, which its tag and
+zip identify. It is shipped with the same `.md5`/`.sha256` sidecars as the plugin
+zip.
+
+The SBOM is generated in an isolated job that deliberately does **not** hold the
+release signing scopes, so the SBOM tool can never reach the provenance signing
+identity; it is therefore checksummed rather than attested.
+
+Honest framing: the SBOM documents the shipped dependency set — it is a
+transparency artifact, not a compliance certificate or a statement that those
+dependencies are free of vulnerabilities (that is what the dependency-review and
+vulnerable-dependency scans below cover).
+
 ### Reproducible compile
 
 The build is **deterministic**: `Directory.Build.props` sets `Deterministic` and
