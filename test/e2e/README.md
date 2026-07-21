@@ -12,14 +12,24 @@ be run locally with one command once you have built the plugin.
 
 Keycloak is the **canonical** harness and the only one that runs on a pull request touching the harness,
 on the nightly schedule, and on a manual dispatch (there is deliberately no `push` trigger — the PR run
-already validated it). Additional self-hostable identity providers get their own
-harness under `test/e2e/<provider>/` (one issue each — authentik, Authelia, Pocket ID, Kanidm, Zitadel,
-Dex; tracked in [#919](https://github.com/iderex/jellyfin-plugin-sso/issues/919)), and the **full
-provider matrix runs only at a release and a beta-release** — never on a routine merge, so the
-cross-provider pass is release-gate evidence, not a per-commit cost. A provider joins the matrix by
-adding one `{ name, compose }` object to the release list in the workflow's `select` job, pointing at
-its `test/e2e/<provider>/docker-compose.yml`. Cloud providers (Google, Entra ID) cannot run in
-ephemeral CI, so they are verified manually and marked as such in the README provider table.
+already validated it). Additional self-hostable identity providers get their own harness under
+`test/e2e/<provider>/`. **Authelia** (`test/e2e/authelia/`, OIDC) is implemented; the rest are one issue
+each — authentik, Pocket ID, Kanidm, Zitadel, Dex; tracked in
+[#919](https://github.com/iderex/jellyfin-plugin-sso/issues/919). The **full provider matrix runs only at
+a release and a beta-release** — never on a routine merge, so the cross-provider pass is release-gate
+evidence, not a per-commit cost. A provider joins the matrix by adding one `{ name, compose }` object to
+the release list in the workflow's `select` job, pointing at its `test/e2e/<provider>/docker-compose.yml`.
+Cloud providers (Google, Entra ID) cannot run in ephemeral CI, so they are verified manually and marked as
+such in the README provider table.
+
+The shared driver (`harness/harness.sh`) keeps the Jellyfin setup and the assertions common and swaps only
+the provider-specific browser login (`idp_oidc_login`, selected by `IDP_KIND`): Keycloak renders a
+server-side HTML form, Authelia is a JSON-API login portal. Provider shape is passed entirely through the
+compose `environment` (issuer/discovery, the role claim and scopes, `RUN_SAML`, whether to load the
+profile, and `DISABLE_HTTPS`), so the defaults reproduce the Keycloak run unchanged. The **Authelia**
+harness additionally serves TLS with a self-signed cert (Authelia 4.38 requires a secure session URL); the
+cert is appended to Jellyfin's system CA bundle at container start (never replacing it) and trusted by the
+harness via `CURL_CA_BUNDLE`, so the plugin's real https OIDC path is exercised.
 
 ## What it verifies
 
@@ -78,3 +88,15 @@ docker compose -f test/e2e/docker-compose.yml down -v
 
 A green run prints `ALL E2E CHECKS PASSED`. In CI, container logs are dumped automatically on
 failure.
+
+To run the **Authelia** harness instead, generate its self-signed TLS cert first (never committed), then
+point `docker compose` at its file — the plugin drop from step 2 is reused unchanged:
+
+```sh
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout test/e2e/authelia/tls.key -out test/e2e/authelia/tls.crt \
+  -days 3650 -subj "/CN=login.example.com" -addext "subjectAltName=DNS:login.example.com"
+
+docker compose -f test/e2e/authelia/docker-compose.yml up \
+  --abort-on-container-exit --exit-code-from harness
+```

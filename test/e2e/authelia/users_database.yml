@@ -1,0 +1,17 @@
+# E2E test users for the Authelia login harness (#921). alice carries the jellyfin-access group (the
+# plugin role gate lets her in); bob has no groups (the role gate refuses him) — the OIDC-only mirror of
+# the Keycloak realm's alice/bob. Passwords are argon2id hashes of the username, for tests only.
+users:
+  alice:
+    disabled: false
+    displayname: 'Alice'
+    password: '$argon2id$v=19$m=65536,t=3,p=4$p9hMmwkVwCKTLg8F00Lp9w$BsMyZk6h6FbZturxH0NFXgAG7hBhmrslYEIFq4XUCZM'
+    email: 'alice@example.com'
+    groups:
+      - 'jellyfin-access'
+  bob:
+    disabled: false
+    displayname: 'Bob'
+    password: '$argon2id$v=19$m=65536,t=3,p=4$Q/v7cLdV7pbPzBMdEjeuSw$zPjEtlhPWQWFAqpd2cMSXd/6khna9RrVp4MN6QsNJlE'
+    email: 'bob@example.com'
+    groups: []

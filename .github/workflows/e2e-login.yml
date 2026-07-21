@@ -54,11 +54,11 @@ jobs:
         run: |
           set -euo pipefail
           keycloak='{"name":"Keycloak (OIDC + SAML)","compose":"test/e2e/docker-compose.yml"}'
+          authelia='{"name":"Authelia (OIDC)","compose":"test/e2e/authelia/docker-compose.yml"}'
           # The full provider matrix (release/beta only). Append one object per shipped harness as each
-          # test/e2e/<provider>/ lands: #920 authentik, #921 authelia, #922 pocket-id, #923 kanidm,
-          # #924 zitadel, #925 dex. Until then the release run is the Keycloak harness alone.
+          # test/e2e/<provider>/ lands: #920 authentik, #922 pocket-id, #923 kanidm, #924 zitadel, #925 dex.
           if [ "$IS_RELEASE" = "true" ]; then
-            include="[$keycloak]"
+            include="[$keycloak,$authelia]"
           else
             include="[$keycloak]"
           fi
@@ -108,6 +108,17 @@ jobs:
           echo "Installed plugin files:"
           ls -la "$plugin_dir"
           chmod -R 0777 test/e2e/jellyfin
+
+      - name: Generate the Authelia test TLS cert
+        # Authelia 4.38 requires a secure session URL, so its harness serves TLS. The self-signed test cert
+        # is generated here (never committed — no private key in the repo) for the authelia matrix entry.
+        if: contains(matrix.compose, 'authelia')
+        run: |
+          set -euo pipefail
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout test/e2e/authelia/tls.key -out test/e2e/authelia/tls.crt \
+            -days 3650 -subj "/CN=login.example.com" \
+            -addext "subjectAltName=DNS:login.example.com"
 
       - name: Run the E2E login harness
         env:
