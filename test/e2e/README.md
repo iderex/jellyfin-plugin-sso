@@ -14,8 +14,7 @@ Keycloak is the **canonical** harness and the only one that runs on a pull reque
 on the nightly schedule, and on a **default** manual dispatch (there is deliberately no `push` trigger —
 the PR run already validated it). Additional self-hostable identity providers get their own harness under
 `test/e2e/<provider>/`. **Authelia** (`test/e2e/authelia/`, OIDC) and **authentik**
-(`test/e2e/authentik/`, OIDC — its SAML half is still open on
-[#920](https://github.com/iderex/jellyfin-plugin-sso/issues/920)) are implemented; the rest are one issue
+(`test/e2e/authentik/`, OIDC **and** SAML) are implemented; the rest are one issue
 each — Pocket ID, Kanidm, Zitadel, Dex; tracked in
 [#919](https://github.com/iderex/jellyfin-plugin-sso/issues/919). The **full provider matrix runs at a
 release and a beta-release** — never on a routine merge, so the cross-provider pass is release-gate
@@ -27,10 +26,12 @@ Cloud providers (Google, Entra ID) cannot run in ephemeral CI, so they are verif
 such in the README provider table.
 
 The shared driver (`harness/harness.sh`) keeps the Jellyfin setup and the assertions common and swaps only
-the provider-specific browser login (`idp_oidc_login`, selected by `IDP_KIND`): Keycloak renders a
-server-side HTML form, Authelia is a single JSON first-factor call, and authentik is a **stateful
-multi-stage flow-executor** (identification → password → the non-interactive stage → the flow-completion
-redirect that resumes the authorization), which must be driven with exactly one request per step. Provider
+the provider-specific browser login (`idp_oidc_login` / `idp_saml_login`, selected by `IDP_KIND`): Keycloak
+renders a server-side HTML form, Authelia is a single JSON first-factor call, and authentik is a **stateful
+multi-stage flow-executor** that CHAINS flows (the authentication flow, then the provider's authorization
+flow) and must be driven with exactly one request per step — for SAML it ends in an `autosubmit` stage that
+carries the POST-binding fields as JSON rather than rendered HTML, which the driver renders back into the
+equivalent form so the shared parser can consume it. Provider
 shape is passed entirely through the
 compose `environment` (issuer/discovery, the role claim and scopes, `RUN_SAML`, whether to load the
 profile, and `DISABLE_HTTPS`), so the defaults reproduce the Keycloak run unchanged. The **Authelia**

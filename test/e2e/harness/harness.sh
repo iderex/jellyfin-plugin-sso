@@ -40,6 +40,15 @@ DO_NOT_LOAD_PROFILE="${DO_NOT_LOAD_PROFILE:-true}"
 DISABLE_HTTPS="${DISABLE_HTTPS:-true}"
 AUTHELIA_URL="${AUTHELIA_URL:-http://authelia:9091}"
 AUTHENTIK_URL="${AUTHENTIK_URL:-http://authentik:9000}"
+# SAML provider shape (defaults reproduce the Keycloak realm exactly).
+SAML_DESCRIPTOR_URL="${SAML_DESCRIPTOR_URL:-$KEYCLOAK/realms/$REALM/protocol/saml/descriptor}"
+SAML_ENDPOINT="${SAML_ENDPOINT:-$KEYCLOAK/realms/$REALM/protocol/saml}"
+SAML_CLIENT_ID="${SAML_CLIENT_ID:-jellyfin-saml}"
+# Canonical base URL the plugin builds its AssertionConsumerService URL from. Blank (the Keycloak default)
+# leaves the feature off and the ACS is derived from the request host. A provider that validates the ACS
+# against a configured value needs both sides to agree — authentik rejects a mismatch with HTTP 400, and its
+# provider ACS must use a dotted host, so that harness pins the same dotted host here.
+SAML_BASE_URL_OVERRIDE="${SAML_BASE_URL_OVERRIDE:-}"
 
 # A stable device identity for the harness's Jellyfin API calls (the MediaBrowser auth scheme).
 CLIENT="e2e-harness"
@@ -236,6 +245,73 @@ oid_start() {
   printf '%s' "$auth_url"
 }
 
+# authentik_run_flow <jar> <flow_page_url> <user> <pass> : drives ANY authentik flow executor to completion
+# and prints the ABSOLUTE completion redirect target. authentik chains flows — a login runs the
+# authentication flow and THEN the provider's authorization flow — and uses the same executor for all of
+# them, so this is generic over the flow slug and over the interactive (identification/password) and
+# non-interactive (implicit consent) stages alike. The executor is STATEFUL: each call advances it, so this
+# issues exactly one request per logical step and follows redirects to reach the next stage.
+authentik_run_flow() {
+  jar="$1"; flow_url="$2"; user="$3"; pass="$4"
+  # `sed` leaves its input UNCHANGED when there is no "?", so a non-flow landing would otherwise be fed to
+  # the executor as a plausible query.
+  case "$flow_url" in
+    */if/flow/*/\?*) : ;;
+    *) printf 'authentik_run_flow: not a flow page: %s\n' "${flow_url%%\?*}" >&2; return 1 ;;
+  esac
+  slug="$(printf '%s' "$flow_url" | sed -E 's#.*/if/flow/([^/]+)/.*#\1#')"
+  flow_query="$(printf '%s' "$flow_url" | sed 's#[^?]*?##')"
+  q_enc="$(printf '%s' "$flow_query" | jq -rR '@uri')"
+  exec_url="$AUTHENTIK_URL/api/v3/flows/executor/$slug/?query=$q_enc"
+  step=0
+  while [ "$step" -lt 8 ]; do
+    step=$((step + 1))
+    stage="$(curl -sSL -c "$jar" -b "$jar" "$exec_url")" || { printf 'authentik_run_flow[%s]: executor GET failed\n' "$slug" >&2; return 1; }
+    comp="$(printf '%s' "$stage" | jq -r '.component // empty' 2>/dev/null)"
+    case "$comp" in
+      ak-stage-identification)
+        # -f: without it curl exits 0 on a 4xx and this guard would be dead code.
+        curl -fsS -c "$jar" -b "$jar" -H "Content-Type: application/json" \
+          -d "{\"component\":\"ak-stage-identification\",\"uid_field\":\"$user\"}" "$exec_url" >/dev/null \
+          || { printf 'authentik_run_flow[%s]: identification POST failed\n' "$slug" >&2; return 1; }
+        ;;
+      ak-stage-password)
+        curl -fsS -c "$jar" -b "$jar" -H "Content-Type: application/json" \
+          -d "{\"component\":\"ak-stage-password\",\"password\":\"$pass\"}" "$exec_url" >/dev/null \
+          || { printf 'authentik_run_flow[%s]: password POST failed\n' "$slug" >&2; return 1; }
+        ;;
+      xak-flow-redirect)
+        redir_to="$(printf '%s' "$stage" | jq -r '.to // empty' 2>/dev/null)"
+        [ -n "$redir_to" ] || { printf 'authentik_run_flow[%s]: redirect stage carried no target\n' "$slug" >&2; return 1; }
+        case "$redir_to" in /*) redir_to="$AUTHENTIK_URL$redir_to" ;; esac
+        printf '%s' "$redir_to"
+        return 0
+        ;;
+      ak-stage-autosubmit)
+        # How authentik delivers a SAML POST-binding response: the stage carries the target `url` and the
+        # form fields in `attrs` as JSON rather than rendered HTML. Synthesise the equivalent auto-submit
+        # form so the shared, provider-agnostic parser can consume it, and signal that with rc 3 (the body,
+        # not a redirect target, is on stdout).
+        printf '%s' "$stage" | jq -r '"<form action=\"" + .url + "\">"
+          + ((.attrs // {}) | to_entries | map("<input name=\"" + .key + "\" value=\"" + (.value | tostring) + "\">") | join(""))
+          + "</form>"' 2>/dev/null \
+          || { printf 'authentik_run_flow[%s]: could not render the autosubmit stage\n' "$slug" >&2; return 1; }
+        return 3
+        ;;
+      "")
+        printf 'authentik_run_flow[%s]: executor returned no stage (login rejected?)\n' "$slug" >&2
+        return 1
+        ;;
+      *)
+        printf 'authentik_run_flow[%s]: unhandled stage %s\n' "$slug" "$comp" >&2
+        return 1
+        ;;
+    esac
+  done
+  printf 'authentik_run_flow[%s]: flow did not complete within 8 steps\n' "$slug" >&2
+  return 1
+}
+
 # idp_oidc_login <cookiejar> <start_headers_file> <user> <pass> : drives the full browser-role login at the
 # identity provider and prints the plugin CALLBACK url (/sso/OID/redirect/<provider>?code&state) on stdout;
 # it writes the /start headers to start_hdr. Dispatches on IDP_KIND — Keycloak renders a server-side HTML
@@ -284,41 +360,10 @@ idp_oidc_login() {
       ;;
     authentik)
       # authentik's login is a STATEFUL multi-stage flow-executor (a JSON API built for its SPA), not a form.
-      # Follow the authorize redirect to the flow page (seats the pending authorization in the session and
-      # yields the flow's query string), then drive the default-authentication-flow: identification ->
-      # password -> the non-interactive user_login stage -> the final xak-flow-redirect whose `to` resumes the
-      # authorize and 302s to the plugin callback. Each executor call advances state, so exactly one request
-      # per step.
-      # -f on every leg: without it curl exits 0 on a 4xx/5xx and the error guards below are dead code, so a
-      # rejected stage would only surface three steps later as a missing redirect.
+      # Follow the authorize redirect to the flow page — that seats the pending authorization in the session —
+      # then drive the shared flow helper and resume the authorize it hands back. `-f` so a 4xx fails here.
       flow_url="$(curl -fsSL -c "$jar" -b "$jar" -o /dev/null -w '%{url_effective}' "$auth_url")" || { printf 'idp_oidc_login[authentik]: authorize follow failed\n' >&2; return 1; }
-      # The authorize must land on a flow page carrying a query; `sed` leaves its input UNCHANGED when there is
-      # no "?", so without this guard a non-flow landing would be fed to the executor as a plausible query.
-      # Pin the SAME flow slug the executor URL below hardcodes, so the guard and the executor cannot drift.
-      case "$flow_url" in
-        */if/flow/default-authentication-flow/\?*) : ;;
-        *) printf 'idp_oidc_login[authentik]: authorize did not land on the default authentication flow: %s\n' "${flow_url%%\?*}" >&2; return 1 ;;
-      esac
-      flow_query="$(printf '%s' "$flow_url" | sed 's#[^?]*?##')"
-      case "$flow_query" in
-        next=*) : ;;
-        *) printf 'idp_oidc_login[authentik]: unexpected flow query (no pending authorization)\n' >&2; return 1 ;;
-      esac
-      q_enc="$(printf '%s' "$flow_query" | jq -rR '@uri')"
-      exec_url="$AUTHENTIK_URL/api/v3/flows/executor/default-authentication-flow/?query=$q_enc"
-      curl -fsS -c "$jar" -b "$jar" -H "Content-Type: application/json" \
-        -d "{\"component\":\"ak-stage-identification\",\"uid_field\":\"$user\"}" "$exec_url" >/dev/null \
-        || { printf 'idp_oidc_login[authentik]: identification POST failed\n' >&2; return 1; }
-      curl -fsS -c "$jar" -b "$jar" -H "Content-Type: application/json" \
-        -d "{\"component\":\"ak-stage-password\",\"password\":\"$pass\"}" "$exec_url" >/dev/null \
-        || { printf 'idp_oidc_login[authentik]: password POST failed\n' >&2; return 1; }
-      # Advance the non-interactive stage(s) and read the flow-completion redirect target.
-      redir_to="$(curl -sSL -c "$jar" -b "$jar" "$exec_url" | jq -r '.to // empty' 2>/dev/null)"
-      if [ -z "$redir_to" ]; then
-        printf 'idp_oidc_login[authentik]: no flow-completion redirect (login rejected?)\n' >&2
-        return 1
-      fi
-      case "$redir_to" in /*) redir_to="$AUTHENTIK_URL$redir_to" ;; esac
+      redir_to="$(authentik_run_flow "$jar" "$flow_url" "$user" "$pass")" || return 1
       printf 'idp_oidc_login[authentik]: resuming authorize at %s\n' "${redir_to%%\?*}?<query>" >&2
       # Resume the authorize; it 302s to the plugin callback with code + state (do NOT follow into the plugin).
       curl -sS -c "$jar" -b "$jar" -o /dev/null -w '%{redirect_url}' "$redir_to"
@@ -450,52 +495,108 @@ if [ "$RUN_SAML" = "true" ]; then
 # not carry it).
 SAML_BINDING_COOKIE_NAME="__Host-sso_saml_state_binding"
 
-# saml_authorize <jar> <start_hdr> : /start -> keycloak login form action URL (stdout). Diagnostics to
-# stderr. Writes the /start response headers (carrying the SAML binding Set-Cookie) to start_hdr.
-saml_authorize() {
+# saml_start <jar> <start_hdr> : calls the plugin's provider-agnostic SAML /start, writes the response
+# headers (carrying the SAML binding Set-Cookie) to start_hdr, and prints the IdP SSO URL it 302s to.
+saml_start() {
   jar="$1"; start_hdr="$2"
   start_out="$(curl -sS -D "$start_hdr" -o /dev/null -c "$jar" -b "$jar" -w '%{http_code} %{redirect_url}' "$JELLYFIN/sso/SAML/start/$PROVIDER")"
   code="${start_out%% *}"; auth_url="${start_out#* }"
-  printf 'saml_authorize: /start -> HTTP %s location=%s\n' "$code" "${auth_url%%\?*}?<SAMLRequest>" >&2
+  printf 'saml_start: /start -> HTTP %s location=%s\n' "$code" "${auth_url%%\?*}?<SAMLRequest>" >&2
   if [ -z "$auth_url" ]; then
-    printf 'saml_authorize: /start returned no redirect; body was:\n' >&2
+    printf 'saml_start: /start returned no redirect; body was:\n' >&2
     curl -sS -c "$jar" -b "$jar" "$JELLYFIN/sso/SAML/start/$PROVIDER" >&2 || true
     return 1
   fi
-  login_page="$(curl -sSL -c "$jar" -b "$jar" "$auth_url")" || { printf 'saml_authorize: login page curl failed\n' >&2; return 1; }
-  form_action="$(printf '%s' "$login_page" | grep -oE 'action="[^"]*"' | head -1 | sed -e 's/^action="//' -e 's/"$//' -e 's/&amp;/\&/g')"
-  if [ -z "$form_action" ]; then
-    printf 'saml_authorize: could not parse a form action; first 800 chars:\n%s\n' "$(printf '%s' "$login_page" | head -c 800)" >&2
-    return 1
-  fi
-  printf '%s' "$form_action"
+  printf '%s' "$auth_url"
 }
 
-# saml_acs_post <jar> <form_action> <user> <pass> : posts credentials to Keycloak, parses the returned
-# SAML POST-binding auto-submit form, and posts SAMLResponse to the plugin's ACS. Prints the ACS response
-# body on stdout, with a trailing  __ACSHTTP__<code>  marker line carrying the ACS HTTP status (so a caller
-# can tell an actual plugin-side deny — a reached-ACS non-2xx — apart from a token-less body a broken leg
-# would also produce); diagnostics go to stderr. Returns NON-ZERO if it cannot get through the Keycloak
-# login, cannot parse the SAMLResponse form, or cannot connect to the ACS — i.e. a genuine transport break
-# is a hard failure the caller must red on, never something to swallow as a "refusal".
-saml_acs_post() {
-  jar="$1"; form_action="$2"; user="$3"; pass="$4"
-  post_page="$(curl -sSL -c "$jar" -b "$jar" \
-    --data-urlencode "username=$user" \
-    --data-urlencode "password=$pass" \
-    --data-urlencode "credentialId=" \
-    "$form_action")" || { printf 'saml_acs_post: credential POST failed\n' >&2; return 1; }
+# idp_saml_login <jar> <start_hdr> <user> <pass> : drives the browser-role SAML login at the identity provider
+# and prints the page carrying the SAML POST-binding auto-submit form. Dispatches on IDP_KIND exactly as the
+# OIDC path does — Keycloak renders a server-side HTML form, authentik runs the same stateful flow-executor
+# it uses for OpenID. Returns NON-ZERO on any transport break: a broken leg must RED the caller, never look
+# like a refusal.
+idp_saml_login() {
+  jar="$1"; start_hdr="$2"; user="$3"; pass="$4"
+  auth_url="$(saml_start "$jar" "$start_hdr")" || return 1
+  case "$IDP_KIND" in
+    keycloak)
+      login_page="$(curl -sSL -c "$jar" -b "$jar" "$auth_url")" || { printf 'idp_saml_login[keycloak]: login page curl failed\n' >&2; return 1; }
+      form_action="$(printf '%s' "$login_page" | grep -oE 'action="[^"]*"' | head -1 | sed -e 's/^action="//' -e 's/"$//' -e 's/&amp;/\&/g')"
+      if [ -z "$form_action" ]; then
+        printf 'idp_saml_login[keycloak]: could not parse a form action; first 800 chars:\n%s\n' "$(printf '%s' "$login_page" | head -c 800)" >&2
+        return 1
+      fi
+      curl -sSL -c "$jar" -b "$jar" \
+        --data-urlencode "username=$user" \
+        --data-urlencode "password=$pass" \
+        --data-urlencode "credentialId=" \
+        "$form_action" || { printf 'idp_saml_login[keycloak]: credential POST failed\n' >&2; return 1; }
+      ;;
+    authentik)
+      flow_url="$(curl -fsSL -c "$jar" -b "$jar" -o /dev/null -w '%{url_effective}' "$auth_url")" || { printf 'idp_saml_login[authentik]: SSO follow failed\n' >&2; return 1; }
+      # authentik CHAINS flows for a SAML login: the authentication flow, then the provider's authorization
+      # flow. Run whichever flow we land on, follow its completion target, and stop as soon as the response is
+      # the SAML POST-binding auto-submit form.
+      hop=0
+      while [ "$hop" -lt 4 ]; do
+        hop=$((hop + 1))
+        redir_to="$(authentik_run_flow "$jar" "$flow_url" "$user" "$pass")"; flow_rc=$?
+        if [ "$flow_rc" -eq 3 ]; then
+          # The flow ended in an autosubmit stage: what it printed IS the SAML POST-binding form.
+          printf 'idp_saml_login[authentik]: SAML response delivered by an autosubmit stage after %s flow(s)\n' "$hop" >&2
+          printf '%s' "$redir_to"
+          return 0
+        fi
+        [ "$flow_rc" -eq 0 ] || return 1
+        saml_body="$(mktemp)"
+        saml_meta="$(curl -sSL -c "$jar" -b "$jar" -o "$saml_body" -w '%{http_code} %{url_effective}' "$redir_to")" \
+          || { printf 'idp_saml_login[authentik]: SSO resume failed\n' >&2; rm -f "$saml_body"; return 1; }
+        saml_final="${saml_meta#* }"
+        if grep -q 'name="SAMLResponse"' "$saml_body" 2>/dev/null; then
+          printf 'idp_saml_login[authentik]: reached the SAMLResponse form after %s flow(s)\n' "$hop" >&2
+          cat "$saml_body"
+          rm -f "$saml_body"
+          return 0
+        fi
+        rm -f "$saml_body"
+        case "$saml_final" in
+          */if/flow/*/\?*)
+            printf 'idp_saml_login[authentik]: chained into %s\n' "${saml_final%%\?*}" >&2
+            flow_url="$saml_final"
+            ;;
+          *)
+            printf 'idp_saml_login[authentik]: landed on %s (HTTP %s) without a SAMLResponse form\n' "${saml_final%%\?*}" "${saml_meta%% *}" >&2
+            return 1
+            ;;
+        esac
+      done
+      printf 'idp_saml_login[authentik]: did not reach the SAMLResponse form within 4 flows\n' >&2
+      return 1
+      ;;
+    *)
+      printf 'idp_saml_login: unknown IDP_KIND=%s\n' "$IDP_KIND" >&2
+      return 1
+      ;;
+  esac
+}
+
+# post_saml_response <jar> <post_page> : parses the SAML POST-binding auto-submit form out of the page and
+# posts SAMLResponse to the plugin's ACS. Prints the ACS response body with a trailing __ACSHTTP__<code>
+# marker carrying the ACS HTTP status (so a caller can tell an actual plugin-side deny — a reached-ACS
+# non-2xx — from a token-less body a broken leg would also produce); diagnostics go to stderr. Returns
+# NON-ZERO if the form cannot be parsed or the ACS cannot be reached.
+post_saml_response() {
+  jar="$1"; post_page="$2"
   acs_url="$(printf '%s' "$post_page" | grep -oE 'form[^>]*action="[^"]*"' | head -1 | sed -E 's/.*action="//; s/".*//; s/&amp;/\&/g')"
   saml_resp="$(printf '%s' "$post_page" | grep -oE 'name="SAMLResponse"[^>]*value="[^"]*"' | head -1 | sed -E 's/.*value="//; s/".*//')"
   relay="$(printf '%s' "$post_page" | grep -oE 'name="RelayState"[^>]*value="[^"]*"' | head -1 | sed -E 's/.*value="//; s/".*//')"
   if [ -z "$acs_url" ] || [ -z "$saml_resp" ]; then
-    printf 'saml_acs_post: could not parse SAMLResponse form (acs=%s, resp_len=%s); first 800 chars:\n%s\n' "$acs_url" "${#saml_resp}" "$(printf '%s' "$post_page" | head -c 800)" >&2
+    printf 'post_saml_response: could not parse SAMLResponse form (acs=%s, resp_len=%s); first 800 chars:\n%s\n' "$acs_url" "${#saml_resp}" "$(printf '%s' "$post_page" | head -c 800)" >&2
     return 1
   fi
-  printf 'saml_acs_post: posting SAMLResponse to %s\n' "$acs_url" >&2
-  # -w appends the ACS HTTP status so the caller can assert an actual plugin refusal; NO -f, so a
-  # non-2xx deny still returns the body+marker (a role-gate refusal is an expected outcome here, not a
-  # transport error). A real connection failure to the ACS still exits non-zero and reds the caller.
+  printf 'post_saml_response: posting SAMLResponse to %s\n' "$acs_url" >&2
+  # NO -f, so a non-2xx deny still returns the body+marker (a role-gate refusal is an expected outcome here,
+  # not a transport error). A real connection failure to the ACS still exits non-zero and reds the caller.
   if [ -n "$relay" ]; then
     curl -sS -w '\n__ACSHTTP__%{http_code}' -X POST "$acs_url" --data-urlencode "SAMLResponse=$saml_resp" --data-urlencode "RelayState=$relay"
   else
@@ -507,15 +608,17 @@ saml_acs_post() {
 # Phase 7 — configure the SAML provider (IdP signing cert fetched from Keycloak's SAML descriptor)
 # --------------------------------------------------------------------------------------------------
 log "== Configuring SAML provider '$PROVIDER' =="
-DESCRIPTOR="$(curl -fsS "$KEYCLOAK/realms/$REALM/protocol/saml/descriptor")" || die "SAML: descriptor fetch failed"
+# -L: authentik serves its provider metadata through a redirect, Keycloak serves it directly.
+DESCRIPTOR="$(curl -fsSL "$SAML_DESCRIPTOR_URL")" || die "SAML: descriptor fetch failed"
 IDP_CERT="$(printf '%s' "$DESCRIPTOR" | tr -d '\n\r' | grep -oiE '<[a-z0-9]*:?X509Certificate>[^<]*' | head -1 | sed -E 's/.*X509Certificate>//' | tr -d ' \t')"
 [ -n "$IDP_CERT" ] || die "SAML: could not extract the IdP signing certificate from the descriptor"
 log "SAML IdP signing certificate captured (${#IDP_CERT} base64 chars)"
 
 SAML_CONFIG="$(cat <<JSON
 {
-  "SamlEndpoint": "$KEYCLOAK/realms/$REALM/protocol/saml",
-  "SamlClientId": "jellyfin-saml",
+  "SamlEndpoint": "$SAML_ENDPOINT",
+  "SamlClientId": "$SAML_CLIENT_ID",
+  "BaseUrlOverride": "$SAML_BASE_URL_OVERRIDE",
   "SamlCertificate": "$IDP_CERT",
   "Enabled": true,
   "EnableAuthorization": true,
@@ -545,11 +648,11 @@ fi
 log "== SAML round-trip: carol (expect success) =="
 JAR_S="$(mktemp)"
 SHDR="$(mktemp)"
-SFORM="$(saml_authorize "$JAR_S" "$SHDR")" || die "carol: could not reach the Keycloak SAML login form"
+SPAGE="$(idp_saml_login "$JAR_S" "$SHDR" "carol" "carol")" || die "carol: could not complete the IdP SAML login"
 SBIND="$(grep -i '^set-cookie:' "$SHDR" 2>/dev/null | grep -o "$SAML_BINDING_COOKIE_NAME=[^;]*" | head -1 | cut -d= -f2-)"
 [ -n "$SBIND" ] || die "carol: /start set no SAML browser-binding cookie"
 
-ACS_PAGE="$(saml_acs_post "$JAR_S" "$SFORM" "carol" "carol")" || die "carol: SAML login/ACS leg failed"
+ACS_PAGE="$(post_saml_response "$JAR_S" "$SPAGE")" || die "carol: SAML ACS leg failed"
 STOKEN="$(printf '%s' "$ACS_PAGE" | grep -oE 'var data = "[^"]*"' | head -1 | sed -e 's/^var data = "//' -e 's/"$//')"
 if [ -z "$STOKEN" ]; then
   log "carol: ACS response carried no login token; first 600 chars: $(printf '%s' "$ACS_PAGE" | head -c 600)"
@@ -589,10 +692,10 @@ SHDR_D="$(mktemp)"
 # broken transport leg (no login form, failed Keycloak login, unparseable SAMLResponse, or an
 # unreachable ACS) must RED the run, not masquerade as a role-gate refusal: a token-less body from a
 # broken leg is indistinguishable from a deny unless we first prove the round-trip actually happened.
-SFORM_D="$(saml_authorize "$JAR_SD" "$SHDR_D")" || die "dave: could not reach the Keycloak SAML login form"
-# saml_acs_post returns non-zero only when it cannot get dave through Keycloak or reach the ACS at all;
+SPAGE_D="$(idp_saml_login "$JAR_SD" "$SHDR_D" "dave" "dave")" || die "dave: could not complete the IdP SAML login (broken negative test)"
+# post_saml_response returns non-zero only when the form is unparseable or the ACS is unreachable at all;
 # a reached-ACS (any HTTP status, including the expected deny) returns 0 with the body + status marker.
-ACS_PAGE_D="$(saml_acs_post "$JAR_SD" "$SFORM_D" "dave" "dave")" || die "dave: could not authenticate at Keycloak or reach the SAML ACS (broken negative test)"
+ACS_PAGE_D="$(post_saml_response "$JAR_SD" "$SPAGE_D")" || die "dave: could not reach the SAML ACS (broken negative test)"
 ACS_STATUS_D="$(printf '%s' "$ACS_PAGE_D" | sed -n 's/.*__ACSHTTP__\([0-9][0-9]*\)$/\1/p')"
 DTOKEN="$(printf '%s' "$ACS_PAGE_D" | grep -oE 'var data = "[^"]*"' | head -1 | sed -e 's/^var data = "//' -e 's/"$//')"
 log "dave: reached the SAML ACS; it returned HTTP ${ACS_STATUS_D:-<none>}"
