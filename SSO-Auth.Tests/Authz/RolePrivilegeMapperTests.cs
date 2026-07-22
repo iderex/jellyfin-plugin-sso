@@ -440,4 +440,63 @@ public class RolePrivilegeMapperTests
         Assert.False(result.EnableLiveTvManagement);
         Assert.Empty(result.Folders);
     }
+
+    /// <summary>
+    /// A blank configured allow-list entry must never be satisfiable (#935). The admin form filters
+    /// blank lines, but a hand-edited or imported configuration XML can carry one, and a blank
+    /// identity-provider role is producible via a terminal array element <c>""</c> or (since #934) an
+    /// object-map property named <c>""</c>. Blank-skip aligns the mapper with
+    /// <see cref="ParentalRatingPolicy"/> (which already skipped blank configured roles) and
+    /// <see cref="PermissionRolePolicy"/> (which gained the same skip in the same change).
+    /// </summary>
+    /// <param name="blankEntry">The blank configured entry variant.</param>
+    /// <param name="blankRole">The blank identity-provider role variant.</param>
+    [Theory]
+    [InlineData("", "")]
+    [InlineData("   ", "   ")]
+    [InlineData("", "   ")]
+    [InlineData("\t", "")]
+    public void Evaluate_BlankConfiguredEntry_NeverMatchedByBlankRole(string blankEntry, string blankRole)
+    {
+        var config = Oid(c =>
+        {
+            c.Roles = new[] { blankEntry };
+            c.AdminRoles = new[] { blankEntry };
+            c.EnableFolderRoles = true;
+            c.FolderRoleMapping = new List<FolderRoleMap>
+            {
+                new FolderRoleMap { Role = blankEntry, Folders = new List<string> { "movies" } },
+            };
+            c.EnableLiveTvRoles = true;
+            c.LiveTvRoles = new[] { blankEntry };
+            c.LiveTvManagementRoles = new[] { blankEntry };
+        });
+
+        var grants = RolePrivilegeMapper.Evaluate(new[] { blankRole }, config);
+
+        Assert.False(grants.Valid);
+        Assert.False(grants.Admin);
+        Assert.False(grants.EnableLiveTv);
+        Assert.False(grants.EnableLiveTvManagement);
+        Assert.Empty(grants.Folders);
+    }
+
+    [Fact]
+    public void Evaluate_BlankEntryBesideRealEntries_RealMatchingIsUnaffected()
+    {
+        // The blank entry is skipped, not the whole list: legitimate entries beside it keep matching,
+        // and a whitespace-carrying configured entry still requires the exact ordinal role (no new
+        // trimming is introduced for non-blank entries).
+        var config = Oid(c =>
+        {
+            c.Roles = new[] { string.Empty, "user" };
+            c.AdminRoles = new[] { "  ", " admin " };
+        });
+
+        var grants = RolePrivilegeMapper.Evaluate(new[] { "user", " admin " }, config);
+
+        Assert.True(grants.Valid);
+        Assert.True(grants.Admin);
+        Assert.False(RolePrivilegeMapper.Evaluate(new[] { "admin" }, config).Admin);
+    }
 }

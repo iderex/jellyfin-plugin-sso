@@ -300,4 +300,37 @@ public class PermissionRolePolicyTests
     {
         Assert.Equal(PermissionRolePolicy.PermissionNameStatus.Empty, PermissionRolePolicy.Classify(permission));
     }
+
+    /// <summary>
+    /// A blank configured mapping role must never be satisfiable (#935): the save-path validator checks
+    /// only the permission NAME, so a hand-edited or imported config XML can carry a blank Roles entry,
+    /// and a blank identity-provider role is producible via a terminal array element <c>""</c> or (since
+    /// #934) an object-map property named <c>""</c>. Without the blank-skip the mapping would GRANT the
+    /// permission on that phantom match instead of falling through to the explicit revoke.
+    /// </summary>
+    /// <param name="blankEntry">The blank configured mapping-role variant.</param>
+    /// <param name="blankRole">The blank identity-provider role variant.</param>
+    [Theory]
+    [InlineData("", "")]
+    [InlineData("   ", "")]
+    [InlineData("\t", "")]
+    [InlineData("   ", "   ")]
+    public void Map_BlankConfiguredRole_NeverMatchedByBlankRole_StillRevokes(string blankEntry, string blankRole)
+    {
+        var config = Config(enable: true, Map("EnableContentDownloading", blankEntry));
+
+        var grants = PermissionRolePolicy.Map(new[] { blankRole }, config);
+
+        // The mapping stays managed (explicit revoke) — the blank entry just can never grant it.
+        Assert.Equal(false, GrantFor(grants, PermissionKind.EnableContentDownloading));
+    }
+
+    [Fact]
+    public void Map_BlankEntryBesideRealRole_RealMatchingIsUnaffected()
+    {
+        var config = Config(enable: true, Map("EnableContentDownloading", string.Empty, "downloaders"));
+
+        Assert.Equal(true, GrantFor(PermissionRolePolicy.Map(new[] { "downloaders" }, config), PermissionKind.EnableContentDownloading));
+        Assert.Equal(false, GrantFor(PermissionRolePolicy.Map(new[] { string.Empty }, config), PermissionKind.EnableContentDownloading));
+    }
 }
