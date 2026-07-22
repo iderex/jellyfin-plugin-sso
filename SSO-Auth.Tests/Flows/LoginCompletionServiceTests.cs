@@ -43,7 +43,7 @@ public class LoginCompletionServiceTests
     private static readonly Guid Existing = Guid.Parse("11111111-1111-1111-1111-111111111111");
 
 
-    private static (LoginCompletionService Service, PluginConfiguration Config, IUserManager Users, ISessionManager Sessions) Build(Action<PluginConfiguration> seed)
+    private static (LoginCompletionService Service, PluginConfiguration Config, IUserManager Users, ISessionManager Sessions) Build(Action<PluginConfiguration> seed, CapturingLogger? auditLog = null)
     {
         var cfg = new PluginConfiguration();
         seed(cfg);
@@ -55,7 +55,7 @@ public class LoginCompletionServiceTests
         var avatar = new AvatarService(users, Substitute.For<IProviderManager>(), Substitute.For<IServerConfigurationManager>(), new CapturingLogger(), "test-agent");
         var minter = new SessionMinter(users, avatar, sessions, new CapturingLogger());
         var ssoOnly = new SsoOnlyLoginService(users, store, new CapturingLogger());
-        return (new LoginCompletionService(canonicalLinks, minter, ssoOnly, store, new CapturingLogger()), cfg, users, sessions);
+        return (new LoginCompletionService(canonicalLinks, minter, ssoOnly, store, auditLog ?? new CapturingLogger()), cfg, users, sessions);
     }
 
     private static AuthResponse Response() =>
@@ -102,6 +102,49 @@ public class LoginCompletionServiceTests
         Assert.NotNull(captured);
         Assert.Equal(Created, captured!.UserId);
         Assert.Equal("203.0.113.9", captured.RemoteEndPoint);
+    }
+
+    [Fact]
+    public async Task CompleteAsync_SuccessfulMint_EmitsExactlyOneLoginSucceededAuditLine()
+    {
+        // The emission point (#928 U1): a session actually minted must leave exactly one
+        // "[SSO Audit] Login succeeded" line naming the user and provider — and never the subject
+        // key, which is an identity-provider identifier.
+        var config = new OidConfig { Enabled = true };
+        var auditLog = new CapturingLogger();
+        var (service, _, users, sessions) = Build(c => c.OidConfigs["kc"] = config, auditLog);
+        var created = TestUsers.Named("alice", Created);
+        users.GetUserByName("alice").Returns((User?)null);
+        users.CreateUserAsync("alice").Returns(created);
+        users.GetUserById(Created).Returns(created);
+        sessions.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(new AuthenticationResult());
+
+        await service.CompleteAsync(
+            OidcIdentity("kc", "sub-1", "alice"), Response(), config, AdoptionGate.None, () => "203.0.113.9");
+
+        var audit = Assert.Single(auditLog.Entries, e => e.Message.Contains("[SSO Audit] Login succeeded", StringComparison.Ordinal));
+        Assert.Contains("alice", audit.Message, StringComparison.Ordinal);
+        Assert.Contains("kc", audit.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("sub-1", audit.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CompleteAsync_RefusedLogin_EmitsNoLoginSucceededAuditLine()
+    {
+        // The inverse pin: a refusal must not write a success line — the audit trail's integrity
+        // depends on the line meaning "a session was issued", nothing weaker.
+        var config = new OidConfig { Enabled = true, ProvisionNewUsersDisabled = true };
+        var auditLog = new CapturingLogger();
+        var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = config, auditLog);
+        var created = TestUsers.Named("alice", Created);
+        users.GetUserByName("alice").Returns((User?)null);
+        users.CreateUserAsync("alice").Returns(created);
+        users.GetUserById(Created).Returns(created);
+
+        await service.CompleteAsync(
+            OidcIdentity("kc", "sub-1", "alice"), Response(), config, AdoptionGate.None, () => "203.0.113.9");
+
+        Assert.DoesNotContain(auditLog.Entries, e => e.Message.Contains("Login succeeded", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -10,10 +10,13 @@ using Xunit;
 namespace Jellyfin.Plugin.SSO_Auth.Tests;
 
 /// <summary>
-/// Tests for <see cref="SsoAudit"/> — the structured security audit-log entries. Focused on the
-/// insecure-options warning (#140): it must fire at Warning level, name the provider and the enabled
-/// options, and strip line endings from the (route/admin-supplied) provider name so it cannot forge
-/// or split a log entry.
+/// Tests for <see cref="SsoAudit"/> — the structured security audit-log entries (#928 U1). Every
+/// method is pinned on three properties: the level it fires at, the "[SSO Audit]" prefix plus its
+/// key fields, and the inline line-ending strip on EVERY caller-supplied string so an identity-
+/// provider- or admin-supplied value can never forge or split an entry. The sensitive-data posture
+/// is structural — the signatures accept no secret, token, NameID or SessionIndex — and the fixed-
+/// code discipline (reason codes are enum names/constants, never request-derived text) is asserted
+/// where a code parameter exists.
 /// </summary>
 public class SsoAuditTests
 {
@@ -43,5 +46,193 @@ public class SsoAuditTests
         var message = Assert.Single(logger.Entries).Message;
         Assert.DoesNotContain("\n", message, StringComparison.Ordinal);
         Assert.Contains("corpInjected", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LoginSucceeded_LogsInformation_NamingUserProtocolProviderAndAdminFlag()
+    {
+        var logger = new CapturingLogger();
+
+        SsoAudit.LoginSucceeded(logger, "OpenID", "corp", "alice", isAdmin: true);
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Information, entry.Level);
+        Assert.Contains("[SSO Audit]", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("alice", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("OpenID", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("corp", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("admin=True", entry.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LoginSucceeded_StripsLineEndings_FromUsernameAndProvider()
+    {
+        var logger = new CapturingLogger();
+
+        // Both the username (IdP-derived) and the provider (route/admin input) are foreign values.
+        SsoAudit.LoginSucceeded(logger, "SAML", "corp\nX", "ali\r\nce", isAdmin: false);
+
+        var message = Assert.Single(logger.Entries).Message;
+        Assert.DoesNotContain("\n", message, StringComparison.Ordinal);
+        Assert.Contains("alice", message, StringComparison.Ordinal);
+        Assert.Contains("corpX", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ProvisionedPendingApproval_LogsWarning_SayingNoSessionWasIssued()
+    {
+        var logger = new CapturingLogger();
+
+        SsoAudit.ProvisionedPendingApproval(logger, "OpenID", "corp", "newbie\r\nX");
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Warning, entry.Level);
+        Assert.Contains("[SSO Audit]", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("newbieX", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("no session issued", entry.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("\n", entry.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AccountAdopted_LogsWarning_NamingTheAdoptedAccountAndStrippingLineEndings()
+    {
+        var logger = new CapturingLogger();
+
+        SsoAudit.AccountAdopted(logger, "SAML", "corp\rX", "vic\ntim");
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Warning, entry.Level);
+        Assert.Contains("[SSO Audit]", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("victim", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("corpX", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("AllowExistingAccountLink", entry.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("\n", entry.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ProviderConfiguredAndRemoved_LogInformation_AndStripTheProviderName(bool configured)
+    {
+        var logger = new CapturingLogger();
+
+        if (configured)
+        {
+            SsoAudit.ProviderConfigured(logger, "OpenID", "corp\r\nX");
+        }
+        else
+        {
+            SsoAudit.ProviderRemoved(logger, "OpenID", "corp\r\nX");
+        }
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Information, entry.Level);
+        Assert.Contains("[SSO Audit]", entry.Message, StringComparison.Ordinal);
+        Assert.Contains(configured ? "configured" : "removed", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("corpX", entry.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("\n", entry.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PkceNotAdvertised_LogsWarning_PointingAtRequirePkce_AndStripsTheProviderName()
+    {
+        var logger = new CapturingLogger();
+
+        SsoAudit.PkceNotAdvertised(logger, "corp\nX");
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Warning, entry.Level);
+        Assert.Contains("[SSO Audit]", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("corpX", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("RequirePkce", entry.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("\n", entry.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConfigImported_LogsWarning_WithTheMergedProviderCounts()
+    {
+        var logger = new CapturingLogger();
+
+        SsoAudit.ConfigImported(logger, oidProviders: 2, samlProviders: 1);
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Warning, entry.Level);
+        Assert.Contains("[SSO Audit]", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("2 OpenID", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("1 SAML", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("re-entered", entry.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LogoutRequested_LogsInformation_WithProviderAndCountOnly()
+    {
+        var logger = new CapturingLogger();
+
+        SsoAudit.LogoutRequested(logger, "corp\r\nX", usersRevoked: 3);
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Information, entry.Level);
+        Assert.Contains("[SSO Audit]", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("corpX", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("3 user(s)", entry.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("\n", entry.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LogoutRejected_LogsWarning_WithTheFixedReasonCode_AndNoSessionTerminated()
+    {
+        var logger = new CapturingLogger();
+
+        // The reason is a FIXED code (an enum member name), never request-derived text — the caller
+        // contract SSOControllerSamlLogoutTests pins from the validator side.
+        SsoAudit.LogoutRejected(logger, "corp\nX", "Replay");
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Warning, entry.Level);
+        Assert.Contains("[SSO Audit]", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("corpX", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("Replay", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("No session was terminated", entry.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("\n", entry.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EveryEntry_CarriesTheFilterablePrefix_AndInformationLevelEmissionsRespectIsEnabled()
+    {
+        // The IsEnabled guard exists so the inline sanitizer is not evaluated when the level is off
+        // (CA1873); a disabled level must emit NOTHING rather than an unsanitized fallback.
+        var off = new LevelFilteredLogger(minimum: LogLevel.Error);
+
+        SsoAudit.LoginSucceeded(off, "OpenID", "corp", "alice", isAdmin: false);
+        SsoAudit.ProviderConfigured(off, "OpenID", "corp");
+        SsoAudit.LogoutRequested(off, "corp", 1);
+        SsoAudit.ProvisionedPendingApproval(off, "OpenID", "corp", "u");
+        SsoAudit.AccountAdopted(off, "OpenID", "corp", "u");
+        SsoAudit.PkceNotAdvertised(off, "corp");
+        SsoAudit.LogoutRejected(off, "corp", "Replay");
+
+        Assert.Empty(off.Entries);
+    }
+
+    private sealed class LevelFilteredLogger : ILogger
+    {
+        private readonly LogLevel _minimum;
+
+        internal LevelFilteredLogger(LogLevel minimum) => _minimum = minimum;
+
+        internal System.Collections.Generic.List<(LogLevel Level, string Message)> Entries { get; } = new();
+
+        public IDisposable BeginScope<TState>(TState state)
+            where TState : notnull => null!;
+
+        public bool IsEnabled(LogLevel logLevel) => logLevel >= _minimum;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (IsEnabled(logLevel))
+            {
+                Entries.Add((logLevel, formatter(state, exception)));
+            }
+        }
     }
 }
