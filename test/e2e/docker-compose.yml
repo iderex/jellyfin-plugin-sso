@@ -64,6 +64,12 @@ services:
       OIDC_CLIENT_SECRET: jellyfin-oidc-secret
       JF_ADMIN_USER: e2eadmin
       JF_ADMIN_PASS: e2e-admin-pw
+      # Extended phases (#928 U5): alice carries the realm role jellyfin-admin (seeded in
+      # e2e-realm.json), mapped to Jellyfin admin rights via the AdminRoles allow-list; the
+      # second-login binding, the admin-policy assert and the SSO-only round-trip all run on this
+      # canonical stack.
+      ADMIN_ROLES_JSON: '["jellyfin-admin"]'
+      EXTENDED_PHASES: "true"
     volumes:
       - ./harness:/harness:ro
     command: ["sh", "/harness/harness.sh"]
