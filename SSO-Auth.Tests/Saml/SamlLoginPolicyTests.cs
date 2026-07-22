@@ -54,4 +54,41 @@ public class SamlLoginPolicyTests
         Assert.False(SamlLoginPolicy.IsLoginAllowed(new string?[] { null }, new string?[] { null }));
         Assert.False(SamlLoginPolicy.IsLoginAllowed(new[] { "" }, new[] { "" }));
     }
+
+    /// <summary>
+    /// The whitespace variant of the blank class (#952, follow-up to #935): a whitespace-only
+    /// configured entry (hand-edited or imported config XML) must not be satisfiable by a
+    /// whitespace-only assertion role — XML text nodes preserve whitespace and the assertion
+    /// roles are compared raw, so the pair is producible. Aligns SAML login validity with the
+    /// OIDC allow-list, which skips whitespace-only entries since #935.
+    /// </summary>
+    /// <param name="configured">The blank configured entry variant.</param>
+    /// <param name="asserted">The blank assertion-role variant.</param>
+    [Theory]
+    [InlineData("   ", "   ")]
+    [InlineData("\t", "\t")]
+    [InlineData(" ", " ")]
+    public void WhitespaceOnlyRolesNeverAuthorize(string configured, string asserted)
+    {
+        Assert.False(SamlLoginPolicy.IsLoginAllowed(new[] { asserted }, new[] { configured }));
+    }
+
+    [Fact]
+    public void WhitespaceOnlyAllowList_StillCountsAsConfigured_AndDeniesRealRoles()
+    {
+        // A list holding only a blank entry is a misconfiguration, and it fails CLOSED: it does not
+        // fall into the RBAC-off early return (Length > 0), so a real asserted role is denied.
+        Assert.False(SamlLoginPolicy.IsLoginAllowed(new[] { "jellyfin" }, new[] { "   " }));
+    }
+
+    [Fact]
+    public void WhitespaceEntryBesideRealEntry_RealMatchingIsUnaffected()
+    {
+        // The blank entry is skipped per-entry, not per-list, and no trimming is introduced for
+        // non-blank values: an entry carrying inner/outer whitespace still requires the exact
+        // ordinal role.
+        Assert.True(SamlLoginPolicy.IsLoginAllowed(new[] { "jellyfin" }, new[] { "   ", "jellyfin" }));
+        Assert.True(SamlLoginPolicy.IsLoginAllowed(new[] { " jellyfin " }, new[] { " jellyfin " }));
+        Assert.False(SamlLoginPolicy.IsLoginAllowed(new[] { "jellyfin" }, new[] { " jellyfin " }));
+    }
 }

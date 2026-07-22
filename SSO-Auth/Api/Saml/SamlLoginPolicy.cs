@@ -33,14 +33,17 @@ internal static class SamlLoginPolicy
         {
             foreach (var role in assertionRoles)
             {
-                // Skip empty/null role values so a missing role can never satisfy the allow-list
-                // (a null/empty on both sides must not authorize).
-                if (string.IsNullOrEmpty(role))
+                // Skip blank (null/empty/whitespace-only) role values so a missing role can never
+                // satisfy the allow-list. Whitespace counts as blank (#952): XML text nodes preserve
+                // whitespace and assertion roles are compared raw, so a whitespace-only configured
+                // entry (hand-edited/imported config) paired with a whitespace-only asserted value
+                // must not authorize — the same blank definition the OIDC allow-list applies (#935).
+                if (string.IsNullOrWhiteSpace(role))
                 {
                     continue;
                 }
 
-                if (allowedRoles.Any(allowed => !string.IsNullOrEmpty(allowed) && string.Equals(allowed, role, StringComparison.Ordinal)))
+                if (allowedRoles.Any(allowed => !string.IsNullOrWhiteSpace(allowed) && string.Equals(allowed, role, StringComparison.Ordinal)))
                 {
                     return true;
                 }
