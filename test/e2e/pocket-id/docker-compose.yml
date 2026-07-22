@@ -1,0 +1,93 @@
+# End-to-end SSO login harness — Pocket ID provider (#922). Boots a real Jellyfin 10.11 server with the
+# packaged plugin installed and a real Pocket ID instance, driven by the SHARED harness.
+#
+# Pocket ID authenticates people with PASSKEYS ONLY, so it is the one provider in the matrix with no
+# browser-drivable password login. It is driven instead through its own one-time-access-token mechanism —
+# the flow it ships for the case where a user loses their passkey. That flow is real product behaviour, not
+# a test backdoor: a token is exchanged at POST /api/one-time-access-token/<token> for the same session
+# cookie a passkey login would mint.
+#
+# BOOTSTRAP COST, deliberate and documented: a fresh Pocket ID has no non-interactive way in at all. Its
+# user-creation API needs a session, open signup is off and is itself an admin-only setting, there is no
+# setup endpoint, and its `one-time-access-token` CLI refuses because no user exists yet. So the harness
+# seeds the very first admin, and the one-time tokens, straight into Pocket ID's SQLite file — the only
+# place in this matrix that reaches past a provider's API into its database. Everything after that runs
+# through the normal admin API. The trade-off is that a Pocket ID schema change breaks this harness rather
+# than the plugin: a false RED, never a false green.
+#
+# Local run (build the plugin zip first — see test/e2e/README.md). Like the Zitadel stack this one is NOT
+# re-runnable in place — the seeded rows and the consumed tokens are stateful:
+#   docker compose -f test/e2e/pocket-id/docker-compose.yml up \
+#     --abort-on-container-exit --exit-code-from harness
+#   docker compose -f test/e2e/pocket-id/docker-compose.yml down -v
+name: sso-e2e-pocket-id
+
+services:
+  pocketid:
+    image: ghcr.io/pocket-id/pocket-id:v1.16.0
+    environment:
+      # The origin Pocket ID issues tokens for. It must be the service-DNS name so Jellyfin
+      # (server-to-server) and the harness (browser role) resolve a byte-identical issuer.
+      APP_URL: http://pocketid:1411
+      TRUST_PROXY: "true"
+      # Pocket ID beacons a heartbeat to a third party on every start. This repo trusts no external service
+      # with its process (#262), and CI audits egress, so the test rig does not phone home either.
+      ANALYTICS_DISABLED: "true"
+      # Run as root so the harness, which mounts the same data volume, can write the bootstrap rows into
+      # the SQLite file. /app/data is not a declared volume in the image, hence the named one below.
+      PUID: "0"
+      PGID: "0"
+    volumes:
+      - piddata:/app/data
+    networks:
+      - ssonet
+
+  jellyfin:
+    # Same server the Keycloak harness pins (see ../docker-compose.yml for the version-bind rationale).
+    image: jellyfin/jellyfin:10.11.11
+    environment:
+      JELLYFIN_CACHE_DIR: /cache
+    volumes:
+      # Reuse the shared plugin drop the workflow / local build step unpacks under ../jellyfin/config.
+      - ../jellyfin/config:/config
+    networks:
+      - ssonet
+
+  harness:
+    image: alpine:3.20
+    depends_on:
+      - jellyfin
+      - pocketid
+    environment:
+      JELLYFIN_URL: http://jellyfin:8096
+      IDP_KIND: pocket-id
+      PROVIDER: pocket-id
+      POCKETID_URL: http://pocketid:1411
+      OID_ENDPOINT: http://pocketid:1411
+      DISCOVERY_URL: http://pocketid:1411/.well-known/openid-configuration
+      # Pocket ID exposes group membership as a `groups` claim when the groups scope is requested.
+      ROLE_CLAIM: groups
+      OID_SCOPES_JSON: '["openid","email","profile","groups"]'
+      DO_NOT_LOAD_PROFILE: "true"
+      DISABLE_HTTPS: "true"
+      RUN_SAML: "false"
+      JF_ADMIN_USER: e2eadmin
+      JF_ADMIN_PASS: e2e-admin-pw
+    volumes:
+      - ../harness:/harness:ro
+      # Read-write: the bootstrap rows go into the SQLite file here.
+      - piddata:/pid-data
+    command: ["sh", "/harness/harness.sh"]
+    networks:
+      - ssonet
+
+volumes:
+  piddata:
+
+networks:
+  ssonet:
+    driver: bridge
+    ipam:
+      config:
+        # SSRF-guard-friendly public-looking range, distinct from the other harnesses.
+        - subnet: 11.0.5.0/24
