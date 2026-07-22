@@ -33,9 +33,8 @@ services:
     image: ghcr.io/zitadel/zitadel:v2.71.16
     # The token volume is created root-owned and this image otherwise runs unprivileged, so writing the
     # token fails with "permission denied" and takes the whole setup migration down with it. Running the
-    # container as root is the one-line fix; a separate chmod init container is NOT an option, because the
-    # run uses --abort-on-container-exit, under which a one-shot service finishing successfully tears the
-    # entire stack down mid-migration. The image ships no shell, so the chmod cannot be folded into command.
+    # container as root is the one-line fix, and the image ships no shell, so a chmod cannot be folded into
+    # its command either.
     user: "0:0"
     # The master key encrypts Zitadel's own secrets at rest; it must be exactly 32 bytes. Test-only.
     command: >
