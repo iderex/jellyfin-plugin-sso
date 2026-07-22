@@ -9,6 +9,18 @@ suffix on the git tag and GitHub release name only (`-stable`, `-beta.<run>`,
 
 ## Unreleased
 
+### Added
+
+- **OpenID role claims carried as an object map.** A new per-provider option,
+  **Role claim is an object map**, reads the roles from the property _names_ of
+  a JSON object instead of from a list of strings. Zitadel needs it: it emits
+  `{"jellyfin-access": {"<orgId>": "<domain>"}}` under
+  `urn:zitadel:iam:org:project:roles`, which no previous configuration could
+  read, so its role gate could never be enabled. Only the names are read —
+  never the values, never nested objects — and every other claim shape still
+  fails closed to no roles. The option is **off by default**, so no existing
+  provider changes behaviour.
+
 ### Changed
 
 - **Renamed to "Community SSO for Jellyfin".** The plugin's display name (the

@@ -639,6 +639,18 @@ public class OidConfig : ProviderConfigBase
     public string? RoleClaim { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the node <see cref="RoleClaim"/> resolves to is a JSON
+    /// <b>object whose property names are the role names</b>, rather than a JSON array of role strings
+    /// (#934). Zitadel emits exactly that shape — <c>{"jellyfin-access": {"&lt;orgId&gt;": "&lt;domain&gt;"}}</c>
+    /// under <c>urn:zitadel:iam:org:project:roles</c> — so without this its roles are unreadable and its
+    /// role gate can never be turned on. Off by default, so no existing provider changes behaviour.
+    /// Only the property NAMES are read, never the values and never nested objects; any other shape
+    /// (array, scalar, malformed JSON) still fails closed to no roles. Settable in the admin provider
+    /// form as well as the config XML.
+    /// </summary>
+    public bool RoleClaimIsObjectMap { get; set; }
+
+    /// <summary>
     /// Gets or Sets additional Scopes to request access to in the authorization request.
     /// </summary>
     public string?[]? OidScopes { get; set; }

@@ -685,4 +685,85 @@ public class OidcAuthorizeStateBuilderTests
         Assert.True(result.EnableLiveTv);            // from config default
         Assert.True(result.EnableLiveTvManagement);  // granted by the role
     }
+
+    [Fact]
+    public void ObjectMapRoleClaim_MatchesTheAllowList_WhenTheProviderOptsIn()
+    {
+        // #934, Zitadel's shape end to end: the role claim's property NAMES are the roles.
+        var config = Config(c =>
+        {
+            c.Roles = new[] { "jellyfin-access" };
+            c.RoleClaim = "urn:zitadel:iam:org:project:roles";
+            c.RoleClaimIsObjectMap = true;
+        });
+
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(
+                ("preferred_username", "alice"),
+                ("urn:zitadel:iam:org:project:roles", "{\"jellyfin-access\":{\"orgid\":\"example.com\"}}")),
+            config);
+
+        Assert.Equal("alice", result.Username);
+        Assert.True(result.Valid);
+    }
+
+    [Fact]
+    public void ObjectMapRoleClaim_UnmatchedRole_IsRefused()
+    {
+        var config = Config(c =>
+        {
+            c.Roles = new[] { "jellyfin-access" };
+            c.RoleClaim = "urn:zitadel:iam:org:project:roles";
+            c.RoleClaimIsObjectMap = true;
+        });
+
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(
+                ("preferred_username", "bob"),
+                ("urn:zitadel:iam:org:project:roles", "{\"some-other-role\":{\"orgid\":\"example.com\"}}")),
+            config);
+
+        Assert.False(result.Valid);
+    }
+
+    [Fact]
+    public void ObjectMapRoleClaim_WithoutOptIn_IsRefused()
+    {
+        // The default is unchanged: without the opt-in the same object claim grants nothing, so no existing
+        // provider silently starts accepting a shape it did not before.
+        var config = Config(c =>
+        {
+            c.Roles = new[] { "jellyfin-access" };
+            c.RoleClaim = "urn:zitadel:iam:org:project:roles";
+        });
+
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(
+                ("preferred_username", "alice"),
+                ("urn:zitadel:iam:org:project:roles", "{\"jellyfin-access\":{\"orgid\":\"example.com\"}}")),
+            config);
+
+        Assert.False(result.Valid);
+    }
+
+    [Fact]
+    public void ObjectMapRoleClaim_DoesNotReadTheValues()
+    {
+        // Only the property names are roles. Zitadel puts the granting org's id→domain map in the VALUE;
+        // reading it would turn an org domain the user never had granted into a matching role.
+        var config = Config(c =>
+        {
+            c.Roles = new[] { "jellyfin-access" };
+            c.RoleClaim = "urn:zitadel:iam:org:project:roles";
+            c.RoleClaimIsObjectMap = true;
+        });
+
+        var result = OidcAuthorizeStateBuilder.Build(
+            Claims(
+                ("preferred_username", "mallory"),
+                ("urn:zitadel:iam:org:project:roles", "{\"nothing\":{\"orgid\":\"jellyfin-access\"}}")),
+            config);
+
+        Assert.False(result.Valid);
+    }
 }

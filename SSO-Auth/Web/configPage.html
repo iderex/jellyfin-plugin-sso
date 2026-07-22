@@ -926,7 +926,8 @@
                       roles. The first element is the claim type, the subsequent
                       values are to parse the JSON of the claim value. Use a
                       <code>"\."</code> to denote a literal ".". This expects a
-                      list of strings from the OIDC server.
+                      list of strings from the OIDC server, unless "Role claim
+                      is an object map" below is on.
                       <br />
                       For Keycloak, it is <code>realm_access.roles</code> by
                       default for realm roles. For client roles, it is
@@ -934,6 +935,34 @@
                       (e.g. resource_access.jellyfin.roles)
                       <br />
                       For Authelia, it is <code>groups</code>
+                    </div>
+                  </div>
+
+                  <div
+                    class="checkboxContainer checkboxContainer-withDescription"
+                  >
+                    <label>
+                      <input
+                        is="emby-checkbox"
+                        id="RoleClaimIsObjectMap"
+                        name="RoleClaimIsObjectMap"
+                        type="checkbox"
+                        class="sso-toggle"
+                      />
+                      <span>Role claim is an object map</span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">
+                      Read the roles from the property <em>names</em> of a JSON
+                      object instead of from a list of strings. Zitadel needs
+                      this: it emits
+                      <code
+                        >{"jellyfin-access": {"&lt;orgId&gt;":
+                        "&lt;domain&gt;"}}</code
+                      >
+                      under <code>urn:zitadel:iam:org:project:roles</code>. Only
+                      the names are read — never the values, never nested
+                      objects. Off by default; leave it off for a provider that
+                      returns a list (Keycloak, Authelia, authentik).
                     </div>
                   </div>
                 </div>
@@ -964,7 +993,10 @@
                       <br />
                       If a user has any of these roles, then the user is
                       authenticated. This validates the OpenID response against
-                      the claim set in <strong>"RoleClaim"</strong>.
+                      the claim set in <strong>"RoleClaim"</strong>. (If your
+                      provider — Zitadel does this — carries the roles as object
+                      keys, also tick "Role claim is an object map" beside the
+                      Role Claim field.)
                       <br />
                       Leave blank to disable role checking.
                     </div>

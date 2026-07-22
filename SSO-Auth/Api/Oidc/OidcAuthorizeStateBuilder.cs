@@ -217,7 +217,7 @@ internal static class OidcAuthorizeStateBuilder
 
             if (roleClaimSegments.Length > 0 && string.Equals(claim.Type, roleClaimSegments[0], StringComparison.Ordinal))
             {
-                roles.AddRange(OidcRoleExtractor.ExtractRoles(roleClaimSegments, claim.Value));
+                roles.AddRange(OidcRoleExtractor.ExtractRoles(roleClaimSegments, claim.Value, config.RoleClaimIsObjectMap));
             }
         }
 
