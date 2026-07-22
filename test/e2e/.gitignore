@@ -5,3 +5,7 @@ jellyfin/config/
 # Authelia harness TLS cert is generated at run time (workflow step / local openssl), never committed.
 authelia/tls.crt
 authelia/tls.key
+
+# Kanidm harness TLS cert is generated at run time (workflow step / local openssl), never committed.
+kanidm/chain.pem
+kanidm/key.pem

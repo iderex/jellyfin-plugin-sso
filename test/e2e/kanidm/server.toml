@@ -1,0 +1,14 @@
+# Kanidm server configuration for the E2E login harness (#923). Test-only.
+#
+# The database and the ADMIN UNIX SOCKET live under /data, which is a NAMED VOLUME the harness also mounts:
+# that socket is the only non-interactive way into a fresh Kanidm (see the compose header), and over a bind
+# mount it is unusable — the socket file appears but every connect is refused. The TLS material and this
+# file come in through a separate read-only bind mount at /certs, which a bind mount handles fine.
+version = "2"
+bindaddress = "[::]:8443"
+# Must match the certificate's CN/SAN and the service-DNS alias, or the plugin's TLS validation fails.
+domain = "idm.example.com"
+origin = "https://idm.example.com:8443"
+db_path = "/data/kanidm.db"
+tls_chain = "/certs/chain.pem"
+tls_key = "/certs/key.pem"

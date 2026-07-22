@@ -15,8 +15,9 @@ on the nightly schedule, and on a **default** manual dispatch (there is delibera
 the PR run already validated it). Additional self-hostable identity providers get their own harness under
 `test/e2e/<provider>/`. **Authelia** (`test/e2e/authelia/`, OIDC), **authentik**
 (`test/e2e/authentik/`, OIDC **and** SAML), **Dex** (`test/e2e/dex/`, OIDC), **Zitadel**
-(`test/e2e/zitadel/`, OIDC) and **Pocket ID** (`test/e2e/pocket-id/`, OIDC) are implemented; only **Kanidm**
-remains, tracked in
+(`test/e2e/zitadel/`, OIDC), **Pocket ID** (`test/e2e/pocket-id/`, OIDC) and **Kanidm**
+(`test/e2e/kanidm/`, OIDC) are all implemented — every self-hostable provider in the README table now has
+one. The programme is tracked in
 [#919](https://github.com/iderex/jellyfin-plugin-sso/issues/919). The **full provider matrix runs at a
 release and a beta-release** — never on a routine merge, so the cross-provider pass is release-gate
 evidence, not a per-commit cost — **and on a manual dispatch with `providers: all`**, which is how a newly
@@ -45,6 +46,32 @@ profile, and `DISABLE_HTTPS`), so the defaults reproduce the Keycloak run unchan
 harness additionally serves TLS with a self-signed cert (Authelia 4.38 requires a secure session URL); the
 cert is appended to Jellyfin's system CA bundle at container start (never replacing it) and trusted by the
 harness via `CURL_CA_BUNDLE`, so the plugin's real https OIDC path is exercised.
+
+**Kanidm has the hardest bootstrap and the strictest defaults.** It is TLS-only, ships **no shell** in its
+image (so its container command cannot sequence `recover-account` before `server`), has no provisioning file
+and no default admin password. The way in is its **admin unix socket**, which speaks one-line JSON and hands
+out a recovery password — so its `/data` is a **named volume** the harness mounts too; over a bind mount the
+socket file appears but every connect is refused, which would break the local run. Three further defaults
+shape the harness and are worth knowing before configuring Kanidm for real:
+
+- Its account policy **requires MFA**, so a password-only credential cannot be committed
+  (`can_commit=false, warnings=["MfaRequired"]`). The harness relaxes it deliberately; a real deployment
+  should not.
+- Its OAuth2 **scope map is what grants access to the client at all**. Mapping it onto the role group would
+  make Kanidm itself refuse `bob` with a 403 and the plugin's role gate would never be reached, so the
+  harness uses **two** groups: `jellyfin-users` grants both users access, `jellyfin-access` is the role the
+  plugin gates on and only `alice` holds it. That is also how a real deployment should separate "may use
+  this app" from "has this role".
+- Its `groups` claim carries **SPNs** (`jellyfin-access@idm.example.com`), not bare names, so the allow-list
+  is spelled that way. So does `preferred_username`, until the resource server opts into
+  `prefer_short_username` — which the seeding does, because otherwise every Jellyfin account would be named
+  `alice@idm.example.com`. Pointing the plugin at the `name` claim instead looks like it works and is
+  wrong: `name` is the OIDC profile claim and carries the **display name**. The harness seeds display names
+  that are unlike the usernames precisely so its `Name='alice'` assertion can tell the two apart — with them
+  seeded equal, as they were in the first draft, it would have passed either way.
+
+Together with Authelia it is one of the two harnesses exercising the plugin's real https path, and its
+`ES256` signing is what the widened asymmetric-algorithm assertion exists for.
 
 **Pocket ID has no password login at all** — it authenticates with passkeys only. The browser role is
 played through the provider's own **one-time-access-token** flow, the mechanism it ships for a lost passkey:
@@ -138,13 +165,14 @@ docker compose -f test/e2e/docker-compose.yml down -v
 A green run prints `ALL E2E CHECKS PASSED`. In CI, container logs are dumped automatically on
 failure.
 
-**The Zitadel and Pocket ID stacks cannot be re-run in place.** Every other provider is seeded from a file
+**The Zitadel, Pocket ID and Kanidm stacks cannot be re-run in place.** Every other provider is seeded from a file
 (an imported realm, a reapplied blueprint, or a static config) and the driver deliberately reuses an
-already-initialised Jellyfin. These two are seeded imperatively against stateful storage and their seeds are
-not idempotent: a second `up` on the same stack hits `ALREADY_EXISTS` on Zitadel's project create, or a
-duplicate-primary-key error on Pocket ID's bootstrap admin, and dies there. Always tear them down with
-`down -v` between runs — that also drops the volumes holding Zitadel's access token and Pocket ID's
-database. CI is unaffected: each matrix entry gets a fresh runner and tears the stack down with `-v`.
+already-initialised Jellyfin. These three are seeded imperatively against stateful storage and their seeds
+are not idempotent: a second `up` on the same stack hits `ALREADY_EXISTS` on Zitadel's project create, a
+duplicate-primary-key error on Pocket ID's bootstrap admin, or an already-exists error on Kanidm's groups,
+and dies there. Always tear them down with `down -v` between runs — that also drops the volumes holding
+Zitadel's access token, Pocket ID's database, and Kanidm's database and admin socket. CI is unaffected: each
+matrix entry gets a fresh runner and tears the stack down with `-v`.
 
 **Running more than one provider locally:** every provider's compose bind-mounts the same
 `test/e2e/jellyfin/config`, and `docker compose down -v` does not clear a bind mount. Wipe it (and re-unpack
@@ -162,4 +190,21 @@ openssl req -x509 -newkey rsa:2048 -nodes \
 
 docker compose -f test/e2e/authelia/docker-compose.yml up \
   --abort-on-container-exit --exit-code-from harness
+```
+
+**Kanidm** needs its cert the same way, and skipping the step fails in a way that does not point at the
+cause: Docker creates _directories_ where the certificate files should be bind-mounted, Jellyfin's
+entrypoint then cannot read one, and the run dies minutes later saying Jellyfin never became ready. The
+recovery is not obvious either — `openssl … -out chain.pem` then refuses because the path is a directory,
+and `.gitignore` matches it, so `git status` stays clean. If that happens, delete
+`test/e2e/kanidm/chain.pem` and `test/e2e/kanidm/key.pem` (they will be directories) and start over:
+
+```sh
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout test/e2e/kanidm/key.pem -out test/e2e/kanidm/chain.pem \
+  -days 3650 -subj "/CN=idm.example.com" -addext "subjectAltName=DNS:idm.example.com"
+
+docker compose -f test/e2e/kanidm/docker-compose.yml up \
+  --abort-on-container-exit --exit-code-from harness
+docker compose -f test/e2e/kanidm/docker-compose.yml down -v
 ```

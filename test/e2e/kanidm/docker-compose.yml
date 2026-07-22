@@ -1,0 +1,116 @@
+# End-to-end SSO login harness — Kanidm provider (#923). Boots a real Jellyfin 10.11 server with the
+# packaged plugin installed and a real Kanidm instance, driven by the SHARED harness.
+#
+# Kanidm is TLS-ONLY, so this is the second harness (with Authelia) that exercises the plugin's real https
+# path; the other five run over plaintext http.
+#
+# It also has the hardest bootstrap in the matrix: no provisioning file, no shell in the image (so the
+# container command cannot chain `recover-account` before `server`), and no default admin password. The way
+# in is its ADMIN UNIX SOCKET, which speaks one-line JSON and hands out the recovery password — so /data
+# (database + socket) is a NAMED VOLUME the harness mounts too. That is load-bearing: over a bind mount the
+# socket file appears but every connect is refused, which would break the local run. The TLS material and
+# server.toml come in through a separate read-only bind mount, which a bind mount handles fine.
+#
+# Local run (build the plugin zip first — see test/e2e/README.md). Like the Zitadel and Pocket ID stacks
+# this one is NOT re-runnable in place: the seeding is not idempotent and /data is stateful.
+#   openssl req -x509 -newkey rsa:2048 -nodes \
+#     -keyout test/e2e/kanidm/key.pem -out test/e2e/kanidm/chain.pem \
+#     -days 3650 -subj "/CN=idm.example.com" -addext "subjectAltName=DNS:idm.example.com"
+#   docker compose -f test/e2e/kanidm/docker-compose.yml up \
+#     --abort-on-container-exit --exit-code-from harness
+#   docker compose -f test/e2e/kanidm/docker-compose.yml down -v
+name: sso-e2e-kanidm
+
+services:
+  kanidm:
+    image: docker.io/kanidm/server:1.10.4
+    environment:
+      KANIDM_CONFIG: /certs/server.toml
+    volumes:
+      - kandata:/data
+      - .:/certs:ro
+    networks:
+      ssonet:
+        aliases:
+          # Must match the certificate and server.toml's domain/origin.
+          - idm.example.com
+
+  jellyfin:
+    # Same server the Keycloak harness pins (see ../docker-compose.yml for the version-bind rationale).
+    image: jellyfin/jellyfin:10.11.11
+    # APPEND Kanidm's self-signed cert to the system CA bundle (never replace it) before Jellyfin starts, so
+    # the plugin's TLS trusts Kanidm while every real system CA still validates — the same reasoning as the
+    # Authelia harness, where replacing the bundle broke .NET's startup TLS instead.
+    entrypoint:
+      [
+        "/bin/sh",
+        "-c",
+        "cat /certs/chain.pem >> /etc/ssl/certs/ca-certificates.crt && exec /jellyfin/jellyfin",
+      ]
+    environment:
+      JELLYFIN_CACHE_DIR: /cache
+    volumes:
+      # Reuse the shared plugin drop the workflow / local build step unpacks under ../jellyfin/config.
+      - ../jellyfin/config:/config
+      - ./chain.pem:/certs/chain.pem:ro
+    networks:
+      - ssonet
+
+  harness:
+    image: alpine:3.20
+    depends_on:
+      - jellyfin
+      - kanidm
+    environment:
+      JELLYFIN_URL: http://jellyfin:8096
+      IDP_KIND: kanidm
+      PROVIDER: kanidm
+      KANIDM_URL: https://idm.example.com:8443
+      OID_ENDPOINT: https://idm.example.com:8443/oauth2/openid/jellyfin
+      DISCOVERY_URL: https://idm.example.com:8443/oauth2/openid/jellyfin/.well-known/openid-configuration
+      # Kanidm only serves the discovery document once the OAuth2 client is seeded, and seeding needs the
+      # server up, so readiness probes a plain liveness endpoint instead.
+      READINESS_URL: https://idm.example.com:8443/status
+      # Kanidm exposes group membership as a `groups` claim through the OAuth2 scope map — but as SPNs
+      # (`<name>@<domain>`), not bare names, so the allow-list has to be spelled that way or nothing matches.
+      ROLE_CLAIM: groups
+      OID_ROLES_JSON: '["jellyfin-access@idm.example.com"]'
+      # The username claim is left at the plugin's default, `preferred_username`. Kanidm makes that the bare
+      # account name once the resource server sets `prefer_short_username` (the seeding does); without it
+      # the claim is the SPN and every Jellyfin account would be named `alice@idm.example.com`. Pointing the
+      # plugin at `name` instead would be wrong — that is the OIDC profile claim and carries the DISPLAY
+      # name, so accounts would be named after a person's full name. The harness proves the difference by
+      # seeding display names that are unlike the usernames.
+      OID_SCOPES_JSON: '["openid","email","profile","groups"]'
+      # Real TLS, so the plugin's https path is exercised rather than relaxed.
+      DISABLE_HTTPS: "false"
+      DO_NOT_LOAD_PROFILE: "true"
+      RUN_SAML: "false"
+      # Kanidm enforces a password-quality policy, so the bare-username passwords the http harnesses seed
+      # are rejected. These same values seed the accounts and drive the login, so they cannot drift apart.
+      PASSWORD_ALICE: "Alice-e2e-Correct-Horse-9137"
+      PASSWORD_BOB: "Bob-e2e-Correct-Horse-4471"
+      # Trust the harness's own curl against Kanidm's self-signed cert.
+      CURL_CA_BUNDLE: /certs/chain.pem
+      JF_ADMIN_USER: e2eadmin
+      JF_ADMIN_PASS: e2e-admin-pw
+    volumes:
+      - ../harness:/harness:ro
+      - .:/certs:ro
+      # The admin socket lives here. Connecting needs no write access to the volume, so this could be :ro —
+      # it is left read-write to match the provider side and because nothing here benefits from the split.
+      - kandata:/kanidm-data
+    command: ["sh", "/harness/harness.sh"]
+    networks:
+      - ssonet
+
+volumes:
+  kandata:
+
+networks:
+  ssonet:
+    driver: bridge
+    ipam:
+      config:
+        # SSRF-guard-friendly public-looking range, distinct from the other harnesses.
+        - subnet: 11.0.6.0/24
