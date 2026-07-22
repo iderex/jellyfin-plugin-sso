@@ -1,13 +1,21 @@
 [
   {
     "category": "Authentication",
-    "description": "Single sign-on for Jellyfin via OpenID Connect and SAML 2.0 — works with self-hosted and\nmanaged identity providers such as Authelia, Authentik, Keycloak, Pocket ID and Kanidm,\nwith multiple providers side by side.\nRole-based access from provider claims (login, administrator, library folders, Live TV),\navatar sync, self-service account linking, and an optional SSO-only mode that disables\npassword login for every account except a designated break-glass admin.\nSign-in works in the Jellyfin Web UI and, via Quick Connect, in native clients.\n",
+    "description": "Single sign-on for Jellyfin via OpenID Connect and SAML 2.0 — works with self-hosted and\nmanaged identity providers such as Authelia, Authentik, Keycloak, Pocket ID and Kanidm,\nwith multiple providers side by side.\nRole-based access from provider claims (login, administrator, library folders, Live TV),\navatar sync, self-service account linking, and an optional SSO-only mode that disables\npassword login for every account except a designated break-glass admin.\nSign-in works in the Jellyfin Web UI and, via Quick Connect, in native clients.\nA security-first continuation of the archived 9p4/jellyfin-plugin-sso.\nDocumentation and provider setup guides: https://github.com/iderex/jellyfin-plugin-sso\n",
     "guid": "505ce9d1-d916-42fa-86ca-673ef241d7df",
     "imageUrl": "https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/main/img/logo.png",
     "name": "Community SSO for Jellyfin",
     "overview": "Sign in to Jellyfin through OpenID Connect or SAML 2.0 identity providers.",
     "owner": "iderex",
     "versions": [
+      {
+        "changelog": "Jellyfin 12.0 (.NET 10) beta 5.0.0-JF12-beta (plugin version 5.0.0.25).\nInstall via the beta repository URL (a Jellyfin 12.0 server picks this build automatically by targetAbi):\nhttps://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json\n\nScope note (#743): the JF12/5.0 line is **not validated against a live Jellyfin 12.0 server yet** — no 12.0 GA server exists to run the E2E checklist against. It is CI-built and unit/conformance-tested only, and it is NOT part of the 4.x (Jellyfin 10.11) release-candidate gate; the 5.0 line clears its own live-validation gate when a Jellyfin 12.0 RC/GA build is available. Use these betas for testing, not production.\n\n\n## What's Changed\n* Fail the publish when a Jellyfin generation drops out of the manifest by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/946\n* Generate the plugin manifest in-house: paginated, checksum-paired, per-ABI capped by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/947\n* Skip blank configured role entries in all allow-list matching by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/953\n* Publish both betas from main; retire the stable channel until first stable by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/955\n\n\n**Full Changelog**: https://github.com/iderex/jellyfin-plugin-sso/compare/4.3.0-beta.11...5.0.0-JF12-beta.25",
+        "checksum": "f8c1eed61a6af7877ab909ef1da66ba7",
+        "sourceUrl": "https://github.com/iderex/jellyfin-plugin-sso/releases/download/5.0.0-JF12-beta.25/community-sso-for-jellyfin_5.0.0.25.zip",
+        "targetAbi": "12.0.0.0",
+        "timestamp": "2026-07-22T16:59:09Z",
+        "version": "5.0.0.25"
+      },
       {
         "changelog": "Jellyfin 12.0 (.NET 10) beta 5.0.0-JF12-beta (plugin version 5.0.0.24).\nInstall via the beta repository URL (a Jellyfin 12.0 server picks this build automatically by targetAbi):\nhttps://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json\n\nScope note (#743): the JF12/5.0 line is **not validated against a live Jellyfin 12.0 server yet** — no 12.0 GA server exists to run the E2E checklist against. It is CI-built and unit/conformance-tested only, and it is NOT part of the 4.x (Jellyfin 10.11) release-candidate gate; the 5.0 line clears its own live-validation gate when a Jellyfin 12.0 RC/GA build is available. Use these betas for testing, not production.\n\n\n## What's Changed\n* Fix the 4.2 advisory and workflow-audit gate reds by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/951\n* Port the in-house manifest generator to the 4.2 publish legs by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/950\n\n\n**Full Changelog**: https://github.com/iderex/jellyfin-plugin-sso/compare/5.0.0-JF12-beta.20...5.0.0-JF12-beta.24",
         "checksum": "5663b1b11f170c5081e30107b0bf20b1",
@@ -119,14 +127,6 @@
         "targetAbi": "12.0.0.0",
         "timestamp": "2026-07-18T21:38:34Z",
         "version": "5.0.0.6"
-      },
-      {
-        "changelog": "Jellyfin 12.0 (.NET 10) beta 5.0.0-JF12-beta (plugin version 5.0.0.5).\nInstall via the beta repository URL (a Jellyfin 12.0 server picks this build automatically by targetAbi):\nhttps://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json\n\n\n## What's Changed\n* publish-beta: shared publish-manifest-beta concurrency group by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/606\n\n\n**Full Changelog**: https://github.com/iderex/jellyfin-plugin-sso/compare/4.1.2-beta.4...5.0.0-JF12-beta.5",
-        "checksum": "a279d53a7f89e9af33eba8d60af07820",
-        "sourceUrl": "https://github.com/iderex/jellyfin-plugin-sso/releases/download/5.0.0-JF12-beta.5/sso-authentication_5.0.0.5.zip",
-        "targetAbi": "12.0.0.0",
-        "timestamp": "2026-07-18T21:31:01Z",
-        "version": "5.0.0.5"
       },
       {
         "changelog": "Jellyfin 10.11 beta 4.3.0-beta (plugin version 4.3.0.11).\nInstall via the beta repository URL:\nhttps://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json\n\n\n## What's Changed\n* Add a Zitadel E2E login harness by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/938\n* Add a Pocket ID E2E login harness by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/939\n* Correct a false claim about one-shot init containers by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/940\n* Add a Kanidm E2E login harness — completing the provider matrix by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/941\n* Stop the manifest publishing the SBOM's checksum, and verify what ships by @iderex in https://github.com/iderex/jellyfin-plugin-sso/pull/945\n\n\n**Full Changelog**: https://github.com/iderex/jellyfin-plugin-sso/compare/4.3.0-beta.10...4.3.0-beta.11",
