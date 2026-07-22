@@ -23,6 +23,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 /// writes nothing), and a branding-store failure is swallowed (a branding problem must never block
 /// startup or a config save).
 /// </summary>
+[Collection("SSOController")]
 public class LoginButtonManagerTests
 {
     private static (LoginButtonManager Manager, IServerConfigurationManager Branding, BrandingOptions Options, SsoControllerHarness Harness) Build(
