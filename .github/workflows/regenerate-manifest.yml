@@ -1,0 +1,97 @@
+name: Regenerate manifest
+
+# Manual RECOVERY path (#948). Three publish legs run the manifest step inline in the job that
+# already created and sealed the immutable release: if manifest generation fails transiently
+# there, "re-run failed jobs" re-enters action-gh-release on the sealed release and never
+# reaches the manifest step again. This workflow regenerates and verifies one channel's
+# manifest WITHOUT building or releasing anything.
+#
+# The plugin identity (the generate action's required plugin-metadata input) comes from a
+# release the OPERATOR names — its *.zip.meta.json asset. Name the NEWEST release of the
+# channel: the action asserts that the metadata's version survives into the committed
+# manifest, so naming an ancient release fails that assertion by design.
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Which manifest to regenerate
+        type: choice
+        options:
+          - beta
+          - release
+        required: true
+      metadata-release-tag:
+        description: Release tag whose *.zip.meta.json supplies the plugin identity (use the channel's newest release, e.g. 4.3.0-beta.11)
+        type: string
+        required: true
+      repopulate-stable:
+        description: Allow regenerating manifest-release although the stable channel is retired (#954 keeps it empty)
+        type: boolean
+        default: false
+
+# Explicit deny-all at workflow level; the job below opts into write access explicitly.
+permissions: {}
+
+# Join the SAME per-channel concurrency group as the publish legs, so a recovery run never
+# races a scheduled publish for the manifest branch (the reader-vs-pusher TOCTOU #135 closed).
+# cancel-in-progress is false: a run holding contents:write must never be killed mid-write.
+concurrency:
+  group: publish-manifest-${{ inputs.channel }}
+  cancel-in-progress: false
+
+jobs:
+  regenerate:
+    name: Regenerate the ${{ inputs.channel }} manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Commits the manifest branch, so it opts into write access.
+    permissions:
+      contents: write
+    steps:
+    # Needed so the local composite actions below resolve; nothing else is read from the tree.
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      with:
+        persist-credentials: false
+    - name: Refuse to repopulate the retired stable channel without explicit intent
+      # Fail-closed guard for the #954 posture: manifest-release is deliberately EMPTY while the
+      # project is beta-only, and a routine recovery run must not silently refill it (the newest
+      # stable release ships a known-vulnerable dependency). The boolean is an explicit,
+      # per-run operator statement that the stable channel is being (re)opened on purpose.
+      if: inputs.channel == 'release' && inputs.repopulate-stable == false
+      run: |
+        echo "::error::manifest-release is kept empty while the project is beta-only (#954); re-run with repopulate-stable=true only when deliberately (re)opening the stable channel"
+        exit 1
+    - name: Download the identity metadata from the named release
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        TAG: ${{ inputs.metadata-release-tag }}
+      run: |
+        set -euo pipefail
+        mkdir -p _meta
+        gh release download "$TAG" --repo "$REPO" --pattern '*.zip.meta.json' --dir _meta
+        # Exactly one metadata file, same posture as the action's own glob assertion.
+        set -- _meta/*.zip.meta.json
+        if [ "$#" -ne 1 ] || [ ! -s "$1" ]; then
+          echo "::error::release $TAG resolved to $# *.zip.meta.json asset(s); expected exactly one"
+          exit 1
+        fi
+        echo "EXPECT_VERSION=$(jq -r '.version // empty' "$1")" >> "$GITHUB_ENV"
+    - name: Regenerate the manifest
+      uses: ./.github/actions/generate-manifest
+      with:
+        plugin-metadata: _meta/*.zip.meta.json
+        repository: ${{ github.repository }}
+        manifest-branch: ${{ inputs.channel == 'beta' && 'manifest-beta' || 'manifest-release' }}
+        include-prereleases: ${{ inputs.channel == 'beta' && 'true' || 'false' }}
+        github-token: ${{ github.token }}
+    - name: Verify the regenerated manifest
+      uses: ./.github/actions/verify-manifest
+      with:
+        repository: ${{ github.repository }}
+        manifest-branch: ${{ inputs.channel == 'beta' && 'manifest-beta' || 'manifest-release' }}
+        github-token: ${{ github.token }}
+        expect-version: ${{ env.EXPECT_VERSION }}
+        # Both generations must survive a beta regeneration; the stable manifest's ABI set is
+        # whatever the (deliberately reopened) release history yields, so no requirement there.
+        require-abis: ${{ inputs.channel == 'beta' && '10.11.0.0 12.0.0.0' || '' }}
