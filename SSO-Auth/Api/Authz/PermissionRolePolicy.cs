@@ -195,6 +195,15 @@ internal static class PermissionRolePolicy
             }
 
             var trimmed = configured.Trim();
+
+            // A configured entry that trims to empty grants nothing (#935): a blank IdP role (a terminal
+            // array element "" or, since #934, an object-map property named "") must never satisfy a
+            // mapping — the same blank-skip RolePrivilegeMapper.IsOnList and ParentalRatingPolicy apply.
+            if (trimmed.Length == 0)
+            {
+                continue;
+            }
+
             foreach (var role in loginRoles)
             {
                 if (string.Equals(role, trimmed, StringComparison.Ordinal))
