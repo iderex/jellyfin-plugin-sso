@@ -188,7 +188,7 @@ public class CanonicalLinkServiceTests
     [Fact]
     public async Task ResolveOrCreateAsync_ExistingAccountAndAdoptionAllowed_AdoptsAndLinks()
     {
-        var (service, cfg, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
+        var (service, cfg, users, log) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
         users.GetUserByName("alice").Returns(TestUsers.Named("alice", Existing));
         users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
 
@@ -197,6 +197,13 @@ public class CanonicalLinkServiceTests
         Assert.Equal(Existing, resolved);
         await users.DidNotReceive().CreateUserAsync(Arg.Any<string>());
         Assert.Equal(Existing, cfg.OidConfigs["kc"].CanonicalLinks["sub-1"]);
+
+        // The adoption of a pre-existing account is a security-relevant event and must leave exactly
+        // one audit line naming the adopted account (#928 U1) — and never the subject key, which is
+        // an identity-provider identifier.
+        var audit = Assert.Single(log.Entries, e => e.Message.Contains("[SSO Audit]", StringComparison.Ordinal) && e.Message.Contains("existing account", StringComparison.Ordinal));
+        Assert.Contains("alice", audit.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("sub-1", audit.Message, StringComparison.Ordinal);
     }
 
     [Fact]
