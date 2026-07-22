@@ -165,19 +165,19 @@ jobs:
     - name: Prepare GitHub Release assets
       run: |-
         pushd _dist
-        # ONLY the plugin zip gets a `.md5`. The manifest generator
-        # (Kevinjil/jellyfin-plugin-repo-action) walks a release's assets and keeps the
-        # LAST one whose name ends in `.md5` — no break, and no pairing with the zip —
-        # so a second `.md5` asset sorting after the plugin's silently becomes the
-        # published checksum and every install then fails verification. The rename to
-        # `community-sso-for-jellyfin` did exactly that: it moved the plugin's md5 ahead
-        # of `sbom.cyclonedx.md5` alphabetically. The SBOM keeps a sha256, which is the
-        # meaningful integrity value for it and cannot collide.
+        # ONLY the plugin zip gets a `.md5`. Defence in depth: the generator this repo now
+        # owns pairs a release's checksum with ITS zip by name, but the third-party one it
+        # replaced kept the LAST asset ending in `.md5` with no pairing at all — which is how
+        # renaming the plugin to `community-sso-for-jellyfin` moved its md5 ahead of
+        # `sbom.cyclonedx.md5` alphabetically and made the manifest publish the SBOM's
+        # checksum, breaking every install (#942). One `.md5` per release keeps that class
+        # unreachable however the manifest is built. The SBOM keeps a sha256, the meaningful
+        # integrity value for it.
         for file in ./*.zip; do
-          md5sum ${file#./} >> ${file%.*}.md5
-          sha256sum ${file#./} >> ${file%.*}.sha256
+          md5sum ${file#./} > ${file%.*}.md5
+          sha256sum ${file#./} > ${file%.*}.sha256
         done
-        sha256sum sbom.cyclonedx.json >> sbom.cyclonedx.sha256
+        sha256sum sbom.cyclonedx.json > sbom.cyclonedx.sha256
         ls -l
         popd
     - name: Upload beta assets to a draft release
@@ -227,16 +227,16 @@ jobs:
         REPO: ${{ github.repository }}
       run: gh api "repos/${REPO}/releases/${RELEASE_ID}" -X PATCH -F draft=false
     - name: Publish Beta Plugin Manifest
-      # ignorePrereleases: false so the beta build is included. Writes the SEPARATE
+      # include-prereleases so the beta build is included. Writes the SEPARATE
       # `manifest-beta` branch; the stable `manifest-release` is only ever written
       # by publish.yml, so a beta build can never reach the stable channel.
-      uses: Kevinjil/jellyfin-plugin-repo-action@296850372cd569cbcc040e834222a5afed861485 # v0.4.3
+      uses: ./.github/actions/generate-manifest
       with:
-        ignorePrereleases: false
-        githubToken: ${{ secrets.GITHUB_TOKEN }}
+        plugin-metadata: _dist/*.zip.meta.json
         repository: ${{ github.repository }}
-        pagesBranch: manifest-beta
-        pagesFile: manifest.json
+        manifest-branch: manifest-beta
+        include-prereleases: "true"
+        github-token: ${{ github.token }}
     - name: Verify the published manifest
       # Post-publish DETECTOR for the class of "the manifest ships a checksum that matches
       # nothing" (#942) — it turns a silent, user-facing install outage into a red build.

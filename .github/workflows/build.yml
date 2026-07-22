@@ -84,7 +84,13 @@ jobs:
           name: build-artifact
           retention-days: 30
           if-no-files-found: error
-          path: ${{ steps.jprm.outputs.artifact }}
+          # The zip AND the metadata JPRM writes beside it. The manifest generator reads that
+          # metadata (version, targetAbi and the plugin-level fields) as JSON rather than
+          # parsing build.yaml, because the runner image ships jq but NOT yq — verified against
+          # the runner-images tool list rather than assumed.
+          path: |
+            ${{ steps.jprm.outputs.artifact }}
+            ${{ steps.jprm.outputs.artifact }}.meta.json
 
   # The CycloneDX SBOM runs in its OWN release-only job, DELIBERATELY WITHOUT the
   # signing scopes the build job holds. The SBOM generator installs a NuGet global
