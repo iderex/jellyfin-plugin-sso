@@ -85,7 +85,7 @@ internal sealed class OidcTokenFixture : IDisposable
     /// <c>authorization_response_iss_parameter_supported</c> flag (§2.4, #210), so a challenge captures
     /// the requirement onto its authorize state.
     /// </summary>
-    internal string Discovery(bool advertiseResponseIssuer = false) =>
+    internal string Discovery(bool advertiseResponseIssuer = false, bool advertisePar = false) =>
         "{\"issuer\":\"" + Issuer + "\","
         + "\"authorization_endpoint\":\"" + Issuer + "/authorize\","
         + "\"token_endpoint\":\"" + Issuer + "/token\","
@@ -96,6 +96,7 @@ internal sealed class OidcTokenFixture : IDisposable
         + "\"id_token_signing_alg_values_supported\":[\"RS256\"],"
         + "\"grant_types_supported\":[\"authorization_code\"],"
         + (advertiseResponseIssuer ? "\"authorization_response_iss_parameter_supported\":true," : string.Empty)
+        + (advertisePar ? "\"pushed_authorization_request_endpoint\":\"" + Issuer + "/par\"," : string.Empty)
         + "\"code_challenge_methods_supported\":[\"S256\"]}";
 
     /// <summary>The URL the fixture serves each document at.</summary>
@@ -104,6 +105,9 @@ internal sealed class OidcTokenFixture : IDisposable
     internal string JwksUrl => Issuer + "/jwks";
 
     internal string TokenUrl => Issuer + "/token";
+
+    /// <summary>The RFC 9126 pushed-authorization-request endpoint (advertised only when asked).</summary>
+    internal string ParUrl => Issuer + "/par";
 
     public void Dispose() => _rsa.Dispose();
 }

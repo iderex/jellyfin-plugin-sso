@@ -214,6 +214,79 @@ public class OidcRoundTripTests
         Assert.IsType<OkObjectResult>(await harness.Controller.OidAuth("kc", Redeem(state)));
     }
 
+    [Fact]
+    public async Task ParAdvertisedAndEnabled_ChallengePushesTheRequest_AndRedirectsByRequestUri()
+    {
+        // #928 U3: PAR is ON by default in production (DisablePushedAuthorization defaults false), yet no
+        // test anywhere exercised the enabled path. With the provider advertising the RFC 9126 endpoint and
+        // the default config, the challenge must POST the authorization parameters to the PAR endpoint and
+        // redirect with ONLY request_uri + client_id — no code_challenge/redirect_uri/scope in the front
+        // channel (that is PAR's confidentiality point).
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        string? pushedBody = null;
+        var harness = BuildHarness(
+            fixture,
+            request =>
+            {
+                if (request.RequestUri!.AbsoluteUri == fixture.ParUrl)
+                {
+                    pushedBody = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+                    return Json("{\"request_uri\":\"urn:ietf:params:oauth:request_uri:par-1\",\"expires_in\":60}");
+                }
+
+                return ServeIdp(fixture, request, fixture.IdToken("sub-1", "alice"), advertisePar: true);
+            },
+            cfg => cfg.DisablePushedAuthorization = false);
+
+        var challenge = Assert.IsType<RedirectResult>(await harness.Controller.OidChallenge("kc"));
+
+        Assert.NotNull(pushedBody);
+        Assert.Contains("code_challenge", pushedBody, StringComparison.Ordinal);
+        Assert.Contains("redirect_uri", pushedBody, StringComparison.Ordinal);
+        Assert.StartsWith(Authority + "/authorize", challenge.Url, StringComparison.Ordinal);
+        Assert.Contains("request_uri=", challenge.Url, StringComparison.Ordinal);
+        Assert.DoesNotContain("code_challenge", challenge.Url, StringComparison.Ordinal);
+        Assert.DoesNotContain("redirect_uri", challenge.Url, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ParAdvertisedButPushFails_ChallengeFailsClosed_NeverDowngradesToAPlainRedirect()
+    {
+        // The fail-closed half: when the advertised PAR endpoint errors, the challenge must NOT silently
+        // fall back to a plain front-channel redirect (that downgrade would defeat the reason an operator
+        // deployed PAR). It fails the login attempt instead.
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        var harness = BuildHarness(
+            fixture,
+            request => request.RequestUri!.AbsoluteUri == fixture.ParUrl
+                ? new HttpResponseMessage(HttpStatusCode.InternalServerError)
+                : ServeIdp(fixture, request, fixture.IdToken("sub-1", "alice"), advertisePar: true),
+            cfg => cfg.DisablePushedAuthorization = false);
+
+        var result = await harness.Controller.OidChallenge("kc");
+
+        Assert.IsNotType<RedirectResult>(result);
+    }
+
+    [Fact]
+    public async Task ParEnabledButNotAdvertised_ChallengeUsesThePlainRedirect()
+    {
+        // The compatibility half of the production default: a provider that advertises no PAR endpoint
+        // still gets the ordinary front-channel redirect — PAR-on is safe against non-PAR providers, which
+        // is what makes default-on shippable.
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        var harness = BuildHarness(
+            fixture,
+            request => ServeIdp(fixture, request, fixture.IdToken("sub-1", "alice")),
+            cfg => cfg.DisablePushedAuthorization = false);
+
+        var challenge = Assert.IsType<RedirectResult>(await harness.Controller.OidChallenge("kc"));
+
+        Assert.StartsWith(Authority + "/authorize", challenge.Url, StringComparison.Ordinal);
+        Assert.Contains("code_challenge", challenge.Url, StringComparison.Ordinal);
+        Assert.DoesNotContain("request_uri=", challenge.Url, StringComparison.Ordinal);
+    }
+
     // Builds a harness with a single enabled provider "kc" pointed at the fixture's authority, served by the
     // supplied responder. DisablePushedAuthorization keeps the challenge to a plain redirect; DoNotLoadProfile
     // makes the id_token claims the whole identity (no userinfo fetch); EnableAuthorization/AllowExistingAccountLink
@@ -240,12 +313,12 @@ public class OidcRoundTripTests
 
     // Serves the fixture's discovery, JWKS, and token endpoints; any other URL 404s so a regression that
     // reaches an unexpected endpoint is caught. The token endpoint returns the supplied id_token.
-    private static HttpResponseMessage ServeIdp(OidcTokenFixture fixture, HttpRequestMessage request, string idToken)
+    private static HttpResponseMessage ServeIdp(OidcTokenFixture fixture, HttpRequestMessage request, string idToken, bool advertisePar = false)
     {
         var url = request.RequestUri!.AbsoluteUri;
         if (url == fixture.DiscoveryUrl)
         {
-            return Json(fixture.Discovery());
+            return Json(fixture.Discovery(advertisePar: advertisePar));
         }
 
         if (url == fixture.JwksUrl)
