@@ -215,6 +215,26 @@ public class OidcRoundTripTests
     }
 
     [Fact]
+    public async Task LinkingChallenge_ThreadsIsLinkingIntoTheRegisteredState()
+    {
+        // #928 U6: the OIDC linking-mode challenge was never driven end-to-start — only hand-seeded states
+        // carried the flag. isLinking=true through the real OidChallenge must register an authorize state
+        // whose summary says linking, which is what the callback later uses to route to the link workflow
+        // instead of a login.
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        var harness = BuildHarness(fixture, request => ServeIdp(fixture, request, fixture.IdToken("sub-1", "alice")));
+
+        harness.Controller.HttpContext.Request.Path = "/sso/OID/start/kc";
+        Assert.IsType<RedirectResult>(await harness.Controller.OidChallenge("kc", isLinking: true));
+
+        var ok = Assert.IsType<OkObjectResult>(harness.Controller.OidStates());
+        var summaries = Assert.IsAssignableFrom<System.Collections.Generic.IEnumerable<OidcStateStore.Summary>>(ok.Value);
+        var summary = Assert.Single(summaries);
+        Assert.True(summary.IsLinking);
+        Assert.Equal("kc", summary.Provider);
+    }
+
+    [Fact]
     public async Task ParAdvertisedAndEnabled_ChallengePushesTheRequest_AndRedirectsByRequestUri()
     {
         // #928 U3: PAR is ON by default in production (DisablePushedAuthorization defaults false), yet no

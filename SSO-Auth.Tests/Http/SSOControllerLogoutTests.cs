@@ -78,4 +78,34 @@ public class SSOControllerLogoutTests
         Assert.IsType<LocalRedirectResult>(result);
         await harness.SessionManager.Received(1).Logout("caller-token");
     }
+
+    [Fact]
+    public async Task OidLogout_EndSessionBuildThrows_LocalLogoutStands_AndDegradesToALocalRedirect()
+    {
+        // The fail-safe catch (#928 U6, previously untested): a captured session whose stored id_token
+        // cannot be revealed (an ssoenc envelope with no at-rest key — the harness's plugin data dir is a
+        // fresh temp, so no key exists) makes the end-session URL build throw. The contract: the local
+        // logout already ran and STANDS, the browser degrades to a LOCAL redirect, never a 500 and never
+        // a half-built external redirect.
+        var harness = ForCaller("caller-token", config =>
+        {
+            config.EnableSingleLogout = true;
+            config.OidConfigs["kc"] = new OidConfig { Enabled = true, OidClientId = "client-kc" };
+            config.LogoutSessions["session-1"] = new LogoutSession
+            {
+                Protocol = "OpenID",
+                Provider = "kc",
+                Subject = "sub-1",
+                Issuer = "https://idp.example",
+                EndSessionEndpoint = "https://idp.example/logout",
+                IdToken = "ssoenc:v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", // envelope, no key -> Reveal throws
+                UserId = Caller,
+            };
+        });
+
+        var result = await harness.Controller.OidLogout("kc");
+
+        Assert.IsType<LocalRedirectResult>(result);
+        await harness.SessionManager.Received(1).Logout("caller-token");
+    }
 }
