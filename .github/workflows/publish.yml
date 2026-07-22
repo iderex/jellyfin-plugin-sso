@@ -141,3 +141,8 @@ jobs:
         repository: ${{ github.repository }}
         manifest-branch: manifest-release
         github-token: ${{ github.token }}
+        # Only 10.11 today: no JF12 STABLE release exists, so requiring 12.0.0.0 here would red
+        # every JF10.11 stable publish. This value does not need updating when JF12 goes GA —
+        # the action's undated shrink check (ABI set vs the previous manifest revision) is what
+        # catches a generation being evicted from this shared branch, from whichever leg published.
+        require-abis: "10.11.0.0"
