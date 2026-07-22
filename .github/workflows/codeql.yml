@@ -21,9 +21,8 @@ name: CodeQL
 
 on:
   push:
-    # main is the released line; the release/dev branches are where feature work
-    # accumulates before promotion. 4.2 is the current one; the 4.* / 5.* globs
-    # future-proof the next release lines so a new branch is covered without
+    # main is the one code line (beta-only, #954; the 4.2 branch is retired). The
+    # 4.* / 5.* globs future-proof any later release branch so it is covered without
     # editing this file (a `*` matches any branch name that has no `/`, so plain
     # numeric release branches like 4.2 / 4.3 / 5.0 all match). A release line
     # that ever uses a non-numeric name must still be added here explicitly.

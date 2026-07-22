@@ -2,7 +2,7 @@ name: unicode-guard
 
 on:
   # Every branch and every PR: the guard is a cheap read-only scan and must cover
-  # the shipping release branches (e.g. 4.2, which ships JF12 betas), not just main.
+  # any future release branch too, not just main (one code line since #954).
   push:
     branches: ["**"]
   pull_request:

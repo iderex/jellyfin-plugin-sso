@@ -1,21 +1,20 @@
 name: Publish JF12 Beta
 
 # The Jellyfin 12.0 (.NET 10) BETA channel — the 5.0 line (#135). Jellyfin 12.0 moves the server to
-# .NET 10 and a 10.11-ABI plugin will not load there, so upgraders need a 12-targeted build. The
-# multi-target codebase (net9.0;net10.0) lives on the `4.2` branch, so JF12 betas publish from 4.2:
-# every push to 4.2 builds the net10 target and publishes an installable prerelease into the SHARED
+# .NET 10 and a 10.11-ABI plugin will not load there, so upgraders need a 12-targeted build. Since
+# #954 the one multi-target codebase (net9.0;net10.0) lives on `main` and BOTH betas publish from it:
+# this leg builds the net10 target and publishes an installable prerelease into the SHARED
 # `manifest-beta` branch. Jellyfin filters plugin versions client-side by targetAbi, so one beta
 # manifest carries BOTH generations (4.x at targetAbi 10.11, 5.0 at 12.0) and each server installs only
-# its compatible build — no separate JF12 manifest is needed. (The JF10.11 beta is published from `main`
-# by publish-beta.yml; both regenerate the same manifest-beta from all prerelease releases.) When 4.2.0
-# releases (4.2 -> main), this leg moves to main with the multi-target codebase.
+# its compatible build — no separate JF12 manifest is needed. (The JF10.11 beta is published by
+# publish-beta.yml; both regenerate the same manifest-beta from all prerelease releases.)
 #
 # The JF12 build METADATA (version 5.0, targetAbi 12.0.0.0, framework net10.0, and the net10 shipping
 # closure) lives in build-jf12.yaml, which this job copies over build.yaml before JPRM builds — the
 # committed build.yaml stays the JF10.11 metadata.
-# No push trigger: a beta is no longer minted on every merge to 4.2 (that spammed one release per PR).
+# No push trigger: a beta is no longer minted on every merge (that spammed one release per PR).
 # nightly-betas.yml (the scheduler on the default branch) dispatches this workflow once a day; the gate
-# job below then skips the build unless 4.2 has advanced since the last JF12 beta. Still manually
+# job below then skips the build unless main has advanced since the last JF12 beta. Still manually
 # runnable via workflow_dispatch.
 on:
   workflow_dispatch:
@@ -33,20 +32,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Publish only when 4.2 has advanced since the last JF12 beta, so a scheduled daily run on an
-  # unchanged branch does not mint a duplicate release. Compares the current 4.2 HEAD (github.sha) to
+  # Publish only when main has advanced since the last JF12 beta, so a scheduled daily run on an
+  # unchanged branch does not mint a duplicate release. Compares the current main HEAD (github.sha) to
   # the commit the newest 5.0.0-JF12-beta.<n> tag points at. If the base version is ever bumped (the
   # JF12 line is 5.0 for now) no tag matches, last_sha is empty, and the build proceeds — the safe
-  # default is to publish, never to silently skip a real change.
+  # default is to publish, never to silently skip a real change. (The first run after #954 moved this
+  # leg from the retired 4.2 branch always builds: the last tag points at a 4.2 commit, not main HEAD.)
   gate:
-    name: Gate on new 4.2 commits
+    name: Gate on new main commits
     runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
       changed: ${{ steps.check.outputs.changed }}
     steps:
-    - name: Compare 4.2 HEAD to the last JF12 beta
+    - name: Compare main HEAD to the last JF12 beta
       id: check
       env:
         GH_TOKEN: ${{ github.token }}
@@ -56,13 +56,20 @@ jobs:
       # and build. Skipping a real change is worse than an occasional duplicate beta.
       run: |
         set -uo pipefail
-        last_tag=$(gh api "repos/${REPO}/git/matching-refs/tags/5.0.0-JF12-beta." \
-          --jq 'map(.ref | sub("refs/tags/"; "")) | sort_by(split(".") | last | tonumber) | last // ""' 2>/dev/null || echo "")
+        # --paginate is load-bearing: the refs endpoint returns 30 per page in LEXICOGRAPHIC order,
+        # so once >30 JF12 beta tags exist the numerically-newest falls off page 1, the gate picks a
+        # stale tag, and an unchanged day mints a duplicate beta — every day, self-amplifying (each
+        # new tag sorts later and keeps the newest off-page). Same idiom as publish-beta.yml's gate:
+        # emit one tag per line across ALL pages, then sort numerically in the shell (a per-page jq
+        # max would be wrong — gh applies --jq per page, and the numeric max can sit on any page).
+        last_tag=$(gh api --paginate "repos/${REPO}/git/matching-refs/tags/5.0.0-JF12-beta." \
+          --jq '.[].ref | sub("refs/tags/"; "") | select(test("^5[.]0[.]0-JF12-beta[.][0-9]+$"))' 2>/dev/null \
+          | sort -t. -k4 -n | tail -1 || echo "")
         last_sha=""
         if [ -n "$last_tag" ]; then
           last_sha=$(gh api "repos/${REPO}/git/refs/tags/${last_tag}" --jq '.object.sha' 2>/dev/null || echo "")
         fi
-        echo "current 4.2 HEAD: ${CUR}"
+        echo "current main HEAD: ${CUR}"
         echo "last JF12 beta:   ${last_tag:-<none>} -> ${last_sha:-<none>}"
         if [ -n "$last_sha" ] && [ "$last_sha" = "$CUR" ]; then
           echo "No new commits since the last JF12 beta; skipping the build."
@@ -173,13 +180,12 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           tag_name: ${{ steps.version.outputs.base }}-JF12-beta.${{ github.run_number }}
-          # Anchor the tag to the 4.2 commit this build ran on. Without this, the create-release API
-          # defaults target_commitish to the repository DEFAULT branch (main) — which is not where JF12
-          # publishing happens — so every JF12 beta tag was created on main's stale HEAD (stuck at #606)
-          # instead of the 4.2 commit that triggered the run. That made generate_release_notes compute
-          # its "What's Changed" from main's history (always the last main-merge, #606) rather than the
-          # 4.2 changes actually shipped. Pinning it to github.sha (the pushed 4.2 commit) tags the
-          # correct commit and lets the auto-notes diff the real 4.2 range against the previous JF12 beta.
+          # Anchor the tag to the exact commit this build ran on (#627 class). Without this the
+          # create-release API defaults target_commitish to the default branch's CURRENT head, which
+          # can have advanced past the dispatched commit by publish time — the tag would then name a
+          # commit this build did not ship and generate_release_notes would diff the wrong range.
+          # (Historically this leg ran from the retired 4.2 branch, where the default was outright
+          # wrong; pinning github.sha is correct on main too, so it stays.)
           target_commitish: ${{ github.sha }}
           files: |
             _dist/*
