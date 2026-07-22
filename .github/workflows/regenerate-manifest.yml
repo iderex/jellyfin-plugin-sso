@@ -35,6 +35,9 @@ permissions: {}
 # Join the SAME per-channel concurrency group as the publish legs, so a recovery run never
 # races a scheduled publish for the manifest branch (the reader-vs-pusher TOCTOU #135 closed).
 # cancel-in-progress is false: a run holding contents:write must never be killed mid-write.
+# Note: a group holds at most one PENDING run — dispatching a recovery while a nightly leg is
+# queued (around 04:00 UTC) evicts that queued publish (it self-heals at the next nightly, and
+# nothing is written by a canceled pending run). Check the group's run list after dispatching.
 concurrency:
   group: publish-manifest-${{ inputs.channel }}
   cancel-in-progress: false
@@ -57,7 +60,10 @@ jobs:
       # project is beta-only, and a routine recovery run must not silently refill it (the newest
       # stable release ships a known-vulnerable dependency). The boolean is an explicit,
       # per-run operator statement that the stable channel is being (re)opened on purpose.
-      if: inputs.channel == 'release' && inputs.repopulate-stable == false
+      # The predicate MIRRORS the branch selection below (anything that is not exactly 'beta'
+      # writes manifest-release), so no channel value can reach the release branch unguarded —
+      # deny by default, independent of whether the dispatch API validates choice membership.
+      if: inputs.channel != 'beta' && inputs.repopulate-stable != true
       run: |
         echo "::error::manifest-release is kept empty while the project is beta-only (#954); re-run with repopulate-stable=true only when deliberately (re)opening the stable channel"
         exit 1
@@ -76,7 +82,15 @@ jobs:
           echo "::error::release $TAG resolved to $# *.zip.meta.json asset(s); expected exactly one"
           exit 1
         fi
-        echo "EXPECT_VERSION=$(jq -r '.version // empty' "$1")" >> "$GITHUB_ENV"
+        # Shape-check before the GITHUB_ENV write: a multiline or non-numeric version would
+        # otherwise be able to smuggle extra env assignments into later steps. The metadata is
+        # our own release asset, so this is defense in depth, not a trust boundary.
+        version="$(jq -r '.version // empty' "$1")"
+        if ! printf '%s' "$version" | grep -qE '^[0-9]+(\.[0-9]+){1,3}$'; then
+          echo "::error::the metadata's version ('$version') is not a plain dotted version"
+          exit 1
+        fi
+        echo "EXPECT_VERSION=$version" >> "$GITHUB_ENV"
     - name: Regenerate the manifest
       uses: ./.github/actions/generate-manifest
       with:
