@@ -47,6 +47,18 @@ const OIDC_PRESETS = {
     },
     toggles: [],
   },
+  zitadel: {
+    label: "Zitadel",
+    note: "Zitadel project application. Its roles arrive as an OBJECT whose keys are the role names, so 'Role claim is an object map' is pre-checked — without it no role can ever match. The project must have 'Assert Roles on Authentication' on, and the application 'User roles inside ID Token', or the role claim is absent entirely. Replace YOUR_INSTANCE in the endpoint.",
+    fields: {
+      OidEndpoint:
+        "https://YOUR_INSTANCE.zitadel.cloud/.well-known/openid-configuration",
+      OidScopes: "email",
+      RoleClaim: "urn:zitadel:iam:org:project:roles",
+      DefaultUsernameClaim: "preferred_username",
+    },
+    toggles: ["RoleClaimIsObjectMap"],
+  },
   entra: {
     label: "Microsoft Entra ID (Azure AD)",
     note: "Entra ID app registration. App roles come from the `roles` claim (assign them under the app registration). Replace YOUR_TENANT_ID in the endpoint.",
@@ -146,7 +158,7 @@ const OIDC_PRESET_MANAGED_TOGGLES = [
   // every preset sets RoleClaim, so leaving a previous provider's shape flag ticked while the claim path is
   // replaced by an array-shaped one (Keycloak's realm_access.roles) would extract ZERO roles and lock the
   // whole userbase out on the next login. Clearing is correct for every shipped preset; a future
-  // object-map preset (Zitadel) can pre-check it from its own `toggles`.
+  // object-map preset can pre-check it from its own `toggles` — the Zitadel preset above does exactly that.
   "RoleClaimIsObjectMap",
 ];
 const SAML_PRESET_MANAGED_TOGGLES = ["DoNotValidateAudience"];
