@@ -139,6 +139,52 @@ public class SSOControllerTestConnectionTests
         Assert.DoesNotContain(SamlKeySentinel, json, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void SamlTest_UnparsableCertificate_ReportsFailure_WithoutLeakingTheKey()
+    {
+        // The controller-level negative (#928 U6): the tester-level parse failure was pinned, but the
+        // endpoint wrapping it was only asserted on the happy path. An unparsable stored certificate must
+        // come back as a failed-but-OK test result (the admin sees WHY), never a 500, and never the key.
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["idp"] = new SamlConfig
+        {
+            Enabled = true,
+            SamlCertificate = "not-a-base64-der-certificate",
+            SamlSigningKeyPfx = SamlKeySentinel,
+        });
+
+        var ok = Assert.IsType<OkObjectResult>(harness.Controller.SamlTest("idp"));
+        var result = Assert.IsType<ProviderTestResult>(ok.Value);
+
+        Assert.False(result.Ok);
+        Assert.Contains("could not be parsed", result.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(SamlKeySentinel, JsonSerializer.Serialize(ok.Value), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ProviderGetEndpoints_MvcCamelCaseSerialization_NeverCarriesASecret()
+    {
+        // #928 U6: the OID/Get and SAML/Get snapshots were asserted as objects, but the redaction lives in
+        // WriteOnlySecretConverter attributes — so the property that matters is what the MVC serializer
+        // actually EMITS. Serialize both snapshots with the camelCase options MVC uses and pin that neither
+        // the OIDC client secret nor the SAML signing key reaches the wire.
+        const string OidSecretSentinel = "get-endpoint-oid-secret";
+        var harness = new SsoControllerHarness(c =>
+        {
+            c.OidConfigs["kc"] = new OidConfig { Enabled = true, OidSecret = OidSecretSentinel };
+            c.SamlConfigs["idp"] = new SamlConfig { Enabled = true, SamlSigningKeyPfx = SamlKeySentinel };
+        });
+        var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+        var oidJson = JsonSerializer.Serialize(Assert.IsType<OkObjectResult>(harness.Controller.OidProviders()).Value, options);
+        var samlJson = JsonSerializer.Serialize(Assert.IsType<OkObjectResult>(harness.Controller.SamlProviders()).Value, options);
+
+        Assert.DoesNotContain(OidSecretSentinel, oidJson, StringComparison.Ordinal);
+        Assert.DoesNotContain(SamlKeySentinel, samlJson, StringComparison.Ordinal);
+        // Liveness: the snapshots really carried the providers (the redaction is not vacuous).
+        Assert.Contains("kc", oidJson, StringComparison.Ordinal);
+        Assert.Contains("idp", samlJson, StringComparison.Ordinal);
+    }
+
     // Serves the discovery document and a one-key JWKS; any other URL 404s so an unexpected call is visible.
     private static HttpResponseMessage Responder(HttpRequestMessage request)
     {
