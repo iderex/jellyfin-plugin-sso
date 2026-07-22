@@ -159,6 +159,39 @@ jobs:
           docker compose -f "$COMPOSE" up \
             --abort-on-container-exit --exit-code-from harness
 
+      - name: Assert secrets-at-rest and the audit trail (#928 U8)
+        # Two assertions the in-container harness cannot make itself (no docker access, no bind mount of
+        # Jellyfin's config): the persisted provider secret is an ssoenc:v1 envelope on disk, not
+        # plaintext, and the security audit trail actually reached the log. Runs only on a green harness,
+        # so a real login/config failure surfaces as the harness failure, not here.
+        if: success()
+        env:
+          COMPOSE: ${{ matrix.compose }}
+        run: |
+          set -euo pipefail
+          config="test/e2e/jellyfin/config/plugins/configurations/SSO-Auth.xml"
+          echo "===== secrets at rest ====="
+          if [ ! -s "$config" ]; then
+            echo "::error::the plugin persisted no configuration at $config"; exit 1
+          fi
+          if grep -q "ssoenc:v1:" "$config"; then
+            echo "OK: the persisted provider secret is an ssoenc:v1 envelope, not plaintext"
+          else
+            echo "::error::no ssoenc:v1 envelope in the persisted config — a provider secret may be stored in plaintext"; exit 1
+          fi
+
+          echo "===== audit trail ====="
+          logs="$(docker compose -f "$COMPOSE" logs jellyfin --no-color 2>/dev/null || true)"
+          for expected in \
+            "[SSO Audit] Provider configured:" \
+            "[SSO Audit] Login succeeded:"; do
+            if printf '%s' "$logs" | grep -qF "$expected"; then
+              echo "OK: audit line present -> $expected"
+            else
+              echo "::error::expected audit line missing from the Jellyfin log: $expected"; exit 1
+            fi
+          done
+
       - name: Dump container logs on failure
         if: failure()
         env:

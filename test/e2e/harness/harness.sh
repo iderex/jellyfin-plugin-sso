@@ -1362,6 +1362,46 @@ else
 fi
 
 # --------------------------------------------------------------------------------------------------
+# Extended SAML admin surfaces (#928 U8), gated by EXTENDED_PHASES: the plugin's own metadata importer
+# and its SP-metadata endpoint, neither of which any harness exercised (the config above extracts the
+# cert with grep/sed rather than through the importer).
+# --------------------------------------------------------------------------------------------------
+if [ "$EXTENDED_PHASES" = "true" ]; then
+  log "== Extended: SAML/ImportMetadata parses the live IdP descriptor =="
+  # The plugin fetches and parses the SAME descriptor the harness read; the parsed cert and endpoint must
+  # match what the harness extracted by hand. This exercises SamlMetadataImporter against a real IdP,
+  # through the SSRF-hardened outbound client (the harness subnet is public-looking, so the guard stays
+  # engaged and still permits the fetch).
+  IMP="$(curl -sS -o /tmp/import.out -w '%{http_code}' -X POST "$JELLYFIN/sso/SAML/ImportMetadata" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: MediaBrowser Token=\"$ADMIN_TOKEN\"" \
+    -d "{\"Url\":\"$SAML_DESCRIPTOR_URL\"}")"
+  if [ "$IMP" = "200" ]; then
+    # Jellyfin's MVC serializes PascalCase (the harness reads .AccessToken, .Policy.IsAdministrator the
+    # same way), so the import record's fields are PrimaryCertificate / Endpoint, not camelCase.
+    IMP_CERT="$(jq -r '.PrimaryCertificate // empty' /tmp/import.out | tr -d ' \t')"
+    IMP_EP="$(jq -r '.Endpoint // empty' /tmp/import.out)"
+    if [ "$IMP_CERT" = "$IDP_CERT" ] && [ -n "$IMP_EP" ]; then
+      pass "SAML/ImportMetadata parsed the descriptor: cert matches the hand-extracted one, endpoint=$IMP_EP"
+    else
+      fail "SAML/ImportMetadata returned a cert/endpoint that does not match the descriptor (cert-match=$([ "$IMP_CERT" = "$IDP_CERT" ] && echo yes || echo no), endpoint='$IMP_EP')"
+    fi
+  else
+    fail "SAML/ImportMetadata returned HTTP $IMP: $(head -c 300 /tmp/import.out 2>/dev/null)"
+  fi
+
+  log "== Extended: SAML/metadata SP descriptor is served and well-formed =="
+  # The published SP metadata a real IdP would consume: an EntityDescriptor carrying the ACS URL the
+  # plugin advertises (built from the canonical base, #928 U5 territory), served anonymously.
+  SPMETA="$(curl -fsS "$JELLYFIN/sso/SAML/metadata/$PROVIDER")" || SPMETA=""
+  if printf '%s' "$SPMETA" | grep -q "EntityDescriptor" && printf '%s' "$SPMETA" | grep -q "AssertionConsumerService"; then
+    pass "SAML/metadata serves an SP EntityDescriptor with an AssertionConsumerService"
+  else
+    fail "SAML/metadata did not serve a well-formed SP descriptor (first 200 chars: $(printf '%s' "$SPMETA" | head -c 200))"
+  fi
+fi
+
+# --------------------------------------------------------------------------------------------------
 # Phase 8 — full SAML round-trip for carol (milestone 4)
 # --------------------------------------------------------------------------------------------------
 log "== SAML round-trip: carol (expect success) =="

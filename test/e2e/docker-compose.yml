@@ -70,6 +70,10 @@ services:
       # canonical stack.
       ADMIN_ROLES_JSON: '["jellyfin-admin"]'
       EXTENDED_PHASES: "true"
+      # The canonical base URL the plugin publishes in its SP metadata (#928 U8): the SAML/metadata
+      # endpoint fails closed without it (the ACS URL must never come from a spoofable request Host).
+      # This IS the Jellyfin service URL on the harness network, so the advertised ACS is reachable.
+      SAML_BASE_URL_OVERRIDE: http://jellyfin:8096
     volumes:
       - ./harness:/harness:ro
     command: ["sh", "/harness/harness.sh"]
