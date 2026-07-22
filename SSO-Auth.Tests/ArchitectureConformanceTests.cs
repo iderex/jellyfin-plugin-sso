@@ -2395,6 +2395,132 @@ public class ArchitectureConformanceTests
             .ToList();
     }
 
+    // Routes whose action MUST call RateLimitCheck (#928 U2): the anonymous login-path endpoints
+    // (challenge / callback / auth for both protocols, SP metadata, inbound SAML logout) and the
+    // admin endpoints that drive an OUTBOUND fetch (the OpenID connection tester and SAML metadata
+    // import — an authenticated admin must not be able to spin the outbound probe unthrottled), plus
+    // the account-link and unregister mutations. Adding a route here without wiring the gate fails the
+    // test; the reverse — an unclassified NEW route — fails EverySensitiveRoute_IsClassified below.
+    private static readonly string[] MustThrottleRoutes =
+    {
+        "OID/r/{provider}", "OID/redirect/{provider}", "OID/p/{provider}", "OID/start/{provider}",
+        "OID/Test/{provider}", "OID/Auth/{provider}",
+        "SAML/p/{provider}", "SAML/post/{provider}", "SAML/start/{provider}", "SAML/metadata/{provider}",
+        "SAML/Logout/{provider}", "SAML/ImportMetadata", "SAML/Auth/{provider}",
+        "Unregister/{username}", "{mode}/Link/{provider}/{jellyfinUserId}",
+        "{mode}/Link/{provider}/{jellyfinUserId}/{canonicalName}",
+    };
+
+    // Routes deliberately NOT rate-limited, each with the reason it is safe: an elevation-gated admin
+    // operation with no outbound fetch, an authenticated user action, or a purely local (no-I/O) probe.
+    // Kept as an explicit allowlist so a NEW endpoint cannot be silently exempted — it must be added to
+    // one of the two lists, which is the classification decision this conformance test forces.
+    private static readonly string[] RateLimitExemptRoutes =
+    {
+        "OID/logout/{provider}", "SAML/logout/{provider}", // [Authorize] user logout, no fetch
+        "OID/Add/{provider}", "SAML/Add/{provider}", "OID/Del/{provider}", "SAML/Del/{provider}", // elevated config CRUD
+        "OID/Get", "SAML/Get", "OID/GetNames", "SAML/GetNames", "OID/States", // read-only listings
+        "SAML/Test/{provider}", // LOCAL certificate parse — no outbound fetch (unlike OID/Test)
+        "Config/Export", "Config/Import", // elevated config transfer
+        "SSO-Only/Status", "SSO-Only/Enable", "SSO-Only/Disable", "SSO-Only/BreakGlassAdmin", // elevated mode control
+        "saml/links/{jellyfinUserId}", "oid/links/{jellyfinUserId}", // authenticated link listings
+        "{viewName}", // SSOViewsController: read-only embedded static asset (ETag/304), no I/O, no login path
+    };
+
+    [Fact]
+    public void EveryMustThrottleEndpoint_CallsTheRateLimitGate()
+    {
+        // #928 U2 — the structural half of "does every rate-limited endpoint actually rate-limit". The
+        // per-endpoint 429 response-shape tests prove the wiring behaves; this proves the wiring EXISTS on
+        // every endpoint that must have it, so the class of "a new login-path/outbound endpoint forgot the
+        // RateLimitCheck call" is a red build, not a review miss.
+        var actions = ControllerActionBlocks();
+        var missing = new List<string>();
+        foreach (var route in MustThrottleRoutes)
+        {
+            var block = actions.FirstOrDefault(a => a.Routes.Contains(route, StringComparer.Ordinal));
+            Assert.True(block.Routes is not null, $"MustThrottleRoutes lists '{route}', but no controller action declares that route — a route was renamed; update the list (#928).");
+            if (!block.Body.Contains("RateLimitCheck(SsoRateLimitClass.", StringComparison.Ordinal))
+            {
+                missing.Add(route);
+            }
+        }
+
+        Assert.True(
+            missing.Count == 0,
+            "These endpoints must call RateLimitCheck(SsoRateLimitClass.…) and do not: " + string.Join(", ", missing));
+    }
+
+    [Fact]
+    public void EverySensitiveRoute_IsClassified_AsThrottledOrExplicitlyExempt()
+    {
+        // The completeness guard: every controller route is in exactly one of the two lists. A NEW endpoint
+        // therefore cannot land without a deliberate decision on whether it needs rate limiting — the whole
+        // point of #928 U2's "no forgotten gate". Also fails on a stale list entry (a route no longer in
+        // the controller), so the lists cannot drift out of sync with the surface.
+        var declared = ControllerActionBlocks().SelectMany(a => a.Routes).ToList();
+        Assert.NotEmpty(declared);
+
+        var classified = MustThrottleRoutes.Concat(RateLimitExemptRoutes).ToHashSet(StringComparer.Ordinal);
+
+        var unclassified = declared.Where(r => !classified.Contains(r)).ToList();
+        Assert.True(
+            unclassified.Count == 0,
+            "These controller routes are in neither MustThrottleRoutes nor RateLimitExemptRoutes — classify each (does it need rate limiting?): " + string.Join(", ", unclassified));
+
+        var declaredSet = declared.ToHashSet(StringComparer.Ordinal);
+        var stale = classified.Where(r => !declaredSet.Contains(r)).ToList();
+        Assert.True(
+            stale.Count == 0,
+            "These routes are listed in a rate-limit classification list but no longer exist on the controller — remove them: " + string.Join(", ", stale));
+    }
+
+    // Every controller action as (its route templates, its method-body text): the body runs from an action's
+    // HTTP-attribute cluster to the next action's cluster, which is enough to see whether the (always-first)
+    // RateLimitCheck statement is present. Stacked route attributes on one method (consecutive lines) are one
+    // action. Route-template source scan, in the ControllerSourceFiles idiom (#388) so a controller split
+    // cannot hide an endpoint.
+    private static IReadOnlyList<(IReadOnlyList<string> Routes, string Body)> ControllerActionBlocks()
+    {
+        var attr = new Regex(
+            @"^\s*\[Http(?:Get|Post|Put|Delete)\(""(?<route>[^""]*)""\)\]");
+        var results = new List<(IReadOnlyList<string>, string)>();
+
+        foreach (var path in ControllerSourceFiles())
+        {
+            var lines = File.ReadAllLines(path);
+            var hits = new List<(int Line, string Route)>();
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var m = attr.Match(lines[i]);
+                if (m.Success)
+                {
+                    hits.Add((i, m.Groups["route"].Value));
+                }
+            }
+
+            // Group consecutive attribute lines (a method's stacked routes) into one action cluster.
+            for (var i = 0; i < hits.Count;)
+            {
+                var routes = new List<string> { hits[i].Route };
+                var last = i;
+                while (last + 1 < hits.Count && hits[last + 1].Line == hits[last].Line + 1)
+                {
+                    routes.Add(hits[last + 1].Route);
+                    last++;
+                }
+
+                var bodyStart = hits[last].Line;
+                var bodyEnd = last + 1 < hits.Count ? hits[last + 1].Line : lines.Length;
+                var body = string.Join("\n", lines.Skip(bodyStart).Take(bodyEnd - bodyStart));
+                results.Add((routes, body));
+                i = last + 1;
+            }
+        }
+
+        return results;
+    }
+
     [Fact]
     public void EverySourceFile_CarriesTheSpdxHeader()
     {
