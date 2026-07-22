@@ -165,10 +165,19 @@ jobs:
     - name: Prepare GitHub Release assets
       run: |-
         pushd _dist
-        for file in ./*.zip ./sbom.cyclonedx.json; do
+        # ONLY the plugin zip gets a `.md5`. The manifest generator
+        # (Kevinjil/jellyfin-plugin-repo-action) walks a release's assets and keeps the
+        # LAST one whose name ends in `.md5` — no break, and no pairing with the zip —
+        # so a second `.md5` asset sorting after the plugin's silently becomes the
+        # published checksum and every install then fails verification. The rename to
+        # `community-sso-for-jellyfin` did exactly that: it moved the plugin's md5 ahead
+        # of `sbom.cyclonedx.md5` alphabetically. The SBOM keeps a sha256, which is the
+        # meaningful integrity value for it and cannot collide.
+        for file in ./*.zip; do
           md5sum ${file#./} >> ${file%.*}.md5
           sha256sum ${file#./} >> ${file%.*}.sha256
         done
+        sha256sum sbom.cyclonedx.json >> sbom.cyclonedx.sha256
         ls -l
         popd
     - name: Upload beta assets to a draft release
@@ -228,3 +237,14 @@ jobs:
         repository: ${{ github.repository }}
         pagesBranch: manifest-beta
         pagesFile: manifest.json
+    - name: Verify the published manifest
+      # Post-publish DETECTOR for the class of "the manifest ships a checksum that matches
+      # nothing" (#942) — it turns a silent, user-facing install outage into a red build.
+      # It does not prevent: the release is already sealed and the manifest already written
+      # by the time it runs.
+      uses: ./.github/actions/verify-manifest
+      with:
+        repository: ${{ github.repository }}
+        manifest-branch: manifest-beta
+        github-token: ${{ github.token }}
+        expect-version: ${{ steps.version.outputs.beta }}
