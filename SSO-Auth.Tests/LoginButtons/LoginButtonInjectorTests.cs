@@ -68,6 +68,19 @@ public class LoginButtonInjectorTests
     }
 
     [Fact]
+    public void BuildBlock_HtmlEncodesAHostileName_OnTheSamlStartRouteToo()
+    {
+        // The SAML sibling of the pin above (#928 U4): the encoding runs through the shared builder, but the
+        // SAML start route was only ever asserted with a clean name — this pins the hostile case per route so
+        // a route-specific regression cannot hide behind the shared-code argument.
+        var block = LoginButtonInjector.BuildBlock(One("a\"b<c", "a\"b<c", LoginButtonProtocol.Saml));
+
+        Assert.DoesNotContain("<c", block, System.StringComparison.Ordinal);
+        Assert.DoesNotContain("\"b", block, System.StringComparison.Ordinal);
+        Assert.Contains("/sso/SAML/start/a%22b%3Cc", block, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Merge_AppendsWhenNoRegionExists_PreservingAdminContent()
     {
         var block = LoginButtonInjector.BuildBlock(One("keycloak", "Keycloak"));
