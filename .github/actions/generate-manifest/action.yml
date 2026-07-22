@@ -184,30 +184,12 @@ runs:
             echo "::error::release $tag has $zip_name and $md5_count candidate checksum sidecars (${zip_name%.zip}.md5 / ${zip_name}.md5); refusing to publish a guessed checksum"
             exit 1
           fi
+          # The sidecar's CONTENT is fetched and validated later, only for the entries that
+          # survive the per-ABI cap (#949): the history walk otherwise costs one sidecar
+          # download per release forever, though at most keep×ABIs entries can be published.
+          # Only the URL is resolved here; the pairing cardinality was asserted above.
           md5_url="$(printf '%s' "$assets" | jq -r --arg a "${zip_name%.zip}.md5" --arg b "${zip_name}.md5" \
             'first(.[] | select(.name == $a or .name == $b)) | .browser_download_url')"
-          # The sidecar is `md5sum` output: `<32 hex><space><space-or-*><filename>`. Validate the
-          # WHOLE line, filename included — not just the leading 32 characters. A sidecar written
-          # with `>>` that ended up holding two lines would otherwise pass on its first line,
-          # which may describe an entirely different file, and the manifest would again publish a
-          # checksum belonging to something other than the zip beside it (#942's shape).
-          if ! sidecar="$(curl -fsSL --retry 5 --retry-all-errors --max-time 60 "$md5_url")"; then
-            if [ "$ours" = "no" ]; then
-              echo "::warning::release $tag — could not fetch the checksum sidecar; dropping it from the manifest this run"
-              continue
-            fi
-            echo "::error::release $tag — could not fetch the checksum sidecar"
-            exit 1
-          fi
-          checksum="$(printf '%s\n' "$sidecar" | sed -n "1s/^\([0-9a-f]\{32\}\)[[:space:]][[:space:]*]$(printf '%s' "$zip_name" | sed 's/[].[^$*\/]/\\&/g')\$/\1/p")"
-          if [ -z "$checksum" ] || [ "$(printf '%s\n' "$sidecar" | grep -c .)" -ne 1 ]; then
-            if [ "$ours" = "no" ]; then
-              echo "::warning::release $tag — the checksum sidecar is not a single md5sum line naming $zip_name; dropping it from the manifest"
-              continue
-            fi
-            echo "::error::release $tag — the checksum sidecar is not a single md5sum line naming $zip_name"
-            exit 1
-          fi
 
           # Version and targetAbi describe THIS release, so they come from the metadata JPRM
           # wrote beside its zip — plain JSON, read with jq. The runner image ships jq but NOT
@@ -248,9 +230,12 @@ runs:
           # Same draft filter and cutoff as the asset lookup above, for the same reason: two
           # releases sharing a tag_name would otherwise concatenate both bodies into one entry.
           changelog="$(jq -r --arg t "$tag" -s 'first(add[] | select((.draft | not) and .tag_name == $t) | .body // "")' "$work/releases.json")"
-          jq -nc --arg changelog "$changelog" --arg checksum "$checksum" --arg sourceUrl "$zip_url" \
+          # Underscore-prefixed fields are working data for the post-cap checksum pass and are
+          # stripped before the manifest is built; `checksum` is added there.
+          jq -nc --arg changelog "$changelog" --arg sourceUrl "$zip_url" \
                  --arg targetAbi "$target_abi" --arg timestamp "$published_at" --arg version "$version" \
-            '{changelog:$changelog, checksum:$checksum, sourceUrl:$sourceUrl, targetAbi:$targetAbi, timestamp:$timestamp, version:$version}' \
+                 --arg md5url "$md5_url" --arg zip "$zip_name" --arg tag "$tag" --arg ours "$ours" \
+            '{changelog:$changelog, sourceUrl:$sourceUrl, targetAbi:$targetAbi, timestamp:$timestamp, version:$version, _md5url:$md5url, _zip:$zip, _tag:$tag, _ours:$ours}' \
             >> "$work/versions.jsonl"
         done < <(jq -r -s 'add[] | [.tag_name, (.draft|tostring), (.prerelease|tostring), .published_at] | @tsv' "$work/releases.json")
 
@@ -281,12 +266,61 @@ runs:
           echo "::error::the build this run published ($this_version, targetAbi $this_abi) did not survive into the manifest — refusing to publish without it"
           exit 1
         fi
-        echo "manifest entries per targetAbi:"
-        jq -r 'group_by(.targetAbi)[] | "  \(.[0].targetAbi): \(length) (newest \(.[0].version))"' "$work/kept.json"
 
-        # `jq -S` sorts keys, matching the previous action's stable stringify, and the plugin
-        # object carries exactly the fields it emitted (imageUrl only when set).
-        jq -S --slurpfile versions "$work/kept.json" '
+        # THE #942 FIX, applied to the ≤ keep×ABIs entries that survived the cap (#949 moved it
+        # here from the history walk, which bounds the sidecar downloads however long the
+        # release history grows). The checksum is the sidecar belonging to THIS entry's zip; the
+        # sidecar is `md5sum` output (`<32 hex><space><space-or-*><filename>`) and the WHOLE
+        # line is validated, filename included — a sidecar written with `>>` that ended up
+        # holding two lines would otherwise pass on its first line, which may describe an
+        # entirely different file, and the manifest would again publish a checksum belonging to
+        # something other than the zip beside it. Fatal for the release this run published, a
+        # loud drop for a historical one (immutable releases cannot be repaired).
+        : > "$work/final.jsonl"
+        dropped=0
+        while IFS= read -r entry; do
+          tag="$(printf '%s' "$entry" | jq -r '._tag')"
+          zip_name="$(printf '%s' "$entry" | jq -r '._zip')"
+          md5_url="$(printf '%s' "$entry" | jq -r '._md5url')"
+          ours="$(printf '%s' "$entry" | jq -r '._ours')"
+          if ! sidecar="$(curl -fsSL --retry 5 --retry-all-errors --max-time 60 "$md5_url")"; then
+            if [ "$ours" = "no" ]; then
+              echo "::warning::release $tag — could not fetch the checksum sidecar; dropping its entry from the manifest this run"
+              dropped=$((dropped+1))
+              continue
+            fi
+            echo "::error::release $tag — could not fetch the checksum sidecar"
+            exit 1
+          fi
+          checksum="$(printf '%s\n' "$sidecar" | sed -n "1s/^\([0-9a-f]\{32\}\)[[:space:]][[:space:]*]$(printf '%s' "$zip_name" | sed 's/[].[^$*\/]/\\&/g')\$/\1/p")"
+          if [ -z "$checksum" ] || [ "$(printf '%s\n' "$sidecar" | grep -c .)" -ne 1 ]; then
+            if [ "$ours" = "no" ]; then
+              echo "::warning::release $tag — the checksum sidecar is not a single md5sum line naming $zip_name; dropping its entry from the manifest"
+              dropped=$((dropped+1))
+              continue
+            fi
+            echo "::error::release $tag — the checksum sidecar is not a single md5sum line naming $zip_name"
+            exit 1
+          fi
+          printf '%s' "$entry" | jq -c --arg c "$checksum" 'del(._md5url, ._zip, ._tag, ._ours) + {checksum:$c}' >> "$work/final.jsonl"
+        done < <(jq -c '.[]' "$work/kept.json")
+
+        jq -s '.' "$work/final.jsonl" > "$work/final.json"
+        final_total="$(jq 'length' "$work/final.json")"
+        if [ "$dropped" -gt 0 ]; then
+          echo "::warning::$dropped capped entries were dropped for unusable checksum sidecars — the affected ABI lists are shorter than max-versions-per-abi this run"
+        fi
+        if [ "$final_total" -eq 0 ]; then
+          echo "::error::no releases produced a manifest entry"
+          exit 1
+        fi
+        echo "manifest entries per targetAbi:"
+        jq -r 'group_by(.targetAbi)[] | "  \(.[0].targetAbi): \(length) (newest \(.[0].version))"' "$work/final.json"
+
+        # `jq -S` sorts keys RECURSIVELY, matching the previous action's stable stringify (the
+        # trailing `checksum` the pass above appended lands in alphabetical position), and the
+        # plugin object carries exactly the fields it emitted (imageUrl only when set).
+        jq -S --slurpfile versions "$work/final.json" '
           {
             category: .category,
             description: .description,
@@ -315,4 +349,4 @@ runs:
           --arg c "$(base64 -w0 < "$work/manifest.json")" --arg s "${current_sha:-}" \
           '{message:$m, branch:$b, content:$c} + (if $s == "" then {} else {sha:$s} end)')"
         printf '%s' "$payload" | gh api -X PUT "repos/${REPO}/contents/${MANIFEST_FILE}" --input - >/dev/null
-        echo "committed $kept_total versions to ${BRANCH}/${MANIFEST_FILE}"
+        echo "committed $final_total versions to ${BRANCH}/${MANIFEST_FILE}"
