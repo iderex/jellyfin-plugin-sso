@@ -1,7 +1,8 @@
 name: "Community SSO for Jellyfin"
 # Same plugin GUID as the JF10.11 build (build.yaml) — one plugin, so a JF12 server updates it in
-# place. The targetAbi below gates it to the 12.0 line, so a 10.11 server never offers this build and
-# vice versa (the two generations live in separate manifest branches, manifest-jf12-* vs manifest-*).
+# place. The targetAbi below gates it to the 12.0 line: both generations share one manifest branch
+# per channel and Jellyfin filters client-side, so a 10.11 server never offers this build and vice
+# versa.
 guid: "505ce9d1-d916-42fa-86ca-673ef241d7df"
 imageUrl: "https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/main/img/logo.png"
 # The JF12 (5.0) line's target version. The beta workflow overrides this to 5.0.0.<run> at build time;

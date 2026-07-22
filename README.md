@@ -107,19 +107,18 @@ Jellyfin upstream is building [native OIDC](https://github.com/jellyfin/jellyfin
 
 **Add this plugin's repository, then install from the in-app catalog (recommended for testing):**
 
-1. In Jellyfin, go to **Dashboard → Plugins → Repositories** and add the repository URL for the channel you want. **One URL serves both Jellyfin generations** — your server installs the matching build automatically. Add **one** of these:
+1. In Jellyfin, go to **Dashboard → Plugins → Repositories** and add this repository URL. **One URL serves both Jellyfin generations** — your server installs the matching build automatically:
 
-   | Channel    | Repository URL                                                                                |
-   | ---------- | --------------------------------------------------------------------------------------------- |
-   | **stable** | `https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-release/manifest.json` |
-   | **beta**   | `https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json`    |
-   - **stable** ships tagged releases only. **beta** publishes on a daily schedule (04:00 UTC) whenever `main` has advanced since the last beta, so betas move fast and may break — use them for testing, not production.
-   - Each manifest lists builds for **both Jellyfin 10.11** (.NET 9) and **Jellyfin 12.0** (.NET 10). Jellyfin filters by the plugin's target ABI, so your server is only ever offered the build that runs on it — you don't pick the generation, it does. Jellyfin 12.0 support is currently **beta only** and **not yet validated against a live 12.0 server** (none exists at GA quality to test against): the JF12/5.0 line is CI-built and unit-tested but sits outside the 4.x release-candidate gate, and it clears its own live-validation gate when a Jellyfin 12.0 RC/GA build is available (the stable 12.0 build lands at a 12.0 stable release).
+   | Channel  | Repository URL                                                                             |
+   | -------- | ------------------------------------------------------------------------------------------ |
+   | **beta** | `https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json` |
+   - This project is **beta software — the beta channel is the only release channel** for now. Betas publish on a daily schedule (04:00 UTC) whenever `main` has advanced since the last beta. A stable channel opens when the project reaches its first stable release; the former stable manifest has been emptied so it cannot offer outdated builds (if you still have it configured, switch to the beta URL above to keep receiving updates).
+   - The manifest lists builds for **both Jellyfin 10.11** (.NET 9) and **Jellyfin 12.0** (.NET 10). Jellyfin filters by the plugin's target ABI, so your server is only ever offered the build that runs on it — you don't pick the generation, it does. The JF12/5.0 line is **not yet validated against a live 12.0 server** (none exists at GA quality to test against): it is CI-built and unit-tested and clears its own live-validation gate when a Jellyfin 12.0 RC/GA build is available.
 
 2. Go to **Dashboard → Plugins → Catalog**, find **Community SSO for Jellyfin**, and install it.
 3. **Restart Jellyfin** to load the plugin.
 
-The plugin GUID is unchanged from the original `9p4` plugin, so a new version installs over an existing one in place and keeps your existing configuration. To switch channels, replace the repository URL and let the catalog offer the other channel's build.
+The plugin GUID is unchanged from the original `9p4` plugin, so a new version installs over an existing one in place and keeps your existing configuration.
 
 **Build from source (alternative):**
 
@@ -131,7 +130,7 @@ Copy the **full publish output** (`SSO-Auth.dll` and every dependency DLL beside
 
 **Client support:** SSO sign-in runs in the Jellyfin **Web UI** and in clients that support **Quick Connect** (the mobile and TV apps drive the login through Quick Connect). A native client that does not support Quick Connect cannot complete the browser redirect flow — use the Web UI or a Quick Connect client there.
 
-**Coming from the old plugin repository?** This project is the maintained continuation of the archived `9p4/jellyfin-plugin-sso`. If your Jellyfin still points at the old `9p4` manifest — or at any other now-dead SSO manifest URL, such as a former `jellyfin-plugin-sso-V2` one — it will not receive updates from here. Packaged releases have resumed: replace the stale plugin-repository URL with the 10.11 stable manifest (`https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-release/manifest.json`) under **Dashboard → Plugins → Repositories**, then install **Community SSO for Jellyfin** from the catalog. The plugin GUID is unchanged, so it updates in place and keeps your existing configuration.
+**Coming from the old plugin repository?** This project is the maintained continuation of the archived `9p4/jellyfin-plugin-sso`. If your Jellyfin still points at the old `9p4` manifest — or at any other now-dead SSO manifest URL, such as a former `jellyfin-plugin-sso-V2` one — it will not receive updates from here. Packaged releases have resumed: replace the stale plugin-repository URL with the beta manifest (`https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json`) under **Dashboard → Plugins → Repositories**, then install **Community SSO for Jellyfin** from the catalog. The plugin GUID is unchanged, so it updates in place and keeps your existing configuration.
 
 ## Configuration
 
