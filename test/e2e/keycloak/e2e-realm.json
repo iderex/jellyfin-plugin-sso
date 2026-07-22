@@ -9,6 +9,10 @@
       {
         "name": "jellyfin-access",
         "description": "Realm role that gates access to the Jellyfin SSO plugin (the plugin Roles allow-list)."
+      },
+      {
+        "name": "jellyfin-admin",
+        "description": "Realm role the harness maps to Jellyfin administrator rights (AdminRoles allow-list, #928 U5)."
       }
     ]
   },
@@ -104,7 +108,8 @@
         }
       ],
       "realmRoles": [
-        "jellyfin-access"
+        "jellyfin-access",
+        "jellyfin-admin"
       ]
     },
     {

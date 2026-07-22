@@ -68,6 +68,13 @@ OID_ROLES_JSON="${OID_ROLES_JSON:-[\"jellyfin-access\"]}"
 # Whether the role claim's terminal is an object whose property NAMES are the roles (#934) rather than a
 # list of role strings. Only Zitadel emits that shape.
 ROLE_CLAIM_IS_OBJECT_MAP="${ROLE_CLAIM_IS_OBJECT_MAP:-false}"
+# The admin-elevation allow-list (#928 U5). Empty by default so every existing provider stack is
+# byte-unchanged; a stack that grants an IdP role admin rights sets this AND seeds the role.
+ADMIN_ROLES_JSON="${ADMIN_ROLES_JSON:-[]}"
+# Extended phases (#928 U5): second-login identity-binding, admin-elevation policy assert, and the
+# SSO-only login round-trip. Off by default — the canonical Keycloak stack turns them on; other
+# providers opt in once their seeds carry the required roles.
+EXTENDED_PHASES="${EXTENDED_PHASES:-false}"
 # The two OIDC test users' passwords. They default to the username (every other harness seeds them that
 # way); Zitadel's default password policy rejects anything that simple, so that harness overrides both. The
 # SAME variables seed the account and drive the login, so the two can never disagree.
@@ -532,6 +539,7 @@ OID_CONFIG="$(cat <<JSON
   "DisableHttps": $DISABLE_HTTPS,
   "EnableAuthorization": true,
   "Roles": $OID_ROLES_JSON,
+  "AdminRoles": $ADMIN_ROLES_JSON,
   "RoleClaim": "$ROLE_CLAIM",
   "RoleClaimIsObjectMap": $ROLE_CLAIM_IS_OBJECT_MAP,
   "DefaultUsernameClaim": "$USERNAME_CLAIM"
@@ -962,6 +970,10 @@ if [ -n "${JF_TOKEN:-}" ] && [ "$JF_TOKEN" != "null" ]; then
   else
     fail "alice: GET /Users/Me did not return the alice user (got '$ME_NAME')"
   fi
+  # The account id and policy feed the extended phases (#928 U5): identity-binding compares this id on a
+  # second login, and the admin-elevation assert reads the minted policy.
+  ALICE_ID="$(printf '%s' "$ME" | jq -r '.Id // empty' 2>/dev/null || true)"
+  ALICE_IS_ADMIN="$(printf '%s' "$ME" | jq -r '.Policy.IsAdministrator // false' 2>/dev/null || true)"
 fi
 
 # --------------------------------------------------------------------------------------------------
@@ -1188,6 +1200,130 @@ post_saml_response() {
 }
 
 # --------------------------------------------------------------------------------------------------
+# Extended phases (#928 U5) — gated by EXTENDED_PHASES (the canonical Keycloak stack turns them on).
+# --------------------------------------------------------------------------------------------------
+if [ "$EXTENDED_PHASES" = "true" ]; then
+
+  # jf_auth_status USERNAME PASSWORD -> the HTTP status of a password login attempt. Uses the same
+  # X-Emby-Authorization idiom as the admin authenticate in phase 1; -o keeps the body out of the way.
+  jf_auth_status() {
+    curl -sS -o /tmp/authbyname.out -w '%{http_code}' -X POST "$JELLYFIN/Users/AuthenticateByName" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: $EMBY_AUTH" \
+      -d "{\"Username\":\"$1\",\"Pw\":\"$2\"}"
+  }
+
+  # oidc_relogin_me VARPREFIX — drives a full second OIDC login for alice and echoes /Users/Me JSON.
+  oidc_relogin_me() {
+    r_jar="$(mktemp)"; r_hdr="$(mktemp)"
+    r_cb="$(idp_oidc_login "$r_jar" "$r_hdr" alice "$PASSWORD_ALICE")" || return 1
+    r_binding="$(extract_binding "$r_hdr")"
+    [ -n "$r_binding" ] && [ -n "$r_cb" ] || return 1
+    r_page="$(curl -fsS -H "Cookie: $BINDING_COOKIE_NAME=$r_binding" "$r_cb")" || return 1
+    r_state="$(printf '%s' "$r_page" | grep -oE 'var data = "[^"]*"' | head -1 | sed -e 's/^var data = "//' -e 's/"$//')"
+    [ -n "$r_state" ] || return 1
+    r_auth="$(curl -fsS -H "Cookie: $BINDING_COOKIE_NAME=$r_binding" -X POST "$JELLYFIN/sso/OID/Auth/$PROVIDER" \
+      -H "Content-Type: application/json" \
+      -d "{\"deviceId\":\"$DEVICE_ID-relogin\",\"appName\":\"Jellyfin Web\",\"appVersion\":\"10.8.0\",\"deviceName\":\"$DEVICE\",\"data\":\"$r_state\"}")" || return 1
+    r_token="$(printf '%s' "$r_auth" | jq -r '.AccessToken // empty')"
+    [ -n "$r_token" ] || return 1
+    curl -fsS "$JELLYFIN/Users/Me" -H "Authorization: MediaBrowser Token=\"$r_token\""
+  }
+
+  # ------------------------------------------------------------------------------------------------
+  # Phase 6b — second login: stable identity binding (the sub-keyed link reuses the SAME account).
+  # A rename-at-the-IdP or a broken canonical link would mint a fresh account here and pass every
+  # earlier phase — this is the end-to-end pin that it cannot.
+  # ------------------------------------------------------------------------------------------------
+  log "== Extended: second OIDC login for alice (expect the SAME Jellyfin account) =="
+  [ -n "${ALICE_ID:-}" ] || die "extended: phase 4 captured no alice account id"
+  ME2="$(oidc_relogin_me)" || die "extended: alice's second IdP login failed"
+  ALICE_ID_2="$(printf '%s' "$ME2" | jq -r '.Id // empty')"
+  if [ -n "$ALICE_ID_2" ] && [ "$ALICE_ID_2" = "$ALICE_ID" ]; then
+    pass "alice: second login reuses the same Jellyfin account (stable sub->account binding)"
+  else
+    fail "alice: second login minted a DIFFERENT account ('$ALICE_ID_2' vs '$ALICE_ID') — the canonical link did not hold"
+  fi
+
+  # ------------------------------------------------------------------------------------------------
+  # Phase 6c — admin elevation from the IdP role claim, asserted on the minted policy.
+  # alice carries the admin-mapped role (the stack seeds it and sets ADMIN_ROLES_JSON); the policy on
+  # the REAL minted user must say administrator — the RBAC assert beyond the login allow-list that no
+  # phase covered before (#928 audit, G4).
+  # ------------------------------------------------------------------------------------------------
+  log "== Extended: admin-elevation policy assert =="
+  if [ "$ADMIN_ROLES_JSON" = "[]" ]; then
+    die "extended: EXTENDED_PHASES is on but ADMIN_ROLES_JSON is empty — the stack must seed an admin role"
+  fi
+  if [ "${ALICE_IS_ADMIN:-false}" = "true" ]; then
+    pass "alice: minted policy carries IsAdministrator=true from the IdP role claim"
+  else
+    fail "alice: minted policy is NOT administrator although the admin role is granted and configured"
+  fi
+
+  # ------------------------------------------------------------------------------------------------
+  # Phase 6d — SSO-only login round-trip: enable with the break-glass admin, prove the lockout is
+  # scoped (non-exempt password login refused, break-glass survives, SSO still mints), then disable
+  # and prove restoration. The feature's whole safety claim was in-process-only before (#928 audit).
+  # ------------------------------------------------------------------------------------------------
+  log "== Extended: SSO-only login round-trip =="
+  PW_USER="pwuser"; PW_PASS="Pw-e2e-1!"
+  NEWU="$(curl -fsS -X POST "$JELLYFIN/Users/New" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: MediaBrowser Token=\"$ADMIN_TOKEN\"" \
+    -d "{\"Name\":\"$PW_USER\",\"Password\":\"$PW_PASS\"}")" || die "extended: creating the password user failed"
+  [ -n "$(printf '%s' "$NEWU" | jq -r '.Id // empty')" ] || die "extended: /Users/New returned no user id"
+
+  [ "$(jf_auth_status "$PW_USER" "$PW_PASS")" = "200" ] || die "extended: the fresh password user cannot log in even before SSO-only"
+
+  EN_STATUS="$(curl -sS -o /tmp/ssoonly.out -w '%{http_code}' -X POST "$JELLYFIN/sso/SSO-Only/Enable" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: MediaBrowser Token=\"$ADMIN_TOKEN\"" \
+    -d "\"$ADMIN_USER\"")"
+  [ "$EN_STATUS" = "200" ] || die "extended: SSO-Only/Enable returned HTTP $EN_STATUS: $(cat /tmp/ssoonly.out 2>/dev/null)"
+
+  PW_LOCKED="$(jf_auth_status "$PW_USER" "$PW_PASS")"
+  if [ "$PW_LOCKED" != "200" ]; then
+    pass "SSO-only: non-exempt password login refused (HTTP $PW_LOCKED)"
+  else
+    fail "SSO-only: the non-exempt password user can STILL log in with a password"
+  fi
+
+  if [ "$(jf_auth_status "$ADMIN_USER" "$ADMIN_PASS")" = "200" ]; then
+    pass "SSO-only: the break-glass admin's password door survives"
+  else
+    fail "SSO-only: the break-glass admin was locked out — the fail-safe failed"
+  fi
+
+  ME3="$(oidc_relogin_me)" || ME3=""
+  if [ "$(printf '%s' "$ME3" | jq -r '.Name // empty')" = "alice" ]; then
+    pass "SSO-only: the SSO login path still mints sessions while the mode is on"
+  else
+    fail "SSO-only: alice's SSO login broke while the mode is on"
+  fi
+
+  # Re-authenticate for a FRESH admin token: enabling SSO-only revokes existing sessions (the
+  # break-glass admin keeps its password DOOR, but the token minted in phase 1 is gone), so the
+  # disable call must use a token minted after the enable — via that surviving break-glass door.
+  [ "$(jf_auth_status "$ADMIN_USER" "$ADMIN_PASS")" = "200" ] || die "extended: break-glass re-authenticate before disable failed"
+  ADMIN_TOKEN="$(jq -r '.AccessToken' /tmp/authbyname.out)"
+  [ -n "$ADMIN_TOKEN" ] && [ "$ADMIN_TOKEN" != "null" ] || die "extended: no fresh admin token from the break-glass login"
+
+  DIS_STATUS="$(curl -sS -o /tmp/ssoonly.out -w '%{http_code}' -X POST "$JELLYFIN/sso/SSO-Only/Disable" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: MediaBrowser Token=\"$ADMIN_TOKEN\"" \
+    -d '""')"
+  [ "$DIS_STATUS" = "200" ] || die "extended: SSO-Only/Disable returned HTTP $DIS_STATUS: $(cat /tmp/ssoonly.out 2>/dev/null)"
+
+  if [ "$(jf_auth_status "$PW_USER" "$PW_PASS")" = "200" ]; then
+    pass "SSO-only: disable restores the password user's native login (no hash was reset)"
+  else
+    fail "SSO-only: the password user stayed locked out after disable — restoration failed"
+  fi
+
+fi
+
+# --------------------------------------------------------------------------------------------------
 # Phase 7 — configure the SAML provider (IdP signing cert fetched from Keycloak's SAML descriptor)
 # --------------------------------------------------------------------------------------------------
 log "== Configuring SAML provider '$PROVIDER' =="
@@ -1261,6 +1397,16 @@ if [ -n "${S_JF_TOKEN:-}" ] && [ "$S_JF_TOKEN" != "null" ]; then
     pass "carol: SAML session token works against GET /Users/Me (Name='carol')"
   else
     fail "carol: GET /Users/Me did not return the carol user (got '$SME_NAME')"
+  fi
+  # The non-admin negative to phase 6c's positive (#928 U5): carol carries only the access role, so
+  # her minted policy must NOT be administrator — pins that admin elevation needs the mapped role,
+  # not merely a successful SSO login.
+  if [ "$EXTENDED_PHASES" = "true" ]; then
+    if [ "$(printf '%s' "$SME" | jq -r '.Policy.IsAdministrator // false')" = "false" ]; then
+      pass "carol: minted policy is NOT administrator (no admin role granted)"
+    else
+      fail "carol: minted policy claims administrator although carol has no admin role"
+    fi
   fi
 fi
 
