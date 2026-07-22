@@ -70,10 +70,11 @@ jobs:
           keycloak='{"name":"Keycloak (OIDC + SAML)","compose":"test/e2e/docker-compose.yml"}'
           authelia='{"name":"Authelia (OIDC)","compose":"test/e2e/authelia/docker-compose.yml"}'
           authentik='{"name":"authentik (OIDC + SAML)","compose":"test/e2e/authentik/docker-compose.yml"}'
+          dex='{"name":"Dex (OIDC)","compose":"test/e2e/dex/docker-compose.yml"}'
           # The full provider matrix (release/beta only). Append one object per shipped harness as each
-          # test/e2e/<provider>/ lands: #922 pocket-id, #923 kanidm, #924 zitadel, #925 dex.
+          # test/e2e/<provider>/ lands: #922 pocket-id, #923 kanidm, #924 zitadel.
           if [ "$IS_RELEASE" = "true" ] || [ "$DISPATCH_ALL" = "true" ]; then
-            include="[$keycloak,$authelia,$authentik]"
+            include="[$keycloak,$authelia,$authentik,$dex]"
           else
             include="[$keycloak]"
           fi

@@ -25,7 +25,8 @@ ADMIN_PASS="${JF_ADMIN_PASS:-e2e-admin-pw}"
 
 # Provider-shape parameters. Defaults reproduce the Keycloak harness byte-for-byte; another OIDC provider
 # (e.g. Authelia) overrides them from its compose env. IDP_KIND selects the provider-specific browser-login
-# sequence in idp_oidc_login (Keycloak renders a server-side HTML form; Authelia is a JSON-API login portal).
+# sequence in idp_oidc_login (Keycloak and Dex render a server-side HTML form, Authelia is a JSON-API login
+# portal, authentik is a stateful multi-stage flow executor).
 IDP_KIND="${IDP_KIND:-keycloak}"
 RUN_SAML="${RUN_SAML:-true}"
 OID_ENDPOINT="${OID_ENDPOINT:-$KEYCLOAK/realms/$REALM}"
@@ -49,6 +50,16 @@ SAML_CLIENT_ID="${SAML_CLIENT_ID:-jellyfin-saml}"
 # against a configured value needs both sides to agree — authentik rejects a mismatch with HTTP 400, and its
 # provider ACS must use a dotted host, so that harness pins the same dotted host here.
 SAML_BASE_URL_OVERRIDE="${SAML_BASE_URL_OVERRIDE:-}"
+# The HTML-form login's user field. Keycloak names it `username`; Dex's local connector names it `login`.
+LOGIN_USER_FIELD="${LOGIN_USER_FIELD:-username}"
+# The claim the plugin turns into the Jellyfin account name. Dex's local connector emits no
+# preferred_username (only `name`), so that harness repoints it rather than failing to resolve a username.
+USERNAME_CLAIM="${USERNAME_CLAIM:-preferred_username}"
+# The plugin's login allow-list. A non-empty list IS the role gate; an EMPTY list turns it off, which is the
+# only honest setting for a provider that cannot express group membership at all (Dex's local password
+# database carries none). The role-gate phase is driven off this ONE value rather than a second switch, so
+# the configured gate and the asserted gate can never disagree.
+OID_ROLES_JSON="${OID_ROLES_JSON:-[\"jellyfin-access\"]}"
 
 # A stable device identity for the harness's Jellyfin API calls (the MediaBrowser auth scheme).
 CLIENT="e2e-harness"
@@ -193,8 +204,9 @@ OID_CONFIG="$(cat <<JSON
   "DisablePushedAuthorization": true,
   "DisableHttps": $DISABLE_HTTPS,
   "EnableAuthorization": true,
-  "Roles": ["jellyfin-access"],
-  "RoleClaim": "$ROLE_CLAIM"
+  "Roles": $OID_ROLES_JSON,
+  "RoleClaim": "$ROLE_CLAIM",
+  "DefaultUsernameClaim": "$USERNAME_CLAIM"
 }
 JSON
 )"
@@ -326,19 +338,26 @@ idp_oidc_login() {
   jar="$1"; start_hdr="$2"; user="$3"; pass="$4"
   auth_url="$(oid_start "$jar" "$start_hdr")" || return 1
   case "$IDP_KIND" in
-    keycloak)
-      login_page="$(curl -sSL -c "$jar" -b "$jar" -w '\n__HTTP__%{http_code}' "$auth_url")" || { printf 'idp_oidc_login[keycloak]: login page curl failed\n' >&2; return 1; }
+    keycloak | dex)
+      # Both render a server-side HTML login form, so they share this path; they differ only in the form's
+      # user field name (LOGIN_USER_FIELD) and in whether the action is absolute (Keycloak) or site-relative
+      # (Dex). `credentialId` is Keycloak's hidden field; an extra field is ignored by Dex.
+      login_page="$(curl -sSL -c "$jar" -b "$jar" -w '\n__HTTP__%{http_code}' "$auth_url")" || { printf 'idp_oidc_login[%s]: login page curl failed\n' "$IDP_KIND" >&2; return 1; }
       page_code="$(printf '%s' "$login_page" | sed -n 's/.*__HTTP__\([0-9]*\)$/\1/p')"
-      printf 'idp_oidc_login[keycloak]: authorize page -> HTTP %s\n' "$page_code" >&2
+      printf 'idp_oidc_login[%s]: authorize page -> HTTP %s\n' "$IDP_KIND" "$page_code" >&2
       form_action="$(printf '%s' "$login_page" | grep -oE 'action="[^"]*"' | head -1 | sed -e 's/^action="//' -e 's/"$//' -e 's/&amp;/\&/g')"
       if [ -z "$form_action" ]; then
-        printf 'idp_oidc_login[keycloak]: could not parse a form action; first 1200 chars:\n%s\n' "$(printf '%s' "$login_page" | head -c 1200)" >&2
+        printf 'idp_oidc_login[%s]: could not parse a form action; first 1200 chars:\n%s\n' "$IDP_KIND" "$(printf '%s' "$login_page" | head -c 1200)" >&2
         return 1
       fi
-      printf 'idp_oidc_login[keycloak]: form action=%s\n' "$form_action" >&2
-      # Keycloak 302s back to the plugin callback with code + state.
+      # A site-relative action must be resolved against the provider origin, or curl rejects it outright.
+      case "$form_action" in
+        /*) form_action="$(printf '%s' "$auth_url" | sed -E 's#^(https?://[^/]+).*#\1#')$form_action" ;;
+      esac
+      printf 'idp_oidc_login[%s]: form action=%s\n' "$IDP_KIND" "${form_action%%\?*}" >&2
+      # The provider 302s back to the plugin callback with code + state.
       curl -fsS -c "$jar" -b "$jar" -o /dev/null -w '%{redirect_url}' \
-        --data-urlencode "username=$user" \
+        --data-urlencode "$LOGIN_USER_FIELD=$user" \
         --data-urlencode "password=$pass" \
         --data-urlencode "credentialId=" \
         "$form_action"
@@ -430,6 +449,17 @@ fi
 # --------------------------------------------------------------------------------------------------
 # Phase 5 — role-gate negative: bob is refused (milestone 3)
 # --------------------------------------------------------------------------------------------------
+# Gated on the SAME value that configures the gate: an empty allow-list means the plugin has no role gate to
+# exercise (the only honest setting for a provider that cannot express groups, e.g. Dex's local password DB),
+# so asserting one would test nothing. Reading the configured list — rather than a second switch — makes it
+# impossible to skip a gate that IS configured, or to assert one that is not.
+# `jq -e` as the condition itself, and an explicit `type == "array"`: a bare `jq length` would print 0 (and
+# pick the skip branch) for a scalar, and would print the first value of a multi-value stream while
+# discarding the parse error — a guard that answers on input it did not actually understand. Here anything
+# that is not exactly an empty array — a malformed value, a scalar, a non-empty list — RUNS the gate.
+if printf '%s' "$OID_ROLES_JSON" | jq -e 'type == "array" and length == 0' >/dev/null 2>&1; then
+  log "== OIDC role-gate phase skipped (empty allow-list: this provider cannot express groups) =="
+else
 log "== OIDC round-trip: bob (expect role-gate refusal) =="
 JAR_BOB="$(mktemp)"
 START_HDR_BOB="$(mktemp)"
@@ -471,19 +501,30 @@ if CB_URL_BOB="$(idp_oidc_login "$JAR_BOB" "$START_HDR_BOB" bob bob)"; then
 else
   fail "bob: could not complete the IdP login"
 fi
+fi # role-gate phase
 
 # --------------------------------------------------------------------------------------------------
 # Phase 6 — fail-closed negative: a replayed one-time state is refused
 # --------------------------------------------------------------------------------------------------
 log "== Fail-closed negative: replayed state (expect refusal) =="
 if [ -n "${STATE:-}" ]; then
-  # alice's STATE was already redeemed once in Phase 4; replaying it must be rejected.
-  if curl -fsS -o /dev/null -H "Cookie: $BINDING_COOKIE_NAME=$BINDING" -X POST "$JELLYFIN/sso/OID/Auth/$PROVIDER" \
+  # alice's STATE was already redeemed once in Phase 4; replaying it must be rejected. Read the ACTUAL
+  # status rather than "curl -f said non-zero": -f is non-zero for a connection failure, a timeout, a 429
+  # throttle or an unhandled 500 too, so accepting any failure would let a broken leg print "one-time-use
+  # holds". The redeem miss is a SPECIFIC outcome — 400 "Invalid or expired state" (PublicReason.InvalidState,
+  # LoginStatusMapper) — so pin it, the same standard the bob/dave role-gate negatives hold.
+  REPLAY_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -H "Cookie: $BINDING_COOKIE_NAME=$BINDING" -X POST "$JELLYFIN/sso/OID/Auth/$PROVIDER" \
       -H "Content-Type: application/json" \
-      -d "{\"deviceId\":\"$DEVICE_ID\",\"appName\":\"Jellyfin Web\",\"appVersion\":\"10.8.0\",\"deviceName\":\"$DEVICE\",\"data\":\"$STATE\"}" 2>/dev/null; then
-    fail "replayed state was accepted — one-time-use is NOT enforced"
+      -d "{\"deviceId\":\"$DEVICE_ID\",\"appName\":\"Jellyfin Web\",\"appVersion\":\"10.8.0\",\"deviceName\":\"$DEVICE\",\"data\":\"$STATE\"}" 2>/dev/null || true)"
+  [ -n "$REPLAY_STATUS" ] || REPLAY_STATUS="000"
+  if [ "$REPLAY_STATUS" = "000" ]; then
+    fail "replay check could not reach Jellyfin (HTTP 000) — cannot prove one-time-use (broken negative test)"
+  elif [ "$REPLAY_STATUS" -ge 200 ] && [ "$REPLAY_STATUS" -lt 300 ]; then
+    fail "replayed state was accepted (HTTP $REPLAY_STATUS) — one-time-use is NOT enforced"
+  elif [ "$REPLAY_STATUS" != "400" ]; then
+    fail "replayed state returned $REPLAY_STATUS, not the redeem miss's 400 — refused for the WRONG reason (broken negative test)"
   else
-    pass "replayed state refused (one-time-use holds)"
+    pass "replayed state refused (HTTP 400, one-time-use holds)"
   fi
 else
   fail "replay check skipped: no state captured from the alice round-trip"
@@ -747,13 +788,20 @@ fi
 # --------------------------------------------------------------------------------------------------
 log "== SAML fail-closed negative: replayed token (expect refusal) =="
 if [ -n "${STOKEN:-}" ]; then
-  # carol's STOKEN was already redeemed once in Phase 8; replaying it must be rejected.
-  if curl -fsS -o /dev/null -H "Cookie: $SAML_BINDING_COOKIE_NAME=$SBIND" -X POST "$JELLYFIN/sso/SAML/Auth/$PROVIDER" \
+  # carol's STOKEN was already redeemed once in Phase 8; replaying it must be rejected. Status-pinned for the
+  # same reason as the OIDC replay above: a transport break or a 500 must never read as "one-time-use holds".
+  SREPLAY_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -H "Cookie: $SAML_BINDING_COOKIE_NAME=$SBIND" -X POST "$JELLYFIN/sso/SAML/Auth/$PROVIDER" \
       -H "Content-Type: application/json" \
-      -d "{\"deviceId\":\"$DEVICE_ID\",\"appName\":\"Jellyfin Web\",\"appVersion\":\"10.8.0\",\"deviceName\":\"$DEVICE\",\"data\":\"$STOKEN\"}" 2>/dev/null; then
-    fail "SAML: replayed login-outcome token was accepted — one-time-use is NOT enforced"
+      -d "{\"deviceId\":\"$DEVICE_ID\",\"appName\":\"Jellyfin Web\",\"appVersion\":\"10.8.0\",\"deviceName\":\"$DEVICE\",\"data\":\"$STOKEN\"}" 2>/dev/null || true)"
+  [ -n "$SREPLAY_STATUS" ] || SREPLAY_STATUS="000"
+  if [ "$SREPLAY_STATUS" = "000" ]; then
+    fail "SAML replay check could not reach Jellyfin (HTTP 000) — cannot prove one-time-use (broken negative test)"
+  elif [ "$SREPLAY_STATUS" -ge 200 ] && [ "$SREPLAY_STATUS" -lt 300 ]; then
+    fail "SAML: replayed login-outcome token was accepted (HTTP $SREPLAY_STATUS) — one-time-use is NOT enforced"
+  elif [ "$SREPLAY_STATUS" != "400" ]; then
+    fail "SAML: replayed token returned $SREPLAY_STATUS, not the redeem miss's 400 — refused for the WRONG reason (broken negative test)"
   else
-    pass "SAML: replayed login-outcome token refused (one-time-use holds)"
+    pass "SAML: replayed login-outcome token refused (HTTP 400, one-time-use holds)"
   fi
 else
   fail "SAML replay check skipped: no token captured from the carol round-trip"
