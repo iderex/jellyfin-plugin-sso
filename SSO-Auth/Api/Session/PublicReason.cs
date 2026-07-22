@@ -37,4 +37,7 @@ internal enum PublicReason
 
     /// <summary>RequireAcr is set but the id_token's acr claim was absent or outside the configured acr_values (#757, step-up/MFA). Operator-facing by design.</summary>
     AcrNotSatisfied,
+
+    /// <summary>max_age is configured but the id_token's auth_time was absent or older than the window (#961) — the user authenticated too long ago. Operator-facing by design.</summary>
+    AuthTooOld,
 }

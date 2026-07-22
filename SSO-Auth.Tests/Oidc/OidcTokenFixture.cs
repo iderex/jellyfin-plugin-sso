@@ -46,7 +46,7 @@ internal sealed class OidcTokenFixture : IDisposable
     /// issuer) so a test can model a provider whose id_token issuer differs from its discovery issuer
     /// (templated / <c>DoNotValidateIssuerName</c> setups, #210).
     /// </summary>
-    internal string IdToken(string? subject, string username, string? issuer = null, string? acr = null)
+    internal string IdToken(string? subject, string username, string? issuer = null, string? acr = null, long? authTimeUnixSeconds = null)
     {
         var now = DateTime.UtcNow;
         var claims = new Dictionary<string, object> { ["preferred_username"] = username };
@@ -60,6 +60,13 @@ internal sealed class OidcTokenFixture : IDisposable
         if (!string.IsNullOrEmpty(acr))
         {
             claims["acr"] = acr;
+        }
+
+        // The moment the user authenticated, for the max_age freshness gate (#961); omitted when null (the
+        // common provider case AND the max_age-ignored rejection path — a provider that returns no auth_time).
+        if (authTimeUnixSeconds is long authTime)
+        {
+            claims["auth_time"] = authTime;
         }
 
         var descriptor = new SecurityTokenDescriptor

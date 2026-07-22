@@ -199,6 +199,77 @@ public class OidcRoundTripTests
     }
 
     [Fact]
+    public async Task MaxAgeConfigured_FreshAuthTime_YieldsLoggedInOutcome()
+    {
+        // #961 happy path: MaxAge set + the id_token carries a recent auth_time within the window ⇒ login.
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        var recent = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 30;
+        var idToken = fixture.IdToken(subject: "sub-1", username: "alice", authTimeUnixSeconds: recent);
+        var harness = BuildHarness(fixture, request => ServeIdp(fixture, request, idToken), cfg => cfg.MaxAge = 300);
+        var user = TestUsers.Named("alice", Guid.Parse("19999999-1111-1111-1111-111111111114"));
+        harness.UserManager.CreateUserAsync("alice").Returns(user);
+        harness.UserManager.GetUserById(user.Id).Returns(user);
+
+        var (state, binding) = await DriveChallenge(harness);
+        RepointToCallback(harness, state, binding, query: $"?code=test-code&state={state}");
+        Assert.Equal("text/html", Assert.IsType<ContentResult>(await harness.Controller.OidCallback("kc", state)).ContentType);
+        Assert.IsType<OkObjectResult>(await harness.Controller.OidAuth("kc", Redeem(state)));
+        await harness.UserManager.Received(1).CreateUserAsync("alice");
+    }
+
+    [Fact]
+    public async Task MaxAgeConfigured_MissingAuthTime_RejectsAtCallback_MintsNothing()
+    {
+        // #961 fail-closed: MaxAge set but the provider ignored max_age and returned no auth_time ⇒ the
+        // callback denies before promoting a Ready, so the redeem finds no state and mints nothing. This is
+        // the whole point of the gate — a provider that ignores max_age must not pass silently.
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        var idToken = fixture.IdToken(subject: "sub-1", username: "alice"); // no auth_time
+        var harness = BuildHarness(fixture, request => ServeIdp(fixture, request, idToken), cfg => cfg.MaxAge = 300);
+
+        var (state, binding) = await DriveChallenge(harness);
+        RepointToCallback(harness, state, binding, query: $"?code=test-code&state={state}");
+        Assert.Equal(403, Assert.IsType<ContentResult>(await harness.Controller.OidCallback("kc", state)).StatusCode);
+
+        var content = Assert.IsType<ContentResult>(await harness.Controller.OidAuth("kc", Redeem(state)));
+        Assert.Equal(400, content.StatusCode);
+        Assert.Equal("Invalid or expired state", content.Content);
+        await harness.UserManager.DidNotReceive().CreateUserAsync(Arg.Any<string>());
+    }
+
+    [Fact]
+    public async Task MaxAgeConfigured_StaleAuthTime_RejectsAtCallback_MintsNothing()
+    {
+        // #961 fail-closed: MaxAge set + auth_time older than the window+skew ⇒ the user authenticated too
+        // long ago, denied.
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        var stale = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 3600;
+        var idToken = fixture.IdToken(subject: "sub-1", username: "alice", authTimeUnixSeconds: stale);
+        var harness = BuildHarness(fixture, request => ServeIdp(fixture, request, idToken), cfg => cfg.MaxAge = 300);
+
+        var (state, binding) = await DriveChallenge(harness);
+        RepointToCallback(harness, state, binding, query: $"?code=test-code&state={state}");
+        Assert.Equal(403, Assert.IsType<ContentResult>(await harness.Controller.OidCallback("kc", state)).StatusCode);
+        await harness.UserManager.DidNotReceive().CreateUserAsync(Arg.Any<string>());
+    }
+
+    [Fact]
+    public async Task MaxAgeUnset_NoAuthTime_YieldsLoggedInOutcome()
+    {
+        // Upgrade-safe: with MaxAge unset, an id_token without auth_time logs in unchanged (no new gate).
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        var harness = BuildHarness(fixture, request => ServeIdp(fixture, request, fixture.IdToken("sub-1", "alice")));
+        var user = TestUsers.Named("alice", Guid.Parse("19999999-1111-1111-1111-111111111115"));
+        harness.UserManager.CreateUserAsync("alice").Returns(user);
+        harness.UserManager.GetUserById(user.Id).Returns(user);
+
+        var (state, binding) = await DriveChallenge(harness);
+        RepointToCallback(harness, state, binding, query: $"?code=test-code&state={state}");
+        Assert.Equal("text/html", Assert.IsType<ContentResult>(await harness.Controller.OidCallback("kc", state)).ContentType);
+        Assert.IsType<OkObjectResult>(await harness.Controller.OidAuth("kc", Redeem(state)));
+    }
+
+    [Fact]
     public async Task RequireAcrOff_NoAcrClaim_YieldsLoggedInOutcome()
     {
         // Default: with RequireAcr off, an id_token that carries no acr logs in unchanged (no new gate).

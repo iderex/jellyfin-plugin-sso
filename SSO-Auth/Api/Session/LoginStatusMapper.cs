@@ -92,6 +92,7 @@ internal static class LoginStatusMapper
         PublicReason.EmailNotVerified => Emit(StatusCodes.Status403Forbidden, "A verified email is required to log in."),
         PublicReason.AwaitingApproval => Emit(StatusCodes.Status403Forbidden, "Your account is not active. It is awaiting administrator approval."),
         PublicReason.AcrNotSatisfied => Emit(StatusCodes.Status403Forbidden, "A stronger authentication level (for example MFA) is required to log in."),
+        PublicReason.AuthTooOld => Emit(StatusCodes.Status403Forbidden, "You authenticated too long ago; please sign in again."),
         // A new PublicReason member without a mapper entry fails loudly here, and the totality test
         // enumerating every member catches it before it can ship — never a fall-through.
         _ => throw new InvalidOperationException($"Unmapped public reason: {reason}"),
