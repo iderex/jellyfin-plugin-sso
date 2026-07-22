@@ -472,3 +472,4 @@ docs/*
 !docs/METRICS.md
 !docs/PRIVACY.md
 !docs/SECURITY-REMEDIATION-POLICY.md
+StrykerOutput/

@@ -25,14 +25,14 @@
 #      predicted it and a dispatch confirmed it. A run with no report now fails
 #      visibly (fail-closed reporting; the run is still never a merge gate).
 #
-# CURRENTLY BLOCKED UPSTREAM (#899): dotnet-stryker (<= 4.16.0) drives its runs
-# through VSTest and cannot mutate a Microsoft.Testing.Platform-only test
-# project (stryker-mutator/stryker-net#3094); since the #718 MTP migration every
-# run fails at startup with "Microsoft.Testing.Platform ... not yet supported".
-# The weekly cron is therefore PAUSED (commented out) so the schedule does not
-# emit a known-red run every Monday; manual dispatch stays available to re-test.
-# When a Stryker release supports MTP: bump the tool pin, dispatch once, and
-# re-enable the cron (#899 tracks this).
+# RUNS AGAINST THE VSTEST TWIN (#899): dotnet-stryker (<= 4.16.0) drives its
+# runs through VSTest and cannot mutate the Microsoft.Testing.Platform-v2 test
+# project (stryker-mutator/stryker-net#3094; upstream's in-progress MTP runner
+# targets MTP v1 first). SSO-Auth.Tests.Stryker compiles the SAME test sources
+# as a classic VSTest container purely for this run — verified empirically:
+# a scoped mutation run kills mutants again (40/40 on RolePrivilegeMapper).
+# Delete the twin and point this back at SSO-Auth.Tests when Stryker ships
+# MTP v2 support.
 #
 # Hardened per the repo workflow policy (see zizmor.yml): every action is
 # SHA-pinned with a version comment, checkout runs with persist-credentials:false,
@@ -42,13 +42,11 @@
 name: Stryker mutation testing
 
 on:
-  # Weekly cron PAUSED while Stryker lacks Microsoft.Testing.Platform support
-  # (see the blocked-upstream note above; #899). Re-enable when the tool pin is
-  # bumped to an MTP-capable release:
-  # schedule:
-  #   # Weekly (Mondays). Offset from the Scorecard cron (27 4 * * 1) so the two
-  #   # scheduled runs do not contend for a runner at the same minute.
-  #   - cron: "41 5 * * 1"
+  schedule:
+    # Weekly (Mondays). Offset from the Scorecard cron (27 4 * * 1) so the two
+    # scheduled runs do not contend for a runner at the same minute. Re-enabled
+    # with the VSTest twin (#899) after the MTP migration had paused it.
+    - cron: "41 5 * * 1"
   # Let a maintainer run it on demand from the Actions tab.
   workflow_dispatch:
 
@@ -94,7 +92,12 @@ jobs:
       - name: Restore dependencies
         # --locked-mode fails the restore if the committed packages.lock.json
         # files would change, matching the main build job's supply-chain posture.
-        run: dotnet restore --locked-mode
+        # The VSTest twin is deliberately outside the solution (it must never join
+        # the normal build/test path), so it is restored explicitly — otherwise
+        # Stryker's implicit build would restore it WITHOUT locked-mode.
+        run: |
+          dotnet restore --locked-mode
+          dotnet restore SSO-Auth.Tests.Stryker/SSO-Auth.Tests.Stryker.csproj --locked-mode
 
       - name: Restore pinned .NET tools (Stryker)
         # Installs dotnet-stryker at the version pinned in .config/dotnet-tools.json.
@@ -104,10 +107,10 @@ jobs:
         # break=0 in config keeps a LOW SCORE from exiting non-zero (the score is
         # a signal, not a gate). A tool/infrastructure failure, however, exits
         # non-zero and now fails the run visibly — no continue-on-error, per the
-        # fail-closed-reporting note at the top (#899). Run from the test project
-        # directory so Stryker picks up stryker-config.json and auto-detects the
-        # single project under test.
-        working-directory: SSO-Auth.Tests
+        # fail-closed-reporting note at the top (#899). Run from the VSTest twin
+        # directory so Stryker picks up stryker-config.json and drives the twin
+        # (the MTP-v2 test project is not VSTest-mutable — see the header note).
+        working-directory: SSO-Auth.Tests.Stryker
         run: dotnet stryker
 
       - name: Upload mutation report
@@ -119,6 +122,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: stryker-mutation-report
-          path: SSO-Auth.Tests/StrykerOutput/**/reports/**
+          path: SSO-Auth.Tests.Stryker/StrykerOutput/**/reports/**
           retention-days: 14
           if-no-files-found: error
