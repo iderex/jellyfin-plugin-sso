@@ -1377,8 +1377,10 @@ if [ "$EXTENDED_PHASES" = "true" ]; then
     -H "Authorization: MediaBrowser Token=\"$ADMIN_TOKEN\"" \
     -d "{\"Url\":\"$SAML_DESCRIPTOR_URL\"}")"
   if [ "$IMP" = "200" ]; then
-    IMP_CERT="$(jq -r '.primaryCertificate // empty' /tmp/import.out | tr -d ' \t')"
-    IMP_EP="$(jq -r '.endpoint // empty' /tmp/import.out)"
+    # Jellyfin's MVC serializes PascalCase (the harness reads .AccessToken, .Policy.IsAdministrator the
+    # same way), so the import record's fields are PrimaryCertificate / Endpoint, not camelCase.
+    IMP_CERT="$(jq -r '.PrimaryCertificate // empty' /tmp/import.out | tr -d ' \t')"
+    IMP_EP="$(jq -r '.Endpoint // empty' /tmp/import.out)"
     if [ "$IMP_CERT" = "$IDP_CERT" ] && [ -n "$IMP_EP" ]; then
       pass "SAML/ImportMetadata parsed the descriptor: cert matches the hand-extracted one, endpoint=$IMP_EP"
     else
