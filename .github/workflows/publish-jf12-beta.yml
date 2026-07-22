@@ -136,13 +136,25 @@ jobs:
         path: .
         dotnet-target: "net10.0"
         output: _dist
+    # CycloneDX SBOM of the net10 shipping closure, into the release staging dir so
+    # the checksum loop and `files: _dist/*` ship it as a beta release asset. Reads
+    # the --locked-mode restore above; the same single generator publish.yml uses.
+    - name: Generate CycloneDX SBOM
+      uses: ./.github/actions/cyclonedx-sbom
+      with:
+        output-dir: _dist
     - name: Prepare GitHub Release assets
       run: |-
         pushd _dist
+        # ONLY the plugin zip gets a `.md5` — see the same note in publish-beta.yml. The
+        # manifest generator keeps the LAST asset ending in `.md5`, so a second one
+        # sorting after the plugin's becomes the published checksum and every install
+        # fails verification.
         for file in ./*.zip; do
-          md5sum ${file#./} >> ${file%.*}.md5
-          sha256sum ${file#./} >> ${file%.*}.sha256
+          md5sum ${file#./} > ${file%.*}.md5
+          sha256sum ${file#./} > ${file%.*}.sha256
         done
+        sha256sum sbom.cyclonedx.json > sbom.cyclonedx.sha256
         ls -l
         popd
     - name: Upload JF12 beta assets to a draft release
@@ -176,6 +188,8 @@ jobs:
             Jellyfin 12.0 (.NET 10) beta ${{ steps.version.outputs.base }}-JF12-beta (plugin version ${{ steps.version.outputs.beta }}).
             Install via the beta repository URL (a Jellyfin 12.0 server picks this build automatically by targetAbi):
             https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json
+
+            Scope note (#743): the JF12/5.0 line is **not validated against a live Jellyfin 12.0 server yet** — no 12.0 GA server exists to run the E2E checklist against. It is CI-built and unit/conformance-tested only, and it is NOT part of the 4.x (Jellyfin 10.11) release-candidate gate; the 5.0 line clears its own live-validation gate when a Jellyfin 12.0 RC/GA build is available. Use these betas for testing, not production.
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     - name: Publish the draft release
@@ -193,10 +207,22 @@ jobs:
       # so every version lands in the manifest with its correct targetAbi, and a Jellyfin server installs
       # only the build matching its generation. publish-beta.yml (on main) regenerates the same branch, so
       # whichever generation publishes last leaves manifest-beta complete for both.
-      uses: Kevinjil/jellyfin-plugin-repo-action@296850372cd569cbcc040e834222a5afed861485 # v0.4.3
+      uses: ./.github/actions/generate-manifest
       with:
-        ignorePrereleases: false
-        githubToken: ${{ secrets.GITHUB_TOKEN }}
+        plugin-metadata: _dist/*.zip.meta.json
         repository: ${{ github.repository }}
-        pagesBranch: manifest-beta
-        pagesFile: manifest.json
+        manifest-branch: manifest-beta
+        include-prereleases: "true"
+        github-token: ${{ github.token }}
+    - name: Verify the published manifest
+      # Post-publish DETECTOR for the class of "the manifest ships a checksum that matches
+      # nothing" (#942) — it turns a silent, user-facing install outage into a red build.
+      # It does not prevent: the release is already sealed and the manifest already written
+      # by the time it runs.
+      uses: ./.github/actions/verify-manifest
+      with:
+        repository: ${{ github.repository }}
+        manifest-branch: manifest-beta
+        github-token: ${{ github.token }}
+        expect-version: ${{ steps.version.outputs.beta }}
+        require-abis: "10.11.0.0 12.0.0.0"
