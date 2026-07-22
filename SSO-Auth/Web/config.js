@@ -142,6 +142,12 @@ const OIDC_PRESET_MANAGED_TOGGLES = [
   "DoNotValidateResponseIssuer",
   "DisableHttps",
   "DoNotLoadProfile",
+  // Not an insecure toggle — it names the SHAPE of the RoleClaim path's terminal (#934). It is here because
+  // every preset sets RoleClaim, so leaving a previous provider's shape flag ticked while the claim path is
+  // replaced by an array-shaped one (Keycloak's realm_access.roles) would extract ZERO roles and lock the
+  // whole userbase out on the next login. Clearing is correct for every shipped preset; a future
+  // object-map preset (Zitadel) can pre-check it from its own `toggles`.
+  "RoleClaimIsObjectMap",
 ];
 const SAML_PRESET_MANAGED_TOGGLES = ["DoNotValidateAudience"];
 

@@ -1437,11 +1437,16 @@ public class ArchitectureConformanceTests
         // The full save-contract roster, pinned after the #365 provider-workspace redesign reordered and
         // regrouped the form into native accordion sections. ProviderFormFieldIds_MatchOidConfigProperties
         // guards the FORWARD direction (no stray marked id) and a reverse pin for the security-critical
-        // SUBSET; this test is the exhaustive reverse pin: every one of the 42 persisting fields must still
-        // render as a marked input with its exact id, so a field silently dropped or unmarked during a
-        // future re-layout — which would stop it persisting — fails here rather than shipping as silent data
-        // loss. The provider-name KEY input (OidProviderName) is deliberately unmarked (it supplies the
-        // OidConfigs dictionary key, not an OidConfig property) and is asserted present separately.
+        // SUBSET; this test is the exhaustive reverse pin: every persisting field must still render as a
+        // marked input with its exact id, so a field silently dropped or unmarked during a future re-layout —
+        // which would stop it persisting — fails here rather than shipping as silent data loss. The
+        // provider-name KEY input (OidProviderName) is deliberately unmarked (it supplies the OidConfigs
+        // dictionary key, not an OidConfig property) and is asserted present separately.
+        //
+        // The roster is compared as a SET IN BOTH DIRECTIONS (#934). A subset assertion silently tolerated a
+        // newly added field that nobody listed here — which is exactly how DisableAvatarFromPictureClaim
+        // (#723) and RoleClaimIsObjectMap escaped it — so a new form field now fails this test until it is
+        // rostered, instead of shipping outside the guard.
         var markerClasses = new[] { "sso-text", "sso-line-list", "sso-toggle", "sso-folder-list", "sso-role-map" };
         var form = OidcProviderFormMarkup(
             File.ReadAllText(Path.Combine(RepoRoot(), "SSO-Auth", "Web", "configPage.html")));
@@ -1471,7 +1476,8 @@ public class ArchitectureConformanceTests
         var expected = new[]
         {
             "OidEndpoint", "OidClientId", "OidSecret", "OidScopes", "Enabled",
-            "EnableAuthorization", "DefaultUsernameClaim", "DefaultProvider", "AvatarUrlFormat", "RoleClaim",
+            "EnableAuthorization", "DefaultUsernameClaim", "DefaultProvider", "AvatarUrlFormat", "DisableAvatarFromPictureClaim",
+            "RoleClaim", "RoleClaimIsObjectMap",
             "Roles", "AdminRoles", "EnableAllFolders", "EnabledFolders", "EnableFolderRoles", "FolderRoleMapping",
             "EnableLiveTvRoles", "LiveTvRoles", "LiveTvManagementRoles", "EnableLiveTv", "EnableLiveTvManagement",
             "DoNotLoadProfile", "SchemeOverride", "PortOverride", "BaseUrlOverride",
@@ -1481,11 +1487,17 @@ public class ArchitectureConformanceTests
             "HideLoginButton", "LoginButtonText", "PostLogoutRedirectUri",
         };
 
-        Assert.Equal(42, expected.Length);
+        Assert.Equal(44, expected.Length);
         var missing = expected.Where(id => !markedIds.Contains(id)).ToList();
         Assert.True(
             missing.Count == 0,
             "These persisting provider-form fields are missing their marked input in configPage.html (a re-layout dropped or unmarked them, so they would stop persisting): " + string.Join(", ", missing));
+
+        // The other direction: a marked input nobody rostered is a field that shipped outside this guard.
+        var unrostered = markedIds.Where(id => !expected.Contains(id, StringComparer.Ordinal)).OrderBy(id => id, StringComparer.Ordinal).ToList();
+        Assert.True(
+            unrostered.Count == 0,
+            "These provider-form fields render a marked input but are not in this test's roster, so they are outside the persistence guard — add them to `expected` and bump its count: " + string.Join(", ", unrostered));
 
         // The provider-name KEY input must still be present (unmarked by design).
         Assert.Contains("id=\"OidProviderName\"", form, StringComparison.Ordinal);
