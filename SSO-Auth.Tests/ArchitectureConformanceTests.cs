@@ -2522,6 +2522,45 @@ public class ArchitectureConformanceTests
     }
 
     [Fact]
+    public void EveryHarnessUsingTestClass_IsInTheNonParallelControllerCollection()
+    {
+        // The SsoControllerHarness constructor swaps the process-wide SSOPlugin.Instance and resets the
+        // OIDC/SAML static caches — two harness-based classes running in parallel therefore race each
+        // other (the exact intermittent 429→400 failure that motivated this rule, #928 U4). The
+        // "SSOController" collection (DisableParallelization) is the existing convention; this makes it
+        // self-enforcing: a NEW test class that constructs the harness without joining the collection is
+        // a red build naming the file, not a flaky suite three weeks later.
+        var testsRoot = Path.Combine(RepoRoot(), "SSO-Auth.Tests");
+        var offenders = new List<string>();
+        foreach (var src in Directory.EnumerateFiles(testsRoot, "*.cs", SearchOption.AllDirectories))
+        {
+            // Skip THIS file: it carries the scanned literal inside the rule itself, not a harness use.
+            if (IsBuildOutput(src) || Path.GetFileName(src) == "ArchitectureConformanceTests.cs")
+            {
+                continue;
+            }
+
+            var text = File.ReadAllText(src);
+            if (text.Contains("new SsoControllerHarness", StringComparison.Ordinal)
+                && !text.Contains("[Collection(\"SSOController\")]", StringComparison.Ordinal))
+            {
+                offenders.Add(Path.GetFileName(src));
+            }
+        }
+
+        Assert.True(
+            offenders.Count == 0,
+            "Every test class constructing SsoControllerHarness must carry [Collection(\"SSOController\")] (the harness swaps process-wide statics; parallel classes race). Missing in: " + string.Join(", ", offenders));
+
+        // Liveness sentinel: the scan must actually see the known harness users, or a harness rename has
+        // silently blinded it.
+        Assert.True(
+            Directory.EnumerateFiles(testsRoot, "*.cs", SearchOption.AllDirectories)
+                .Count(f => !IsBuildOutput(f) && File.ReadAllText(f).Contains("new SsoControllerHarness", StringComparison.Ordinal)) >= 10,
+            "The harness-usage scan matched fewer than 10 files — SsoControllerHarness was renamed; update this rule.");
+    }
+
+    [Fact]
     public void EverySourceFile_CarriesTheSpdxHeader()
     {
         // #747: every C# source file opens with the SPDX copyright + licence header, so the licence of any

@@ -20,6 +20,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Tests;
 /// response at each route. The already-pinned endpoints (SamlChallenge, OidCallback, Link, Unregister)
 /// keep their own tests; this fills the remainder.
 /// </summary>
+[Collection("SSOController")]
 public class SSOControllerRateLimitTests
 {
     private const string ThrottledBody = "Too many attempts. Please wait a moment and try again.";
