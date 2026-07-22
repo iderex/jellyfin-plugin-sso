@@ -1,0 +1,162 @@
+name: Verify the published plugin manifest
+description: >-
+  Prove that a just-published plugin manifest actually installs: download exactly
+  what it points at and check the artifact's MD5 against the checksum it
+  publishes — for the version this run added, and for the newest entry of every
+  targetAbi it lists.
+
+  This exists because the manifest generator
+  (Kevinjil/jellyfin-plugin-repo-action) selects a release's checksum by NAME —
+  it keeps the LAST asset whose name ends in `.md5`, with no break and no
+  pairing against the zip. A second `.md5` asset that sorts after the plugin's
+  therefore becomes the published checksum, the manifest ships a value that
+  matches nothing, and every install fails Jellyfin's verification with a bare
+  "failed" and no hint at the cause. That is not hypothetical: renaming the
+  plugin to `community-sso-for-jellyfin` moved its md5 ahead of
+  `sbom.cyclonedx.md5` alphabetically and broke the beta channel exactly that
+  way (#942). The publish legs no longer emit a competing `.md5`; this action
+  re-derives the answer from the published artefacts and trusts nothing the
+  generator did.
+
+  SCOPE, honestly: this is a post-publish DETECTOR, not a preventer. It runs
+  after the release is sealed (immutable) and after the manifest branch is
+  written, so on a true positive the bad manifest is already being served — the
+  run turns red and a human has to act. It converts a silent, user-facing
+  outage into a loud build failure; it does not roll anything back.
+
+  The newest entry of EVERY targetAbi is checked, not only the one this run
+  added: the manifests are shared between the Jellyfin generations, so a run of
+  one publish leg can break the other's head entry — the entry a fresh install
+  of that generation is offered.
+inputs:
+  repository:
+    description: owner/repo whose manifest branch is being verified.
+    required: true
+  manifest-branch:
+    description: >-
+      Branch holding the published manifest.json (e.g. manifest-beta,
+      manifest-release).
+    required: true
+  github-token:
+    description: >-
+      Token used to read the manifest through the API. The API is used rather
+      than raw.githubusercontent because raw serves the branch through a cache
+      with max-age=300 and no way for a client to force revalidation — a read
+      there routinely returns the PREVIOUS revision, which would verify the
+      wrong document (a false green on the stable legs) or report the just-added
+      version as missing (a false red on the beta legs).
+    required: true
+  expect-version:
+    description: >-
+      Plugin version this run published (e.g. 4.3.0.10), which must be present
+      AND whose checksum is verified directly — being present is not enough,
+      since a version that is not its ABI's head would otherwise only be
+      checked for existence. Leave unset where the leg cannot derive it.
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Verify the published manifest
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ inputs.repository }}
+        BRANCH: ${{ inputs.manifest-branch }}
+        EXPECT_VERSION: ${{ inputs.expect-version }}
+      run: |-
+        set -euo pipefail
+        work="$(mktemp -d)"
+        manifest="$work/manifest.json"
+
+        # Read through the API, which is read-your-writes against the commit the generator
+        # just made. Retried because the generator's write and this read are separate API
+        # calls; when a version is expected, the retry waits for THAT version rather than
+        # merely for a successful fetch — a fetch that succeeds with stale content is the
+        # failure mode, not a fetch that errors.
+        fetched=0
+        for _ in $(seq 1 12); do
+          if gh api "repos/${REPO}/contents/manifest.json?ref=${BRANCH}" \
+               -H "Accept: application/vnd.github.raw" > "$manifest" 2>/dev/null; then
+            if [ -z "$EXPECT_VERSION" ]; then
+              fetched=1
+              break
+            fi
+            if jq -e --arg v "$EXPECT_VERSION" \
+                 '.[0].versions | map(.version) | index($v)' "$manifest" >/dev/null 2>&1; then
+              fetched=1
+              break
+            fi
+          fi
+          sleep 10
+        done
+        if [ "$fetched" -ne 1 ]; then
+          echo "::error::could not read a manifest containing ${EXPECT_VERSION:-any version} from ${REPO}@${BRANCH}"
+          exit 1
+        fi
+
+        # verify <version> — download what the manifest points at and compare.
+        # Returns non-zero on any mismatch, unreachable artifact, or missing entry.
+        verify() {
+          entry="$(jq -c --arg v "$1" 'first(.[0].versions[] | select(.version == $v))' "$manifest")"
+          if [ -z "$entry" ] || [ "$entry" = "null" ]; then
+            echo "::error::version $1 is missing from the published manifest"
+            return 1
+          fi
+          want="$(printf '%s' "$entry" | jq -r '.checksum // ""')"
+          url="$(printf '%s' "$entry" | jq -r '.sourceUrl // ""')"
+          if [ -z "$want" ] || [ -z "$url" ]; then
+            echo "::error::version $1 has an empty checksum or sourceUrl in the published manifest"
+            return 1
+          fi
+          # Retried: this runs moments after the release was sealed, and asset propagation
+          # can 404 or 5xx transiently — a false red here would fail an otherwise correct
+          # publish that can no longer be re-made (the release is immutable).
+          if ! curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 --max-time 180 "$url" -o "$work/published.zip"; then
+            echo "::error::version $1 — the manifest's sourceUrl is not downloadable: $url"
+            return 1
+          fi
+          got="$(md5sum "$work/published.zip" | cut -d' ' -f1)"
+          if [ "$want" != "$got" ]; then
+            echo "::error::version $1 — the manifest publishes checksum $want but the artifact at $url is $got; every install of this build would fail verification"
+            return 1
+          fi
+          echo "ok   version=$1 checksum=$got"
+          return 0
+        }
+
+        # An ASSIGNMENT, not a `for … in $(...)` word list: `set -e` ignores a failed
+        # command substitution in a for-list, so a jq error there would yield zero
+        # iterations and a green run — the gate would pass on an empty, truncated or
+        # non-JSON manifest, which is exactly the catastrophic case it must catch.
+        abis="$(jq -r '.[0].versions | map(.targetAbi) | unique | .[]' "$manifest")" || {
+          echo "::error::the published manifest is not a readable plugin manifest (jq could not read .[0].versions); first bytes: $(head -c 200 "$manifest")"
+          exit 1
+        }
+        if [ -z "$abis" ]; then
+          echo "::error::the published manifest lists no versions at all"
+          exit 1
+        fi
+
+        fail=0
+        checked=0
+        if [ -n "$EXPECT_VERSION" ]; then
+          verify "$EXPECT_VERSION" || fail=1
+          checked=$((checked + 1))
+        fi
+        for abi in $abis; do
+          head_version="$(jq -r --arg a "$abi" 'first(.[0].versions[] | select(.targetAbi == $a)) | .version' "$manifest")"
+          echo "abi=$abi head=$head_version"
+          if [ "$head_version" != "$EXPECT_VERSION" ]; then
+            verify "$head_version" || fail=1
+            checked=$((checked + 1))
+          fi
+        done
+
+        # Belt and braces: a run that verified nothing must never report success.
+        if [ "$checked" -eq 0 ]; then
+          echo "::error::the verification checked no manifest entries at all"
+          exit 1
+        fi
+        echo "verified $checked manifest entr(y|ies)"
+        [ "$fail" -eq 0 ]

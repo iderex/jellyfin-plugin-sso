@@ -146,10 +146,15 @@ jobs:
     - name: Prepare GitHub Release assets
       run: |-
         pushd _dist
-        for file in ./*.zip ./sbom.cyclonedx.json; do
+        # ONLY the plugin zip gets a `.md5` — see the same note in publish-beta.yml. The
+        # manifest generator keeps the LAST asset ending in `.md5`, so a second one
+        # sorting after the plugin's becomes the published checksum and every install
+        # fails verification.
+        for file in ./*.zip; do
           md5sum ${file#./} >> ${file%.*}.md5
           sha256sum ${file#./} >> ${file%.*}.sha256
         done
+        sha256sum sbom.cyclonedx.json >> sbom.cyclonedx.sha256
         ls -l
         popd
     - name: Upload JF12 beta assets to a draft release
@@ -209,3 +214,14 @@ jobs:
         repository: ${{ github.repository }}
         pagesBranch: manifest-beta
         pagesFile: manifest.json
+    - name: Verify the published manifest
+      # Post-publish DETECTOR for the class of "the manifest ships a checksum that matches
+      # nothing" (#942) — it turns a silent, user-facing install outage into a red build.
+      # It does not prevent: the release is already sealed and the manifest already written
+      # by the time it runs.
+      uses: ./.github/actions/verify-manifest
+      with:
+        repository: ${{ github.repository }}
+        manifest-branch: manifest-beta
+        github-token: ${{ github.token }}
+        expect-version: ${{ steps.version.outputs.beta }}

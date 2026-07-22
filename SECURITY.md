@@ -77,8 +77,11 @@ inventory a downstream redistributor needs for its own CRA Annex I duties
 (and satisfies OSPS-QA-02.02). The SBOM covers the **full multi-target closure**
 (both the net9.0 / Jellyfin 10.11 and net10.0 / Jellyfin 12.0 lines) — a
 conservative superset of any single release's shipped ABI, which its tag and
-zip identify. It is shipped with the same `.md5`/`.sha256` sidecars as the plugin
-zip.
+zip identify. It ships with a `.sha256` sidecar. It deliberately carries no
+`.md5`: the Jellyfin manifest generator picks a release's checksum by filename
+and keeps the last `.md5` it sees, so a second one can silently become the
+published plugin checksum and break every install (#942). SHA-256 is the
+meaningful integrity value here in any case.
 
 The SBOM is generated in an isolated job that deliberately does **not** hold the
 release signing scopes, so the SBOM tool can never reach the provenance signing
