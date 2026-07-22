@@ -63,11 +63,25 @@ concurrency:
 
 jobs:
   mutation:
-    name: Mutation testing (SAML/OIDC core)
+    name: Mutation testing (${{ matrix.scope.name }})
     runs-on: ubuntu-latest
-    # Mutation testing re-runs the suite once per mutant, so it is far slower
-    # than a normal test run; the scope is kept small (#169) to hold this down.
-    timeout-minutes: 60
+    # Mutation testing re-runs the covered tests once per mutant. The full scoped
+    # core is ~1379 mutants — ~3.5h serial on a 2-core runner, which killed the
+    # first VSTest-twin run at the old 60-minute limit. The matrix splits the
+    # scope into three parallel legs (~1-1.5h each); the timeout is sized for the
+    # largest leg with headroom. Weekly + informational, so wall clock is cheap.
+    timeout-minutes: 240
+    strategy:
+      # One leg failing (e.g. a timeout) must not cancel the others' reports.
+      fail-fast: false
+      matrix:
+        scope:
+          - name: saml
+            mutate: "Api/Saml/*.cs"
+          - name: oidc
+            mutate: "Api/Oidc/*.cs"
+          - name: core
+            mutate: "Api/Authz/RolePrivilegeMapper.cs,Api/Session/LoginStatusMapper.cs,Api/Linking/AdoptionEligibilityResolver.cs"
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -111,7 +125,15 @@ jobs:
         # directory so Stryker picks up stryker-config.json and drives the twin
         # (the MTP-v2 test project is not VSTest-mutable — see the header note).
         working-directory: SSO-Auth.Tests.Stryker
-        run: dotnet stryker
+        env:
+          # This leg's mutate scope (comma-separated globs). CLI -m REPLACES the
+          # config's mutate list, so each leg mutates exactly its slice.
+          MUTATE: ${{ matrix.scope.mutate }}
+        run: |
+          IFS="," read -ra globs <<< "$MUTATE"
+          args=()
+          for g in "${globs[@]}"; do args+=(-m "$g"); done
+          dotnet stryker "${args[@]}"
 
       - name: Upload mutation report
         # Publish the HTML/markdown report as a run artifact even when the scan
@@ -121,7 +143,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: stryker-mutation-report
+          name: stryker-mutation-report-${{ matrix.scope.name }}
           path: SSO-Auth.Tests.Stryker/StrykerOutput/**/reports/**
           retention-days: 14
           if-no-files-found: error
