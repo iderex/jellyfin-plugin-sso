@@ -1,0 +1,136 @@
+# End-to-end SSO login harness — Zitadel provider (#924). Boots a real Jellyfin 10.11 server with the
+# packaged plugin installed and a real Zitadel instance (postgres + zitadel), driven by the SHARED harness.
+#
+# Zitadel cannot be seeded from a static file the way Keycloak's realm or authentik's blueprint can: only the
+# first instance, its org and a machine account with a personal access token come from environment. The
+# project, the OIDC application, the role and the user grants are created by the harness through Zitadel's
+# management API using that token, which is written to a volume both containers share.
+#
+# Local run (build the plugin zip first — see test/e2e/README.md). This stack is NOT re-runnable in place:
+# the seeding is not idempotent and both Postgres and the token volume are stateful, so a second `up` dies
+# on ALREADY_EXISTS at the project create. Always tear it down with -v between runs.
+#   docker compose -f test/e2e/zitadel/docker-compose.yml up \
+#     --abort-on-container-exit --exit-code-from harness
+#   docker compose -f test/e2e/zitadel/docker-compose.yml down -v
+name: sso-e2e-zitadel
+
+services:
+  postgres:
+    image: docker.io/library/postgres:16-alpine
+    environment:
+      POSTGRES_USER: zitadel
+      POSTGRES_PASSWORD: zitadel-e2e-db
+      POSTGRES_DB: zitadel
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zitadel"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks:
+      - ssonet
+
+  zitadel:
+    image: ghcr.io/zitadel/zitadel:v2.71.16
+    # The token volume is created root-owned and this image otherwise runs unprivileged, so writing the
+    # token fails with "permission denied" and takes the whole setup migration down with it. Running the
+    # container as root is the one-line fix; a separate chmod init container is NOT an option, because the
+    # run uses --abort-on-container-exit, under which a one-shot service finishing successfully tears the
+    # entire stack down mid-migration. The image ships no shell, so the chmod cannot be folded into command.
+    user: "0:0"
+    # The master key encrypts Zitadel's own secrets at rest; it must be exactly 32 bytes. Test-only.
+    command: >
+      start-from-init
+      --masterkey MasterkeyNeedsToHave32Characters
+      --tlsMode disabled
+    environment:
+      ZITADEL_DATABASE_POSTGRES_HOST: postgres
+      ZITADEL_DATABASE_POSTGRES_PORT: 5432
+      ZITADEL_DATABASE_POSTGRES_DATABASE: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_USERNAME: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_PASSWORD: zitadel-e2e-db
+      ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE: disable
+      ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: zitadel
+      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: zitadel-e2e-db
+      ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
+      # The issuer Zitadel advertises. It must be the service-DNS name so Jellyfin (server-to-server) and the
+      # harness (browser role) resolve a byte-identical issuer — the trap the whole harness design avoids.
+      ZITADEL_EXTERNALDOMAIN: zitadel
+      ZITADEL_EXTERNALPORT: 8080
+      ZITADEL_EXTERNALSECURE: "false"
+      ZITADEL_TLS_ENABLED: "false"
+      # Zitadel derives its sonyflake machine id from a PRIVATE (RFC1918) IP by default and panics at startup
+      # when it finds none — and this network is deliberately public-looking (see the subnet note below), so
+      # that method can never succeed here. Identify by hostname instead; the container name is stable and
+      # unique within the stack, which is all the id generator needs.
+      ZITADEL_MACHINE_IDENTIFICATION_PRIVATEIP_ENABLED: "false"
+      ZITADEL_MACHINE_IDENTIFICATION_HOSTNAME_ENABLED: "true"
+      ZITADEL_MACHINE_IDENTIFICATION_WEBHOOK_ENABLED: "false"
+      # A machine account plus a personal access token written to the shared volume: the only non-interactive
+      # way in, and what the harness then drives the management API with.
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_USERNAME: e2e-sa
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_NAME: e2e-sa
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_PAT_EXPIRATIONDATE: "2999-01-01T00:00:00Z"
+      ZITADEL_FIRSTINSTANCE_PATPATH: /pat/e2e.pat
+      ZITADEL_FIRSTINSTANCE_ORG_NAME: e2e
+    volumes:
+      - pat:/pat
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ssonet
+
+  jellyfin:
+    # Same server the Keycloak harness pins (see ../docker-compose.yml for the version-bind rationale).
+    image: jellyfin/jellyfin:10.11.11
+    environment:
+      JELLYFIN_CACHE_DIR: /cache
+    volumes:
+      # Reuse the shared plugin drop the workflow / local build step unpacks under ../jellyfin/config.
+      - ../jellyfin/config:/config
+    networks:
+      - ssonet
+
+  harness:
+    image: alpine:3.20
+    depends_on:
+      - jellyfin
+      - zitadel
+    environment:
+      JELLYFIN_URL: http://jellyfin:8096
+      IDP_KIND: zitadel
+      PROVIDER: zitadel
+      ZITADEL_URL: http://zitadel:8080
+      OID_ENDPOINT: http://zitadel:8080
+      DISCOVERY_URL: http://zitadel:8080/.well-known/openid-configuration
+      # Zitadel carries the roles in an OBJECT MAP whose property names are the role keys (#934), so the
+      # allow-list is read through the plugin's RoleClaimIsObjectMap option rather than as a string list.
+      ROLE_CLAIM: "urn:zitadel:iam:org:project:roles"
+      ROLE_CLAIM_IS_OBJECT_MAP: "true"
+      OID_SCOPES_JSON: '["openid","email","profile"]'
+      # Zitadel's default password policy rejects the bare-username passwords the other harnesses seed.
+      # These same values seed the accounts and drive the login, so they cannot drift apart.
+      PASSWORD_ALICE: "Alice-e2e-Password1!"
+      PASSWORD_BOB: "Bob-e2e-Password1!"
+      DO_NOT_LOAD_PROFILE: "true"
+      DISABLE_HTTPS: "true"
+      RUN_SAML: "false"
+      JF_ADMIN_USER: e2eadmin
+      JF_ADMIN_PASS: e2e-admin-pw
+    volumes:
+      - ../harness:/harness:ro
+      - pat:/pat:ro
+    command: ["sh", "/harness/harness.sh"]
+    networks:
+      - ssonet
+
+volumes:
+  pat:
+
+networks:
+  ssonet:
+    driver: bridge
+    ipam:
+      config:
+        # SSRF-guard-friendly public-looking range, distinct from the other harnesses.
+        - subnet: 11.0.4.0/24

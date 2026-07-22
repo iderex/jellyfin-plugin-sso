@@ -14,8 +14,9 @@ Keycloak is the **canonical** harness and the only one that runs on a pull reque
 on the nightly schedule, and on a **default** manual dispatch (there is deliberately no `push` trigger —
 the PR run already validated it). Additional self-hostable identity providers get their own harness under
 `test/e2e/<provider>/`. **Authelia** (`test/e2e/authelia/`, OIDC), **authentik**
-(`test/e2e/authentik/`, OIDC **and** SAML) and **Dex** (`test/e2e/dex/`, OIDC) are implemented; the rest are
-one issue each — Pocket ID, Kanidm, Zitadel; tracked in
+(`test/e2e/authentik/`, OIDC **and** SAML), **Dex** (`test/e2e/dex/`, OIDC) and **Zitadel**
+(`test/e2e/zitadel/`, OIDC) are implemented; the rest are
+one issue each — Pocket ID, Kanidm; tracked in
 [#919](https://github.com/iderex/jellyfin-plugin-sso/issues/919). The **full provider matrix runs at a
 release and a beta-release** — never on a routine merge, so the cross-provider pass is release-gate
 evidence, not a per-commit cost — **and on a manual dispatch with `providers: all`**, which is how a newly
@@ -28,7 +29,10 @@ such in the README provider table.
 The shared driver (`harness/harness.sh`) keeps the Jellyfin setup and the assertions common and swaps only
 the provider-specific browser login (`idp_oidc_login` / `idp_saml_login`, selected by `IDP_KIND`): Keycloak
 and Dex render a server-side HTML form (differing only in the form's user field name, a parameter, and in
-whether the form action is absolute or site-relative, which the driver detects), Authelia is a single JSON
+whether the form action is absolute or site-relative, which the driver detects), Zitadel is a **chain** of
+single-form pages (login name → password → a two-factor setup prompt this stack skips) driven generically by
+each page's form action — an action the driver does not know is a loud failure naming it, never a silent
+skip. Authelia is a single JSON
 first-factor call, and
 authentik is a **stateful
 multi-stage flow-executor** that CHAINS flows (the authentication flow, then the provider's authorization
@@ -42,6 +46,17 @@ harness additionally serves TLS with a self-signed cert (Authelia 4.38 requires 
 cert is appended to Jellyfin's system CA bundle at container start (never replacing it) and trusted by the
 harness via `CURL_CA_BUNDLE`, so the plugin's real https OIDC path is exercised.
 
+**Zitadel is the one provider that cannot be seeded from a file.** Only its first instance, org and a
+machine account with a personal access token come from environment; the project, the OIDC application, the
+role and the user grants exist only through its management API — and the client id and secret are
+_generated_ by that call, so they can only be known after seeding. The harness therefore seeds it in a
+Phase-0b step before any assertion, using the token Zitadel writes to a shared volume. Two Zitadel quirks
+are handled there and documented in its compose file: it panics at startup without an RFC1918 address (so
+it identifies itself by hostname instead, since these networks are deliberately public-looking), and it
+publishes an **empty JWKS** until its `webKey` feature is enabled — which makes every login fail with
+`invalid_signature` and nothing in the login path say why. Its roles arrive as an **object map**, read
+through the plugin's `RoleClaimIsObjectMap` option (#934).
+
 ## What it verifies
 
 - The **packaged JPRM zip** loads on Linux (the `#181` packaged-crypto-DLL load path that
@@ -52,9 +67,12 @@ harness via `CURL_CA_BUNDLE`, so the plugin's real https OIDC path is exercised.
 - A **full SAML round-trip** for `carol` (challenge → Keycloak login → ACS POST → `SAML/Auth`) mints a
   Jellyfin session token that works against `GET /Users/Me` — exercising the packaged SAML crypto DLLs
   (#181) and the signed-assertion validation path.
-- **Asymmetric id_token signing**: the provider's discovery must advertise **RS256**. An identity provider
-  that falls back to symmetric HS256 (authentik does this when its provider has no signing key) makes the
-  plugin reject every login with `invalid_signature`, so this is asserted before any login is driven.
+- **Asymmetric id_token signing**: the provider's discovery must advertise an **asymmetric** algorithm
+  (any of `RS*`/`ES*`/`PS*`/`EdDSA` — not RS256 alone, since a correctly configured provider may default to
+  ES256) **and its JWKS must publish at least one key**. An identity provider that falls back to symmetric
+  HS256 (authentik does this when its provider has no signing key), or that advertises RS256 while
+  publishing an empty key set (Zitadel, until its `webKey` feature is enabled), makes the plugin reject
+  every login with `invalid_signature`, so both halves are asserted before any login is driven.
 - **Role gating**: `bob` (OIDC) and `dave` (SAML), who lack the `jellyfin-access` role, are refused at
   the callback — and the refusal must be the role gate's **exact HTTP 401**, not merely "some error", so a
   token-exchange failure or a 500 cannot masquerade as a passing role-gate test. A provider that cannot
@@ -107,6 +125,13 @@ docker compose -f test/e2e/docker-compose.yml down -v
 
 A green run prints `ALL E2E CHECKS PASSED`. In CI, container logs are dumped automatically on
 failure.
+
+**The Zitadel stack is the one harness that cannot be re-run in place.** Every other provider is seeded
+from a file (an imported realm, a reapplied blueprint, or a static config) and the driver deliberately
+reuses an already-initialised Jellyfin. Zitadel is seeded through its API against a stateful Postgres and a
+named volume holding its access token, and the seed is not idempotent — a second `up` on the same stack hits
+`ALREADY_EXISTS` on the project create and dies there. Always tear it down with `down -v` between runs. CI
+is unaffected: each matrix entry gets a fresh runner and tears the stack down with `-v`.
 
 **Running more than one provider locally:** every provider's compose bind-mounts the same
 `test/e2e/jellyfin/config`, and `docker compose down -v` does not clear a bind mount. Wipe it (and re-unpack
