@@ -56,8 +56,15 @@ jobs:
       # and build. Skipping a real change is worse than an occasional duplicate beta.
       run: |
         set -uo pipefail
-        last_tag=$(gh api "repos/${REPO}/git/matching-refs/tags/5.0.0-JF12-beta." \
-          --jq 'map(.ref | sub("refs/tags/"; "")) | sort_by(split(".") | last | tonumber) | last // ""' 2>/dev/null || echo "")
+        # --paginate is load-bearing: the refs endpoint returns 30 per page in LEXICOGRAPHIC order,
+        # so once >30 JF12 beta tags exist the numerically-newest falls off page 1, the gate picks a
+        # stale tag, and an unchanged day mints a duplicate beta — every day, self-amplifying (each
+        # new tag sorts later and keeps the newest off-page). Same idiom as publish-beta.yml's gate:
+        # emit one tag per line across ALL pages, then sort numerically in the shell (a per-page jq
+        # max would be wrong — gh applies --jq per page, and the numeric max can sit on any page).
+        last_tag=$(gh api --paginate "repos/${REPO}/git/matching-refs/tags/5.0.0-JF12-beta." \
+          --jq '.[].ref | sub("refs/tags/"; "") | select(test("^5[.]0[.]0-JF12-beta[.][0-9]+$"))' 2>/dev/null \
+          | sort -t. -k4 -n | tail -1 || echo "")
         last_sha=""
         if [ -n "$last_tag" ]; then
           last_sha=$(gh api "repos/${REPO}/git/refs/tags/${last_tag}" --jq '.object.sha' 2>/dev/null || echo "")

@@ -26,6 +26,8 @@ description: |
   avatar sync, self-service account linking, and an optional SSO-only mode that disables
   password login for every account except a designated break-glass admin.
   Sign-in works in the Jellyfin Web UI and, via Quick Connect, in native clients.
+  A security-first continuation of the archived 9p4/jellyfin-plugin-sso.
+  Documentation and provider setup guides: https://github.com/iderex/jellyfin-plugin-sso
 category: "Authentication"
 # The net10 shipping closure, empirically from `dotnet publish -f net10.0` (#135). It differs from the
 # net9 list in build.yaml: on .NET 10 the SAML crypto assemblies (System.Security.Cryptography.Xml /
