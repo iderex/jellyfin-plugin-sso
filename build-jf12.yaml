@@ -1,4 +1,4 @@
-name: "SSO Authentication"
+name: "Community SSO for Jellyfin"
 # Same plugin GUID as the JF10.11 build (build.yaml) — one plugin, so a JF12 server updates it in
 # place. The targetAbi below gates it to the 12.0 line, so a 10.11 server never offers this build and
 # vice versa (the two generations live in separate manifest branches, manifest-jf12-* vs manifest-*).
@@ -12,11 +12,19 @@ version: "5.0.0"
 targetAbi: "12.0.0.0"
 framework: "net10.0"
 owner: "iderex"
-overview: "Authenticate users against an SSO provider."
+# overview/description MUST stay word-identical with build.yaml's. Both beta legs regenerate the
+# SHARED manifest-beta branch and the manifest holds ONE plugin object taken from the publishing
+# leg's metadata — if the prose diverges, the catalogue entry flips between the two texts on
+# alternating nightly publishes and every regeneration commits a churn diff.
+overview: "Sign in to Jellyfin through OpenID Connect or SAML 2.0 identity providers."
 description: |
-  This plugin allows users to sign in through an SSO provider (such as Google, Facebook, or your own provider). This enables one-click signin.
-  SSO sign-in works in the Jellyfin Web UI and in clients that support Quick Connect.
-  Review documentation at https://github.com/iderex/jellyfin-plugin-sso
+  Single sign-on for Jellyfin via OpenID Connect and SAML 2.0 — works with self-hosted and
+  managed identity providers such as Authelia, Authentik, Keycloak, Pocket ID and Kanidm,
+  with multiple providers side by side.
+  Role-based access from provider claims (login, administrator, library folders, Live TV),
+  avatar sync, self-service account linking, and an optional SSO-only mode that disables
+  password login for every account except a designated break-glass admin.
+  Sign-in works in the Jellyfin Web UI and, via Quick Connect, in native clients.
 category: "Authentication"
 # The net10 shipping closure, empirically from `dotnet publish -f net10.0` (#135). It differs from the
 # net9 list in build.yaml: on .NET 10 the SAML crypto assemblies (System.Security.Cryptography.Xml /

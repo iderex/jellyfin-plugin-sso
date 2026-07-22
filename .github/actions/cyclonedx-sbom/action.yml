@@ -1,0 +1,51 @@
+name: Generate CycloneDX SBOM
+description: >-
+  Emit a CycloneDX JSON SBOM for the SSO-Auth plugin from the locked restore
+  graph the caller has already materialised, so a release can carry the
+  dependency inventory CRA Annex I / OSPS-QA-02.02 expect. The single generator
+  for every publish leg (DRY): each leg calls this action, none re-implements it.
+  The SBOM covers the plugin's FULL multi-target dependency closure (both the
+  net9.0 / Jellyfin 10.11 and net10.0 / Jellyfin 12.0 lines) as pinned in the
+  committed packages.lock.json — a conservative superset for any single leg's
+  shipped ABI, never an under-report. Which target framework a given release
+  ships is identified by its tag and zip.
+inputs:
+  output-dir:
+    description: >-
+      Existing directory the SBOM JSON is written into (e.g. the publish leg's
+      `_dist` staging dir, or a fresh `sbom` dir in the reusable build).
+    required: true
+outputs:
+  sbom-path:
+    description: Path to the generated CycloneDX JSON SBOM.
+    value: ${{ steps.generate.outputs.sbom-path }}
+runs:
+  using: composite
+  steps:
+    - name: Generate CycloneDX SBOM
+      id: generate
+      shell: bash
+      # CycloneDX is a NuGet global tool, so it is pinned by VERSION — the correct
+      # pin mechanism for a NuGet package, and stricter than adopting a single-
+      # release third-party wrapper action into the SHA-pin trust set. It reads the
+      # caller's already-restored graph (`--disable-package-restore`): the real
+      # restore ran under RestoreLockedMode against the committed packages.lock.json,
+      # so the SBOM documents exactly the locked closure and no drifted or poisoned
+      # package can be pulled in merely to describe the bill of materials. The
+      # output path is passed through an env var, not interpolated into the script,
+      # so a caller value can never be evaluated as shell.
+      env:
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$OUTPUT_DIR"
+        dotnet tool install --global CycloneDX --version 6.2.0
+        export PATH="$HOME/.dotnet/tools:$PATH"
+        dotnet-CycloneDX SSO-Auth/SSO-Auth.csproj \
+          --output-format Json \
+          --output "$OUTPUT_DIR" \
+          --filename sbom.cyclonedx.json \
+          --set-nuget-purl \
+          --exclude-test-projects \
+          --disable-package-restore
+        echo "sbom-path=$OUTPUT_DIR/sbom.cyclonedx.json" >> "$GITHUB_OUTPUT"
