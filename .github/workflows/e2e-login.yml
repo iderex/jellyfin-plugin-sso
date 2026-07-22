@@ -73,10 +73,11 @@ jobs:
           dex='{"name":"Dex (OIDC)","compose":"test/e2e/dex/docker-compose.yml"}'
           zitadel='{"name":"Zitadel (OIDC)","compose":"test/e2e/zitadel/docker-compose.yml"}'
           pocketid='{"name":"Pocket ID (OIDC)","compose":"test/e2e/pocket-id/docker-compose.yml"}'
-          # The full provider matrix (release/beta only). Append one object per shipped harness as each
-          # test/e2e/<provider>/ lands: #923 kanidm.
+          kanidm='{"name":"Kanidm (OIDC)","compose":"test/e2e/kanidm/docker-compose.yml"}'
+          # The full provider matrix (release/beta only). Every self-hostable provider in the README table
+          # now has a harness here; adding one is a further object plus its test/e2e/<provider>/ directory.
           if [ "$IS_RELEASE" = "true" ] || [ "$DISPATCH_ALL" = "true" ]; then
-            include="[$keycloak,$authelia,$authentik,$dex,$zitadel,$pocketid]"
+            include="[$keycloak,$authelia,$authentik,$dex,$zitadel,$pocketid,$kanidm]"
           else
             include="[$keycloak]"
           fi
@@ -137,6 +138,18 @@ jobs:
             -keyout test/e2e/authelia/tls.key -out test/e2e/authelia/tls.crt \
             -days 3650 -subj "/CN=login.example.com" \
             -addext "subjectAltName=DNS:login.example.com"
+
+      - name: Generate the Kanidm test TLS cert
+        # Kanidm is TLS-only and its image has no shell to sequence its own cert-generate, so the harness
+        # gets a self-signed test cert the same way Authelia does (never committed — no private key in the
+        # repo). The CN/SAN must match the service-DNS alias and server.toml's domain/origin.
+        if: contains(matrix.compose, 'kanidm')
+        run: |
+          set -euo pipefail
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout test/e2e/kanidm/key.pem -out test/e2e/kanidm/chain.pem \
+            -days 3650 -subj "/CN=idm.example.com" \
+            -addext "subjectAltName=DNS:idm.example.com"
 
       - name: Run the E2E login harness
         env:

@@ -31,6 +31,11 @@ IDP_KIND="${IDP_KIND:-keycloak}"
 RUN_SAML="${RUN_SAML:-true}"
 OID_ENDPOINT="${OID_ENDPOINT:-$KEYCLOAK/realms/$REALM}"
 DISCOVERY_URL="${DISCOVERY_URL:-$KEYCLOAK/realms/$REALM/.well-known/openid-configuration}"
+# What the readiness wait probes. Defaults to the discovery document, which every provider that declares its
+# client statically already serves. Kanidm cannot: its discovery document only comes into existence once the
+# OAuth2 client is seeded, and seeding needs the server up — so it points this at a plain liveness endpoint
+# and the discovery document is still asserted afterwards by the signing check.
+READINESS_URL="${READINESS_URL:-$DISCOVERY_URL}"
 ROLE_CLAIM="${ROLE_CLAIM:-realm_access.roles}"
 OID_SCOPES_JSON="${OID_SCOPES_JSON:-[\"email\"]}"
 # Keycloak carries the roles in the id_token, so the profile fetch is skipped; a provider that only exposes
@@ -68,6 +73,10 @@ ROLE_CLAIM_IS_OBJECT_MAP="${ROLE_CLAIM_IS_OBJECT_MAP:-false}"
 # SAME variables seed the account and drive the login, so the two can never disagree.
 PASSWORD_ALICE="${PASSWORD_ALICE:-alice}"
 PASSWORD_BOB="${PASSWORD_BOB:-bob}"
+# Kanidm seeding: its origin, and the admin unix socket that is the only non-interactive way into a fresh
+# instance. The socket must be on a named volume — over a bind mount every connect is refused.
+KANIDM_URL="${KANIDM_URL:-https://idm.example.com:8443}"
+KANIDM_SOCKET="${KANIDM_SOCKET:-/kanidm-data/kanidmd.sock}"
 # Pocket ID seeding: its origin, and the SQLite file the harness writes the bootstrap rows into.
 POCKETID_URL="${POCKETID_URL:-http://pocketid:1411}"
 POCKETID_DB="${POCKETID_DB:-/pid-data/pocket-id.db}"
@@ -119,7 +128,7 @@ wait_for() {
 # --------------------------------------------------------------------------------------------------
 # Phase 0 — readiness
 # --------------------------------------------------------------------------------------------------
-wait_for "OIDC discovery" "$DISCOVERY_URL"
+wait_for "identity provider" "$READINESS_URL"
 wait_for "Jellyfin" "$JELLYFIN/System/Info/Public"
 
 # --------------------------------------------------------------------------------------------------
@@ -156,6 +165,116 @@ pocket_id_session() {
   pid_ck="$(grep -i '^set-cookie' /tmp/pid.h | sed -e 's/^[Ss]et-[Cc]ookie: //' -e 's/;.*//' | paste -sd';' -)"
   [ -n "$pid_ck" ] || return 1
   printf '%s' "$pid_ck"
+}
+
+# Runs Kanidm's auth step machine and prints the resulting bearer token. Every step after the first carries
+# the session id in a HEADER, not the body.
+kanidm_auth() {
+  # kanidm_auth <username> <password>
+  curl -sS -D /tmp/kan.h -o /dev/null -X POST "$KANIDM_URL/v1/auth" -H 'Content-Type: application/json' \
+    -d "$(jq -nc --arg u "$1" '{step:{init2:{username:$u,issue:"token"}}}')" 2>/dev/null || return 1
+  kan_sid="$(grep -i '^x-kanidm-auth-session-id:' /tmp/kan.h | sed -e 's/^[^:]*: //' | tr -d '\r\n')"
+  [ -n "$kan_sid" ] || return 1
+  curl -sS -o /dev/null -X POST "$KANIDM_URL/v1/auth" -H 'Content-Type: application/json' \
+    -H "X-KANIDM-AUTH-SESSION-ID: $kan_sid" -d '{"step":{"begin":"password"}}' 2>/dev/null || return 1
+  kan_out="$(curl -sS -X POST "$KANIDM_URL/v1/auth" -H 'Content-Type: application/json' \
+    -H "X-KANIDM-AUTH-SESSION-ID: $kan_sid" -d "$(jq -nc --arg p "$2" '{step:{cred:{password:$p}}}')" 2>/dev/null || true)"
+  kan_tok="$(printf '%s' "$kan_out" | jq -r '.state.success // empty' 2>/dev/null || true)"
+  [ -n "$kan_tok" ] || return 1
+  printf '%s' "$kan_tok"
+}
+
+seed_kanidm() {
+  log "== Seeding Kanidm (admin recovery, groups, users, OAuth2 client) =="
+  apk add --no-cache socat >/dev/null 2>&1 || die "kanidm: could not install socat"
+
+  # A fresh Kanidm has no default admin password, no provisioning file, and no shell in its image to
+  # sequence `recover-account` before the server. Its ADMIN UNIX SOCKET is the way in: it speaks one-line
+  # JSON and hands out a recovery password. It only works over a named volume, which is why the compose
+  # gives /data one (see that file's header).
+  kan_wait=0
+  while [ "$kan_wait" -lt 45 ]; do
+    [ -S "$KANIDM_SOCKET" ] && break
+    kan_wait=$((kan_wait + 1))
+    sleep 2
+  done
+  [ "$kan_wait" -lt 45 ] || die "kanidm: the admin socket never appeared at $KANIDM_SOCKET"
+
+  kan_admin_pw="$(printf '%s\n' '{"RecoverAccount":{"name":"idm_admin"}}' \
+    | socat -t10 - "UNIX-CONNECT:$KANIDM_SOCKET" 2>/dev/null | jq -r '.RecoverAccount.password // empty' 2>/dev/null || true)"
+  [ -n "$kan_admin_pw" ] || die "kanidm: the admin socket returned no recovery password"
+
+  kan_admin="$(kanidm_auth idm_admin "$kan_admin_pw")" || die "kanidm: could not authenticate as idm_admin after recovery"
+
+  # kapi <method> <path> <json> — one admin call, returning a status and leaving the body in /tmp/kan.out,
+  # so each call site can be `|| die` with its own reason.
+  kapi() {
+    kan_code="$(curl -sS -o /tmp/kan.out -w '%{http_code}' -X "$1" "$KANIDM_URL$2" \
+      -H "Authorization: Bearer $kan_admin" -H 'Content-Type: application/json' -d "$3" 2>/dev/null || true)"
+    case "$kan_code" in
+      2*) return 0 ;;
+      *) log "kanidm: $1 $2 returned HTTP ${kan_code:-000}: $(head -c 300 /tmp/kan.out 2>/dev/null)"; return 1 ;;
+    esac
+  }
+
+  # Kanidm's default account policy requires MFA, so a password-only credential cannot be committed
+  # (can_commit=false, warnings=["MfaRequired"]). Relaxing it is a deliberate TEST-RIG-ONLY change; a real
+  # deployment should leave it alone.
+  kapi PUT /v1/group/idm_all_persons/_attr/credential_type_minimum '["any"]' \
+    || die "kanidm: could not relax the MFA account policy — password credentials cannot be committed without it"
+
+  # TWO groups, and the split matters. Kanidm's scope map is what grants access to the client at all, so
+  # mapping it onto the role group would make Kanidm itself refuse bob with a 403 and the PLUGIN's role gate
+  # would never be reached — the negative test would prove nothing. jellyfin-users grants both users access
+  # to the client; jellyfin-access is the role the plugin gates on and only alice holds it.
+  kapi POST /v1/group '{"attrs":{"name":["jellyfin-access"]}}' || die "kanidm: the jellyfin-access group create failed"
+  kapi POST /v1/group '{"attrs":{"name":["jellyfin-users"]}}' || die "kanidm: the jellyfin-users group create failed"
+
+  # The DISPLAY NAME is deliberately UNLIKE the username. Kanidm's `name` claim is the OIDC profile claim
+  # and carries the display name, not the account name — so seeding the two equal would make the harness
+  # unable to tell them apart, and it would pass just as happily with Jellyfin accounts named after a
+  # person's full name. With them distinct, the `Name='alice'` assertion is what proves the plugin took the
+  # username and not the display name.
+  for kan_person in alice bob; do
+    kapi POST /v1/person "$(jq -nc --arg n "$kan_person" --arg d "$kan_person Example" '{attrs:{name:[$n],displayname:[$d]}}')" \
+      || die "kanidm: the $kan_person create failed"
+  done
+  kapi POST /v1/group/jellyfin-users/_attr/member '["alice","bob"]' || die "kanidm: adding the users to jellyfin-users failed"
+  kapi POST /v1/group/jellyfin-access/_attr/member '["alice"]' \
+    || die "kanidm: granting alice the role failed — she would then be refused for the same reason as bob, making the role gate's positive and negative cases indistinguishable"
+
+  kapi POST /v1/oauth2/_basic "$(jq -nc --arg redir "$JELLYFIN/sso/OID/redirect/$PROVIDER" --arg land "$JELLYFIN" \
+    '{attrs:{name:["jellyfin"],displayname:["Jellyfin"],oauth2_rs_origin:[$redir],oauth2_rs_origin_landing:[$land]}}')" \
+    || die "kanidm: the OAuth2 client create failed"
+  kapi POST /v1/oauth2/jellyfin/_scopemap/jellyfin-users '["openid","profile","email","groups"]' \
+    || die "kanidm: the OAuth2 scope map failed — without it no user can authorise at all"
+  # Kanidm's preferred_username is the SPN (alice@idm.example.com) unless the resource server opts into the
+  # short form. That opt-in is Kanidm's own supported mechanism for it, and it is what makes
+  # preferred_username — the plugin's default username claim — the bare account name.
+  kapi POST /v1/oauth2/jellyfin/_attr/oauth2_prefer_short_username '["true"]' \
+    || die "kanidm: enabling prefer_short_username failed — the Jellyfin account would be named after the SPN"
+
+  CLIENT_ID=jellyfin
+  kapi GET /v1/oauth2/jellyfin/_basic_secret '' || die "kanidm: reading the client secret failed"
+  CLIENT_SECRET="$(jq -r '. // empty' /tmp/kan.out 2>/dev/null || true)"
+  [ -n "$CLIENT_SECRET" ] || die "kanidm: the client secret is empty"
+
+  # Passwords go through a credential-update SESSION. The update body is a TUPLE with the request FIRST and
+  # lowercase variant names; a token-first tuple fails with "unknown variant `token`".
+  kan_setpw() {
+    kapi GET "/v1/person/$1/_credential/_update" '' || die "kanidm: opening $1's credential session failed"
+    kan_cu="$(jq -c '.[0]' /tmp/kan.out 2>/dev/null || true)"
+    [ -n "$kan_cu" ] || die "kanidm: $1's credential session returned no token"
+    kapi POST /v1/credential/_update "$(jq -nc --arg p "$2" --argjson cu "$kan_cu" '[{password:$p},$cu]')" \
+      || die "kanidm: setting $1's password failed"
+    [ "$(jq -r '.can_commit' /tmp/kan.out 2>/dev/null || echo false)" = "true" ] \
+      || die "kanidm: $1's credential is not committable: $(jq -c '.warnings' /tmp/kan.out 2>/dev/null)"
+    kapi POST /v1/credential/_commit "$kan_cu" || die "kanidm: committing $1's password failed"
+  }
+  kan_setpw alice "$PASSWORD_ALICE"
+  kan_setpw bob "$PASSWORD_BOB"
+
+  log "Kanidm seeded (client_id=$CLIENT_ID)"
 }
 
 seed_pocket_id() {
@@ -218,8 +337,12 @@ SQL
 }
 
 idp_seed() {
-  [ "$IDP_KIND" = "zitadel" ] || [ "$IDP_KIND" = "pocket-id" ] || return 0
-  [ "$IDP_KIND" = "pocket-id" ] && { seed_pocket_id; return 0; }
+  case "$IDP_KIND" in
+    pocket-id) seed_pocket_id; return 0 ;;
+    kanidm)    seed_kanidm; return 0 ;;
+    zitadel)   : ;;
+    *)         return 0 ;;
+  esac
 
   log "== Seeding Zitadel (project, OIDC app, role, users) =="
   [ -s "$ZITADEL_PAT_PATH" ] || die "zitadel: no personal access token at $ZITADEL_PAT_PATH (the instance never finished its setup migration)"
@@ -539,10 +662,76 @@ authentik_run_flow() {
 # it writes the /start headers to start_hdr. Dispatches on IDP_KIND — Keycloak renders a server-side HTML
 # login form; Authelia is a JSON-API login portal. Returns non-zero on a transport break. Diagnostics to
 # stderr so they are not captured by the caller's $(...).
+# Reads one query parameter out of the authorize URL the PLUGIN issued. The `[?&]` anchor and the literal
+# `=` are what keep a name from matching inside a longer one (code_challenge vs code_challenge_method), in
+# either order. Used by the providers whose authorize endpoint is a single-page app rather than something a
+# browser role can simply follow, so the request has to be re-issued to their API — from the plugin's own
+# parameters, never hand-built ones.
+auth_url_param() { printf '%s' "$auth_url" | sed -n "s/.*[?&]$1=\([^&]*\).*/\1/p"; }
+
 idp_oidc_login() {
   jar="$1"; start_hdr="$2"; user="$3"; pass="$4"
   auth_url="$(oid_start "$jar" "$start_hdr")" || return 1
   case "$IDP_KIND" in
+    kanidm)
+      # Kanidm's authorization endpoint is its consent SPA, so the driver replays the request to the API the
+      # SPA uses — the same shape as the Pocket ID arm, and for the same reason.
+      kan_token="$(kanidm_auth "$user" "$pass")" || { printf 'idp_oidc_login[kanidm]: %s could not authenticate\n' "$user" >&2; return 1; }
+
+      kan_state="$(auth_url_param state)"
+      kan_scope="$(auth_url_param scope | sed 's/%20/ /g')"
+      kan_challenge="$(auth_url_param code_challenge)"
+      kan_method="$(auth_url_param code_challenge_method)"
+      kan_client="$(auth_url_param client_id)"
+      kan_redirect="$(auth_url_param redirect_uri)"
+      for kan_have in "$kan_state" "$kan_scope" "$kan_challenge" "$kan_method" "$kan_client" "$kan_redirect"; do
+        [ -n "$kan_have" ] || { printf 'idp_oidc_login[kanidm]: the plugin authorize URL is missing a parameter this driver needs: %s\n' "$auth_url" >&2; return 1; }
+      done
+      # Assert the plugin's own redirect_uri, then send it: otherwise both sides of the redirect-URI
+      # equality check would be harness-supplied and a challenge-time regression would pass unnoticed.
+      kan_expect="$(jq -rn --arg s "$JELLYFIN/sso/OID/redirect/$PROVIDER" '$s|@uri')"
+      if [ "$kan_redirect" != "$kan_expect" ]; then
+        printf 'idp_oidc_login[kanidm]: the plugin issued redirect_uri=%s, not %s — a real browser login would be refused as an unregistered origin\n' \
+          "$kan_redirect" "$kan_expect" >&2
+        return 1
+      fi
+
+      kan_body="$(jq -nc --arg cid "$kan_client" --arg scope "$kan_scope" --arg redir "$JELLYFIN/sso/OID/redirect/$PROVIDER" \
+        --arg state "$kan_state" --arg cc "$kan_challenge" --arg ccm "$kan_method" \
+        '{client_id:$cid,response_type:"code",scope:$scope,redirect_uri:$redir,state:$state,code_challenge:$cc,code_challenge_method:$ccm}')"
+      # Capture the STATUS, not just the body: the failure this design most needs to name is Kanidm itself
+      # refusing a user (403, empty body) because the scope map ended up on the role group — without the
+      # status that reads exactly like a wrong password. `-f` is deliberately not used, since a 4xx body is
+      # the diagnostic.
+      kan_status="$(curl -sS -D /tmp/kan.ah -o /tmp/kan.ab -w '%{http_code}' -H "Authorization: Bearer $kan_token" \
+        -H 'Content-Type: application/json' -X POST "$KANIDM_URL/oauth2/authorise" -d "$kan_body" 2>/dev/null || true)"
+      case "${kan_status:-000}" in
+        2*) : ;;
+        403) printf 'idp_oidc_login[kanidm]: Kanidm refused %s at the authorise step (HTTP 403) — the OAuth2 scope map does not cover this user, so the PLUGIN never sees the login\n' "$user" >&2; return 1 ;;
+        *)   printf 'idp_oidc_login[kanidm]: authorise returned HTTP %s for %s: %s\n' "${kan_status:-000}" "$user" "$(head -c 200 /tmp/kan.ab)" >&2; return 1 ;;
+      esac
+
+      # First login for a user+client asks for consent; afterwards the same call answers "Permitted"
+      # outright. Both end with the callback in a Location header.
+      kan_consent="$(jq -r '.ConsentRequested.consent_token // empty' /tmp/kan.ab 2>/dev/null || true)"
+      if [ -n "$kan_consent" ]; then
+        # The permit body is a BARE JSON STRING, not an object — an object is a 422.
+        kan_status="$(curl -sS -D /tmp/kan.ah -o /tmp/kan.ab -w '%{http_code}' -H "Authorization: Bearer $kan_token" \
+          -H 'Content-Type: application/json' -X POST "$KANIDM_URL/oauth2/authorise/permit" -d "\"$kan_consent\"" 2>/dev/null || true)"
+        case "${kan_status:-000}" in
+          2*) : ;;
+          *) printf 'idp_oidc_login[kanidm]: the consent permit returned HTTP %s: %s\n' "${kan_status:-000}" "$(head -c 200 /tmp/kan.ab)" >&2; return 1 ;;
+        esac
+      fi
+
+      kan_cb="$(grep -i '^location:' /tmp/kan.ah | sed -e 's/^[Ll]ocation: //' | tr -d '\r\n')"
+      if [ -z "$kan_cb" ]; then
+        printf 'idp_oidc_login[kanidm]: no callback location for %s; authorise said: %s\n' "$user" "$(head -c 200 /tmp/kan.ab)" >&2
+        return 1
+      fi
+      printf '%s' "$kan_cb"
+      ;;
+
     keycloak | dex)
       # Both render a server-side HTML login form, so they share this path; they differ only in the form's
       # user field name (LOGIN_USER_FIELD) and in whether the action is absolute (Keycloak) or site-relative
@@ -588,19 +777,18 @@ idp_oidc_login() {
       # page posts the authorize request to the API and gets the code back as JSON, so the driver does the
       # same, taking every parameter from the URL the PLUGIN issued (never a hand-built one, or the test
       # would stop exercising what the plugin actually sends).
-      pid_q() { printf '%s' "$auth_url" | sed -n "s/.*[?&]$1=\([^&]*\).*/\1/p"; }
-      pid_state="$(pid_q state)"
-      pid_scope="$(pid_q scope | sed 's/%20/ /g')"
-      pid_challenge="$(pid_q code_challenge)"
-      pid_method="$(pid_q code_challenge_method)"
-      pid_client="$(pid_q client_id)"
+      pid_state="$(auth_url_param state)"
+      pid_scope="$(auth_url_param scope | sed 's/%20/ /g')"
+      pid_challenge="$(auth_url_param code_challenge)"
+      pid_method="$(auth_url_param code_challenge_method)"
+      pid_client="$(auth_url_param client_id)"
       # redirect_uri MUST come from the plugin too, and be the value posted to the provider. Hand-building
       # it would leave BOTH sides of the redirect-URI equality check harness-supplied — the plugin derives
       # its token-exchange redirect_uri from the callback path it is handed — so a regression in the
       # CHALLENGE-time URI (#98's wrong `r`/`redirect` segment, a wrong canonical base) would sail through
       # green here while every other harness reds. Posting the plugin's own value makes Pocket ID's
       # registered-callback check the detector, and the assertion below names a mismatch outright.
-      pid_redirect="$(pid_q redirect_uri)"
+      pid_redirect="$(auth_url_param redirect_uri)"
       for pid_have in "$pid_state" "$pid_scope" "$pid_challenge" "$pid_method" "$pid_client" "$pid_redirect"; do
         [ -n "$pid_have" ] || { printf 'idp_oidc_login[pocket-id]: the plugin authorize URL is missing a parameter this driver needs: %s\n' "$auth_url" >&2; return 1; }
       done
