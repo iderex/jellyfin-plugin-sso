@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- VSTest twin of SSO-Auth.Tests, exclusively for the Stryker mutation run (#899).
+
+       The real test project runs in the .NET 10 SDK's Microsoft.Testing.Platform v2 mode
+       (xunit.v3.mtp-v2), which Stryker cannot drive: its runner speaks VSTest, and upstream
+       MTP support (stryker-net#3094) targets MTP v1 first. This project compiles the SAME
+       test sources (Compile-Include glob below, so new test files join automatically) as a
+       classic VSTest container - xunit.v3 with Microsoft.NET.Test.Sdk + xunit.runner.visualstudio,
+       which xunit v3 explicitly supports alongside its MTP mode.
+
+       Deliberately NOT part of the solution build or any CI job except stryker-mutation.yml:
+       the MTP project remains the one gate for test correctness; this twin exists so mutants
+       can be exercised at all. net9.0 only - Stryker mutates the net9.0 target
+       (stryker-config.json target-framework) and one TFM keeps the twin cheap.
+       Delete this project when Stryker ships MTP v2 support. -->
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <RollForward>Major</RollForward>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- The twin only needs to COMPILE the shared sources; the analyzer gate runs on the
+         real test project. Keeping analyzers off here halves the mutation build time. -->
+    <RunAnalyzers>false</RunAnalyzers>
+    <RootNamespace>Jellyfin.Plugin.SSO_Auth.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\SSO-Auth.Tests\**\*.cs" Exclude="..\SSO-Auth.Tests\bin\**;..\SSO-Auth.Tests\obj\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FsCheck" Version="3.3.3" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="NSubstitute" Version="6.0.0" />
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SSO-Auth\SSO-Auth.csproj" />
+  </ItemGroup>
+
+</Project>
