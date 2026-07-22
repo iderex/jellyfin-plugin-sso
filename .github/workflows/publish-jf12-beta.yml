@@ -207,7 +207,12 @@ jobs:
       # so every version lands in the manifest with its correct targetAbi, and a Jellyfin server installs
       # only the build matching its generation. publish-beta.yml (on main) regenerates the same branch, so
       # whichever generation publishes last leaves manifest-beta complete for both.
-      uses: Kevinjil/jellyfin-plugin-repo-action@296850372cd569cbcc040e834222a5afed861485 # v0.4.3
+      uses: ./.github/actions/generate-manifest
+      with:
+        repository: ${{ github.repository }}
+        manifest-branch: manifest-beta
+        include-prereleases: "true"
+        github-token: ${{ github.token }}
       with:
         ignorePrereleases: false
         githubToken: ${{ secrets.GITHUB_TOKEN }}

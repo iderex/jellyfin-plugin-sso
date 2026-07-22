@@ -1,0 +1,205 @@
+name: Generate the Jellyfin plugin manifest
+description: >-
+  Build and commit the Jellyfin plugin repository manifest from this
+  repository's releases.
+
+  This replaces Kevinjil/jellyfin-plugin-repo-action, which produced two
+  user-facing outages in a week and could not be configured out of either:
+
+  - It selected a release's checksum BY NAME, keeping the LAST asset ending in
+    `.md5` with no pairing against the zip. Renaming the plugin moved its md5
+    ahead of `sbom.cyclonedx.md5` alphabetically, so the manifest published the
+    SBOM's checksum and every install failed verification (#942). Here the
+    checksum is taken from the sidecar that BELONGS to the selected zip, and a
+    release whose pair cannot be resolved fails the run instead of guessing.
+  - It listed releases UNPAGINATED, so only the first 30 were ever considered.
+    With one manifest branch shared by both Jellyfin generations and the JF10.11
+    line publishing far more often, the JF12 entries were being pushed off the
+    end — after which that generation silently vanishes from the manifest and
+    every Jellyfin 12.0 user's repository goes empty (#943). Here the release
+    list is paginated, and the manifest is capped PER targetAbi rather than
+    globally, so no generation can be squeezed out by another's cadence however
+    long the release history grows.
+
+  The output is byte-compatible with what the previous action produced: the same
+  plugin and version fields, keys sorted, two-space indent, versions in
+  descending version order.
+inputs:
+  repository:
+    description: owner/repo whose releases the manifest is built from.
+    required: true
+  manifest-branch:
+    description: Branch the manifest is committed to (e.g. manifest-beta).
+    required: true
+  manifest-file:
+    description: Path of the manifest within that branch.
+    required: false
+    default: manifest.json
+  include-prereleases:
+    description: >-
+      "true" for the beta channel (prereleases are the point), "false" for
+      stable.
+    required: true
+  max-versions-per-abi:
+    description: >-
+      How many versions to keep for EACH targetAbi. Per-ABI rather than an
+      overall limit is the structural fix for #943: a generation that publishes
+      rarely keeps its entries no matter how often the other one publishes.
+    required: false
+    default: "15"
+  github-token:
+    description: Token used to read releases and commit the manifest.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Generate and commit the manifest
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ inputs.repository }}
+        BRANCH: ${{ inputs.manifest-branch }}
+        MANIFEST_FILE: ${{ inputs.manifest-file }}
+        INCLUDE_PRERELEASES: ${{ inputs.include-prereleases }}
+        MAX_PER_ABI: ${{ inputs.max-versions-per-abi }}
+      run: |-
+        set -euo pipefail
+        work="$(mktemp -d)"
+
+        # Plugin-level metadata (guid, name, description, …) is taken from the NEWEST release
+        # that ships JPRM's metadata JSON — filled in by the release loop below, which walks
+        # releases newest-first. These are properties of the plugin rather than of a release,
+        # so any recent one carries the same values.
+        : > "$work/plugin.json"
+
+        # --paginate is the whole point: without it only the first 30 releases are seen.
+        gh api --paginate "repos/${REPO}/releases" > "$work/releases.json"
+        total="$(jq -s 'add | length' "$work/releases.json")"
+        echo "releases fetched: $total"
+
+        # Each release's targetAbi and version come from ITS OWN build.yaml — shipped as a
+        # release asset where the leg provides one (the JF12 legs must, or their builds would
+        # be labelled with the JF10.11 metadata), otherwise read from the release's tag.
+        : > "$work/versions.jsonl"
+        while IFS=$'\t' read -r tag is_draft is_pre published_at; do
+          [ "$is_draft" = "true" ] && continue
+          if [ "$is_pre" = "true" ] && [ "$INCLUDE_PRERELEASES" != "true" ]; then continue; fi
+
+          assets="$(jq -c --arg t "$tag" -s 'add[] | select(.tag_name == $t) | .assets' "$work/releases.json")"
+
+          zip_url="$(printf '%s' "$assets" | jq -r '[.[] | select(.name | endswith(".zip"))] | last | .browser_download_url // empty')"
+          zip_name="$(printf '%s' "$assets" | jq -r '[.[] | select(.name | endswith(".zip"))] | last | .name // empty')"
+          if [ -z "$zip_url" ]; then
+            echo "::notice::release $tag ships no plugin zip; skipping it"
+            continue
+          fi
+
+          # THE #942 FIX. The checksum is the sidecar belonging to THIS zip — either
+          # <zip-without-.zip>.md5 or <zip>.md5 — never merely the last `.md5` on the
+          # release. An unresolvable pair is fatal: publishing a checksum that matches
+          # nothing breaks every install, so guessing is the one thing not to do here.
+          md5_url="$(printf '%s' "$assets" | jq -r --arg a "${zip_name%.zip}.md5" --arg b "${zip_name}.md5" \
+            'first(.[] | select(.name == $a or .name == $b)) | .browser_download_url // empty')"
+          if [ -z "$md5_url" ]; then
+            echo "::error::release $tag has $zip_name but no matching ${zip_name%.zip}.md5 or ${zip_name}.md5 — refusing to publish a guessed checksum"
+            exit 1
+          fi
+          checksum="$(curl -fsSL --retry 5 --retry-all-errors --max-time 60 "$md5_url" | head -c 32)"
+          if ! printf '%s' "$checksum" | grep -qE '^[0-9a-f]{32}$'; then
+            echo "::error::release $tag — the checksum sidecar did not start with 32 hex characters"
+            exit 1
+          fi
+
+          # Version and targetAbi describe THIS release, so they come from the metadata JPRM
+          # wrote beside its zip — plain JSON, read with jq. The runner image ships jq but NOT
+          # yq (checked against the runner-images tool list, not assumed), so nothing here
+          # parses YAML in the general case.
+          meta_url="$(printf '%s' "$assets" | jq -r --arg m "${zip_name}.meta.json" \
+            'first(.[] | select(.name == $m)) | .browser_download_url // empty')"
+          if [ -n "$meta_url" ]; then
+            curl -fsSL --retry 5 --retry-all-errors --max-time 60 "$meta_url" > "$work/release.json"
+            version="$(jq -r '.version // empty' "$work/release.json")"
+            target_abi="$(jq -r '.targetAbi // empty' "$work/release.json")"
+            [ -s "$work/plugin.json" ] || jq '.' "$work/release.json" > "$work/plugin.json"
+          else
+            # Releases published before that metadata was shipped. Only two scalars are needed
+            # and both are simple quoted values, so a line match is exact here — this is not a
+            # YAML parser and is not asked to be one.
+            build_url="$(printf '%s' "$assets" | jq -r 'first(.[] | select(.name == "build.yaml")) | .browser_download_url // empty')"
+            if [ -n "$build_url" ]; then
+              curl -fsSL --retry 5 --retry-all-errors --max-time 60 "$build_url" > "$work/release.yaml"
+            else
+              gh api "repos/${REPO}/contents/build.yaml?ref=${tag}" -H "Accept: application/vnd.github.raw" > "$work/release.yaml"
+            fi
+            version="$(sed -n 's/^version:[[:space:]]*"\([^"]*\)".*/\1/p' "$work/release.yaml" | head -1)"
+            target_abi="$(sed -n 's/^targetAbi:[[:space:]]*"\([^"]*\)".*/\1/p' "$work/release.yaml" | head -1)"
+          fi
+          if [ -z "$version" ] || [ -z "$target_abi" ]; then
+            echo "::error::release $tag has no readable version/targetAbi in its metadata"
+            exit 1
+          fi
+
+          changelog="$(jq -r --arg t "$tag" -s 'add[] | select(.tag_name == $t) | .body // ""' "$work/releases.json")"
+          jq -nc --arg changelog "$changelog" --arg checksum "$checksum" --arg sourceUrl "$zip_url" \
+                 --arg targetAbi "$target_abi" --arg timestamp "$published_at" --arg version "$version" \
+            '{changelog:$changelog, checksum:$checksum, sourceUrl:$sourceUrl, targetAbi:$targetAbi, timestamp:$timestamp, version:$version}' \
+            >> "$work/versions.jsonl"
+        done < <(jq -r -s 'add[] | [.tag_name, (.draft|tostring), (.prerelease|tostring), .published_at] | @tsv' "$work/releases.json")
+
+        # Sort descending by NUMERIC version components (the previous action used a numeric
+        # locale compare), then keep the newest MAX_PER_ABI of each targetAbi.
+        jq -s --argjson keep "$MAX_PER_ABI" '
+          map(. + {_v: (.version | split(".") | map(tonumber? // 0))})
+          | sort_by(._v) | reverse
+          | group_by(.targetAbi)
+          | map(.[0:$keep])
+          | add
+          | sort_by(._v) | reverse
+          | map(del(._v))
+        ' "$work/versions.jsonl" > "$work/kept.json"
+
+        kept_total="$(jq 'length' "$work/kept.json")"
+        if [ "$kept_total" -eq 0 ]; then
+          echo "::error::no releases produced a manifest entry"
+          exit 1
+        fi
+        echo "manifest entries per targetAbi:"
+        jq -r 'group_by(.targetAbi)[] | "  \(.[0].targetAbi): \(length) (newest \(.[0].version))"' "$work/kept.json"
+
+        if [ ! -s "$work/plugin.json" ]; then
+          echo "::error::no release carried the plugin metadata JSON, so the manifest's plugin fields cannot be filled in"
+          exit 1
+        fi
+
+        # `jq -S` sorts keys, matching the previous action's stable stringify, and the plugin
+        # object carries exactly the fields it emitted (imageUrl only when set).
+        jq -S --slurpfile versions "$work/kept.json" '
+          {
+            category: .category,
+            description: .description,
+            guid: .guid,
+            name: .name,
+            overview: .overview,
+            owner: .owner,
+            versions: $versions[0],
+          }
+          + (if .imageUrl then {imageUrl: .imageUrl} else {} end)
+          | [.]
+        ' "$work/plugin.json" > "$work/manifest.json"
+
+        # Commit only when something changed, so an unchanged regeneration does not add an
+        # empty commit to the manifest branch on every publish.
+        current_sha="$(gh api "repos/${REPO}/contents/${MANIFEST_FILE}?ref=${BRANCH}" --jq '.sha' 2>/dev/null || true)"
+        if [ -n "$current_sha" ]; then
+          gh api "repos/${REPO}/contents/${MANIFEST_FILE}?ref=${BRANCH}" -H "Accept: application/vnd.github.raw" > "$work/live.json" 2>/dev/null || true
+          if [ -f "$work/live.json" ] && cmp -s "$work/live.json" "$work/manifest.json"; then
+            echo "manifest unchanged; nothing to commit"
+            exit 0
+          fi
+        fi
+
+        payload="$(jq -nc --arg m "Regenerate Jellyfin plugin repository." --arg b "$BRANCH" \
+          --arg c "$(base64 -w0 < "$work/manifest.json")" --arg s "${current_sha:-}" \
+          '{message:$m, branch:$b, content:$c} + (if $s == "" then {} else {sha:$s} end)')"
+        printf '%s' "$payload" | gh api -X PUT "repos/${REPO}/contents/${MANIFEST_FILE}" --input - >/dev/null
+        echo "committed $kept_total versions to ${BRANCH}/${MANIFEST_FILE}"

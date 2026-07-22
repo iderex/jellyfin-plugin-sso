@@ -130,7 +130,12 @@ jobs:
       # stable releases from publish.yml (4.x, targetAbi 10.11.0.0). Each release ships its own build.yaml,
       # so every version lands in the manifest with its correct targetAbi and a Jellyfin server installs
       # only the build matching its generation.
-      uses: Kevinjil/jellyfin-plugin-repo-action@296850372cd569cbcc040e834222a5afed861485 # v0.4.3
+      uses: ./.github/actions/generate-manifest
+      with:
+        repository: ${{ github.repository }}
+        manifest-branch: manifest-release
+        include-prereleases: "false"
+        github-token: ${{ github.token }}
       with:
         ignorePrereleases: true
         githubToken: ${{ secrets.GITHUB_TOKEN }}

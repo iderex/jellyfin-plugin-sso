@@ -73,17 +73,14 @@ jobs:
         name: sbom-artifact
     - name: Prepare GitHub Release assets
       run: |-
-        # ONLY the plugin zip gets a `.md5`. The manifest generator
-        # (Kevinjil/jellyfin-plugin-repo-action) walks a release's assets and keeps the
-        # LAST one whose name ends in `.md5` — no break, and no pairing with the zip —
-        # so any second `.md5` asset sorting after the plugin's silently becomes the
-        # published checksum and every install then fails verification. The rename to
-        # `community-sso-for-jellyfin` did exactly that on the beta channel: it moved
-        # the plugin's md5 ahead of `sbom.cyclonedx.md5` alphabetically. This job's
-        # workspace holds only the plugin zip and the SBOM, so the blanket `./*` produced
-        # exactly those two `.md5` files — enough for the next stable release to have
-        # shipped the SBOM's checksum the same way. The SBOM keeps a sha256, which is the
-        # meaningful integrity value for it and cannot collide.
+        # ONLY the plugin zip gets a `.md5`. Defence in depth: the generator this repo now
+        # owns pairs a release's checksum with ITS zip by name, but the third-party one it
+        # replaced kept the LAST asset ending in `.md5` with no pairing at all — which is how
+        # renaming the plugin to `community-sso-for-jellyfin` moved its md5 ahead of
+        # `sbom.cyclonedx.md5` alphabetically and made the manifest publish the SBOM's
+        # checksum, breaking every install (#942). One `.md5` per release keeps that class
+        # unreachable however the manifest is built. The SBOM keeps a sha256, the meaningful
+        # integrity value for it.
         for file in ./*.zip; do
           md5sum ${file#./} >> ${file%.*}.md5
           sha256sum ${file#./} >> ${file%.*}.sha256
@@ -124,13 +121,12 @@ jobs:
       with:
         persist-credentials: false
     - name: Publish Plugin Manifest
-      uses: Kevinjil/jellyfin-plugin-repo-action@296850372cd569cbcc040e834222a5afed861485 # v0.4.3
+      uses: ./.github/actions/generate-manifest
       with:
-        ignorePrereleases: true
-        githubToken: ${{ secrets.GITHUB_TOKEN }}
         repository: ${{ github.repository }}
-        pagesBranch: manifest-release
-        pagesFile: manifest.json
+        manifest-branch: manifest-release
+        include-prereleases: "false"
+        github-token: ${{ github.token }}
     - name: Verify the published manifest
       # Post-publish DETECTOR for the class of "the manifest ships a checksum that matches
       # nothing" (#942) — it turns a silent, user-facing install outage into a red build.
