@@ -136,12 +136,6 @@ jobs:
         manifest-branch: manifest-release
         include-prereleases: "false"
         github-token: ${{ github.token }}
-      with:
-        ignorePrereleases: true
-        githubToken: ${{ secrets.GITHUB_TOKEN }}
-        repository: ${{ github.repository }}
-        pagesBranch: manifest-release
-        pagesFile: manifest.json
     - name: Verify the published manifest
       # Post-publish DETECTOR for the class of "the manifest ships a checksum that matches
       # nothing" (#942) — it turns a silent, user-facing install outage into a red build.
