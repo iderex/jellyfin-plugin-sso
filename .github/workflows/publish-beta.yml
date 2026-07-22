@@ -174,10 +174,10 @@ jobs:
         # unreachable however the manifest is built. The SBOM keeps a sha256, the meaningful
         # integrity value for it.
         for file in ./*.zip; do
-          md5sum ${file#./} >> ${file%.*}.md5
-          sha256sum ${file#./} >> ${file%.*}.sha256
+          md5sum ${file#./} > ${file%.*}.md5
+          sha256sum ${file#./} > ${file%.*}.sha256
         done
-        sha256sum sbom.cyclonedx.json >> sbom.cyclonedx.sha256
+        sha256sum sbom.cyclonedx.json > sbom.cyclonedx.sha256
         ls -l
         popd
     - name: Upload beta assets to a draft release

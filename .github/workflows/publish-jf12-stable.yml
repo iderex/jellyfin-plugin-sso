@@ -92,10 +92,10 @@ jobs:
         # sorting after the plugin's becomes the published checksum and every install
         # fails verification.
         for file in ./*.zip; do
-          md5sum ${file#./} >> ${file%.*}.md5
-          sha256sum ${file#./} >> ${file%.*}.sha256
+          md5sum ${file#./} > ${file%.*}.md5
+          sha256sum ${file#./} > ${file%.*}.sha256
         done
-        sha256sum sbom.cyclonedx.json >> sbom.cyclonedx.sha256
+        sha256sum sbom.cyclonedx.json > sbom.cyclonedx.sha256
         ls -l
         popd
     - name: Publish output artifacts
