@@ -209,6 +209,7 @@ jobs:
       # whichever generation publishes last leaves manifest-beta complete for both.
       uses: ./.github/actions/generate-manifest
       with:
+        plugin-metadata: _dist/*.zip.meta.json
         repository: ${{ github.repository }}
         manifest-branch: manifest-beta
         include-prereleases: "true"

@@ -132,6 +132,7 @@ jobs:
       # only the build matching its generation.
       uses: ./.github/actions/generate-manifest
       with:
+        plugin-metadata: _dist/*.zip.meta.json
         repository: ${{ github.repository }}
         manifest-branch: manifest-release
         include-prereleases: "false"

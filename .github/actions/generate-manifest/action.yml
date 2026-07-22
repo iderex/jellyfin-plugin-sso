@@ -25,6 +25,22 @@ description: >-
   plugin and version fields, keys sorted, two-space indent, versions in
   descending version order.
 inputs:
+  plugin-metadata:
+    description: >-
+      Path to the JSON metadata JPRM wrote beside the zip THIS run built, which
+      supplies the plugin-level fields (guid, name, description, …).
+
+      It is an input rather than something discovered from the releases because
+      discovery has no deterministic answer: the releases API returns neither
+      id- nor date-descending order, and the two Jellyfin generations carry
+      DIFFERENT plugin metadata — `name` is "Community SSO for Jellyfin" on the
+      10.11 line and "SSO Authentication" on the 12.0 line. Both write the same
+      shared manifest branch, which holds exactly one plugin object, so picking
+      "whichever release the API listed first" made the catalogue name and
+      description flip-flop between publishes. Taking it from the publishing leg
+      is deterministic, and it is also what lets the stable channel regenerate at
+      all: no existing stable release ships this file.
+    required: true
   repository:
     description: owner/repo whose releases the manifest is built from.
     required: true
@@ -57,6 +73,7 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
+        PLUGIN_METADATA: ${{ inputs.plugin-metadata }}
         REPO: ${{ inputs.repository }}
         BRANCH: ${{ inputs.manifest-branch }}
         MANIFEST_FILE: ${{ inputs.manifest-file }}
@@ -66,11 +83,23 @@ runs:
         set -euo pipefail
         work="$(mktemp -d)"
 
-        # Plugin-level metadata (guid, name, description, …) is taken from the NEWEST release
-        # that ships JPRM's metadata JSON — filled in by the release loop below, which walks
-        # releases newest-first. These are properties of the plugin rather than of a release,
-        # so any recent one carries the same values.
-        : > "$work/plugin.json"
+        # Plugin-level metadata comes from THIS run's build. See the input's description for why
+        # discovering it from the release list has no deterministic answer.
+        # The filename carries the version, so the input is a glob. It must resolve to exactly
+        # one file: zero means the leg did not ship the metadata and the manifest would be
+        # built from nothing, more than one means it is ambiguous which build's identity the
+        # catalogue entry would take.
+        # shellcheck disable=SC2086
+        set -- $PLUGIN_METADATA
+        if [ "$#" -ne 1 ] || [ ! -s "$1" ]; then
+          echo "::error::plugin-metadata '$PLUGIN_METADATA' resolved to $# path(s); expected exactly one readable file"
+          exit 1
+        fi
+        jq -e '.guid and .name and .category and .owner' "$1" >/dev/null || {
+          echo "::error::$1 does not carry the plugin fields the manifest requires"
+          exit 1
+        }
+        cp "$1" "$work/plugin.json"
 
         # --paginate is the whole point: without it only the first 30 releases are seen.
         gh api --paginate "repos/${REPO}/releases" > "$work/releases.json"
@@ -85,10 +114,24 @@ runs:
           [ "$is_draft" = "true" ] && continue
           if [ "$is_pre" = "true" ] && [ "$INCLUDE_PRERELEASES" != "true" ]; then continue; fi
 
-          assets="$(jq -c --arg t "$tag" -s 'add[] | select(.tag_name == $t) | .assets' "$work/releases.json")"
+          # `first(…)`: a draft can carry the same tag_name as a published release (the draft
+          # flow the beta leg used to run does exactly that), and without the draft filter plus
+          # this cutoff the lookup emits TWO JSON documents — every jq below then produces two
+          # values and the shell comparisons downstream read garbage.
+          assets="$(jq -c --arg t "$tag" -s 'first(add[] | select((.draft | not) and .tag_name == $t) | .assets)' "$work/releases.json")"
 
-          zip_url="$(printf '%s' "$assets" | jq -r '[.[] | select(.name | endswith(".zip"))] | last | .browser_download_url // empty')"
-          zip_name="$(printf '%s' "$assets" | jq -r '[.[] | select(.name | endswith(".zip"))] | last | .name // empty')"
+          # Exactly one zip, or nothing. Picking positionally out of several would publish one
+          # build with the correctly-paired checksum of THAT build — so every downstream
+          # integrity check passes and users install an artifact nobody chose. That is the same
+          # "select by position, never assert cardinality" shape as #942, one level up, so it
+          # gets the same fail-closed treatment the checksum pairing already has.
+          zip_count="$(printf '%s' "$assets" | jq '[.[] | select(.name | endswith(".zip"))] | length')"
+          if [ "$zip_count" -gt 1 ]; then
+            echo "::error::release $tag carries $zip_count plugin zips; refusing to guess which one the manifest should offer"
+            exit 1
+          fi
+          zip_url="$(printf '%s' "$assets" | jq -r 'first(.[] | select(.name | endswith(".zip"))) | .browser_download_url // empty')"
+          zip_name="$(printf '%s' "$assets" | jq -r 'first(.[] | select(.name | endswith(".zip"))) | .name // empty')"
           if [ -z "$zip_url" ]; then
             echo "::notice::release $tag ships no plugin zip; skipping it"
             continue
@@ -120,7 +163,6 @@ runs:
             curl -fsSL --retry 5 --retry-all-errors --max-time 60 "$meta_url" > "$work/release.json"
             version="$(jq -r '.version // empty' "$work/release.json")"
             target_abi="$(jq -r '.targetAbi // empty' "$work/release.json")"
-            [ -s "$work/plugin.json" ] || jq '.' "$work/release.json" > "$work/plugin.json"
           else
             # Releases published before that metadata was shipped. Only two scalars are needed
             # and both are simple quoted values, so a line match is exact here — this is not a
@@ -165,11 +207,6 @@ runs:
         fi
         echo "manifest entries per targetAbi:"
         jq -r 'group_by(.targetAbi)[] | "  \(.[0].targetAbi): \(length) (newest \(.[0].version))"' "$work/kept.json"
-
-        if [ ! -s "$work/plugin.json" ]; then
-          echo "::error::no release carried the plugin metadata JSON, so the manifest's plugin fields cannot be filled in"
-          exit 1
-        fi
 
         # `jq -S` sorts keys, matching the previous action's stable stringify, and the plugin
         # object carries exactly the fields it emitted (imageUrl only when set).

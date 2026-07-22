@@ -232,6 +232,7 @@ jobs:
       # by publish.yml, so a beta build can never reach the stable channel.
       uses: ./.github/actions/generate-manifest
       with:
+        plugin-metadata: _dist/*.zip.meta.json
         repository: ${{ github.repository }}
         manifest-branch: manifest-beta
         include-prereleases: "true"
