@@ -14,9 +14,9 @@ Keycloak is the **canonical** harness and the only one that runs on a pull reque
 on the nightly schedule, and on a **default** manual dispatch (there is deliberately no `push` trigger —
 the PR run already validated it). Additional self-hostable identity providers get their own harness under
 `test/e2e/<provider>/`. **Authelia** (`test/e2e/authelia/`, OIDC), **authentik**
-(`test/e2e/authentik/`, OIDC **and** SAML), **Dex** (`test/e2e/dex/`, OIDC) and **Zitadel**
-(`test/e2e/zitadel/`, OIDC) are implemented; the rest are
-one issue each — Pocket ID, Kanidm; tracked in
+(`test/e2e/authentik/`, OIDC **and** SAML), **Dex** (`test/e2e/dex/`, OIDC), **Zitadel**
+(`test/e2e/zitadel/`, OIDC) and **Pocket ID** (`test/e2e/pocket-id/`, OIDC) are implemented; only **Kanidm**
+remains, tracked in
 [#919](https://github.com/iderex/jellyfin-plugin-sso/issues/919). The **full provider matrix runs at a
 release and a beta-release** — never on a routine merge, so the cross-provider pass is release-gate
 evidence, not a per-commit cost — **and on a manual dispatch with `providers: all`**, which is how a newly
@@ -45,6 +45,18 @@ profile, and `DISABLE_HTTPS`), so the defaults reproduce the Keycloak run unchan
 harness additionally serves TLS with a self-signed cert (Authelia 4.38 requires a secure session URL); the
 cert is appended to Jellyfin's system CA bundle at container start (never replacing it) and trusted by the
 harness via `CURL_CA_BUNDLE`, so the plugin's real https OIDC path is exercised.
+
+**Pocket ID has no password login at all** — it authenticates with passkeys only. The browser role is
+played through the provider's own **one-time-access-token** flow, the mechanism it ships for a lost passkey:
+a token is exchanged for the same session cookie a passkey login would mint. Its `/authorize` is a
+single-page app rather than an endpoint, so the driver posts the authorize request to Pocket ID's API
+exactly as that page does — taking every parameter from the URL the **plugin** issued, so the test keeps
+exercising what the plugin actually sends. The response carries the issuer, which the callback must include:
+the plugin enforces the **RFC 9207 mix-up check** and refuses an authorization response whose `iss` is
+absent or wrong. Its one cost is stated in its compose file: a fresh Pocket ID has no non-interactive way in
+at all, so the harness seeds the first admin and the one-time tokens directly into its SQLite file — the
+only place in this matrix that reaches past a provider's API into its database. A schema change there
+breaks the harness rather than the plugin: a false red, never a false green.
 
 **Zitadel is the one provider that cannot be seeded from a file.** Only its first instance, org and a
 machine account with a personal access token come from environment; the project, the OIDC application, the
@@ -126,12 +138,13 @@ docker compose -f test/e2e/docker-compose.yml down -v
 A green run prints `ALL E2E CHECKS PASSED`. In CI, container logs are dumped automatically on
 failure.
 
-**The Zitadel stack is the one harness that cannot be re-run in place.** Every other provider is seeded
-from a file (an imported realm, a reapplied blueprint, or a static config) and the driver deliberately
-reuses an already-initialised Jellyfin. Zitadel is seeded through its API against a stateful Postgres and a
-named volume holding its access token, and the seed is not idempotent — a second `up` on the same stack hits
-`ALREADY_EXISTS` on the project create and dies there. Always tear it down with `down -v` between runs. CI
-is unaffected: each matrix entry gets a fresh runner and tears the stack down with `-v`.
+**The Zitadel and Pocket ID stacks cannot be re-run in place.** Every other provider is seeded from a file
+(an imported realm, a reapplied blueprint, or a static config) and the driver deliberately reuses an
+already-initialised Jellyfin. These two are seeded imperatively against stateful storage and their seeds are
+not idempotent: a second `up` on the same stack hits `ALREADY_EXISTS` on Zitadel's project create, or a
+duplicate-primary-key error on Pocket ID's bootstrap admin, and dies there. Always tear them down with
+`down -v` between runs — that also drops the volumes holding Zitadel's access token and Pocket ID's
+database. CI is unaffected: each matrix entry gets a fresh runner and tears the stack down with `-v`.
 
 **Running more than one provider locally:** every provider's compose bind-mounts the same
 `test/e2e/jellyfin/config`, and `docker compose down -v` does not clear a bind mount. Wipe it (and re-unpack
