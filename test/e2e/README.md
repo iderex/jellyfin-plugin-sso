@@ -13,9 +13,9 @@ be run locally with one command once you have built the plugin.
 Keycloak is the **canonical** harness and the only one that runs on a pull request touching the harness,
 on the nightly schedule, and on a **default** manual dispatch (there is deliberately no `push` trigger —
 the PR run already validated it). Additional self-hostable identity providers get their own harness under
-`test/e2e/<provider>/`. **Authelia** (`test/e2e/authelia/`, OIDC) and **authentik**
-(`test/e2e/authentik/`, OIDC **and** SAML) are implemented; the rest are one issue
-each — Pocket ID, Kanidm, Zitadel, Dex; tracked in
+`test/e2e/<provider>/`. **Authelia** (`test/e2e/authelia/`, OIDC), **authentik**
+(`test/e2e/authentik/`, OIDC **and** SAML) and **Dex** (`test/e2e/dex/`, OIDC) are implemented; the rest are
+one issue each — Pocket ID, Kanidm, Zitadel; tracked in
 [#919](https://github.com/iderex/jellyfin-plugin-sso/issues/919). The **full provider matrix runs at a
 release and a beta-release** — never on a routine merge, so the cross-provider pass is release-gate
 evidence, not a per-commit cost — **and on a manual dispatch with `providers: all`**, which is how a newly
@@ -27,7 +27,10 @@ such in the README provider table.
 
 The shared driver (`harness/harness.sh`) keeps the Jellyfin setup and the assertions common and swaps only
 the provider-specific browser login (`idp_oidc_login` / `idp_saml_login`, selected by `IDP_KIND`): Keycloak
-renders a server-side HTML form, Authelia is a single JSON first-factor call, and authentik is a **stateful
+and Dex render a server-side HTML form (differing only in the form's user field name, a parameter, and in
+whether the form action is absolute or site-relative, which the driver detects), Authelia is a single JSON
+first-factor call, and
+authentik is a **stateful
 multi-stage flow-executor** that CHAINS flows (the authentication flow, then the provider's authorization
 flow) and must be driven with exactly one request per step — for SAML it ends in an `autosubmit` stage that
 carries the POST-binding fields as JSON rather than rendered HTML, which the driver renders back into the
@@ -54,9 +57,13 @@ harness via `CURL_CA_BUNDLE`, so the plugin's real https OIDC path is exercised.
   plugin reject every login with `invalid_signature`, so this is asserted before any login is driven.
 - **Role gating**: `bob` (OIDC) and `dave` (SAML), who lack the `jellyfin-access` role, are refused at
   the callback — and the refusal must be the role gate's **exact HTTP 401**, not merely "some error", so a
-  token-exchange failure or a 500 cannot masquerade as a passing role-gate test.
+  token-exchange failure or a 500 cannot masquerade as a passing role-gate test. A provider that cannot
+  express group membership at all (Dex's local password database) is configured with an **empty allow-list**
+  and the phase is skipped — driven off that one configured value, so a run can never skip a gate it did
+  configure, nor assert one it did not.
 - **Fail-closed negatives**: a replayed one-time OIDC state, and a replayed one-time SAML login-outcome
-  token, are both refused.
+  token, are both refused — and, like the role gate, with the redeem miss's **exact HTTP 400**, so a
+  connection failure, a throttle or a 500 cannot masquerade as "one-time-use holds".
 
 ## Architecture (avoiding the issuer-hostname trap)
 

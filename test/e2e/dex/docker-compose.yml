@@ -1,0 +1,77 @@
+# End-to-end SSO login harness — Dex provider (#925). Boots a real Jellyfin 10.11 server with the packaged
+# plugin installed and a real Dex OpenID Provider, driven by the SHARED harness. Dex is the lightest IdP in
+# the matrix: one container, no database, plain http, and a server-rendered HTML login form — so it reuses
+# the harness's HTML-form login path, differing only in the form's user field name (`login`, not `username`).
+#
+# SCOPE LIMIT, deliberate and documented: Dex's local password database carries NO group membership (groups
+# reach Dex only through an upstream connector), so this harness cannot exercise the plugin's role gate. It
+# therefore runs with an EMPTY LOGIN ALLOW-LIST (`OID_ROLES_JSON: "[]"`, the setting that disarms that gate;
+# the separate EnableAuthorization switch stays on here as in every harness) and the role-gate phase skipped,
+# covering the login round-trip and the one-time-use negative. The role gate is proven by the group-capable
+# providers (Keycloak, Authelia, authentik) — see test/e2e/README.md.
+#
+# Local run (build the plugin zip first — see test/e2e/README.md):
+#   docker compose -f test/e2e/dex/docker-compose.yml up \
+#     --abort-on-container-exit --exit-code-from harness
+name: sso-e2e-dex
+
+services:
+  dex:
+    image: ghcr.io/dexidp/dex:v2.41.1
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ./config.yaml:/etc/dex/config.yaml:ro
+    networks:
+      - ssonet
+
+  jellyfin:
+    # Same server the Keycloak harness pins (see ../docker-compose.yml for the version-bind rationale).
+    image: jellyfin/jellyfin:10.11.11
+    environment:
+      JELLYFIN_CACHE_DIR: /cache
+    volumes:
+      # Reuse the shared plugin drop the workflow / local build step unpacks under ../jellyfin/config.
+      - ../jellyfin/config:/config
+    networks:
+      - ssonet
+
+  harness:
+    image: alpine:3.20
+    depends_on:
+      - jellyfin
+      - dex
+    environment:
+      JELLYFIN_URL: http://jellyfin:8096
+      IDP_KIND: dex
+      PROVIDER: dex
+      OID_ENDPOINT: http://dex:5556/dex
+      DISCOVERY_URL: http://dex:5556/dex/.well-known/openid-configuration
+      OIDC_CLIENT_ID: jellyfin-oidc
+      OIDC_CLIENT_SECRET: jellyfin-oidc-secret
+      OID_SCOPES_JSON: '["openid","email","profile"]'
+      # Dex's local connector names the login field `login`; Keycloak uses `username`. Dex also renders a
+      # RELATIVE form action, which the shared HTML-form login resolves against the provider origin.
+      LOGIN_USER_FIELD: login
+      USERNAME_CLAIM: name
+      # No group claim is possible from Dex's local password DB, so the login allow-list is empty — which is
+      # what turns the role gate off — and its phase is skipped rather than asserted against a control this
+      # provider cannot express.
+      OID_ROLES_JSON: "[]"
+      DO_NOT_LOAD_PROFILE: "true"
+      DISABLE_HTTPS: "true"
+      RUN_SAML: "false"
+      JF_ADMIN_USER: e2eadmin
+      JF_ADMIN_PASS: e2e-admin-pw
+    volumes:
+      - ../harness:/harness:ro
+    command: ["sh", "/harness/harness.sh"]
+    networks:
+      - ssonet
+
+networks:
+  ssonet:
+    driver: bridge
+    ipam:
+      config:
+        # SSRF-guard-friendly public-looking range, distinct from the other harnesses.
+        - subnet: 11.0.3.0/24
