@@ -345,8 +345,13 @@ runs:
           fi
         fi
 
+        # Base64 the manifest into a file and read it with jq --rawfile: the encoded blob outgrows the
+        # OS per-argument limit (MAX_ARG_STRLEN, ~128 KB) as the version list grows, which made jq abort
+        # with "Argument list too long" (E2BIG) once the manifest crossed it (#978). A file input is not
+        # subject to that limit; base64 -w0 emits no trailing newline, so $c is exactly the encoded blob.
+        base64 -w0 < "$work/manifest.json" > "$work/manifest.b64"
         payload="$(jq -nc --arg m "Regenerate Jellyfin plugin repository." --arg b "$BRANCH" \
-          --arg c "$(base64 -w0 < "$work/manifest.json")" --arg s "${current_sha:-}" \
+          --rawfile c "$work/manifest.b64" --arg s "${current_sha:-}" \
           '{message:$m, branch:$b, content:$c} + (if $s == "" then {} else {sha:$s} end)')"
         printf '%s' "$payload" | gh api -X PUT "repos/${REPO}/contents/${MANIFEST_FILE}" --input - >/dev/null
         echo "committed $final_total versions to ${BRANCH}/${MANIFEST_FILE}"
