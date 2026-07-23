@@ -264,6 +264,127 @@ public class SSOController : ControllerBase
     }
 
     /// <summary>
+    /// Inbound OpenID Connect back-channel logout (#962, OIDC Back-Channel Logout 1.0). The identity provider
+    /// POSTs a signed <c>logout_token</c> here to propagate an IdP-side session termination into Jellyfin.
+    /// The endpoint is ANONYMOUS — the token's signature is the only authenticator — so it is fail-closed at
+    /// every step: a disabled feature, an unknown/disabled provider, and a provider without the per-provider
+    /// opt-in all collapse to the SAME uniform response WITHOUT parsing the token, and the validated (sub, sid)
+    /// revokes only the matched user's OpenID sessions for THIS provider (never cross-provider, never a SAML
+    /// capture, never another user). Rate-limited on the Logout class. Every rejection audits a fixed reason
+    /// code and discloses no subject identifier.
+    /// </summary>
+    /// <param name="provider">The OpenID provider the logout_token arrived for.</param>
+    /// <param name="logoutToken">The <c>logout_token</c> form field (model-bound; a non-form POST binds null and is rejected).</param>
+    /// <returns>200 when a validated token revoked at least one session, else a uniform 400 with no cause detail.</returns>
+    [HttpPost("OID/backchannel-logout/{provider}")]
+    public async Task<ActionResult> OidBackChannelLogout(string provider, [FromForm(Name = "logout_token")] string? logoutToken = null)
+    {
+        if (RateLimitCheck(SsoRateLimitClass.Logout) is { } throttled)
+        {
+            return throttled;
+        }
+
+        // Read the master switch, the per-provider opt-in, AND the provider config in one lock acquisition.
+        // A disabled feature, a provider without the opt-in, an unknown provider, and a disabled provider all
+        // collapse to the ONE uniform 400 below, and NONE of them reads the untrusted token — so the signed-JWT
+        // sink is unreachable while the feature is off, and neither the feature state nor the provider set can
+        // be probed apart.
+        var (enabled, config) = SSOPlugin.Instance.ReadConfiguration(configuration =>
+            (configuration.EnableSingleLogout, configuration.OidConfigs.TryGetValue(provider, out var oidConfig) ? oidConfig : null));
+
+        if (!enabled || config is not { Enabled: true, EnableBackChannelLogout: true })
+        {
+            return UniformBackChannelLogoutRejection();
+        }
+
+        // Read discovery for the JWKS + issuer, then validate signature + every §2.6 rule (events member, no
+        // nonce, sub/sid present, jti one-time-use) via the SAME hardened basis the id_token uses. On any
+        // failure the reason code is a FIXED constant (never token-derived) written only to the audit trail;
+        // the caller sees the uniform 400 with no branch-distinguishing detail (no subject oracle).
+        var result = await _oidc.ValidateBackChannelLogoutAsync(config, provider, logoutToken).ConfigureAwait(false);
+        if (!result.IsValid)
+        {
+            SsoAudit.LogoutRejected(_logger, provider, result.ReasonCode);
+            return UniformBackChannelLogoutRejection();
+        }
+
+        // Resolve the targeted sessions — strictly the SAME provider and subject (ordinal exact), AND only
+        // OpenID captures. FindByProviderSubject filters by (provider, subject) as the blast-radius bound; the
+        // Protocol filter keeps OpenID and SAML apart (an OpenID and a SAML provider can share a config name
+        // and a subject string). When the token names a sid, keep only entries whose captured SessionIndex
+        // matches; a token with sub but no sid targets every OpenID session of that subject for this provider
+        // (§2.4). A token with sid but no sub is matched by sid alone (subject is then whatever captured it).
+        var matches = SSOPlugin.Instance.ReadConfiguration(configuration =>
+            SessionLogoutStore
+                .FindByProviderSubject(configuration, provider, result.Subject ?? string.Empty, result.SessionIndex ?? string.Empty)
+                .Where(pair => string.Equals(pair.Value.Protocol, OpenIdProtocol, StringComparison.Ordinal))
+                .ToList());
+
+        // When the token carries no sub (sid-only), FindByProviderSubject's empty-subject guard returns
+        // nothing, so match on sid across this provider's OpenID captures directly.
+        if (result.Subject is null && result.SessionIndex is not null)
+        {
+            matches = SSOPlugin.Instance.ReadConfiguration(configuration =>
+                configuration.LogoutSessions
+                    .Where(pair =>
+                        string.Equals(pair.Value.Protocol, OpenIdProtocol, StringComparison.Ordinal)
+                        && string.Equals(pair.Value.Provider, provider, StringComparison.Ordinal)
+                        && string.Equals(pair.Value.SessionIndex, result.SessionIndex, StringComparison.Ordinal))
+                    .ToList());
+        }
+
+        // A validated token resolving NO session is the "unknown-subject" case: render the SAME uniform 400.
+        // An anonymous attacker can never produce a valid signature to reach here, so this discloses nothing;
+        // only the trusted IdP (which already knows its own subjects) can tell it from a 200, which is fine.
+        if (matches.Count == 0)
+        {
+            SsoAudit.LogoutRejected(_logger, provider, "no_matching_session");
+            return UniformBackChannelLogoutRejection();
+        }
+
+        // Revoke the tokens of each DISTINCT matched user — the SAME user-scoped fail-SAFE loop the inbound
+        // SAML logout uses: a revoke fault for one user must not abort the others, and only the entries whose
+        // user was actually revoked are consumed (a transient fault leaves the entry for a later retry).
+        var succeeded = new HashSet<Guid>();
+        foreach (var userId in matches.Select(pair => pair.Value.UserId).Distinct())
+        {
+            try
+            {
+                await _sessionManager.RevokeUserTokens(userId, null).ConfigureAwait(false);
+                succeeded.Add(userId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Revoking tokens during OpenID back-channel logout failed for one user; the remaining matched users are still logged out.");
+            }
+        }
+
+        var consumedKeys = matches.Where(pair => succeeded.Contains(pair.Value.UserId)).Select(pair => pair.Key).ToList();
+        if (consumedKeys.Count > 0)
+        {
+            SSOPlugin.Instance.MutateConfiguration(configuration =>
+            {
+                foreach (var key in consumedKeys)
+                {
+                    SessionLogoutStore.Remove(configuration, key);
+                }
+            });
+        }
+
+        if (succeeded.Count == 0)
+        {
+            SsoAudit.LogoutRejected(_logger, provider, "revoke_failed");
+            return UniformBackChannelLogoutRejection();
+        }
+
+        SsoAudit.LogoutRequested(_logger, provider, succeeded.Count);
+
+        // §2.7: a 200 with no body signals success. The IdP is the only party that can distinguish this from
+        // the uniform 400, and it already knows its own subjects — no oracle for an anonymous caller.
+        return Ok();
+    }
+
+    /// <summary>
     /// SP-initiated outbound SAML Single Logout (#727, SLO-3c). Ends the CALLER's local Jellyfin session, then
     /// — when Single Logout is enabled, the provider has a configured SLO endpoint, a signing key loads, and the
     /// caller has a captured SAML session with a NameID — redirects the browser to the identity provider's
@@ -1000,6 +1121,17 @@ public class SSOController : ControllerBase
     private static ContentResult UniformLogoutRejection() => new ContentResult
     {
         Content = "SAML logout request could not be processed",
+        ContentType = MediaTypeNames.Text.Plain,
+        StatusCode = StatusCodes.Status400BadRequest,
+    };
+
+    // The ONE response for every back-channel-logout failure (#962) — a disabled feature, a bad token, an
+    // unmatched subject, or a revoke fault all return this, so the anonymous caller learns nothing about which
+    // branch rejected it (no subject/feature/provider oracle). Distinct wording from the SAML rejection only
+    // because the protocols differ; both carry no cause detail.
+    private static ContentResult UniformBackChannelLogoutRejection() => new ContentResult
+    {
+        Content = "Logout token could not be processed",
         ContentType = MediaTypeNames.Text.Plain,
         StatusCode = StatusCodes.Status400BadRequest,
     };

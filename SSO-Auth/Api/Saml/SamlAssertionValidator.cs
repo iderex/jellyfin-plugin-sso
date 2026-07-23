@@ -47,7 +47,7 @@ internal sealed class SamlAssertionValidator
     // One-time-use tracking for consumed SAML assertion IDs (replay protection). One process-wide instance,
     // like the outstanding-request cache the flow service keeps and the OpenID caches the sibling flow
     // service keeps — the two-step post-then-authenticate legs run across separate per-request instances.
-    private static readonly SamlReplayCache SamlReplays = new SamlReplayCache();
+    private static readonly ReplayCache SamlReplays = new ReplayCache();
 
     private readonly ILogger _logger;
 
@@ -134,7 +134,7 @@ internal sealed class SamlAssertionValidator
     internal bool TryConsumeReplay(SamlResponse samlResponse, string provider)
     {
         var samlNow = DateTime.UtcNow;
-        var replayRetention = SamlReplayCache.ComputeRetention(samlNow, samlResponse.GetNotOnOrAfter());
+        var replayRetention = ReplayCache.ComputeRetention(samlNow, samlResponse.GetNotOnOrAfter(), SamlAssertionTime.ClockSkew);
         var assertionId = samlResponse.GetAssertionId();
         var replayKey = ProviderScopedKey.For(provider, assertionId);
         var consumed = SamlReplays.TryConsume(replayKey, replayRetention, samlNow, out var shouldWarnCapacity);

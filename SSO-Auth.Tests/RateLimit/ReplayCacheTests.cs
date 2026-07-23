@@ -11,7 +11,7 @@ using Xunit;
 namespace Jellyfin.Plugin.SSO_Auth.Tests;
 
 /// <summary>
-/// Tests for <see cref="SamlReplayCache"/> — one-time-use of SAML assertion IDs, the retention
+/// Tests for <see cref="ReplayCache"/> — one-time-use of SAML assertion IDs, the retention
 /// window that keeps a consumed id long enough that it cannot be replayed while still acceptable, and
 /// the throttled cap-refusal capacity-warning signal (#470).
 /// </summary>
@@ -24,7 +24,7 @@ public class SamlReplayCacheTests
     [Fact]
     public void TryConsume_FirstUse_Succeeds_SecondUse_IsReplay()
     {
-        var cache = new SamlReplayCache();
+        var cache = new ReplayCache();
         var expiry = Now.AddMinutes(10);
 
         Assert.True(cache.TryConsume("_assertion-1", expiry, Now, out _));
@@ -34,7 +34,7 @@ public class SamlReplayCacheTests
     [Fact]
     public void TryConsume_DistinctIds_EachSucceedOnce()
     {
-        var cache = new SamlReplayCache();
+        var cache = new ReplayCache();
         var expiry = Now.AddMinutes(10);
 
         Assert.True(cache.TryConsume("_a", expiry, Now, out _));
@@ -46,7 +46,7 @@ public class SamlReplayCacheTests
     [InlineData("")]
     public void TryConsume_MissingId_FailsClosed(string? id)
     {
-        var cache = new SamlReplayCache();
+        var cache = new ReplayCache();
         Assert.False(cache.TryConsume(id!, Now.AddMinutes(10), Now, out _));
     }
 
@@ -55,7 +55,7 @@ public class SamlReplayCacheTests
     {
         // Once retention has elapsed the entry is evicted; a fresh assertion reusing the id (a new
         // login, not a replay of the same still-valid assertion) is accepted again.
-        var cache = new SamlReplayCache();
+        var cache = new ReplayCache();
         Assert.True(cache.TryConsume("_a", Now.AddMinutes(10), Now, out _));
 
         var later = Now.AddMinutes(20);
@@ -65,7 +65,7 @@ public class SamlReplayCacheTests
     // --- Hard cap + throttled prune (#452) ---
 
     // A cache whose cap is small and reachable (production 100k is not).
-    private static SamlReplayCache SmallCache(int cap = 3) => new SamlReplayCache(cap, PruneInterval);
+    private static ReplayCache SmallCache(int cap = 3) => new ReplayCache(cap, PruneInterval);
 
     [Fact]
     public void TryConsume_ReplayStillRejected_UnderCapPressure()
@@ -121,7 +121,7 @@ public class SamlReplayCacheTests
         // The sweep must be throttled, not run on every consume. Add an entry that expires, then a consume
         // WITHIN the prune interval must leave the expired entry in place (an unthrottled sweep would drop
         // it) — proving the IntervalGate throttle is in effect.
-        var cache = new SamlReplayCache(); // production cap: the cap path never fires here
+        var cache = new ReplayCache(); // production cap: the cap path never fires here
         Assert.True(cache.TryConsume("_a", Now.AddSeconds(30), Now, out _)); // enters the gate
 
         var within = Now.AddSeconds(40); // past _a's expiry, within the 1-minute interval
@@ -136,7 +136,7 @@ public class SamlReplayCacheTests
     [Fact]
     public void TryConsume_ExpiredEntry_ReclaimedByThrottledPrune()
     {
-        var cache = new SamlReplayCache();
+        var cache = new ReplayCache();
         Assert.True(cache.TryConsume("_a", Now.AddMinutes(1), Now, out _));
 
         // A later consume past the prune interval sweeps the expired _a.
@@ -217,20 +217,20 @@ public class SamlReplayCacheTests
     [Fact]
     public void ComputeRetention_NoExpiry_UsesOneHourFloor()
     {
-        Assert.Equal(Now.AddHours(1), SamlReplayCache.ComputeRetention(Now, null));
+        Assert.Equal(Now.AddHours(1), ReplayCache.ComputeRetention(Now, null, SamlAssertionTime.ClockSkew));
     }
 
     [Fact]
     public void ComputeRetention_ShortExpiry_UsesFloor()
     {
         // A 5-minute assertion expiry (+skew) is below the one-hour floor, so the floor wins.
-        Assert.Equal(Now.AddHours(1), SamlReplayCache.ComputeRetention(Now, Now.AddMinutes(5)));
+        Assert.Equal(Now.AddHours(1), ReplayCache.ComputeRetention(Now, Now.AddMinutes(5), SamlAssertionTime.ClockSkew));
     }
 
     [Fact]
     public void ComputeRetention_LongExpiry_UsesExpiryPlusSkew()
     {
         var expiry = Now.AddHours(3);
-        Assert.Equal(expiry + SamlAssertionTime.ClockSkew, SamlReplayCache.ComputeRetention(Now, expiry));
+        Assert.Equal(expiry + SamlAssertionTime.ClockSkew, ReplayCache.ComputeRetention(Now, expiry, SamlAssertionTime.ClockSkew));
     }
 }

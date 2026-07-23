@@ -72,7 +72,7 @@ public class ArchitectureConformanceTests
     // login-path cache is added here once, and both fitness functions guard it.
     private static readonly Type[] LoginPathCapWarnCaches =
     {
-        typeof(SamlReplayCache), typeof(SamlRequestCache), typeof(OidcStateStore), typeof(SamlOutcomeStore),
+        typeof(ReplayCache), typeof(SamlRequestCache), typeof(OidcStateStore), typeof(SamlOutcomeStore),
     };
 
     // Every production type, compiler-generated ones excluded — the base sequence for structural rules
@@ -368,7 +368,7 @@ public class ArchitectureConformanceTests
     {
         // Locked in by #452: the login-path caches converged on one bounding pattern — an
         // IntervalGate-throttled expired-entry sweep plus a hard global cap — so none can regress to the
-        // unthrottled full-dictionary sweep (or the unbounded set) SamlReplayCache carried before #452.
+        // unthrottled full-dictionary sweep (or the unbounded set) ReplayCache carried before #452.
         // Each named cache must declare the PRUNE gate specifically (an IntervalGate field named
         // "_pruneGate"), not merely some IntervalGate: the siblings also carry a "_capWarnGate", so keying
         // on the field type alone would miss a sibling that dropped its prune gate but kept cap-warn.
@@ -983,15 +983,17 @@ public class ArchitectureConformanceTests
         // holds those SAML caches nor drives the SAML challenge/validation protocol itself. Call-level
         // property, so it is a source scan like the other controller rules above.
         //
-        // The two cache tokens are nameof-derived, so a rename of either type fails to COMPILE this rule
+        // The request-cache token is nameof-derived, so a rename of that type fails to COMPILE this rule
         // rather than passing vacuously; the two protocol tokens are the outgoing-request builder
         // (SamlAuthnRequest, which the challenge constructs and signs) and the response validator
         // (ValidateSaml). The shared per-client rate limiter is deliberately NOT a marker — it fronts BOTH
         // protocols, so it lives in the shared SsoRateLimitGate (#160), pinned off the controller by
-        // Controller_HoldsNoMutableStaticState, exactly as in the OpenID rule.
-        var replayToken = nameof(SamlReplayCache);
+        // Controller_HoldsNoMutableStaticState, exactly as in the OpenID rule. The replay cache was a SAML
+        // marker until #962 moved it to the shared RateLimit module (protocol-neutral ReplayCache, used by
+        // both the SAML replay path and the OIDC back-channel-logout jti check), so it is no longer a
+        // SAML-ownership marker.
         var requestToken = nameof(SamlRequestCache);
-        var markers = new[] { replayToken, requestToken, "SamlAuthnRequest", "ValidateSaml" };
+        var markers = new[] { requestToken, "SamlAuthnRequest", "ValidateSaml" };
 
         var controllerHits = ControllerSourceFiles()
             .SelectMany(path => File.ReadAllLines(path)
@@ -1151,7 +1153,7 @@ public class ArchitectureConformanceTests
         // this expected count in the same PR that adds or removes a rate-limited endpoint (as the provider-form
         // roster rules do), so a change to the limiter surface is a conscious update here rather than a silent
         // drift the offender scan cannot see.
-        const int expectedTypedCallSites = 13;
+        const int expectedTypedCallSites = 14;
         var typedCall = new Regex("RateLimitCheck\\(\\s*SsoRateLimitClass\\.");
         var typedCallSites = ControllerSourceFiles()
             .Sum(path => typedCall.Matches(File.ReadAllText(path)).Count);
@@ -2404,7 +2406,7 @@ public class ArchitectureConformanceTests
     private static readonly string[] MustThrottleRoutes =
     {
         "OID/r/{provider}", "OID/redirect/{provider}", "OID/p/{provider}", "OID/start/{provider}",
-        "OID/Test/{provider}", "OID/Auth/{provider}",
+        "OID/Test/{provider}", "OID/Auth/{provider}", "OID/backchannel-logout/{provider}",
         "SAML/p/{provider}", "SAML/post/{provider}", "SAML/start/{provider}", "SAML/metadata/{provider}",
         "SAML/Logout/{provider}", "SAML/ImportMetadata", "SAML/Auth/{provider}",
         "Unregister/{username}", "{mode}/Link/{provider}/{jellyfinUserId}",

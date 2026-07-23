@@ -200,6 +200,18 @@ public abstract class ProviderConfigBase
     public string? PostLogoutRedirectUri { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether this provider accepts an inbound OpenID Connect back-channel
+    /// <c>logout_token</c> (OIDC Back-Channel Logout 1.0, #962), so an IdP-side session termination revokes
+    /// the matched Jellyfin sessions. Off by default (fail safe): while off, the anonymous back-channel
+    /// endpoint rejects every request for this provider without parsing the token. Requires
+    /// <see cref="PluginConfiguration.EnableSingleLogout"/> on (the same master switch that captures the
+    /// <c>sid</c> a logout_token is matched on). Note the deployment caveat: back-channel logout needs the
+    /// IdP to reach this server directly (server-to-server), which is often unavailable for a self-hosted
+    /// server behind NAT — RP-initiated logout (#727) covers the user-clicks-logout case regardless.
+    /// </summary>
+    public bool EnableBackChannelLogout { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether this provider is HIDDEN from the managed login-page buttons
     /// (#722), when <see cref="PluginConfiguration.ManageLoginPageButtons"/> is on. Off by default: an enabled
     /// provider gets a button. Set it to keep a provider usable via its direct start URL without advertising a
