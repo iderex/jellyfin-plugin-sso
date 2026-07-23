@@ -133,6 +133,17 @@ runs:
           [ "$is_draft" = "true" ] && continue
           if [ "$is_pre" = "true" ] && [ "$INCLUDE_PRERELEASES" != "true" ]; then continue; fi
 
+          # Stable channel (include-prereleases != true): exclude beta-tagged releases by GLOB, not
+          # only by the prerelease flag. Since #980 the newest JF11 beta is published as a
+          # NON-prerelease (so GitHub can mark it the Latest release), so the prerelease flag alone
+          # no longer keeps betas out of manifest-release. The tag convention is the reliable
+          # separator — a beta is always tagged X.Y.Z[-JF12]-beta.<run>, a stable never is — so this
+          # fails closed: a revived stable channel can never pull an immutable non-prerelease beta
+          # into the stable manifest, where its four-octet version would even outrank the stable build.
+          if [ "$INCLUDE_PRERELEASES" != "true" ]; then
+            case "$tag" in *-beta.*) continue ;; esac
+          fi
+
           # `first(…)`: a draft can carry the same tag_name as a published release (the draft
           # flow the beta leg used to run does exactly that), and without the draft filter plus
           # this cutoff the lookup emits TWO JSON documents — every jq below then produces two
