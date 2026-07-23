@@ -638,6 +638,69 @@ internal sealed class OidcLoginService
     // decided from whether ProviderInformation is set at construction, so the assignment must happen before
     // `new OidcClient(options)`, not after. A null OidEndpoint still fails at the same point it did before
     // (the Uri constructor, after the options object).
+
+    /// <summary>
+    /// Validates an inbound back-channel <c>logout_token</c> for a provider (#962): reads the provider's
+    /// discovery document for its JWKS + issuer, builds the SAME hardened validation parameters the id_token
+    /// uses, and runs <see cref="OidcLogoutTokenValidator"/>. No client secret is revealed — verifying a
+    /// signature needs no credential, so the back-channel path never touches the secret at rest. Every
+    /// failure (a malformed endpoint, an unreadable discovery document, or any §2.6 rule) is fail-closed and
+    /// carries a fixed reason code for the caller to audit; the caller performs the revocation.
+    /// </summary>
+    /// <param name="config">The provider configuration.</param>
+    /// <param name="provider">The provider name (route input, used only for the SSRF-guarded discovery read).</param>
+    /// <param name="logoutToken">The raw <c>logout_token</c> from the anonymous POST body.</param>
+    /// <returns>The validation outcome — on success, the (sub, sid) the caller keys its revocation lookup on.</returns>
+    internal async Task<OidcLogoutTokenValidator.Result> ValidateBackChannelLogoutAsync(OidConfig config, string provider, string? logoutToken)
+    {
+        OidcClientOptions options;
+        try
+        {
+            // Validation-only options: Authority + discovery policy + client id, under the ONE shared
+            // discovery posture (RequireHttps / ValidateIssuerName / ValidateEndpoints). A malformed/absent
+            // endpoint throws here — caught as a fail-closed reject rather than a 500.
+            options = OidcDiscoveryOptions.Build(config);
+        }
+        catch (Exception ex) when (ex is UriFormatException or ArgumentException)
+        {
+            if (_logger.IsEnabled(LogLevel.Warning))
+            {
+                _logger.LogWarning("OpenID back-channel logout refused for provider {Provider}: the configured endpoint is not a usable URL.", provider?.ReplaceLineEndings(string.Empty));
+            }
+
+            return new OidcLogoutTokenValidator.Result(false, null, null, "discovery_unavailable");
+        }
+
+        options.ClientId = config.OidClientId?.Trim();
+        options.LoggerFactory = _loggerFactory;
+        options.HttpClientFactory = _ => SsoHttp.CreateClient(_httpClientFactory);
+
+        var discovery = await OidcDiscoveryReader.ReadAsync(options, provider, _httpClientFactory, _logger).ConfigureAwait(false);
+        if (!discovery.Available)
+        {
+            return new OidcLogoutTokenValidator.Result(false, null, null, "discovery_unavailable");
+        }
+
+        options.ProviderInformation = discovery.ProviderInformation;
+
+        var ephemeralKeys = new List<IDisposable>();
+        try
+        {
+            // requireExpiration:false — OIDC Back-Channel Logout 1.0 §2.4 does not mandate exp on a
+            // logout_token; replay is bounded by the jti one-time-use, not by exp. Requiring it would
+            // silently reject (and thus no-op the logout for) a spec-compliant exp-less IdP (#962).
+            var parameters = OidcSignatureKeys.BuildValidationParameters(options, ephemeralKeys, requireExpiration: false);
+            return await new OidcLogoutTokenValidator().ValidateAsync(logoutToken, parameters, options.ClockSkew, DateTime.UtcNow).ConfigureAwait(false);
+        }
+        finally
+        {
+            foreach (var key in ephemeralKeys)
+            {
+                key.Dispose();
+            }
+        }
+    }
+
     private OidcClientOptions BuildOidcOptions(OidConfig config, string redirectUri, string scope)
     {
         // Authority and the discovery policy (RequireHttps / ValidateIssuerName / ValidateEndpoints + the

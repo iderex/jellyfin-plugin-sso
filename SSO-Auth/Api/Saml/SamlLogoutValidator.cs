@@ -14,7 +14,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Saml;
 /// consume of the request <c>ID</c>. It is the SAML-logout analogue of
 /// <see cref="SamlAssertionValidator"/> — it owns the process-wide replay cache as a <c>static readonly</c>
 /// field, so the controller endpoint that calls it holds no mutable static state, and reuses the SHARED
-/// <see cref="SamlReplayCache"/> primitive rather than a copy.
+/// ReplayCache primitive rather than a copy.
 /// </summary>
 /// <remarks>
 /// On success the caller receives the validated NameID and SessionIndex list; on failure it receives a
@@ -25,7 +25,7 @@ internal sealed class SamlLogoutValidator
 {
     // One-time-use tracking for consumed LogoutRequest IDs (replay protection), process-wide exactly like the
     // login-path SamlAssertionValidator.SamlReplays — a captured LogoutRequest must not revoke twice.
-    private static readonly SamlReplayCache LogoutReplays = new SamlReplayCache();
+    private static readonly ReplayCache LogoutReplays = new ReplayCache();
 
     /// <summary>
     /// Test-only. Clears the process-wide one-time replay cache between tests so a consumed request ID does
@@ -104,7 +104,7 @@ internal sealed class SamlLogoutValidator
         // endpoint additionally leaves the matched entries in the store on a revoke fault, so a fresh-ID retry
         // still finds and acts on them. Replay protection here is a hygiene/DoS bound, not a session-minting
         // gate, so single-use-regardless is the safe default.
-        var retention = SamlReplayCache.ComputeRetention(nowUtc, logoutRequest.GetNotOnOrAfter());
+        var retention = ReplayCache.ComputeRetention(nowUtc, logoutRequest.GetNotOnOrAfter(), SamlAssertionTime.ClockSkew);
         var resolvedRequestId = logoutRequest.GetRequestId();
         var replayKey = ProviderScopedKey.For(provider, resolvedRequestId);
         if (!LogoutReplays.TryConsume(replayKey, retention, nowUtc, out _))

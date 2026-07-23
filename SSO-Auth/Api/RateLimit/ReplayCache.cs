@@ -3,18 +3,18 @@
 
 using System;
 using System.Collections.Concurrent;
-using Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
 
-namespace Jellyfin.Plugin.SSO_Auth.Api.Saml;
+namespace Jellyfin.Plugin.SSO_Auth.Api.RateLimit;
 
 /// <summary>
-/// Tracks SAML assertion IDs that have already been used to mint a session, so a captured assertion
-/// cannot be replayed within its validity window. Entries are retained until the supplied expiry and
-/// reclaimed by a throttled expired-entry sweep, and the set is hard-capped so it cannot grow without
-/// bound (#452). It mirrors the sibling login-path caches (<see cref="SamlRequestCache"/>,
-/// <see cref="Jellyfin.Plugin.SSO_Auth.Api.Oidc.OidcStateStore"/>): an <see cref="IntervalGate"/>-throttled sweep plus a global cap, and a
-/// second <see cref="IntervalGate"/>-throttled signal that surfaces a cap refusal to the caller so a full
-/// replay cache is observable rather than silent (#470).
+/// A protocol-neutral one-time-use cache: tracks identifiers that have already been consumed (a SAML
+/// assertion ID that minted a session #452, an OIDC back-channel logout_token jti #962) so a captured
+/// message cannot be replayed within its validity window. Entries are retained until the supplied expiry
+/// and reclaimed by a throttled expired-entry sweep, and the set is hard-capped so it cannot grow without
+/// bound (#452). It mirrors the per-protocol login-path caches (the SAML request cache, the OIDC state
+/// store): an <see cref="IntervalGate"/>-throttled sweep plus a global cap, and a second
+/// <see cref="IntervalGate"/>-throttled signal that surfaces a cap refusal to the caller so a full replay
+/// cache is observable rather than silent (#470).
 ///
 /// The cap is applied differently from the siblings, on purpose. Recording a consumed assertion is what
 /// makes a replay detectable, so this cache must never drop a still-valid entry to free a slot — that
@@ -25,7 +25,7 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Saml;
 /// reached only after full XML-DSig signature validation, so it is not anonymously floodable; filling the
 /// cap requires a large volume of legitimately signed, rate-limited assertions.
 /// </summary>
-internal sealed class SamlReplayCache
+internal sealed class ReplayCache
 {
     // An approximate ceiling on retained consumed-assertion IDs, bounding memory (CWE-400 parity with the
     // siblings). Unlike the siblings this is not an anti-flood cap on an anonymous endpoint — TryConsume
@@ -61,10 +61,10 @@ internal sealed class SamlReplayCache
     private readonly IntervalGate _capWarnGate;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="SamlReplayCache"/> class with the production cap and
+    /// Initializes a new instance of the <see cref="ReplayCache"/> class with the production cap and
     /// prune interval.
     /// </summary>
-    internal SamlReplayCache()
+    internal ReplayCache()
         : this(DefaultMaxEntries, DefaultPruneInterval)
     {
     }
@@ -73,12 +73,12 @@ internal sealed class SamlReplayCache
     // unit tests (the production values are unreachable there). IntervalGate rejects a non-positive interval.
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="SamlReplayCache"/> class with explicit bounds, so a unit
+    /// Initializes a new instance of the <see cref="ReplayCache"/> class with explicit bounds, so a unit
     /// test can reach the cap and prune-throttle paths the production values make unreachable.
     /// </summary>
     /// <param name="maxEntries">The global ceiling on retained consumed-assertion IDs.</param>
     /// <param name="pruneInterval">The minimum interval between expired-entry sweeps.</param>
-    internal SamlReplayCache(int maxEntries, TimeSpan pruneInterval)
+    internal ReplayCache(int maxEntries, TimeSpan pruneInterval)
     {
         _maxEntries = maxEntries;
         _pruneGate = new IntervalGate(pruneInterval);
@@ -92,21 +92,23 @@ internal sealed class SamlReplayCache
     internal void Clear() => _consumed.Clear();
 
     /// <summary>
-    /// Computes how long a just-consumed assertion must be retained for replay protection: the whole
-    /// window it would still be accepted - its NotOnOrAfter plus the validation clock skew - with a
-    /// one-hour floor that covers an assertion carrying no (or a very short) expiry.
+    /// Computes how long a just-consumed identifier must be retained for replay protection: the whole
+    /// window it would still be accepted - its expiry plus the validation clock skew - with a one-hour
+    /// floor that covers an identifier carrying no (or a very short) expiry. The skew is passed by the
+    /// caller so this stays protocol-neutral (SAML uses its assertion-time skew, OIDC its token skew).
     /// </summary>
     /// <param name="nowUtc">The current time.</param>
-    /// <param name="assertionExpiryUtc">The assertion's effective NotOnOrAfter, or null when it declares none.</param>
-    /// <returns>The UTC instant until which the assertion ID must be retained.</returns>
-    internal static DateTime ComputeRetention(DateTime nowUtc, DateTime? assertionExpiryUtc)
+    /// <param name="expiryUtc">The identifier's effective expiry, or null when it declares none.</param>
+    /// <param name="skew">The validation clock skew to add to the expiry.</param>
+    /// <returns>The UTC instant until which the identifier must be retained.</returns>
+    internal static DateTime ComputeRetention(DateTime nowUtc, DateTime? expiryUtc, TimeSpan skew)
     {
-        // The one-hour floor bounds retention when an assertion carries no (or a very short) expiry; the
+        // The one-hour floor bounds retention when an identifier carries no (or a very short) expiry; the
         // skew margin matches the clock skew the signature/time validation allows.
         var floor = nowUtc.AddHours(1);
-        if (assertionExpiryUtc.HasValue)
+        if (expiryUtc.HasValue)
         {
-            var expiryWithSkew = assertionExpiryUtc.Value + SamlAssertionTime.ClockSkew;
+            var expiryWithSkew = expiryUtc.Value + skew;
             if (expiryWithSkew > floor)
             {
                 return expiryWithSkew;

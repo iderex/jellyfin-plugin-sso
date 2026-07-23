@@ -82,6 +82,47 @@ internal sealed class OidcTokenFixture : IDisposable
         return new JsonWebTokenHandler().CreateToken(descriptor);
     }
 
+    /// <summary>
+    /// A signed back-channel <c>logout_token</c> (#962) carrying the mandatory events member plus the given
+    /// sub/sid/jti, for the OidBackChannelLogout endpoint test. A null sub or sid is omitted.
+    /// </summary>
+    /// <param name="subject">The <c>sub</c> claim, or null to omit it.</param>
+    /// <param name="sessionIndex">The <c>sid</c> claim, or null to omit it.</param>
+    /// <param name="jti">The <c>jti</c> claim (a fresh GUID when null).</param>
+    /// <returns>The signed logout_token.</returns>
+    internal string LogoutToken(string? subject, string? sessionIndex = null, string? jti = null)
+    {
+        var claims = new Dictionary<string, object>
+        {
+            ["events"] = new Dictionary<string, object>
+            {
+                ["http://schemas.openid.net/event/backchannel-logout"] = new Dictionary<string, object>(),
+            },
+            ["jti"] = jti ?? System.Guid.NewGuid().ToString(),
+        };
+        if (subject != null)
+        {
+            claims["sub"] = subject;
+        }
+
+        if (sessionIndex != null)
+        {
+            claims["sid"] = sessionIndex;
+        }
+
+        var now = DateTime.UtcNow;
+        return new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
+        {
+            Issuer = Issuer,
+            Audience = ClientId,
+            IssuedAt = now - TimeSpan.FromMinutes(1),
+            NotBefore = now - TimeSpan.FromMinutes(1),
+            Expires = now + TimeSpan.FromMinutes(5),
+            Claims = claims,
+            SigningCredentials = new SigningCredentials(new RsaSecurityKey(_rsa) { KeyId = KeyId }, SecurityAlgorithms.RsaSha256),
+        });
+    }
+
     /// <summary>The token-endpoint response body carrying the signed id_token.</summary>
     internal string TokenEndpointJson(string idToken) =>
         "{\"access_token\":\"test-access-token\",\"token_type\":\"Bearer\",\"expires_in\":3600,\"id_token\":\"" + idToken + "\"}";
