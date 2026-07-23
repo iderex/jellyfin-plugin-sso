@@ -99,6 +99,33 @@ public class SSOControllerSamlPostTests
     }
 
     [Fact]
+    public async Task SamlPost_RoleDeniedWithDeprovisionOff_LeavesTheLinkedAccountEnabled()
+    {
+        // #831 default (opt-in off) on the SAML leg — the sibling of the OpenID OFF case, added for #928
+        // protocol parity: the same role-denied assertion must NOT disable the linked account when the
+        // toggle is off (the default). Deprovisioning is strictly opt-in, so an existing deployment sees no
+        // behavior change and a transient IdP role glitch cannot silently lock users out.
+        var linked = Guid.Parse("77777777-7777-7777-7777-777777777777");
+        var user = TestUsers.Named("alice", linked);
+        var fixture = SamlTestFactory.Create(nameId: "alice", role: "jellyfin-users");
+        var harness = new SsoControllerHarness(c => c.SamlConfigs["adfs"] = new SamlConfig
+        {
+            Enabled = true,
+            SamlCertificate = fixture.CertificateBase64,
+            DoNotValidateAudience = true,
+            Roles = new[] { "only-admins" },
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = linked },
+        });
+        harness.UserManager.GetUserById(linked).Returns(user);
+
+        var result = await harness.Controller.SamlCallback("adfs", formSamlResponse: fixture.EncodeResponse());
+
+        Assert.Equal(401, Assert.IsType<ContentResult>(result).StatusCode); // still a clean denial
+        Assert.False(user.HasPermission(PermissionKind.IsDisabled)); // untouched — deprovisioning is opt-in
+        await harness.UserManager.DidNotReceive().UpdateUserAsync(user);
+    }
+
+    [Fact]
     public async Task SamlPost_ValidSignedResponse_RendersTheAuthPage()
     {
         var fixture = SamlTestFactory.Create(nameId: "alice");
