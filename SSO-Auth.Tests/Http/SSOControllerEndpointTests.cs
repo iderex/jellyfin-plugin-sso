@@ -59,11 +59,11 @@ public class SSOControllerEndpointTests
     }
 
     [Fact]
-    public void SamlPost_UnknownProvider_RejectsWithUniform400()
+    public async Task SamlPost_UnknownProvider_RejectsWithUniform400()
     {
         var harness = new SsoControllerHarness();
 
-        var result = harness.Controller.SamlCallback("does-not-exist");
+        var result = await harness.Controller.SamlCallback("does-not-exist");
 
         AssertUnknownProvider(result);
     }

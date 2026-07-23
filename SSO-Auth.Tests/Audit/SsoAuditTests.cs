@@ -109,6 +109,26 @@ public class SsoAuditTests
         Assert.DoesNotContain("\n", entry.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void AccountDeprovisioned_LogsWarning_NamingProtocolAndProvider_ButNeverASubject()
+    {
+        var logger = new CapturingLogger();
+
+        // The provider is the only foreign value the signature accepts (there IS no subject/username
+        // parameter — the no-sensitive-data posture is structural, T-I1). A newline in it must not split
+        // the entry, and the fixed toggle name gives the operator the exact setting to check.
+        SsoAudit.AccountDeprovisioned(logger, "OpenID", "corp\r\nInjected");
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Warning, entry.Level);
+        Assert.Contains("[SSO Audit]", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("corpInjected", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("OpenID", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("DisableAccountOnRoleDenied", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("Administrators are never disabled", entry.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("\n", entry.Message, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -208,6 +228,7 @@ public class SsoAuditTests
         SsoAudit.LogoutRequested(off, "corp", 1);
         SsoAudit.ProvisionedPendingApproval(off, "OpenID", "corp", "u");
         SsoAudit.AccountAdopted(off, "OpenID", "corp", "u");
+        SsoAudit.AccountDeprovisioned(off, "OpenID", "corp");
         SsoAudit.PkceNotAdvertised(off, "corp");
         SsoAudit.LogoutRejected(off, "corp", "Replay");
 

@@ -185,6 +185,204 @@ public class CanonicalLinkServiceTests
         Assert.False(service.IsAccountAwaitingApproval(Guid.NewGuid())); // a vanished user is left to the minter's null guard
     }
 
+    // --- DisableDeniedAccountAsync (#831): optional login-time deprovisioning of a linked account whose
+    //     roles no longer satisfy the allow-list. The mass-lockout fail-safe is that an administrator is
+    //     NEVER disabled, so a misconfigured allow-list can strand at most the non-admin accounts. ---
+
+    [Fact]
+    public async Task DisableDeniedAccountAsync_LinkedNonAdmin_DisablesItAndPersists()
+    {
+        var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+        var user = TestUsers.Named("alice", Existing);
+        users.GetUserById(Existing).Returns(user);
+
+        var disabled = await service.DisableDeniedAccountAsync(ProviderMode.Oid, "kc", "sub-1");
+
+        Assert.True(disabled); // reported so the caller audits the deprovisioning
+        Assert.True(user.HasPermission(PermissionKind.IsDisabled));
+        await users.Received(1).UpdateUserAsync(user);
+    }
+
+    [Fact]
+    public async Task DisableDeniedAccountAsync_SamlLinkedNonAdmin_DisablesIt()
+    {
+        // Both protocols share the gate; SAML keys on the NameID (TryGetLinks dispatches saml vs oid to
+        // different config dictionaries, so the SAML branch is pinned directly).
+        var (service, _, users, _) = Build(c => c.SamlConfigs["adfs"] = new SamlConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["alice"] = Existing },
+        });
+        var user = TestUsers.Named("alice", Existing);
+        users.GetUserById(Existing).Returns(user);
+
+        var disabled = await service.DisableDeniedAccountAsync(ProviderMode.Saml, "adfs", "alice");
+
+        Assert.True(disabled);
+        Assert.True(user.HasPermission(PermissionKind.IsDisabled));
+        await users.Received(1).UpdateUserAsync(user);
+    }
+
+    [Fact]
+    public async Task DisableDeniedAccountAsync_LinkedAdmin_IsNeverDisabled()
+    {
+        // THE break-glass guard: an administrator's denied login must NOT disable the account — otherwise a
+        // misconfigured allow-list or an identity provider that transiently drops group claims could lock the
+        // last admin out and strand the server. The admin stays enabled and nothing is persisted.
+        var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+        var admin = AdminUserNamed("root", Existing);
+        users.GetUserById(Existing).Returns(admin);
+
+        var disabled = await service.DisableDeniedAccountAsync(ProviderMode.Oid, "kc", "sub-1");
+
+        Assert.False(disabled);
+        Assert.False(admin.HasPermission(PermissionKind.IsDisabled)); // untouched
+        await users.DidNotReceive().UpdateUserAsync(Arg.Any<User>());
+    }
+
+    [Fact]
+    public async Task DisableDeniedAccountAsync_AlreadyDisabled_IsANoOp_AndNotReAudited()
+    {
+        // An already-disabled account is left untouched and reported false, so a hot denied-login loop for a
+        // revoked user neither re-persists nor re-audits the same deprovisioning every attempt.
+        var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+        var user = TestUsers.Named("alice", Existing);
+        user.SetPermission(PermissionKind.IsDisabled, true);
+        users.GetUserById(Existing).Returns(user);
+
+        var disabled = await service.DisableDeniedAccountAsync(ProviderMode.Oid, "kc", "sub-1");
+
+        Assert.False(disabled);
+        await users.DidNotReceive().UpdateUserAsync(Arg.Any<User>());
+    }
+
+    [Fact]
+    public async Task DisableDeniedAccountAsync_NoLinkForKey_IsANoOp()
+    {
+        // A first-time denied login resolves no existing canonical link, so there is nothing to disable —
+        // deprovisioning acts only on an account that already SSO-linked and later lost its roles.
+        var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig { Enabled = true });
+
+        var disabled = await service.DisableDeniedAccountAsync(ProviderMode.Oid, "kc", "sub-unlinked");
+
+        Assert.False(disabled);
+        await users.DidNotReceive().UpdateUserAsync(Arg.Any<User>());
+    }
+
+    [Fact]
+    public async Task DisableDeniedAccountAsync_DisabledProvider_FailsTheReadClosed_WithoutDisabling()
+    {
+        // The subject-keyed link is read requireEnabled:true, so a provider disabled between the login start
+        // and this call resolves no account and disables nothing — a fail-closed read, never a stray write.
+        var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = false,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
+
+        var disabled = await service.DisableDeniedAccountAsync(ProviderMode.Oid, "kc", "sub-1");
+
+        Assert.False(disabled);
+        await users.DidNotReceive().UpdateUserAsync(Arg.Any<User>());
+    }
+
+    [Fact]
+    public async Task DisableDeniedAccountAsync_IssuerMismatch_NeverDisablesTheOtherIssuersAccount()
+    {
+        // The #186 issuer binding gates the disable exactly as it gates the mint: the link was stamped for
+        // IdP-A, but the denied login's token was issued by IdP-B (a repointed provider with a colliding
+        // sub). The resolved account belongs to the FIRST issuer's user — a denied login from the new
+        // issuer must not disable it (a targeted wrong-account disable the mint path already refuses).
+        var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+            CanonicalLinkIssuers = new SerializableDictionary<string, string> { ["sub-1"] = "https://idp-a.example.com" },
+        });
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
+
+        var disabled = await service.DisableDeniedAccountAsync(ProviderMode.Oid, "kc", "sub-1", "https://idp-b.example.com");
+
+        Assert.False(disabled);
+        await users.DidNotReceive().UpdateUserAsync(Arg.Any<User>());
+    }
+
+    [Fact]
+    public async Task DisableDeniedAccountAsync_IssuerMatch_DisablesTheLinkedNonAdmin()
+    {
+        // The positive binding case: the denied login's issuer equals the stamped one, so the link resolves
+        // and the (non-admin) account is disabled — the binding refuses only a FOREIGN issuer, it does not
+        // break deprovisioning for the provider that minted the link.
+        var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+            CanonicalLinkIssuers = new SerializableDictionary<string, string> { ["sub-1"] = "https://idp-a.example.com" },
+        });
+        var user = TestUsers.Named("alice", Existing);
+        users.GetUserById(Existing).Returns(user);
+
+        var disabled = await service.DisableDeniedAccountAsync(ProviderMode.Oid, "kc", "sub-1", "https://idp-a.example.com");
+
+        Assert.True(disabled);
+        Assert.True(user.HasPermission(PermissionKind.IsDisabled));
+        await users.Received(1).UpdateUserAsync(user);
+    }
+
+    [Fact]
+    public async Task DisableDeniedAccountAsync_UnstampedLink_DisablesUnderTrustOnFirstUseParity()
+    {
+        // A legacy link with no stored issuer is Absent, not Mismatch — the same trust-on-first-use
+        // treatment the mint path applies (#186), so deprovisioning still works for links created before
+        // issuer stamping existed.
+        var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+        var user = TestUsers.Named("alice", Existing);
+        users.GetUserById(Existing).Returns(user);
+
+        var disabled = await service.DisableDeniedAccountAsync(ProviderMode.Oid, "kc", "sub-1", "https://idp-a.example.com");
+
+        Assert.True(disabled);
+        await users.Received(1).UpdateUserAsync(user);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task DisableDeniedAccountAsync_BlankKey_IsANoOp(string? canonicalKey)
+    {
+        // Fail-closed belt: a null/blank subject key (a provider that returned no stable identifier) must
+        // never resolve or disable an account, even if a caller forgets its own guard.
+        var (service, _, users, _) = Build(c => c.OidConfigs["kc"] = new OidConfig
+        {
+            Enabled = true,
+            CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = Existing },
+        });
+        users.GetUserById(Existing).Returns(TestUsers.Named("alice", Existing));
+
+        var disabled = await service.DisableDeniedAccountAsync(ProviderMode.Oid, "kc", canonicalKey);
+
+        Assert.False(disabled);
+        await users.DidNotReceive().UpdateUserAsync(Arg.Any<User>());
+    }
+
     [Fact]
     public async Task ResolveOrCreateAsync_ExistingAccountAndAdoptionAllowed_AdoptsAndLinks()
     {

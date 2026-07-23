@@ -864,7 +864,7 @@ public class SSOController : ControllerBase
     /// <returns>A webpage that will complete the client-side flow.</returns>
     [HttpPost("SAML/p/{provider}")]
     [HttpPost("SAML/post/{provider}")]
-    public ActionResult SamlCallback(string provider, [FromQuery] string? relayState = null, [FromForm(Name = "SAMLResponse")] string? formSamlResponse = null)
+    public async Task<ActionResult> SamlCallback(string provider, [FromQuery] string? relayState = null, [FromForm(Name = "SAMLResponse")] string? formSamlResponse = null)
     {
         if (RateLimitCheck(SsoRateLimitClass.Callback) is { } throttled)
         {
@@ -875,7 +875,7 @@ public class SSOController : ControllerBase
         // signed response and, on a passing role gate, renders the security-headered intermediate auth
         // page on the response.
         // This endpoint is browser-navigated, so a plain-text rejection is restyled as an HTML page (#668).
-        return BrowserErrorPage.Wrap(_saml.Callback(provider, relayState, formSamlResponse, Request, Response), Request, Response);
+        return BrowserErrorPage.Wrap(await _saml.CallbackAsync(provider, relayState, formSamlResponse, Request, Response).ConfigureAwait(false), Request, Response);
     }
 
     /// <summary>

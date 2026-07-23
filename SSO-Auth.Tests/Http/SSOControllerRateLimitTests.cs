@@ -80,13 +80,13 @@ public class SSOControllerRateLimitTests
     }
 
     [Fact]
-    public void SamlCallback_OverRateLimit_Returns429()
+    public async Task SamlCallback_OverRateLimit_Returns429()
     {
         var harness = Throttling(IPAddress.Parse("8.8.8.4"));
 
-        harness.Controller.SamlCallback("does-not-exist");
+        await harness.Controller.SamlCallback("does-not-exist");
 
-        AssertThrottled(harness, harness.Controller.SamlCallback("does-not-exist"));
+        AssertThrottled(harness, await harness.Controller.SamlCallback("does-not-exist"));
     }
 
     [Fact]

@@ -91,7 +91,7 @@ public class SSOControllerSamlAuthTests
         var harness = ProvisioningHarness(fixture);
         SamlLoginService.SeedSamlRequestForTests("adfs", AuthnRequestId, Binding, DateTime.UtcNow.AddMinutes(15));
 
-        var token = ExtractToken(harness.Controller.SamlCallback("adfs", formSamlResponse: fixture.EncodeResponse()));
+        var token = ExtractToken(await harness.Controller.SamlCallback("adfs", formSamlResponse: fixture.EncodeResponse()));
         SetSamlBindingCookie(harness, "a-different-browsers-binding-id");
 
         var result = Assert.IsType<ContentResult>(
@@ -114,7 +114,7 @@ public class SSOControllerSamlAuthTests
         var harness = ProvisioningHarness(fixture); // ValidateInResponseTo off (default)
         // No SeedSamlRequestForTests: the outstanding entry does not exist.
 
-        var token = ExtractToken(harness.Controller.SamlCallback("adfs", formSamlResponse: fixture.EncodeResponse()));
+        var token = ExtractToken(await harness.Controller.SamlCallback("adfs", formSamlResponse: fixture.EncodeResponse()));
 
         var result = Assert.IsType<ContentResult>(
             await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = token }));
@@ -134,7 +134,7 @@ public class SSOControllerSamlAuthTests
         var fixture = SamlTestFactory.Create(nameId: "alice"); // no InResponseTo
         var harness = ProvisioningHarness(fixture, validateInResponseTo: true);
 
-        var token = ExtractToken(harness.Controller.SamlCallback("adfs", formSamlResponse: fixture.EncodeResponse()));
+        var token = ExtractToken(await harness.Controller.SamlCallback("adfs", formSamlResponse: fixture.EncodeResponse()));
 
         var result = Assert.IsType<ContentResult>(
             await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = token }));

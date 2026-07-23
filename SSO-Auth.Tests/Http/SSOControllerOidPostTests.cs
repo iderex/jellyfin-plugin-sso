@@ -7,7 +7,9 @@ using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
 using Duende.IdentityModel.OidcClient;
+using Jellyfin.Data;
 using Jellyfin.Database.Implementations.Entities;
+using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.SSO_Auth;
 using Jellyfin.Plugin.SSO_Auth.Api.Session;
 using Jellyfin.Plugin.SSO_Auth.Api.Identity;
@@ -281,6 +283,54 @@ public class SSOControllerOidPostTests
     }
 
     [Fact]
+    public async Task OidPost_RoleDeniedWithDeprovisionOn_DisablesTheLinkedNonAdmin()
+    {
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        // #831 end-to-end: with an allow-list the id_token cannot satisfy (no matching role claim), the login
+        // is denied — and with the opt-in on, the account already linked under this subject is disabled so a
+        // user whose roles were revoked at the identity provider cannot keep logging in. The subject key is
+        // resolved on the denied path (it is derived independent of validity), so the linked account is found.
+        var linked = Guid.Parse("77777777-7777-7777-7777-777777777777");
+        var user = TestUsers.Named("alice", linked);
+        var harness = ArrangeCallback(fixture, query: "?code=test-code&state=state-1", tuneProvider: p =>
+        {
+            p.Roles = new[] { "only-admins" };
+            p.DisableAccountOnRoleDenied = true;
+            p.CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = linked };
+        });
+        harness.UserManager.GetUserById(linked).Returns(user);
+
+        var result = await harness.Controller.OidCallback("kc", "state-1");
+
+        Assert.Equal(401, Assert.IsType<ContentResult>(result).StatusCode); // still a clean denial
+        Assert.True(user.HasPermission(PermissionKind.IsDisabled)); // the revoked account is deprovisioned
+        await harness.UserManager.Received(1).UpdateUserAsync(user);
+    }
+
+    [Fact]
+    public async Task OidPost_RoleDeniedWithDeprovisionOff_LeavesTheLinkedAccountEnabled()
+    {
+        using var fixture = new OidcTokenFixture(Authority, "jf");
+        // The default (opt-in off): the same denied login must NOT disable the linked account — deprovisioning
+        // is strictly opt-in, so an existing deployment sees no behavior change and a transient IdP role glitch
+        // cannot silently lock users out.
+        var linked = Guid.Parse("77777777-7777-7777-7777-777777777777");
+        var user = TestUsers.Named("alice", linked);
+        var harness = ArrangeCallback(fixture, query: "?code=test-code&state=state-1", tuneProvider: p =>
+        {
+            p.Roles = new[] { "only-admins" };
+            p.CanonicalLinks = new SerializableDictionary<string, Guid> { ["sub-1"] = linked };
+        });
+        harness.UserManager.GetUserById(linked).Returns(user);
+
+        var result = await harness.Controller.OidCallback("kc", "state-1");
+
+        Assert.Equal(401, Assert.IsType<ContentResult>(result).StatusCode);
+        Assert.False(user.HasPermission(PermissionKind.IsDisabled)); // untouched by default
+        await harness.UserManager.DidNotReceive().UpdateUserAsync(Arg.Any<User>());
+    }
+
+    [Fact]
     public async Task OidChallengeToCallback_ResponseIssuerAdvertisedThenAbsent_Returns400()
     {
         using var fixture = new OidcTokenFixture(Authority, "jf");
@@ -411,7 +461,8 @@ public class SSOControllerOidPostTests
         string? bindingCookie = Binding,
         string? secondProvider = null,
         bool responseIssuerRequired = false,
-        bool doNotValidateIssuerName = false)
+        bool doNotValidateIssuerName = false,
+        Action<OidConfig>? tuneProvider = null)
     {
         idToken ??= fixture.IdToken(subject: "sub-1", username: "alice");
 
@@ -429,7 +480,9 @@ public class SSOControllerOidPostTests
         var harness = new SsoControllerHarness(
             c =>
             {
-                c.OidConfigs["kc"] = NewProvider();
+                var primary = NewProvider();
+                tuneProvider?.Invoke(primary); // e.g. an allow-list + a pre-existing canonical link (#831)
+                c.OidConfigs["kc"] = primary;
 
                 // A second enabled provider so a COAT test can hit its callback with a state minted for
                 // "kc" and isolate the provider-context binding from the unknown/disabled-provider guard.

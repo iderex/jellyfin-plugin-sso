@@ -403,6 +403,17 @@ internal sealed class OidcLoginService
                     config.Roles);
             }
 
+            // Login-time deprovisioning (#831): when the provider opts in, a role-denied login disables the
+            // existing linked account (never an admin — the guard lives in the service). Runs only on a
+            // denied login that resolved a subject, so an unauthenticated caller can never trigger it. The
+            // validated id_token's issuer rides along so the link's issuer binding (#186) gates the disable
+            // exactly as it gates the mint — a colliding sub from a repointed provider resolves nothing.
+            if (config.DisableAccountOnRoleDenied
+                && await _canonicalLinks.DisableDeniedAccountAsync(ProviderMode.Oid, provider, derived.Subject, derived.Issuer).ConfigureAwait(false))
+            {
+                SsoAudit.AccountDeprovisioned(_logger, "OpenID", provider);
+            }
+
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());
         }
 
