@@ -196,12 +196,15 @@ jobs:
           # published release cannot be updated in place, so a rolling tag would fail
           # on its second run. The tag never matches publish.yml's
           # [0-9]+.[0-9]+.[0-9]+-stable glob, so a beta never triggers the stable
-          # channel; and prerelease: true keeps it out of the stable manifest
-          # (ignorePrereleases: true) — only the beta manifest below surfaces it. The
-          # INSTALLED plugin version is X.Y.Z.<run> (the hidden fourth octet keeps
-          # Jellyfin's update ordering monotonic across betas).
+          # channel. prerelease is FALSE so the newest JF11 (10.11) beta can be GitHub's
+          # "Latest release" (see the publish step's make_latest) — the headline build a
+          # visitor lands on. Safe in the beta-only phase: #954 retired the stable channel
+          # (manifest-release empty, publish.yml dormant) so nothing filters betas on this
+          # flag, and the beta manifest below uses include-prereleases so a non-prerelease
+          # build is still surfaced. The INSTALLED plugin version is X.Y.Z.<run> (the hidden
+          # fourth octet keeps Jellyfin's update ordering monotonic across betas).
           draft: true
-          prerelease: true
+          prerelease: false
           name: ${{ steps.version.outputs.base }}-beta
           # Always auto-generate the release notes from the commits since the previous tag.
           generate_release_notes: true
@@ -216,16 +219,20 @@ jobs:
             https://raw.githubusercontent.com/iderex/jellyfin-plugin-sso/manifest-beta/manifest.json
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    - name: Publish the draft release
-      # Seal the draft — assets already attached — into an immutable published
-      # prerelease (fires release.published). A draft has no git tag yet, so it is
-      # published by its release id from the step above, not by tag name. -F sends
-      # draft as a typed boolean.
+    - name: Publish the draft release as the repo's Latest release
+      # Seal the draft — assets already attached — into an immutable published release
+      # (fires release.published) AND mark it the repo's Latest release: the newest JF11
+      # (10.11) beta is always the headline build. A draft has no git tag yet, so it is
+      # published by its release id from the step above, not by tag name. The JF12 leg
+      # publishes as a prerelease with no make_latest, so it never competes for Latest.
+      # draft is a boolean (-F, typed); make_latest is a string enum "true"|"false"|"legacy"
+      # in the REST API, so it is sent as a raw string (-f) — a typed boolean would be the
+      # wrong JSON type.
       env:
         GH_TOKEN: ${{ github.token }}
         RELEASE_ID: ${{ steps.publish-assets.outputs.id }}
         REPO: ${{ github.repository }}
-      run: gh api "repos/${REPO}/releases/${RELEASE_ID}" -X PATCH -F draft=false
+      run: gh api "repos/${REPO}/releases/${RELEASE_ID}" -X PATCH -F draft=false -f make_latest=true
     - name: Publish Beta Plugin Manifest
       # include-prereleases so the beta build is included. Writes the SEPARATE
       # `manifest-beta` branch; the stable `manifest-release` is only ever written
