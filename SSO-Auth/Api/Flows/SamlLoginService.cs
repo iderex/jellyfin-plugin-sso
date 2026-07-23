@@ -8,6 +8,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.SSO_Auth.Api;
+using Jellyfin.Plugin.SSO_Auth.Api.Audit;
 using Jellyfin.Plugin.SSO_Auth.Api.Identity;
 using Jellyfin.Plugin.SSO_Auth.Api.Linking;
 using Jellyfin.Plugin.SSO_Auth.Api.Logout;
@@ -183,7 +184,7 @@ internal sealed class SamlLoginService
     /// <param name="request">The current request; read for the assertion-consumer base URL.</param>
     /// <param name="response">The response the auth page's defensive headers are written to.</param>
     /// <returns>The rendered auth page on success, or a fail-closed rejection.</returns>
-    internal ActionResult Callback(string provider, string? relayState, string? formSamlResponse, HttpRequest request, HttpResponse response)
+    internal async Task<ActionResult> CallbackAsync(string provider, string? relayState, string? formSamlResponse, HttpRequest request, HttpResponse response)
     {
         // Unknown and disabled providers share one rejection so neither can be probed apart — this
         // retires the unique "No active providers found" wording that distinguished the disabled case
@@ -218,7 +219,7 @@ internal sealed class SamlLoginService
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.SamlResponseInvalid));
         }
 
-        // Own the parsed response for the rest of this synchronous method: it wraps the identity provider's
+        // Own the parsed response for the rest of this method: it wraps the identity provider's
         // signing-certificate unmanaged handle and must be disposed once fully read (#674). Every claim read
         // below completes before any return (the intermediate auth page's XML is rendered eagerly), and the
         // stored login outcome copies out only strings and the verified identity — never this object — so
@@ -239,6 +240,16 @@ internal sealed class SamlLoginService
                     samlResponse.GetNameID()?.ReplaceLineEndings(string.Empty),
                     assertionRoles.Select(r => r?.ReplaceLineEndings(string.Empty)),
                     config.Roles);
+            }
+
+            // Optional login-time deprovisioning (#831): when the operator has turned it on, a linked
+            // account whose roles no longer satisfy the allow-list is disabled so a revoked user cannot
+            // keep a live Jellyfin session. DisableDeniedAccountAsync never touches an administrator (the
+            // break-glass guard), so this can never strand the server. Audit records provider only.
+            if (config.DisableAccountOnRoleDenied
+                && await _canonicalLinks.DisableDeniedAccountAsync(ProviderMode.Saml, provider, samlResponse.GetNameID()).ConfigureAwait(false))
+            {
+                SsoAudit.AccountDeprovisioned(_logger, "SAML", provider);
             }
 
             return LoginStatusMapper.ToActionResult(new LoginOutcome.Denied());

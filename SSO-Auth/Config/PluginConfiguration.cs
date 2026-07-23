@@ -212,6 +212,18 @@ public abstract class ProviderConfigBase
     public bool EnableBackChannelLogout { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether an SSO login that is DENIED by the role allow-list disables
+    /// the existing linked Jellyfin account (login-time deprovisioning, #831), so a user offboarded at the
+    /// identity provider loses Jellyfin access immediately rather than keeping their session until a role
+    /// change would otherwise apply. Off by default (opt-in). Fail-safe against mass lockout: an
+    /// ADMINISTRATOR is NEVER disabled by this path (which also covers the SSO-only break-glass admin, itself
+    /// an admin), so a misconfigured allow-list or an identity provider that drops group claims can strand at
+    /// most the non-admin accounts — an admin always remains to recover. Acts only on an existing linked
+    /// account; a first-time denied login has nothing to disable.
+    /// </summary>
+    public bool DisableAccountOnRoleDenied { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether this provider is HIDDEN from the managed login-page buttons
     /// (#722), when <see cref="PluginConfiguration.ManageLoginPageButtons"/> is on. Off by default: an enabled
     /// provider gets a button. Set it to keep a provider usable via its direct start URL without advertising a

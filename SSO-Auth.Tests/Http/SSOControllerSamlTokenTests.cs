@@ -68,7 +68,7 @@ public class SSOControllerSamlTokenTests
         var harness = ProvisioningHarness(fixture, out _);
 
         // The callback validates the assertion once and hands the page a token, not the base64 assertion.
-        var token = ExtractToken(harness.Controller.SamlCallback("adfs", formSamlResponse: fixture.EncodeResponse()));
+        var token = ExtractToken(await harness.Controller.SamlCallback("adfs", formSamlResponse: fixture.EncodeResponse()));
 
         // Posting the token (never the assertion) mints the session — no re-parse, no second validation.
         var result = await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = token });
@@ -90,7 +90,7 @@ public class SSOControllerSamlTokenTests
         harness.SessionManager.AuthenticateDirect(Arg.Any<AuthenticationRequest>())
             .Returns(new AuthenticationResult { SessionInfo = new SessionInfoDto { Id = "session-key-slo" } });
 
-        var token = ExtractToken(harness.Controller.SamlCallback("adfs", formSamlResponse: fixture.EncodeResponse()));
+        var token = ExtractToken(await harness.Controller.SamlCallback("adfs", formSamlResponse: fixture.EncodeResponse()));
         Assert.IsType<OkObjectResult>(await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = token }));
 
         Assert.True(harness.Configuration.LogoutSessions.ContainsKey("session-key-slo"));
@@ -105,7 +105,7 @@ public class SSOControllerSamlTokenTests
     {
         var fixture = SamlTestFactory.Create(nameId: "alice");
         var harness = ProvisioningHarness(fixture, out _);
-        var token = ExtractToken(harness.Controller.SamlCallback("adfs", formSamlResponse: fixture.EncodeResponse()));
+        var token = ExtractToken(await harness.Controller.SamlCallback("adfs", formSamlResponse: fixture.EncodeResponse()));
 
         Assert.IsType<OkObjectResult>(await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = token }));
 
@@ -156,11 +156,11 @@ public class SSOControllerSamlTokenTests
         var assertion = fixture.EncodeResponse();
 
         // The first callback validates and consumes the assertion's one-time id, minting a token.
-        var token = ExtractToken(harness.Controller.SamlCallback("adfs", formSamlResponse: assertion));
+        var token = ExtractToken(await harness.Controller.SamlCallback("adfs", formSamlResponse: assertion));
 
         // Re-posting the SAME assertion to the callback is refused by the replay guard (its id was already
         // consumed at the first callback) — the token round-trip did not skip the one-time-use control.
-        var replayCallback = Assert.IsType<ContentResult>(harness.Controller.SamlCallback("adfs", formSamlResponse: assertion));
+        var replayCallback = Assert.IsType<ContentResult>(await harness.Controller.SamlCallback("adfs", formSamlResponse: assertion));
         Assert.Equal(400, replayCallback.StatusCode);
 
         // The token from the first, valid callback still mints exactly once.
@@ -210,19 +210,19 @@ public class SSOControllerSamlTokenTests
 
         // The callback is refused at the store cap — a fail-closed 500 — and the assertion's one-time replay
         // id is NOT consumed, because the reservation is checked ahead of the consume.
-        var refused = Assert.IsType<ContentResult>(harness.Controller.SamlCallback("adfs", formSamlResponse: assertion));
+        var refused = Assert.IsType<ContentResult>(await harness.Controller.SamlCallback("adfs", formSamlResponse: assertion));
         Assert.Equal(500, refused.StatusCode);
 
         // Drain the store (redeem the filler), then re-POST the SAME assertion. Because it was never burned,
         // the retry now validates, consumes the id, and renders a real token — the login was not lost.
         Assert.NotNull(store.TryRedeem(filler, "adfs", DateTime.UtcNow));
-        var token = ExtractToken(harness.Controller.SamlCallback("adfs", formSamlResponse: assertion));
+        var token = ExtractToken(await harness.Controller.SamlCallback("adfs", formSamlResponse: assertion));
         Assert.IsType<OkObjectResult>(await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = token }));
         await harness.UserManager.Received(1).CreateUserAsync("alice");
 
         // Replay protection is intact: re-POSTing the same assertion a third time (the store now has room) is
         // refused by the one-time replay guard, since the retry above consumed the id.
-        var replay = Assert.IsType<ContentResult>(harness.Controller.SamlCallback("adfs", formSamlResponse: assertion));
+        var replay = Assert.IsType<ContentResult>(await harness.Controller.SamlCallback("adfs", formSamlResponse: assertion));
         Assert.Equal(400, replay.StatusCode);
     }
 
@@ -240,7 +240,7 @@ public class SSOControllerSamlTokenTests
         var harness = ProvisioningHarness(fixture, out _);
         SamlLoginService.SeedSamlRequestForTests("adfs", AuthnRequestId, Binding, DateTime.UtcNow.AddMinutes(15));
 
-        var token = ExtractToken(harness.Controller.SamlCallback("adfs", formSamlResponse: fixture.EncodeResponse()));
+        var token = ExtractToken(await harness.Controller.SamlCallback("adfs", formSamlResponse: fixture.EncodeResponse()));
         harness.Controller.HttpContext.Request.Headers.Cookie = $"{AuthorizeStateBinding.SamlCookieName}={Binding}";
 
         Assert.IsType<OkObjectResult>(await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = token }));
@@ -256,7 +256,7 @@ public class SSOControllerSamlTokenTests
         var harness = ProvisioningHarness(fixture, out _);
         SamlLoginService.SeedSamlRequestForTests("adfs", AuthnRequestId, Binding, DateTime.UtcNow.AddMinutes(15));
 
-        var token = ExtractToken(harness.Controller.SamlCallback("adfs", formSamlResponse: fixture.EncodeResponse()));
+        var token = ExtractToken(await harness.Controller.SamlCallback("adfs", formSamlResponse: fixture.EncodeResponse()));
         // No binding cookie set.
 
         var result = Assert.IsType<ContentResult>(await harness.Controller.SamlAuth("adfs", new AuthResponse { Data = token }));

@@ -62,11 +62,11 @@ public class SamlLoginServiceTests
     }
 
     [Fact]
-    public void Post_DisabledProvider_RejectsAsUnknownProvider()
+    public async Task Post_DisabledProvider_RejectsAsUnknownProvider()
     {
         var (service, context) = Build(c => c.SamlConfigs["adfs"] = new SamlConfig { Enabled = false });
 
-        var result = service.Callback("adfs", relayState: null, formSamlResponse: null, context.Request, context.Response);
+        var result = await service.CallbackAsync("adfs", relayState: null, formSamlResponse: null, context.Request, context.Response);
 
         AssertUnknownProvider(result);
     }

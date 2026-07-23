@@ -542,6 +542,66 @@ internal sealed class CanonicalLinkService
         return user is not null && user.HasPermission(PermissionKind.IsDisabled);
     }
 
+    /// <summary>
+    /// Login-time deprovisioning (#831): when an SSO login is DENIED by the role allow-list, disable the
+    /// existing linked Jellyfin account so a user offboarded at the identity provider loses Jellyfin access
+    /// immediately, rather than keeping any session until a role change would otherwise apply. Opt-in per
+    /// provider (<see cref="ProviderConfigBase.DisableAccountOnRoleDenied"/>).
+    /// <para>
+    /// GUARD — the mass-lockout defense (T-D1): an <see cref="PermissionKind.IsAdministrator"/> account is
+    /// NEVER disabled by this path, which also covers the SSO-only break-glass admin (itself an admin). So a
+    /// misconfigured allow-list, or an identity provider that transiently drops group claims and denies every
+    /// login, can strand at most the non-admin accounts — an administrator (and the break-glass door) always
+    /// remains to recover. It acts only on the EXISTING subject-keyed canonical link; a first-time denied
+    /// login resolves no account and disables nothing. An already-disabled account is a no-op (not re-audited).
+    /// </para>
+    /// </summary>
+    /// <param name="mode">The provider protocol.</param>
+    /// <param name="provider">The provider name.</param>
+    /// <param name="canonicalKey">The identity's stable subject key (OpenID sub / SAML NameID) whose login was denied.</param>
+    /// <param name="issuer">The denied login's token issuer (OpenID only; null for SAML), checked against the link's stored issuer binding (#186) so a colliding subject from a repointed identity provider cannot disable the prior provider's account.</param>
+    /// <returns><see langword="true"/> when an enabled non-admin account was actually disabled (so the caller audits it); otherwise <see langword="false"/>.</returns>
+    internal async Task<bool> DisableDeniedAccountAsync(ProviderMode mode, string provider, string? canonicalKey, string? issuer = null)
+    {
+        if (string.IsNullOrWhiteSpace(canonicalKey))
+        {
+            return false;
+        }
+
+        // Resolve the existing subject-keyed link under the config lock; never a create, never the legacy
+        // name-keyed path (a denial must not adopt or mint). A disabled provider fails the read closed.
+        // The issuer binding is enforced exactly as on the mint path (RefuseRepointedIssuer, #186): a
+        // Mismatch means the denied login's subject collides with a link stamped for a DIFFERENT issuer
+        // (a repointed provider), so the resolved account belongs to someone else — never disable it.
+        var userId = _configStore.Read(configuration =>
+            TryGetLinks(configuration, mode, provider, requireEnabled: true, out var links)
+                && links.TryGetValue(canonicalKey, out var linked)
+                && ClassifyIssuer(configuration, mode, provider, canonicalKey, issuer) != IssuerBinding.Mismatch
+                ? (Guid?)linked
+                : null);
+        if (userId is null)
+        {
+            return false;
+        }
+
+        var user = _userManager.GetUserById(userId.Value);
+        if (user is null)
+        {
+            return false;
+        }
+
+        // THE GUARD: an administrator is never disabled by SSO denial (covers the break-glass admin), so this
+        // path can never strand the server. An already-disabled account is left untouched (no re-audit).
+        if (user.HasPermission(PermissionKind.IsAdministrator) || user.HasPermission(PermissionKind.IsDisabled))
+        {
+            return false;
+        }
+
+        user.SetPermission(PermissionKind.IsDisabled, true);
+        await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
+        return true;
+    }
+
     // Logs the name-taken refusal (distinguishing a pending migratable legacy link from an ordinary #95
     // collision) and RETURNS the exception the caller throws, so the terminal switch arm reads as the
     // refusal it is. The refusal throws on every login; only the WARNING is throttled through the shared

@@ -80,6 +80,28 @@ internal static class SsoAudit
             provider?.ReplaceLineEndings(string.Empty));
     }
 
+    /// <summary>
+    /// Records an existing account being disabled by login-time deprovisioning (#831): its SSO login was
+    /// denied by the role allow-list and the provider opts into disabling on denial. Only non-sensitive
+    /// fields are logged — the protocol and provider name, never the subject/username (T-I1) — so an
+    /// offboarding (or a mass-disable incident from a misconfigured allow-list) leaves an operator trail.
+    /// </summary>
+    /// <param name="logger">The logger.</param>
+    /// <param name="protocol">The protocol (OpenID or SAML).</param>
+    /// <param name="provider">The provider name.</param>
+    internal static void AccountDeprovisioned(ILogger logger, string protocol, string provider)
+    {
+        if (!logger.IsEnabled(LogLevel.Warning))
+        {
+            return;
+        }
+
+        logger.LogWarning(
+            "[SSO Audit] Account disabled by login-time deprovisioning: an SSO login via {Protocol} provider '{Provider}' was denied by the role allow-list and the account was disabled (DisableAccountOnRoleDenied). Administrators are never disabled by this path.",
+            protocol,
+            provider?.ReplaceLineEndings(string.Empty));
+    }
+
     /// <summary>Records a provider being added or updated.</summary>
     /// <param name="logger">The logger.</param>
     /// <param name="protocol">The protocol (OpenID or SAML).</param>
