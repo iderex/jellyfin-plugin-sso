@@ -429,6 +429,28 @@ internal sealed class OidcLoginService
             }
         }
 
+        // max_age freshness (#961): when the provider configures MaxAge, the authorize request carried
+        // max_age (OidcFrontChannelParameters), so per OIDC Core §3.1.2.1 the id_token MUST carry auth_time
+        // and the user must have authenticated within the window. Read auth_time from the RAW,
+        // signature-verified id_token (OidcIdTokenAuthTime), NOT result.User — same reason as the acr gate.
+        // Fail closed: a MISSING auth_time (a provider that ignored max_age) or a stale one is refused, so a
+        // forced re-authentication cannot be silently satisfied by an old session. Checked here before
+        // Promote so a too-old login never becomes a redeemable Ready. A negative MaxAge is treated as unset
+        // (OidcFrontChannelParameters sends nothing), so it correctly enforces nothing.
+        if (config.MaxAge is int maxAge && maxAge >= 0)
+        {
+            var authTime = OidcIdTokenAuthTime.Read(result.IdentityToken);
+            if (!MaxAgePolicy.IsFresh(authTime, maxAge, DateTimeOffset.UtcNow))
+            {
+                if (_logger.IsEnabled(LogLevel.Warning))
+                {
+                    _logger.LogWarning("OpenID login denied for provider {Provider}: max_age is configured but the id_token's auth_time was absent or older than the allowed window (the user authenticated too long ago).", provider?.ReplaceLineEndings(string.Empty));
+                }
+
+                return LoginStatusMapper.ToActionResult(new LoginOutcome.Rejected(PublicReason.AuthTooOld));
+            }
+        }
+
         // Atomically swap the peeked Pending for a redeemable Ready (#341). A false return means a
         // concurrent callback already promoted it, or it expired/was pruned since the peek — either way
         // the browser's redeem is the real gate, which consumes the single Ready once (or cleanly rejects
