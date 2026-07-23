@@ -20,6 +20,15 @@ suffix on the git tag and GitHub release name only (`-stable`, `-beta.<run>`,
   never the values, never nested objects — and every other claim shape still
   fails closed to no roles. The option is **off by default**, so no existing
   provider changes behaviour.
+- **Managed login-page buttons (#722).** An opt-in global option, **Manage
+  login-page buttons** (off by default), keeps a "Sign in with …" button block
+  on Jellyfin's login page in sync with the configured, enabled providers — so a
+  configured provider surfaces a button without hand-crafted branding HTML. The
+  managed region is spliced into the login branding disclaimer and removed
+  cleanly when the option is turned off, preserving any surrounding admin
+  disclaimer text; provider names and labels are HTML-encoded. Per provider,
+  **Hide login button** omits one provider's button and **Login button text**
+  overrides its label.
 
 ### Changed
 
