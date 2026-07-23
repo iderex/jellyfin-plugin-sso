@@ -41,11 +41,13 @@ internal sealed class OidcLogoutTokenValidator
     /// </summary>
     /// <param name="logoutToken">The raw compact-serialized logout_token.</param>
     /// <param name="validationParameters">The signature/issuer/audience/lifetime parameters — the SAME basis the id_token uses.</param>
+    /// <param name="clockSkew">The validation clock skew (used for the jti-retention window; matches the parameters' ClockSkew).</param>
     /// <param name="nowUtc">The current time (injected for determinism).</param>
     /// <returns>The validation outcome.</returns>
     internal async Task<Result> ValidateAsync(
         string? logoutToken,
         TokenValidationParameters validationParameters,
+        TimeSpan clockSkew,
         DateTime nowUtc)
     {
         if (string.IsNullOrEmpty(logoutToken))
@@ -63,6 +65,22 @@ internal sealed class OidcLogoutTokenValidator
         }
 
         var token = (JsonWebToken)result.SecurityToken;
+
+        // azp / additional-audience restriction (OIDC Core 3.1.3.7 rules 3-5), the SAME check the id_token
+        // validator applies — §2.4 says the logout_token aud follows OpenID.Core, so the two token types
+        // must not drift on it: when azp is present it MUST equal this client's id, and a multi-audience
+        // token MUST carry azp (a token minted for a different party that merely co-lists this client is
+        // refused). ValidateAudience already confirmed this client is AMONG the audiences.
+        var azp = result.ClaimsIdentity.FindFirst("azp")?.Value;
+        if (azp != null && !string.Equals(azp, validationParameters.ValidAudience, StringComparison.Ordinal))
+        {
+            return new Result(false, null, null, RejectReason.Invalid);
+        }
+
+        if (azp == null && token.Audiences.Count() > 1)
+        {
+            return new Result(false, null, null, RejectReason.Invalid);
+        }
 
         // §2.4: a logout_token MUST NOT contain a nonce. Rejecting it here is what refuses an id_token
         // (which carries nonce) replayed at the back-channel endpoint.
@@ -92,7 +110,7 @@ internal sealed class OidcLogoutTokenValidator
         var jti = token.TryGetPayloadValue<string>("jti", out var j) && !string.IsNullOrEmpty(j)
             ? j
             : token.EncodedSignature;
-        var retention = ReplayCache.ComputeRetention(nowUtc, token.ValidTo == DateTime.MinValue ? null : token.ValidTo, TimeSpan.FromMinutes(5));
+        var retention = ReplayCache.ComputeRetention(nowUtc, token.ValidTo == DateTime.MinValue ? null : token.ValidTo, clockSkew);
         if (!LogoutTokenReplays.TryConsume(jti, retention, nowUtc, out _))
         {
             return new Result(false, null, null, RejectReason.Replay);

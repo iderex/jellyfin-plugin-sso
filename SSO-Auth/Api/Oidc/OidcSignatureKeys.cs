@@ -41,8 +41,9 @@ internal static class OidcSignatureKeys
     /// </summary>
     /// <param name="options">The provider's client options (discovery issuer + JWKS, client id, skew, policy).</param>
     /// <param name="ephemeralKeys">Collects disposable ECDsa handles for the caller to release.</param>
+    /// <param name="requireExpiration">Whether an <c>exp</c> claim is mandatory. True for the id_token (OIDC Core 3.1.3.7 mandates exp); false for the back-channel logout_token, where OIDC Back-Channel Logout 1.0 §2.4 does NOT list exp among the required claims (replay is bounded by the jti one-time-use instead) — requiring it would silently no-op a spec-compliant exp-less IdP (#962).</param>
     /// <returns>The hardened validation parameters.</returns>
-    internal static TokenValidationParameters BuildValidationParameters(OidcClientOptions options, List<IDisposable> ephemeralKeys)
+    internal static TokenValidationParameters BuildValidationParameters(OidcClientOptions options, List<IDisposable> ephemeralKeys, bool requireExpiration = true)
     {
         ArgumentNullException.ThrowIfNull(options);
         return new TokenValidationParameters
@@ -53,7 +54,7 @@ internal static class OidcSignatureKeys
             ValidAlgorithms = AllowedSignatureAlgorithms,
             ClockSkew = options.ClockSkew,
             RequireSignedTokens = true,
-            RequireExpirationTime = true,
+            RequireExpirationTime = requireExpiration,
 
             // The provider-level escape hatch (DoNotValidateIssuerName) exists for IdPs whose issuer
             // legitimately differs from the discovery location; it relaxes ONLY the issuer match.
