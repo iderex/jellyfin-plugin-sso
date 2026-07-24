@@ -2,7 +2,7 @@
 
 > [!NOTE]
 >
-> **Status: Beta** — the third rung of the maturity ladder (In-Development → Alpha → Beta → Release Candidate → Full Release). Install it by adding this plugin's own repository to Jellyfin — see [Installing](#installing).
+> **Status: Release Candidate** — the fourth rung of the maturity ladder (In-Development → Alpha → Beta → Release Candidate → Full Release). Install it by adding this plugin's own repository to Jellyfin — see [Installing](#installing).
 
 <h1 align="center">Community SSO for Jellyfin</h1>
 
@@ -72,7 +72,7 @@ The self-hostable providers run in an automated end-to-end login test in CI ([`e
 2. Go to **Dashboard → Plugins → Catalog**, find **Community SSO for Jellyfin**, and install it.
 3. **Restart Jellyfin.**
 
-This project is **beta software — the beta channel is the only release channel** for now. The plugin GUID is unchanged from the original `9p4` plugin, so it installs over an existing one in place and keeps your configuration. Build-from-source, the release channels, client (Quick Connect) support, and migrating from the old `9p4` manifest are covered on the [Installation](https://github.com/iderex/jellyfin-plugin-sso/wiki/Installation) wiki page.
+This project publishes only to the **beta channel** for now — a stable channel opens with the first stable release. The plugin GUID is unchanged from the original `9p4` plugin, so it installs over an existing one in place and keeps your configuration. Build-from-source, the release channels, client (Quick Connect) support, and migrating from the old `9p4` manifest are covered on the [Installation](https://github.com/iderex/jellyfin-plugin-sso/wiki/Installation) wiki page.
 
 ## Configuration
 
