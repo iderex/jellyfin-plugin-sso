@@ -4,6 +4,7 @@
 using System.Text.Json;
 using Jellyfin.Plugin.SSO_Auth;
 using Jellyfin.Plugin.SSO_Auth.Api.Flows;
+using Jellyfin.Plugin.SSO_Auth.Api.Localization;
 using Xunit;
 
 namespace Jellyfin.Plugin.SSO_Auth.Tests;
@@ -184,7 +185,8 @@ public class WebResponseTests
         var html = WebResponse.Generator("ZGF0YQ==", "keycloak", "https://jf.example.com", "OID", "n0nce", isLinking: true);
 
         Assert.Contains("function showReturnLink()", html);
-        Assert.Contains("'Return to login'", html);
+        // The label now comes from the catalog (#913), injected as a JSON-encoded JS string literal.
+        Assert.Contains("link.textContent = " + JsonSerializer.Serialize("Return to login") + ";", html);
         Assert.Contains("ssoBaseUrl + '/web/index.html'", html);
         // The login-failure branch and the rejected-link branch both invoke it; success paths do not.
         Assert.Contains("showReturnLink();", html);
@@ -192,6 +194,46 @@ public class WebResponseTests
         // (2xx) link does not offer a "return to login" as if it had failed. Deleting the `if (!linked)`
         // guard (which would make the link appear on a successful link too) must fail this test.
         Assert.Contains("if (!linked) {", html);
+    }
+
+    [Fact]
+    public void Generator_ChromeStrings_AreCatalogSourced_AndPlaceholdersFullySubstituted()
+    {
+        // #913: the page's own text is drawn from the localization catalog. HTML-context strings render as
+        // text; the return-link label is injected into the script as a JSON-encoded string literal. Every
+        // {{...}} template token must be substituted — no placeholder may leak into the served page.
+        var html = WebResponse.Generator("ZGF0YQ==", "keycloak", "https://jf.example.com", "OID", "n0nce");
+
+        Assert.Contains(">" + SsoLocalizer.GetString("page.logging_in", null) + "</p>", html);
+        Assert.Contains("<noscript>" + SsoLocalizer.GetString("page.enable_javascript", null) + "</noscript>", html);
+        Assert.Contains("link.textContent = " + JsonSerializer.Serialize(SsoLocalizer.GetString("error.return_to_login", null)) + ";", html);
+        Assert.DoesNotContain("{{", html);
+        Assert.DoesNotContain("}}", html);
+    }
+
+    [Fact]
+    public void Generator_JsStatusStrings_AreJsonEncoded_NotRawSingleQuoted()
+    {
+        // The client-side status messages are injected into the inline script through JSON serialization
+        // (System.Text.Json escapes '<', '>' and '&'), so a catalog value can never terminate the <script>.
+        // Each renders as a double-quoted JSON literal (assigned to textContent in a ternary), never a raw
+        // single-quoted concatenation.
+        var html = WebResponse.Generator("ZGF0YQ==", "keycloak", "https://jf.example.com", "SAML", "n0nce", isLinking: true);
+
+        Assert.Contains("? " + JsonSerializer.Serialize(SsoLocalizer.GetString("page.account_linked", null)), html);
+        Assert.Contains(JsonSerializer.Serialize(SsoLocalizer.GetString("page.link_failed", null)) + ";", html);
+        Assert.Contains(JsonSerializer.Serialize(SsoLocalizer.GetString("page.login_failed", null)) + ";", html);
+        Assert.Contains(JsonSerializer.Serialize(SsoLocalizer.GetString("error.login_rate_limited", null)), html);
+    }
+
+    [Fact]
+    public void Generator_ResolvedCulture_DrivesTheLangAttribute()
+    {
+        // The lang attribute carries the resolved culture (attribute-encoded). The caller passes an
+        // already-resolved, loaded culture; English is the only catalog today, so it renders lang='en'.
+        var html = WebResponse.Generator("ZGF0YQ==", "keycloak", "https://jf.example.com", "OID", "n0nce", culture: SsoLocalizer.FallbackCulture);
+
+        Assert.Contains("<html lang='en'>", html);
     }
 
     [Theory]

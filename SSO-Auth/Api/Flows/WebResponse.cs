@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 using System.Globalization;
+using System.Text.Encodings.Web;
 using System.Text.Json;
+using Jellyfin.Plugin.SSO_Auth.Api.Localization;
 
 namespace Jellyfin.Plugin.SSO_Auth.Api.Flows;
 
@@ -15,7 +17,7 @@ internal static class WebResponse
     /// The shared HTML between all of the responses.
     /// </summary>
     internal static readonly string Base = @"<!DOCTYPE html>
-<html lang='en'><head>
+<html lang='{{LANG}}'><head>
 <meta name='viewport' content='width=device-width, initial-scale=1'>
 <style nonce=""{{NONCE}}"">
   body {
@@ -34,8 +36,8 @@ internal static class WebResponse
   }
 </style>
 </head><body>
-<p role='status' aria-live='polite'>Logging in...</p>
-<noscript>Please enable Javascript to complete the login</noscript>
+<p role='status' aria-live='polite'>{{LOGGING_IN}}</p>
+<noscript>{{ENABLE_JS}}</noscript>
 <script nonce=""{{NONCE}}"">
 
 function isTv() {
@@ -235,7 +237,7 @@ function showReturnLink() {
     if (document.getElementById('sso-return-link')) return;
     const link = document.createElement('a');
     link.id = 'sso-return-link';
-    link.textContent = 'Return to login';
+    link.textContent = {{RETURN_LINK_JS}};
     link.href = ssoBaseUrl + '/web/index.html';
     document.querySelector('p').insertAdjacentElement('afterend', link);
 }
@@ -251,8 +253,9 @@ function showReturnLink() {
     /// <param name="mode">The mode of the function; SAML or OID.</param>
     /// <param name="nonce">The per-response CSP nonce emitted on the inline script and style tags.</param>
     /// <param name="isLinking">Whether or not this request is to link accounts (Rather than authenticate).</param>
+    /// <param name="culture">The culture the page's own text is rendered in (#913), already resolved to a loaded catalog or null for English. The server-derived data/URLs are culture-invariant.</param>
     /// <returns>A string with the HTML to serve to the client.</returns>
-    public static string Generator(string data, string provider, string baseUrl, string mode, string nonce, bool isLinking = false)
+    public static string Generator(string data, string provider, string baseUrl, string mode, string nonce, bool isLinking = false, string? culture = null)
     {
         System.ArgumentNullException.ThrowIfNull(baseUrl);
 
@@ -273,11 +276,24 @@ function showReturnLink() {
         var punycodeDomain = idnMapping.GetAscii(domain);
         var punycodeBaseUrl = protocol + punycodeDomain;
 
+        // The page's own text (#913) is substituted per-culture: HTML-context strings are HTML-encoded,
+        // and strings injected into the inline script are emitted through JsonSerializer.Serialize — the
+        // same safe JS-string-literal encoding used for the server-derived constants below (System.Text.Json
+        // escapes '<', '>' and '&' to \u00XX, so a value can never terminate the <script> element). The
+        // catalog values are first-party, so this encoding is defense-in-depth over an already-trusted source.
+        string Localize(string key) => SsoLocalizer.GetString(key, culture);
+        var head = Base
+            .Replace("{{NONCE}}", nonce, System.StringComparison.Ordinal)
+            .Replace("{{LANG}}", HtmlEncoder.Default.Encode(culture ?? SsoLocalizer.FallbackCulture), System.StringComparison.Ordinal)
+            .Replace("{{LOGGING_IN}}", HtmlEncoder.Default.Encode(Localize("page.logging_in")), System.StringComparison.Ordinal)
+            .Replace("{{ENABLE_JS}}", HtmlEncoder.Default.Encode(Localize("page.enable_javascript")), System.StringComparison.Ordinal)
+            .Replace("{{RETURN_LINK_JS}}", JsonSerializer.Serialize(Localize("error.return_to_login")), System.StringComparison.Ordinal);
+
         // Emit the server-derived values as JSON-encoded JS constants so they cannot break out of
         // the script context, then build every URL from these constants rather than interpolating
         // raw. punycodeBaseUrl derives from the request host, and provider from the route, so both
         // are treated as untrusted here (defense-in-depth); mode is a fixed literal.
-        return Base.Replace("{{NONCE}}", nonce, System.StringComparison.Ordinal) + @"
+        return head + @"
 const ssoBaseUrl = " + JsonSerializer.Serialize(punycodeBaseUrl) + @";
 const ssoProvider = " + JsonSerializer.Serialize(provider) + @";
 const ssoMode = " + JsonSerializer.Serialize(mode) + @";
@@ -350,10 +366,10 @@ async function main() {
             const linked = linkStatus >= 200 && linkStatus < 300;
             document.querySelector('p').textContent =
                 linked
-                    ? 'Account linked. You can now log in with SSO.'
+                    ? " + JsonSerializer.Serialize(Localize("page.account_linked")) + @"
                     : linkStatus === 429
-                        ? 'Too many attempts. Please wait a moment and try again.'
-                        : 'Could not link this account. The provider may be disabled, or linking is not permitted.';
+                        ? " + JsonSerializer.Serialize(Localize("error.rate_limited")) + @"
+                        : " + JsonSerializer.Serialize(Localize("page.link_failed")) + @";
             if (!linked) {
                 showReturnLink();
             }
@@ -387,8 +403,8 @@ async function main() {
         // page stuck on 'Logging in...' forever (reloading only adds rate-limit hits).
         document.querySelector('p').textContent =
             response && response.status === 429
-                ? 'Too many login attempts. Please wait a moment and try again.'
-                : 'Login failed. Please try again.';
+                ? " + JsonSerializer.Serialize(Localize("error.login_rate_limited")) + @"
+                : " + JsonSerializer.Serialize(Localize("page.login_failed")) + @";
         showReturnLink();
         return;
     }

@@ -11,6 +11,7 @@ using Duende.IdentityModel.OidcClient;
 using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Api.Audit;
 using Jellyfin.Plugin.SSO_Auth.Api.Linking;
+using Jellyfin.Plugin.SSO_Auth.Api.Localization;
 using Jellyfin.Plugin.SSO_Auth.Api.Net;
 using Jellyfin.Plugin.SSO_Auth.Api.Oidc;
 using Jellyfin.Plugin.SSO_Auth.Api.Provider;
@@ -473,7 +474,8 @@ internal sealed class OidcLoginService
             _logger.LogInformation("Is request linking: {IsLinking}", pending.IsLinking);
         }
 
-        return FlowResponses.AuthPage(response, nonce => WebResponse.Generator(data: state, provider: provider, baseUrl: RequestBaseUrl(request, config), mode: "OID", nonce: nonce, isLinking: pending.IsLinking));
+        var culture = AcceptLanguage.Resolve(request.Headers.AcceptLanguage.ToString());
+        return FlowResponses.AuthPage(response, nonce => WebResponse.Generator(data: state, provider: provider, baseUrl: RequestBaseUrl(request, config), mode: "OID", nonce: nonce, isLinking: pending.IsLinking, culture: culture));
     }
 
     /// <summary>

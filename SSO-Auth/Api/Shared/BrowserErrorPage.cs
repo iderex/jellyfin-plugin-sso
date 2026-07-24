@@ -40,7 +40,7 @@ internal static class BrowserErrorPage
         }
 
         var nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
-        var culture = AcceptLanguage.Resolve(request.Headers.AcceptLanguage.ToString(), SsoLocalizer.AvailableCultures);
+        var culture = AcceptLanguage.Resolve(request.Headers.AcceptLanguage.ToString());
 
         // A script-less page: only the nonce'd <style> is authorized, default-src 'none' denies scripts,
         // fetch, frames and everything else. Same defensive headers the auth-completion page sets.
