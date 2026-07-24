@@ -148,6 +148,51 @@ public sealed class SSOControllerOidBackChannelLogoutTests : IDisposable
         await harness.SessionManager.DidNotReceive().RevokeUserTokens(UserB, Arg.Any<string>());
     }
 
+    [Fact]
+    public async Task DiscoveryUnavailable_RejectsFailClosed_MintsNoRevoke()
+    {
+        // Feature + per-provider opt-in ON, so the endpoint reaches the validator — but discovery is
+        // unreachable (no HTTP responder). ValidateBackChannelLogoutAsync must fail closed
+        // (discovery_unavailable -> uniform 400), never a 500 and never a session revoke.
+        var harness = Harness(c =>
+        {
+            c.EnableSingleLogout = true;
+            c.OidConfigs["kc"] = Provider(backChannel: true);
+            c.LogoutSessions["a"] = Session("sub-1", "sess-9", UserA);
+        }, withResponder: false);
+
+        var result = await harness.Controller.OidBackChannelLogout("kc", _fixture.LogoutToken("sub-1", "sess-9"));
+
+        AssertUniform400(result);
+        await harness.SessionManager.DidNotReceive().RevokeUserTokens(Arg.Any<Guid>(), Arg.Any<string>());
+        Assert.True(SSOPlugin.Instance.ReadConfiguration(c => c.LogoutSessions.ContainsKey("a")));
+    }
+
+    [Fact]
+    public async Task MalformedEndpoint_RejectsFailClosed_MintsNoRevoke()
+    {
+        // The configured endpoint is not a usable URL, so OidcDiscoveryOptions.Build throws while the
+        // validator prepares discovery — caught as a fail-closed reject (discovery_unavailable), never a 500
+        // and never a session revoke.
+        var harness = Harness(c =>
+        {
+            c.EnableSingleLogout = true;
+            c.OidConfigs["kc"] = new OidConfig
+            {
+                Enabled = true,
+                OidEndpoint = "not-a-usable-url",
+                OidClientId = "jf",
+                EnableBackChannelLogout = true,
+            };
+            c.LogoutSessions["a"] = Session("sub-1", "sess-9", UserA);
+        }, withResponder: false);
+
+        var result = await harness.Controller.OidBackChannelLogout("kc", _fixture.LogoutToken("sub-1", "sess-9"));
+
+        AssertUniform400(result);
+        await harness.SessionManager.DidNotReceive().RevokeUserTokens(Arg.Any<Guid>(), Arg.Any<string>());
+    }
+
     private static void AssertUniform400(ActionResult result)
     {
         var content = Assert.IsType<ContentResult>(result);
