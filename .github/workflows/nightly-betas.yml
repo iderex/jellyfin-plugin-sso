@@ -35,6 +35,10 @@ jobs:
           REPO: ${{ github.repository }}
         run: gh workflow run publish-beta.yml --repo "$REPO" --ref main
       - name: Trigger the JF12 beta (main)
+        # Dispatch the JF12 leg even if the JF10.11 dispatch above failed, so one API hiccup cannot
+        # silently take out both generations' nightly build. The job still fails if either dispatch
+        # failed, and "Publish failure alert" watches this workflow, so the failure is surfaced (#982).
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}

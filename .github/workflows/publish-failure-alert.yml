@@ -1,0 +1,105 @@
+name: Publish failure alert
+
+# Release-channel watchdog (#982). A scheduled or dispatched publish that fails does NOT email me the
+# way a push failure to the author does, so a broken release channel can go unnoticed — the 2026-07-23
+# beta.12 incident: the GitHub release was created but the manifest commit failed on a jq arg-length
+# error, and nothing alerted, so the build silently never reached Jellyfin until a user noticed.
+#
+# This watches the nightly scheduler, the release-publish workflows, and the manifest-freshness check
+# and, on any non-success outcome, opens or updates a single tracking issue (label release-alert)
+# naming the failed run — turning a silent failure into an active, visible signal.
+#
+# Uses only the built-in gh CLI with the workflow token; no third-party action, so nothing to SHA-pin.
+# A workflow_run workflow always runs from the default branch with the default-branch definition, which
+# is why it can react to a failure in a workflow that itself runs on a schedule.
+
+# Documented accept for the zizmor `dangerous-triggers` finding on the workflow_run trigger below:
+# workflow_run is flagged because it runs with the elevated default-branch token and secrets, which is
+# dangerous ONLY when a workflow then checks out or executes the triggering run's (attacker-influenceable)
+# code or artifacts. This watchdog does neither: it never checks out any ref, downloads no artifact, and
+# only reads the public release list and files/updates an issue whose body is built entirely from
+# env-passed values (no ${{ }} shell splicing). Its token is least-privilege (issues: write). So the
+# audit's precondition for exploitability is absent here.
+on: # zizmor: ignore[dangerous-triggers]
+  workflow_run:
+    workflows:
+      - "Nightly betas" # the scheduler: if it dies, no beta is dispatched at all
+      - "Publish Beta"
+      - "Publish JF12 Beta"
+      - "Publish Release"
+      - "Publish JF12 Stable"
+      - "Manifest freshness" # the freshness monitor: its own failure must also surface
+    types: [completed]
+
+# Deny-all at the workflow level; the job opts into the single grant it needs.
+permissions: {}
+
+# Never run two alert jobs at once; never cancel one mid-flight (it may be creating/commenting an issue).
+# Serializing also closes the two-runs-fail race: run B sees the issue run A created and comments on it
+# instead of creating a duplicate.
+concurrency:
+  group: publish-failure-alert
+  cancel-in-progress: false
+
+jobs:
+  alert:
+    name: Open or update the release-failure tracking issue
+    # Fire on any non-success terminal outcome — expressed as a DENYLIST so a new/rare conclusion class is
+    # caught by default rather than silently dropped. The beta.12 mode (release created, then the job dies
+    # before the manifest commit) can surface as `failure`, `timed_out`, or `startup_failure` (a YAML/
+    # config error), and GitHub also has `neutral` / `action_required` / `stale` — all of which should
+    # alert. Only `success` and `skipped` (e.g. the gate job short-circuits an unchanged day) are no-ops;
+    # `cancelled` is treated as an intentional human action and is not alerted.
+    if: >-
+      ${{ github.event.workflow_run.conclusion != 'success'
+       && github.event.workflow_run.conclusion != 'skipped'
+       && github.event.workflow_run.conclusion != 'cancelled' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Only permission needed: file/update an issue (and its label). No contents, no actions.
+    permissions:
+      issues: write
+    steps:
+      - name: File or update the alert issue
+        # All run inputs are passed via env, never spliced into the shell as ${{ }}.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WF_NAME: ${{ github.event.workflow_run.name }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          EVENT: ${{ github.event.workflow_run.event }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          set -euo pipefail
+
+          # Self-provision the dedup label so the alerter never dies on a missing/deleted label (the
+          # create path is the first-fire path). --force makes it idempotent; failure here is non-fatal.
+          gh label create release-alert --repo "$REPO" --color B60205 \
+            --description "Automated alert: a release channel may be broken/stale (see #982)" \
+            --force >/dev/null 2>&1 || true
+
+          title="Release publish/monitoring failed — a channel may be silently stale"
+          body="The **${WF_NAME}** workflow run ended with conclusion \`${CONCLUSION}\` (trigger: ${EVENT}).
+
+          A scheduled publish or monitoring failure is not emailed, so a release channel may not have
+          updated and installs can go stale unnoticed.
+
+          Failed run: ${RUN_URL}
+
+          What to check: whether a GitHub release was created but its channel manifest was not committed
+          (the beta.12 failure mode). Fix the cause, re-run the publish, then confirm the channel
+          manifest lists the newest release. Close this issue once the channel is fresh again.
+
+          Refs #982."
+
+          # The release-alert label is the dedup key: one open tracking issue, updated by comment, so a
+          # run of failures does not spam a new issue each night.
+          num=$(gh issue list --repo "$REPO" --state open --label release-alert \
+            --json number --jq '.[0].number // empty')
+          if [ -n "${num:-}" ]; then
+            echo "Updating existing alert issue #${num}"
+            gh issue comment "$num" --repo "$REPO" --body "$body"
+          else
+            echo "No open alert issue; creating one"
+            gh issue create --repo "$REPO" --title "$title" --label release-alert --body "$body"
+          fi
