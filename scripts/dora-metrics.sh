@@ -8,8 +8,7 @@
 # when the `gh` CLI is authenticated — the `bug`-labelled issue timeline. No new tooling.
 #
 # The operational definitions, and where a metric is only an approximation given the small
-# dataset, are documented in the Delivery-Metrics wiki page
-# (https://github.com/iderex/jellyfin-plugin-sso/wiki/Delivery-Metrics). Read that first.
+# dataset, are documented in the project's internal delivery-metrics notes.
 #
 # The script is READ-ONLY and deterministic: it only reads local git objects and (optionally)
 # makes read-only `gh` queries. It never writes to git or GitHub. Re-running it on the same

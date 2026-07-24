@@ -78,8 +78,6 @@ This project is **beta software — the beta channel is the only release channel
 
 Configure your providers on the plugin's settings page (**Dashboard → Plugins → SSO-Auth**) and via the admin API. The [Provider Setup](https://github.com/iderex/jellyfin-plugin-sso/wiki/Provider-Setup) walkthrough and the [Hardening & Options Reference](https://github.com/iderex/jellyfin-plugin-sso/wiki/Hardening-and-Options-Reference) cover every option, the provider-name rules, and the admin-API details.
 
-![The Community SSO for Jellyfin settings page — an OpenID Connect and a SAML provider configured side by side](img/config-page.gif)
-
 ## Documentation
 
 Full documentation lives in the **[Wiki](https://github.com/iderex/jellyfin-plugin-sso/wiki)**:
