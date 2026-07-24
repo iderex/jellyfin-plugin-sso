@@ -47,6 +47,22 @@ public class BrowserErrorPageTests
     }
 
     [Fact]
+    public void Wrap_ResolvesLangFromAcceptLanguage_FallsToEnglishWhileEnglishIsTheOnlyCatalog()
+    {
+        // The lang attribute is driven by the request's Accept-Language (#913). With only the English
+        // catalog loaded, a German preference resolves to English — the wiring must not throw on a real
+        // header, and the page must stay a valid, English-tagged document.
+        var ctx = Context("text/html");
+        ctx.Request.Headers.AcceptLanguage = "de-DE,de;q=0.9,en;q=0.5";
+
+        var result = Assert.IsType<ContentResult>(
+            BrowserErrorPage.Wrap(PlainError(400, "Invalid or expired state"), ctx.Request, ctx.Response));
+
+        Assert.Contains("<html lang='en'>", result.Content);
+        Assert.Contains("Return to login", result.Content);
+    }
+
+    [Fact]
     public void Wrap_HtmlEncodesTheMessage_SoIdpSuppliedTextCannotInjectMarkup()
     {
         // A callback error body can interpolate an identity-provider error_description; a hostile value

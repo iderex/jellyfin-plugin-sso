@@ -40,6 +40,7 @@ internal static class BrowserErrorPage
         }
 
         var nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
+        var culture = AcceptLanguage.Resolve(request.Headers.AcceptLanguage.ToString(), SsoLocalizer.AvailableCultures);
 
         // A script-less page: only the nonce'd <style> is authorized, default-src 'none' denies scripts,
         // fetch, frames and everything else. Same defensive headers the auth-completion page sets.
@@ -53,7 +54,7 @@ internal static class BrowserErrorPage
 
         return new ContentResult
         {
-            Content = Render(nonce, message),
+            Content = Render(nonce, message, culture),
             ContentType = MediaTypeNames.Text.Html,
             StatusCode = status,
         };
@@ -91,9 +92,11 @@ internal static class BrowserErrorPage
     // The message is HTML-encoded because a few plain-text errors interpolate identity-provider-supplied
     // text (an OpenID error/error_description on the callback), which must not break out of the markup.
     // The "Return to login" link is a same-origin relative path, so no request-host derivation is needed.
-    private static string Render(string nonce, string message) =>
+    // The lang attribute carries the resolved culture (#913) so assistive tech announces the localized label
+    // in the right language; it is a catalog-derived token but attribute-encoded as defense-in-depth.
+    private static string Render(string nonce, string message, string? culture) =>
         "<!DOCTYPE html>\n"
-        + "<html lang='en'><head>\n"
+        + "<html lang='" + HtmlEncoder.Default.Encode(culture ?? SsoLocalizer.FallbackCulture) + "'><head>\n"
         + "<meta name='viewport' content='width=device-width, initial-scale=1'>\n"
         + "<style nonce='" + nonce + "'>\n"
         + "  body { background: #101010; color: #d1cfce; font-family: Noto Sans, Noto Sans HK, Noto Sans JP, Noto Sans KR, Noto Sans SC, Noto Sans TC, sans-serif; margin: 2rem; }\n"
@@ -101,8 +104,8 @@ internal static class BrowserErrorPage
         + "</style>\n"
         + "</head><body>\n"
         + "<p>" + HtmlEncoder.Default.Encode(message) + "</p>\n"
-        // The link label comes from the localization catalog (#913). Culture resolution from the request
-        // (Accept-Language) is wired in a later sub-unit; until then it resolves to the English fallback.
-        + "<a href='/web/index.html'>" + HtmlEncoder.Default.Encode(SsoLocalizer.GetString("error.return_to_login", null)) + "</a>\n"
+        // The link label comes from the localization catalog (#913), in the culture resolved from the
+        // request's Accept-Language header (English until a matching catalog is loaded).
+        + "<a href='/web/index.html'>" + HtmlEncoder.Default.Encode(SsoLocalizer.GetString("error.return_to_login", culture)) + "</a>\n"
         + "</body></html>";
 }
