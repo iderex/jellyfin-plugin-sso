@@ -177,6 +177,7 @@ public class ArchitectureConformanceTests
     [InlineData("Crypto")] // leaf — the shared asymmetric signing-key strength policy (min RSA bits / approved EC curves), referenced by both protocol paths so they cannot drift (#733)
     [InlineData("LoginButtons")] // leaf — login-page button rendering (#722): pure injector/builder over the config + a branding-sync hosted service; imports no other Api module
     [InlineData("Logout")] // leaf — Single Logout session-state store (#727): pure bounded operations over the config's LogoutSessions map; imports no other Api module
+    [InlineData("Localization")] // leaf — served-surface string localizer (#913): loads embedded per-culture JSON catalogs and resolves keys through a fallback chain; imports no other Api module
 
 
     [InlineData("Provider", "Net", "RateLimit")] // provider config/test/naming — validates URLs (Net) and keys throttles (RateLimit)
@@ -185,7 +186,7 @@ public class ArchitectureConformanceTests
     [InlineData("Oidc", "Authz", "Avatar", "Crypto", "Identity", "Logout", "Net", "Provider", "RateLimit", "Routing")] // OIDC flow — mints the keystone (Identity), orchestrates roles, avatar, net, provider, throttle; reads its callback path through the Routing suffix reader; enforces the signing-key floor (Crypto); carries the captured logout context (Logout, #727)
     [InlineData("Identity", "Authz", "Provider")] // the identity keystone — grants (Authz) + link mode (Provider); decoupled from the protocols by #790
     [InlineData("Session", "Authz", "Avatar", "Linking")] // session mint + login outcomes — applies grants (Authz), sets avatars (Avatar), reconciles links (Linking)
-    [InlineData("Shared", "Avatar", "Linking", "RateLimit", "Routing", "Session")] // shared served-page / flow-response + rate-limit-gate helpers — depend downward on the session/linking/avatar/throttle/route tiers, never on a protocol or the boundary
+    [InlineData("Shared", "Avatar", "Linking", "Localization", "RateLimit", "Routing", "Session")] // shared served-page / flow-response + rate-limit-gate helpers — depend downward on the session/linking/avatar/throttle/route/localization tiers, never on a protocol or the boundary
     [InlineData("Flows", "Audit", "Identity", "Linking", "Logout", "Net", "Oidc", "Provider", "RateLimit", "Saml", "Session", "Shared")] // per-protocol login orchestration — drives both protocol modules (Oidc/Saml) and the downstream mint/link/session tiers; persists the captured logout state at the mint (Logout, #727); nothing above the boundary imports it
     [InlineData("Http", "Audit", "Avatar", "Flows", "Linking", "Logout", "Net", "Oidc", "Provider", "Saml", "Session", "Shared")] // the web boundary (SSOController + request helpers + the admin test-connection probe): the composition top of the DAG — it fronts every flow, so its import list is deliberately wide (incl. the RP-initiated logout store, #727); nothing imports it back (#790/#807)
     public void ApiModule_ImportsOnlyItsAllowedApiModules(string module, params string[] allowed)

@@ -51,6 +51,8 @@
     <EmbeddedResource Include="Web\ApiClient.js" />
     <EmbeddedResource Include="Web\jellyfin-apiClient.esm.min.js" />
     <EmbeddedResource Include="Web\emby-restyle.css" />
+    <!-- Per-culture localization catalogs (#913), Jellyfin-idiom flat key->value JSON. -->
+    <EmbeddedResource Include="Localization\*.json" />
   </ItemGroup>
 
   <ItemGroup>
