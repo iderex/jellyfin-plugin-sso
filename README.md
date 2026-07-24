@@ -40,7 +40,7 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 >
 > ### 🤝 AI-assisted, human-owned
 >
-> Development here is **AI-assisted**. Claude (Anthropic) helps with individual **process steps** — generating and analysing code, running the adversarial security reviews, and translating documentation and comments into English. It never hands over finished, unreviewed work: each step is only a proposal. **A human maintainer reviews, understands, edits where needed, and signs off on every one** — the AI proposes, a person decides, and **a human stays responsible for every line that ships, at all times.** The review discipline is modelled, as far as is practical for a volunteer project, on the change-control expected of TÜV/BSI-certified software in a critical sector such as healthcare — with **no claim to actual certification**. In short: nothing lands because a tool suggested it; it lands because a person verified it.
+> Development here is **AI-assisted — the AI only _supports_ the work, it never takes it over.** Claude (Anthropic) assists with individual **process steps**: it helps me generate and analyse code, helps me run the adversarial security reviews, and translates documentation and comments into English. **The coding work stays mine — for every one of those parts the AI only assists, and each step it produces is a proposal, never finished, unreviewed work.** I review, understand, edit where needed, and sign off on every one — the AI proposes, I decide, and **a human stays responsible for every line that ships, at all times.** Nothing lands because a tool suggested it; it lands because I wrote or verified it.
 
 ## Features
 
