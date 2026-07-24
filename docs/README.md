@@ -11,14 +11,10 @@ Start there for:
   — OpenID Connect and SAML
 - **[Login Flow](https://github.com/iderex/jellyfin-plugin-sso/wiki/Login-Flow)**
 - **[Security Model](https://github.com/iderex/jellyfin-plugin-sso/wiki/Security-Model)**
-  and **[Threat Model](https://github.com/iderex/jellyfin-plugin-sso/wiki/Threat-Model)**
 - **[Troubleshooting](https://github.com/iderex/jellyfin-plugin-sso/wiki/Troubleshooting)**
-- **[Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap)**
 
 The [README](../README.md) has the overview and quick start; the Wiki is the
-reference documentation.
-
-For contributors, the in-repo
-**[ARCHITECTURE.md](ARCHITECTURE.md)** describes the module structure, the
-enforced dependency graph, and the contract every change follows — it lives with
-the code because it is tied to it.
+reference documentation. The contributor architecture reference lives in the
+Wiki **[Architecture](https://github.com/iderex/jellyfin-plugin-sso/wiki/Architecture)**
+page — the module structure, the enforced dependency graph, and the contract
+every change follows.
