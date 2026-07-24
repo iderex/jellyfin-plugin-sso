@@ -1,0 +1,11 @@
+{
+  "error.return_to_login": "Return to login",
+  "error.no_matching_provider": "No matching provider found",
+  "error.rate_limited": "Too many attempts. Please wait a moment and try again.",
+  "error.invalid_state": "Invalid or expired state",
+  "error.sso_response_invalid": "SSO response validation failed",
+  "error.saml_response_invalid": "SAML response validation failed",
+  "error.pkce_not_supported": "The identity provider does not advertise the required PKCE (S256) support.",
+  "error.awaiting_approval": "Your account is not active. It is awaiting administrator approval.",
+  "error.auth_too_old": "You authenticated too long ago; please sign in again."
+}

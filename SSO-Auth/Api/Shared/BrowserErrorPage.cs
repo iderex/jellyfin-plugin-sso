@@ -7,6 +7,7 @@ using System.Linq;
 using System.Net.Mime;
 using System.Security.Cryptography;
 using System.Text.Encodings.Web;
+using Jellyfin.Plugin.SSO_Auth.Api.Localization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
@@ -100,6 +101,8 @@ internal static class BrowserErrorPage
         + "</style>\n"
         + "</head><body>\n"
         + "<p>" + HtmlEncoder.Default.Encode(message) + "</p>\n"
-        + "<a href='/web/index.html'>Return to login</a>\n"
+        // The link label comes from the localization catalog (#913). Culture resolution from the request
+        // (Accept-Language) is wired in a later sub-unit; until then it resolves to the English fallback.
+        + "<a href='/web/index.html'>" + HtmlEncoder.Default.Encode(SsoLocalizer.GetString("error.return_to_login", null)) + "</a>\n"
         + "</body></html>";
 }
