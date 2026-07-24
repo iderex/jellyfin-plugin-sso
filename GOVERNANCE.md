@@ -27,9 +27,8 @@ wiki page).
 
 - **Changes** follow the gated flow in [CONTRIBUTING.md](CONTRIBUTING.md):
   issue → branch → tests → review gates → PR → CI-green merge.
-- **Scope and releases** I decide, guided by the public
-  [Roadmap](https://github.com/iderex/jellyfin-plugin-sso/wiki/Roadmap) and its
-  maturity ladder; releases follow the
+- **Scope and releases** I decide, guided by the project's maturity ladder;
+  releases follow the
   [Releasing](https://github.com/iderex/jellyfin-plugin-sso/wiki/Releasing)
   (channel/soak promotion).
 - **Security decisions outrank feature decisions.** Anything touching the login

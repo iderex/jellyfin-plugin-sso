@@ -36,7 +36,7 @@ Sign in to Jellyfin with your existing identity provider — Keycloak, Authelia,
 
 > ### 🔁 Revival
 >
-> This is a security-first revival of [**9p4/jellyfin-plugin-sso**](https://github.com/9p4/jellyfin-plugin-sso), which its original author has since archived. It continues from the last upstream release (**4.0.0.x**, Jellyfin 10.11 / .NET 9). Huge thanks to the original author and contributors for the foundation.
+> This is a security-first revival of [**9p4/jellyfin-plugin-sso**](https://github.com/9p4/jellyfin-plugin-sso), which its original author has since archived. It continues from the last upstream release (**4.0.0.x**) and now supports **both Jellyfin 10.11 (.NET 9) and Jellyfin 12.0 (.NET 10)** — one repository URL serves the matching build to each. Huge thanks to the original author and contributors for the foundation.
 >
 > ### 🤝 AI-assisted, human-owned
 >
@@ -77,8 +77,6 @@ This project is **beta software — the beta channel is the only release channel
 ## Configuration
 
 Configure your providers on the plugin's settings page (**Dashboard → Plugins → SSO-Auth**) and via the admin API. The [Provider Setup](https://github.com/iderex/jellyfin-plugin-sso/wiki/Provider-Setup) walkthrough and the [Hardening & Options Reference](https://github.com/iderex/jellyfin-plugin-sso/wiki/Hardening-and-Options-Reference) cover every option, the provider-name rules, and the admin-API details.
-
-![The Community SSO for Jellyfin settings page — an OpenID Connect and a SAML provider configured side by side](img/config-page.gif)
 
 ## Documentation
 
