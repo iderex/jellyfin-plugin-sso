@@ -1,0 +1,103 @@
+name: Manifest freshness
+
+# Defence in depth for the release channel (#982). The publish workflow can report success yet leave a
+# channel manifest un-updated — the 2026-07-23 beta.12 incident: the release was created but the manifest
+# commit failed on a jq arg-length error, so the "successful" publish shipped nothing installable. A
+# green publish run is therefore not proof the channel is fresh.
+#
+# This scheduled check closes that gap: it asserts the newest published beta release for each generation
+# (JF10.11 and JF12) is actually listed in the manifest-beta manifest.json, so a silent manifest gap
+# becomes a red check even when the publish reported success. A failure here is picked up by
+# publish-failure-alert.yml (which watches this workflow) and raised as a tracking issue.
+#
+# Read-only: curl for the public manifest, gh for the release list, jq (present on the runner) for the
+# comparison. No third-party action, so nothing to SHA-pin.
+
+on:
+  schedule:
+    # 12:00 UTC — hours after the 04:00 nightly publish (releases observed ~06:40), leaving a wide margin
+    # so a schedule-delayed publish cannot race the freshness check and raise a false STALE.
+    - cron: "0 12 * * *"
+  workflow_dispatch:
+
+# Deny-all at the workflow level; the job opts into the single read grant it needs.
+permissions: {}
+
+concurrency:
+  group: manifest-freshness
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Assert manifest-beta lists the newest beta release per generation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check manifest-beta freshness
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # The public beta manifest, exactly as a Jellyfin server would fetch it. -f makes curl exit
+          # non-zero on an HTTP error, and set -e turns that into a fail-closed run (never a silent pass).
+          curl -fsSL "https://raw.githubusercontent.com/${REPO}/manifest-beta/manifest.json" -o manifest.json
+
+          # Fetch the FULL release list once, fail-closed: --paginate so the numerically-newest beta can
+          # never age off a single page (the sibling gate in publish-jf12-beta.yml hit exactly that bug),
+          # and an explicit guard so a transient API error reds the run instead of yielding an empty list
+          # that a later "no release found" branch would wave through as fresh.
+          if ! releases_json=$(gh api --paginate "repos/${REPO}/releases?per_page=100" --slurp); then
+            echo "::error::could not fetch the release list from the GitHub API — failing closed rather than assuming the channel is fresh"
+            exit 1
+          fi
+          # --slurp wraps the paginated pages in an outer array; flatten back to a flat release array.
+          releases_json=$(printf '%s' "$releases_json" | jq 'add // .')
+
+          fail=0
+
+          # For one generation: find the newest published beta release matching tag_re, derive the numeric
+          # manifest version from its tag with strip_re, and assert the manifest lists that version FOR
+          # THIS GENERATION (both generations share one versions[] array and are told apart ONLY by
+          # targetAbi; a JF10.11 `X.Y.Z-beta.N` and a JF12 `X.Y.Z-JF12-beta.N` derive to the same version
+          # string, so without the targetAbi predicate a stale generation is masked by the other).
+          # The tag regexes use [.] rather than \. so no backslash survives the shell -> jq string trip.
+          check_line() {
+            label="$1"; tag_re="$2"; strip_re="$3"; abi_prefix="$4"
+            tag=$(printf '%s' "$releases_json" \
+              | jq -r "[.[] | select(.tag_name | test(\"${tag_re}\"))] | sort_by(.published_at) | last | .tag_name // empty")
+            if [ -z "$tag" ]; then
+              # Fail closed PER GENERATION: a zero match means either the release tag scheme drifted (and
+              # this check is silently no longer verifying this generation) or this generation genuinely
+              # has no published beta. Both current generations always publish, so treat zero as a defect
+              # rather than skipping — a single total-drift guard would let one generation's match mask the
+              # other's silent drift.
+              echo "::error::no ${label} beta release matched ${tag_re} — the release tag scheme may have changed, or this generation has no published beta; failing closed rather than skipping verification."
+              fail=1
+              return
+            fi
+            ver=$(printf '%s' "$tag" | sed -E "$strip_re")
+            if printf '%s' "$manifest_json" \
+              | jq -e --arg v "$ver" --arg abi "$abi_prefix" \
+                  'any(.[].versions[]; .version == $v and (.targetAbi | startswith($abi)))' >/dev/null; then
+              echo "OK (${label}): newest release ${tag} -> manifest lists ${ver} (targetAbi ${abi_prefix}*)"
+            else
+              echo "::error::${label} channel STALE: the newest release is ${tag} (version ${ver}, targetAbi ${abi_prefix}*) but manifest-beta does not list it. Either a publish created the release without committing the manifest, or the manifest could not be parsed — the channel ships nothing installable for this generation until re-published."
+              fail=1
+            fi
+          }
+
+          # Read the manifest once; a parse failure here fails closed (set -e on the substitution's jq).
+          manifest_json=$(jq -c '.' manifest.json)
+
+          check_line "JF10.11" '^[0-9]+[.][0-9]+[.][0-9]+-beta[.][0-9]+$'      's/^([0-9]+\.[0-9]+\.[0-9]+)-beta\.([0-9]+)$/\1.\2/'      '10.11'
+          check_line "JF12"    '^[0-9]+[.][0-9]+[.][0-9]+-JF12-beta[.][0-9]+$' 's/^([0-9]+\.[0-9]+\.[0-9]+)-JF12-beta\.([0-9]+)$/\1.\2/' '12.'
+
+          if [ "$fail" -ne 0 ]; then
+            echo "Manifest freshness check FAILED (see the errors above)."
+            exit 1
+          fi
+          echo "All beta channels are fresh: each generation's newest release is present in manifest-beta."
