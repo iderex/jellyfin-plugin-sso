@@ -11,6 +11,7 @@ using Jellyfin.Plugin.SSO_Auth.Api;
 using Jellyfin.Plugin.SSO_Auth.Api.Audit;
 using Jellyfin.Plugin.SSO_Auth.Api.Identity;
 using Jellyfin.Plugin.SSO_Auth.Api.Linking;
+using Jellyfin.Plugin.SSO_Auth.Api.Localization;
 using Jellyfin.Plugin.SSO_Auth.Api.Logout;
 using Jellyfin.Plugin.SSO_Auth.Api.Net;
 using Jellyfin.Plugin.SSO_Auth.Api.Oidc;
@@ -211,6 +212,7 @@ internal sealed class SamlLoginService
         // touched and cannot throw the InvalidOperationException that escaped as a 500, #206), and a
         // null body is rejected the same way as any other malformed response — a clean 400.
         var requestBase = GetRequestBase(request, config.SchemeOverride, config.PortOverride, config.BaseUrlOverride);
+        var culture = AcceptLanguage.Resolve(request.Headers.AcceptLanguage.ToString());
         if (!_validator.TryValidate(config, provider, requestBase, formSamlResponse, out var samlResponse))
         {
             // A malformed response (non-base64, malformed XML, prohibited DOCTYPE) or a failed
@@ -272,7 +274,8 @@ internal sealed class SamlLoginService
                     baseUrl: requestBase,
                     mode: "SAML",
                     nonce: nonce,
-                    isLinking: true));
+                    isLinking: true,
+                    culture: culture));
         }
 
         // Login path (#251): validate the assertion exactly ONCE here — the one-time replay consume, the
@@ -355,7 +358,8 @@ internal sealed class SamlLoginService
                     baseUrl: requestBase,
                     mode: "SAML",
                     nonce: nonce,
-                    isLinking: false));
+                    isLinking: false,
+                    culture: culture));
         }
         finally
         {

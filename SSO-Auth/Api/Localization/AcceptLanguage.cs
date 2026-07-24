@@ -20,6 +20,14 @@ namespace Jellyfin.Plugin.SSO_Auth.Api.Localization;
 internal static class AcceptLanguage
 {
     /// <summary>
+    /// Picks the best loaded culture for the given Accept-Language header value, choosing among the
+    /// catalogs currently loaded by <see cref="SsoLocalizer"/>.
+    /// </summary>
+    /// <param name="headerValue">The raw Accept-Language header (may hold several comma-separated, weighted tags).</param>
+    /// <returns>The best available culture, or null to fall back to English.</returns>
+    internal static string? Resolve(string? headerValue) => Resolve(headerValue, SsoLocalizer.AvailableCultures);
+
+    /// <summary>
     /// Picks the best culture in <paramref name="available"/> for the given Accept-Language header value.
     /// </summary>
     /// <param name="headerValue">The raw Accept-Language header (may hold several comma-separated, weighted tags).</param>
