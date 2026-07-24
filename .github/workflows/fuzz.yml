@@ -14,7 +14,7 @@
 # minimise + a separate parser fix, GHSA path if exploitable; see the harness
 # README), never a silent in-harness patch. The job therefore ARCHIVES every
 # crasher and the evolved corpus as artifacts and, when a crasher is found, marks
-# the run red purely as a notification signal to the maintainer.
+# the run red purely as a notification signal to me.
 #
 # Hardened per the repo workflow policy (see zizmor.yml): every action is
 # SHA-pinned with a version comment, checkout runs with persist-credentials:false,
@@ -165,8 +165,8 @@ jobs:
 
       - name: Report findings
         # Non-gating notification: if libFuzzer wrote any reproducer, surface it
-        # loudly and fail THIS leg so the scheduled run goes red and notifies the
-        # maintainer. This is a signal to open a security finding, not a merge
+        # loudly and fail THIS leg so the scheduled run goes red and notifies
+        # me. This is a signal to open a security finding, not a merge
         # gate — the workflow never runs on a pull request.
         env:
           TARGET: ${{ matrix.target }}

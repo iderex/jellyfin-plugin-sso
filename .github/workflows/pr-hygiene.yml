@@ -10,7 +10,7 @@
 #
 # This workflow is deliberately ADVISORY: it is NOT wired into the "Protect main"
 # required-status-check ruleset, so it never blocks a merge. It surfaces a
-# deterministic hygiene signal for the maintainer, who keeps the final say. The
+# deterministic hygiene signal for me; I keep the final say. The
 # checks are tiered by confidence so it does not red-flag reasonable PRs:
 #   - FAIL  (high confidence, near-zero false-positive):
 #       * PR body carries an issue reference (Closes/Refs #N) — skipped for bots.

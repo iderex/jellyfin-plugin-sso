@@ -52,8 +52,7 @@ ever drift, the policy is corrected or the gate is fixed, never papered over.
 - **Runtime secrets** (the operator's OIDC client secret, SAML signing keys)
   never appear in the repository or CI at all — they live in the operator's
   plugin configuration, AES-256-GCM-encrypted at rest with a separate key file
-  (see [SECURITY.md](../SECURITY.md) and
-  [docs/PRIVACY.md](PRIVACY.md)), are write-only in the admin API, and are
+  (see [SECURITY.md](../SECURITY.md)), are write-only in the admin API, and are
   redacted from configuration exports.
 - **Rotation:** my GitHub credentials use the platform's strong-auth features;
   a leaked or suspected-leaked credential is rotated immediately and the

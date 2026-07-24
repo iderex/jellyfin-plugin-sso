@@ -200,5 +200,3 @@ off, both the RP-initiated OIDC logout route and the inbound SAML
   artifacts help (release provenance and checksums above, a dependency SBOM is
   planned — [#763](https://github.com/iderex/jellyfin-plugin-sso/issues/763)
   tracks OpenVEX), but do not transfer that responsibility.
-- Data-handling transparency for operators lives in
-  [docs/PRIVACY.md](docs/PRIVACY.md).

@@ -108,12 +108,12 @@ jobs:
       id: version
       # Beta version = build.yaml's `version`, which is the NEXT RELEASE TARGET (the
       # version main is developing toward), with the workflow run number as the fourth
-      # octet: <target>.<run_number>, released as "<target>-beta". The maintainer sets
+      # octet: <target>.<run_number>, released as "<target>-beta". I set
       # the target per change class — a patch (4.1.1 stable -> 4.1.2), a feature
       # (-> 4.2.0), or a breaking release (-> 5.0.0) — so the beta always tracks the
       # actual next release: 4.1.2-beta, then 4.2.0-beta, then 5.0.0-beta. The same
-      # target is what a `<target>-stable` tag releases; after a stable ships the
-      # maintainer bumps build.yaml to the next target. Betas therefore always outrank
+      # target is what a `<target>-stable` tag releases; after a stable ships I
+      # bump build.yaml to the next target. Betas therefore always outrank
       # the current stable; the two channels are separate manifests, so that is fine.
       # The build number is monotonic within this workflow, which is all Jellyfin's
       # version precedence needs; the beta stays out of the stable manifest because it
