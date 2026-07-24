@@ -13,7 +13,14 @@ name: Publish failure alert
 # A workflow_run workflow always runs from the default branch with the default-branch definition, which
 # is why it can react to a failure in a workflow that itself runs on a schedule.
 
-on:
+# Documented accept for the zizmor `dangerous-triggers` finding on the workflow_run trigger below:
+# workflow_run is flagged because it runs with the elevated default-branch token and secrets, which is
+# dangerous ONLY when a workflow then checks out or executes the triggering run's (attacker-influenceable)
+# code or artifacts. This watchdog does neither: it never checks out any ref, downloads no artifact, and
+# only reads the public release list and files/updates an issue whose body is built entirely from
+# env-passed values (no ${{ }} shell splicing). Its token is least-privilege (issues: write). So the
+# audit's precondition for exploitability is absent here.
+on: # zizmor: ignore[dangerous-triggers]
   workflow_run:
     workflows:
       - "Nightly betas" # the scheduler: if it dies, no beta is dispatched at all
